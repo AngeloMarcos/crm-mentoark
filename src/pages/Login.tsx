@@ -5,8 +5,10 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, LogIn, UserPlus } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 export default function LoginPage() {
+  const { toast } = useToast();
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,11 +19,21 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    // TODO: integrate with Supabase Auth
+
     setTimeout(() => {
-      navigate("/dashboard");
+      if (isLogin) {
+        if (email === "mentoark@gmail.com" && password === "Mentoark@2025") {
+          localStorage.setItem("mentoark-auth", "true");
+          navigate("/dashboard");
+        } else {
+          toast({ title: "Credenciais inválidas", description: "E-mail ou senha incorretos.", variant: "destructive" });
+        }
+      } else {
+        toast({ title: "Conta criada", description: "Cadastro realizado. Faça login para continuar." });
+        setIsLogin(true);
+      }
       setLoading(false);
-    }, 800);
+    }, 600);
   };
 
   return (
