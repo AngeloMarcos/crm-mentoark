@@ -2,7 +2,7 @@ import {
   LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug, LogOut, ChevronLeft,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu,
   SidebarMenuButton, SidebarMenuItem, SidebarFooter, useSidebar,
@@ -21,6 +21,12 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    localStorage.removeItem("mentoark-auth");
+    navigate("/login");
+  };
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
@@ -60,7 +66,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-3">
-        <SidebarMenuButton className="flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors">
+        <SidebarMenuButton onClick={handleLogout} className="flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors">
           <LogOut className="h-5 w-5 shrink-0" />
           {!collapsed && <span>Sair</span>}
         </SidebarMenuButton>
