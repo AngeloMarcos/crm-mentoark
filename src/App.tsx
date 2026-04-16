@@ -4,6 +4,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 import LoginPage from "./pages/Login";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
@@ -25,12 +26,12 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/leads" element={<LeadsPage />} />
-            <Route path="/funil" element={<FunilPage />} />
-            <Route path="/whatsapp" element={<WhatsAppPage />} />
-            <Route path="/campanhas" element={<CampanhasPage />} />
-            <Route path="/integracoes" element={<IntegracoesPage />} />
+            <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+            <Route path="/leads" element={<ProtectedRoute><LeadsPage /></ProtectedRoute>} />
+            <Route path="/funil" element={<ProtectedRoute><FunilPage /></ProtectedRoute>} />
+            <Route path="/whatsapp" element={<ProtectedRoute><WhatsAppPage /></ProtectedRoute>} />
+            <Route path="/campanhas" element={<ProtectedRoute><CampanhasPage /></ProtectedRoute>} />
+            <Route path="/integracoes" element={<ProtectedRoute><IntegracoesPage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
