@@ -79,7 +79,7 @@ export default function DashboardPage() {
             <CardContent className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={d.leadsPorOrigem} dataKey="quantidade" nameKey="origem" cx="50%" cy="50%" outerRadius={90} label={({ origem, percent }) => `${origem} ${(percent * 100).toFixed(0)}%`} labelLine={false} fontSize={11}>
+                  <Pie data={d.leadsPorOrigem} dataKey="quantidade" nameKey="origem" cx="50%" cy="50%" outerRadius={90} label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} fontSize={11}>
                     {d.leadsPorOrigem.map((_, i) => (
                       <Cell key={i} fill={COLORS[i % COLORS.length]} />
                     ))}
