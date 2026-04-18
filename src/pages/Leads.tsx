@@ -534,9 +534,26 @@ export default function LeadsPage() {
                       </TableCell>
                       <TableCell>
                         {c.telefone && (
-                          <p className="text-xs flex items-center gap-1">
-                            <Phone className="h-3 w-3 text-muted-foreground" />{c.telefone}
-                          </p>
+                          <div className="text-xs flex items-center gap-1.5">
+                            <Phone className="h-3 w-3 text-muted-foreground" />
+                            <span>{c.telefone}</span>
+                            {(() => {
+                              const wa = formatWhatsappNumber(c.telefone);
+                              if (!wa) return null;
+                              return (
+                                <a
+                                  href={`https://wa.me/${wa}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  title="Abrir conversa no WhatsApp"
+                                  className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-whatsapp/15 text-whatsapp hover:bg-whatsapp hover:text-whatsapp-foreground transition-colors"
+                                >
+                                  <MessageCircle className="h-3 w-3" />
+                                </a>
+                              );
+                            })()}
+                          </div>
                         )}
                         {c.email && (
                           <p className="text-xs flex items-center gap-1 text-muted-foreground">
