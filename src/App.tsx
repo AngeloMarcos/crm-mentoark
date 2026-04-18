@@ -12,6 +12,7 @@ import FunilPage from "./pages/Funil";
 import WhatsAppPage from "./pages/WhatsApp";
 import CampanhasPage from "./pages/Campanhas";
 import IntegracoesPage from "./pages/Integracoes";
+import CerebroPage from "./pages/Cerebro";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,6 +33,7 @@ const App = () => (
             <Route path="/whatsapp" element={<ProtectedRoute><WhatsAppPage /></ProtectedRoute>} />
             <Route path="/campanhas" element={<ProtectedRoute><CampanhasPage /></ProtectedRoute>} />
             <Route path="/integracoes" element={<ProtectedRoute><IntegracoesPage /></ProtectedRoute>} />
+            <Route path="/cerebro" element={<ProtectedRoute><CerebroPage /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
