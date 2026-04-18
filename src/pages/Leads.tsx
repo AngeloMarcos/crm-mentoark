@@ -282,7 +282,9 @@ export default function LeadsPage() {
       headers.includes("nome da empresa") ||
       headers.includes("cnpj ou cpf da empresa") ||
       headers.includes("categoria da empresa") ||
-      headers.includes("razão social da empresa");
+      headers.includes("razão social da empresa") ||
+      // Variante com underscore (export alternativa do Cnpj.biz)
+      (headers.includes("cnpj") && (headers.includes("razao_social") || headers.includes("nome_fantasia")));
 
     for (let i = 1; i < rows.length; i++) {
       const cols = rows[i].map((c) => c.replace(/^"|"$/g, "").trim());
@@ -292,17 +294,24 @@ export default function LeadsPage() {
       };
 
       if (isCnpjBiz) {
-        const empresa = get("nome fantasia da empresa") || get("nome da empresa");
-        const nome = get("nome do contato 1") || empresa;
-        const telefoneBruto = get("telefones da empresa");
-        const telefone = telefoneBruto ? telefoneBruto.split(",")[0].trim() : "";
-        const email = get("e-mails da empresa");
+        const empresa =
+          get("nome fantasia da empresa") ||
+          get("nome da empresa") ||
+          get("nome_fantasia") ||
+          get("razao_social");
+        const nome = get("nome do contato 1") || get("socios") || empresa;
+        const telefoneBruto =
+          get("telefones da empresa") ||
+          get("telefones") ||
+          get("telefone");
+        const telefone = telefoneBruto ? telefoneBruto.split(/[,;]/)[0].trim() : "";
+        const email = get("e-mails da empresa") || get("email") || get("e-mail");
         const cargo = get("cargo / função do contato 1");
-        const segmento = get("categoria da empresa");
-        const porte = get("porte da empresa");
-        const cnpj = get("cnpj ou cpf da empresa");
-        const razao = get("razão social da empresa");
-        const dataAbertura = get("data de abertura da empresa");
+        const segmento = get("categoria da empresa") || get("atividades_principal") || get("atividade_principal");
+        const porte = get("porte da empresa") || get("porte_empresa");
+        const cnpj = get("cnpj ou cpf da empresa") || get("cnpj");
+        const razao = get("razão social da empresa") || get("razao_social");
+        const dataAbertura = get("data de abertura da empresa") || get("data_abertura");
         const contato2 = get("nome do contato 2");
         const cargo2 = get("cargo / função do contato 2");
 
@@ -330,15 +339,19 @@ export default function LeadsPage() {
           lista_id: listaAlvo,
         });
       } else {
-        const nome = get("nome") || get("name") || get("nome completo") || get("nome do contato");
-        const telefone = get("telefone") || get("fone") || get("celular") || get("phone") || get("whatsapp");
-        if (!nome && !telefone) continue;
+        const nome =
+          get("nome") || get("name") || get("nome completo") || get("nome do contato") ||
+          get("nome_fantasia") || get("razao_social") || get("razão social");
+        const telefoneRaw =
+          get("telefone") || get("telefones") || get("fone") || get("celular") ||
+          get("phone") || get("whatsapp");
+        if (!nome && !telefoneRaw) continue;
         const tagsRaw = get("tags") || get("tag");
         novos.push({
-          nome: nome || telefone,
-          telefone,
+          nome: nome || telefoneRaw,
+          telefone: telefoneRaw ? telefoneRaw.split(/[,;]/)[0].trim() : "",
           email: get("email") || get("e-mail") || get("mail"),
-          empresa: get("empresa") || get("company") || get("nome da empresa"),
+          empresa: get("empresa") || get("company") || get("nome da empresa") || get("nome_fantasia"),
           cargo: get("cargo") || get("função") || get("role"),
           origem: get("origem") || get("source") || "Importado",
           status: get("status") || "novo",
