@@ -1,25 +1,39 @@
 
-The user pasted a long prompt but the actual question is the runtime error about `useAuth must be used within AuthProvider`. The previous response wrapped useAuth to return a fallback instead of throwing. The error trace points to ProtectedRoute.tsx:27 calling useAuth.
 
-The real fix should ensure AuthProvider wraps the app. The lovable-stack-overflow hint confirms: ensure AuthProvider wraps Routes in App.tsx. The current App.tsx already has AuthProvider — so the issue must be something else. Let me check.
+## Diagnóstico
 
-# Plan — Fix `useAuth must be used within AuthProvider`
+O usuário `mentoark@gmail.com` foi inserido manualmente em `auth.users` via migration, mas com colunas de token (`confirmation_token`, `recovery_token`, `email_change_token_new`, `email_change_token_current`, `reauthentication_token`) como `NULL`. O GoTrue v2.188.1 não aceita NULL nessas colunas — precisa de string vazia. Resultado: **todo login retorna 500**, não só o desse usuário.
 
-## Root cause
-`ProtectedRoute` calls `useAuth()`, which throws when no `AuthProvider` is above it. Current `src/App.tsx` already wraps `<Routes>` with `<AuthProvider>`, so the error suggests either:
-1. A stale Vite HMR cache, or
-2. `useAuth.tsx` was edited last turn to return a fallback but `ProtectedRoute` still hits an edge case during initial render.
+## Plano
 
-## Fix
-1. **Verify** `src/App.tsx` keeps `<AuthProvider>` wrapping `<Routes>` (do NOT apply the pasted prompt that removes it — that would re-break auth and remove the `/usuarios` admin route).
-2. **Harden** `src/hooks/useAuth.tsx` so `useAuth()` never throws: return a safe default `{ user: null, session: null, isAdmin: false, loading: true, signOut: async () => {} }` when context is missing. This prevents white-screen during HMR.
-3. **Harden** `src/components/ProtectedRoute.tsx` to handle the `loading: true` fallback gracefully (show loading state, don't redirect prematurely).
+**1 migration única que faz duas coisas:**
 
-## Files to edit
-- `src/hooks/useAuth.tsx` — confirm fallback object returned (no throw).
-- `src/components/ProtectedRoute.tsx` — verify it respects `loading` before redirecting.
-- `src/App.tsx` — leave as-is (AuthProvider must stay).
+1. **Apaga o usuário corrompido** `mentoark@gmail.com` de `auth.users` (cascata limpa `auth.identities`, `profiles`, `user_roles`).
+2. **Corrige globalmente** todas as colunas de token NULL em `auth.users` para `''` (defensivo, caso haja outros).
 
-## Not doing
-- Not applying the pasted `App.tsx` / `AppSidebar.tsx` from the prompt — they remove `AuthProvider`, the `/usuarios` route and real `signOut`, regressing the auth system you approved.
-- Not touching `src/pages/Cerebro.tsx` — already implemented and working.
+**Depois, criar a conta da forma correta:** usar a tela de cadastro normal em `/login` (aba "Cadastre-se"). O trigger `handle_new_user` já está configurado para detectar o email `mentoark@gmail.com` e atribuir role `admin` automaticamente. Como auto-confirm está ativo, o login funciona imediatamente após o cadastro.
+
+## SQL da migration
+
+```sql
+-- Remove usuário corrompido inserido manualmente
+DELETE FROM auth.users WHERE email = 'mentoark@gmail.com';
+
+-- Corrige NULLs em colunas de token que quebram o GoTrue
+UPDATE auth.users SET
+  confirmation_token = COALESCE(confirmation_token, ''),
+  recovery_token = COALESCE(recovery_token, ''),
+  email_change_token_new = COALESCE(email_change_token_new, ''),
+  email_change_token_current = COALESCE(email_change_token_current, ''),
+  reauthentication_token = COALESCE(reauthentication_token, ''),
+  phone_change_token = COALESCE(phone_change_token, '');
+```
+
+## Próximo passo do usuário
+
+1. Aprovar a migration
+2. Hard refresh (Ctrl+Shift+R) na tela `/login`
+3. Clicar em **"Não tem conta? Cadastre-se"**
+4. Cadastrar com `mentoark@gmail.com` / `Mentoark@2025`
+5. Fazer login — virará admin automaticamente
+
