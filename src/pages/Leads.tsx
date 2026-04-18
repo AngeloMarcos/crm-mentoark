@@ -18,12 +18,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
-  Tabs, TabsContent, TabsList, TabsTrigger,
-} from "@/components/ui/tabs";
-import {
-  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil,
+  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import * as XLSX from "xlsx";
 
 interface Lista {
   id: string;
@@ -233,16 +231,7 @@ export default function LeadsPage() {
       return;
     }
     const headers = parseCsvLine(linhas[0]).map((h) => h.replace(/"/g, "").trim());
-
-    // Detectar formato Cnpj.biz
-    const isCnpjBiz =
-      headers.includes("Nome da empresa") ||
-      headers.includes("CNPJ ou CPF da empresa") ||
-      headers.includes("Categoria da empresa") ||
-      headers.includes("Nome fantasia da empresa");
-
     const listaAlvo = importLista || (listaFiltro !== "todas" ? listaFiltro : (listas[0]?.id ?? null));
-
     const novos: Array<Omit<Contato, "id" | "created_at">> = [];
 
     for (let i = 1; i < linhas.length; i++) {
@@ -253,70 +242,24 @@ export default function LeadsPage() {
         return idx >= 0 && cols[idx] ? cols[idx] : "";
       };
 
-      if (isCnpjBiz) {
-        // === Modo Cnpj.biz ===
-        const empresa = get("Nome fantasia da empresa") || get("Nome da empresa");
-        const nomeContato = get("Nome do contato 1") || empresa;
-        const telBruto = get("Telefones da empresa");
-        const telefone = telBruto ? telBruto.split(/[,;]/)[0].trim() : "";
-        const email = (get("E-mails da empresa") || "").split(/[,;]/)[0].trim();
-        const cargo = get("Cargo / função do contato 1") || get("Cargo / funcao do contato 1");
-        const segmento = get("Categoria da empresa");
-        const porte = get("Porte da empresa");
-        const cnpj = get("CNPJ ou CPF da empresa");
-        const razao = get("Razão social da empresa") || get("Razao social da empresa");
-        const dataAbertura = get("Data de abertura da empresa");
-        const contato2 = get("Nome do contato 2");
-        const cargo2 = get("Cargo / função do contato 2") || get("Cargo / funcao do contato 2");
-
-        const tagsAuto: string[] = [];
-        const seg = segmento.toLowerCase();
-        if (seg.includes("odontol")) tagsAuto.push("Odontologia");
-        else if (seg.includes("psicol") || seg.includes("psicanal")) tagsAuto.push("Psicologia");
-        else if (seg.includes("fisioter")) tagsAuto.push("Fisioterapia");
-        else if (seg.includes("médic") || seg.includes("medic")) tagsAuto.push("Médico");
-        else if (seg.includes("comércio") || seg.includes("comerc")) tagsAuto.push("Comércio");
-        if (porte) tagsAuto.push(porte);
-        tagsAuto.push("Cnpj.biz");
-
-        let notas = `CNPJ: ${cnpj} | Razão: ${razao} | Abertura: ${dataAbertura} | Segmento: ${segmento}`;
-        if (contato2) notas += ` | Contato 2: ${contato2}${cargo2 ? ` (${cargo2})` : ""}`;
-
-        if (!nomeContato) continue;
-
-        novos.push({
-          nome: nomeContato,
-          telefone,
-          email,
-          empresa,
-          cargo,
-          origem: "Cnpj.biz",
-          status: "novo",
-          tags: tagsAuto,
-          notas,
-          lista_id: listaAlvo,
-        });
-      } else {
-        // === Modo CSV simples ===
-        const nome = get("nome") || get("Nome");
-        if (!nome) continue;
-        novos.push({
-          nome,
-          telefone: get("telefone") || get("Telefone"),
-          email: get("email") || get("Email"),
-          empresa: get("empresa") || get("Empresa"),
-          cargo: get("cargo") || get("Cargo"),
-          origem: get("origem") || get("Origem") || "Manual",
-          status: get("status") || get("Status") || "novo",
-          tags: (get("tags") || get("Tags")) ? (get("tags") || get("Tags")).split(/[;,]/).map((t) => t.trim()).filter(Boolean) : [],
-          notas: get("notas") || get("Notas"),
-          lista_id: listaAlvo,
-        });
-      }
+      const nome = get("nome") || get("Nome");
+      if (!nome) continue;
+      novos.push({
+        nome,
+        telefone: get("telefone") || get("Telefone"),
+        email: get("email") || get("Email"),
+        empresa: get("empresa") || get("Empresa"),
+        cargo: get("cargo") || get("Cargo"),
+        origem: get("origem") || get("Origem") || "Manual",
+        status: get("status") || get("Status") || "novo",
+        tags: (get("tags") || get("Tags")) ? (get("tags") || get("Tags")).split(/[;,]/).map((t) => t.trim()).filter(Boolean) : [],
+        notas: get("notas") || get("Notas"),
+        lista_id: listaAlvo,
+      });
     }
 
     if (!novos.length) {
-      toast({ title: "Nenhum contato válido encontrado", variant: "destructive" });
+      toast({ title: "Nenhum contato válido encontrado", description: "Verifique se o cabeçalho contém ao menos a coluna 'nome'.", variant: "destructive" });
       return;
     }
 
@@ -332,11 +275,35 @@ export default function LeadsPage() {
     setModalImport(false);
     setCsvTexto("");
     setImportLista("");
-    toast({
-      title: `✅ ${novos.length} contatos importados!`,
-      description: isCnpjBiz ? "Formato Cnpj.biz detectado automaticamente." : "Formato CSV padrão importado.",
-    });
+    toast({ title: `✅ ${novos.length} contatos importados!` });
     carregar();
+  };
+
+  // Upload de arquivo do dispositivo (CSV ou Excel)
+  const handleArquivo = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      if (ext === "csv" || ext === "txt") {
+        const texto = await file.text();
+        setCsvTexto(texto);
+        toast({ title: "📄 Arquivo carregado", description: `${file.name} pronto para importar.` });
+      } else if (ext === "xlsx" || ext === "xls") {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const csv = XLSX.utils.sheet_to_csv(ws);
+        setCsvTexto(csv);
+        toast({ title: "📊 Planilha convertida", description: `${file.name} (aba "${wb.SheetNames[0]}") carregada.` });
+      } else {
+        toast({ title: "Formato não suportado", description: "Use CSV, XLSX ou XLS.", variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "Erro ao ler arquivo", description: err.message, variant: "destructive" });
+    } finally {
+      e.target.value = "";
+    }
   };
 
   // ============ FILTROS ============
@@ -555,28 +522,19 @@ export default function LeadsPage() {
         <Dialog open={modalImport} onOpenChange={setModalImport}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>Importar contatos via CSV</DialogTitle>
+              <DialogTitle>Importar contatos via CSV ou Excel</DialogTitle>
               <DialogDescription>
-                Cole o conteúdo do CSV abaixo. O sistema detecta automaticamente se é o formato do <strong>Cnpj.biz</strong> ou um CSV padrão.
+                Envie um arquivo do seu dispositivo (CSV, XLSX, XLS) ou cole o conteúdo abaixo.
               </DialogDescription>
             </DialogHeader>
 
-            <Tabs defaultValue="cnpjbiz" className="w-full">
-              <TabsList className="grid grid-cols-2 w-full">
-                <TabsTrigger value="cnpjbiz">📋 Cnpj.biz (auto)</TabsTrigger>
-                <TabsTrigger value="simples">CSV simples</TabsTrigger>
-              </TabsList>
-              <TabsContent value="cnpjbiz" className="space-y-2 pt-3">
-                <p className="text-xs text-muted-foreground">
-                  Exporte do Cnpj.biz e cole o conteúdo completo. Mapeamos: empresa, contato 1, telefone, e-mail, cargo, CNPJ, razão social, segmento (vira tag) e porte.
-                </p>
-              </TabsContent>
-              <TabsContent value="simples" className="space-y-2 pt-3">
-                <p className="text-xs text-muted-foreground">
-                  Cabeçalhos esperados: <code>nome, telefone, email, empresa, cargo, origem, status, tags, notas</code>. Tags separadas por <code>;</code>
-                </p>
-              </TabsContent>
-            </Tabs>
+            <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-1">
+              <p className="font-semibold">Formato esperado</p>
+              <p className="text-muted-foreground">
+                Cabeçalhos: <code>nome, telefone, email, empresa, cargo, origem, status, tags, notas</code>.
+                A coluna <code>nome</code> é obrigatória. Tags separadas por <code>;</code>
+              </p>
+            </div>
 
             <div className="space-y-3 py-1">
               <div className="space-y-1.5">
@@ -592,13 +550,30 @@ export default function LeadsPage() {
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="space-y-1.5">
-                <Label>Conteúdo do CSV</Label>
+                <Label>Importar do dispositivo</Label>
+                <label className="flex items-center justify-center gap-2 rounded-md border-2 border-dashed border-border hover:border-primary/50 hover:bg-muted/30 transition-colors cursor-pointer py-6 px-4 text-sm">
+                  <FileUp className="h-5 w-5 text-muted-foreground" />
+                  <span className="text-muted-foreground">
+                    Clique para selecionar um arquivo <strong className="text-foreground">CSV, XLSX ou XLS</strong>
+                  </span>
+                  <input
+                    type="file"
+                    accept=".csv,.xlsx,.xls,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                    className="hidden"
+                    onChange={handleArquivo}
+                  />
+                </label>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Ou cole o conteúdo do CSV</Label>
                 <Textarea
                   value={csvTexto}
                   onChange={(e) => setCsvTexto(e.target.value)}
-                  placeholder="Cole aqui o CSV completo (incluindo a primeira linha com os nomes das colunas)..."
-                  rows={12}
+                  placeholder="Cole aqui o CSV (com a primeira linha de cabeçalhos)..."
+                  rows={10}
                   className="font-mono text-xs"
                 />
               </div>
