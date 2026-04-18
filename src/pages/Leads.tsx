@@ -203,7 +203,8 @@ export default function LeadsPage() {
   };
 
   // ============ IMPORTAÇÃO CSV ============
-  // Parser CSV com suporte a campos com vírgulas dentro de aspas
+  // Parser CSV robusto (RFC 4180): suporta vírgulas dentro de aspas, aspas escapadas ("")
+  // e quebras de linha dentro de campos com aspas.
   const parseCsvLine = (line: string): string[] => {
     const out: string[] = [];
     let cur = "";
@@ -223,43 +224,119 @@ export default function LeadsPage() {
     return out.map((s) => s.trim());
   };
 
+  // Parseia CSV completo respeitando aspas que abrangem múltiplas linhas
+  const parseCsvFull = (text: string): string[][] => {
+    const clean = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const rows: string[][] = [];
+    let cur = "";
+    let inQuotes = false;
+    let row: string[] = [];
+    for (let i = 0; i < clean.length; i++) {
+      const ch = clean[i];
+      if (ch === '"') {
+        if (inQuotes && clean[i + 1] === '"') { cur += '"'; i++; }
+        else inQuotes = !inQuotes;
+      } else if (ch === "," && !inQuotes) {
+        row.push(cur.trim()); cur = "";
+      } else if (ch === "\n" && !inQuotes) {
+        row.push(cur.trim()); cur = "";
+        if (row.some((c) => c.length > 0)) rows.push(row);
+        row = [];
+      } else {
+        cur += ch;
+      }
+    }
+    if (cur.length > 0 || row.length > 0) {
+      row.push(cur.trim());
+      if (row.some((c) => c.length > 0)) rows.push(row);
+    }
+    return rows;
+  };
+
   const importarCSV = async () => {
     if (!user) return;
-    const linhas = csvTexto.trim().split(/\r?\n/);
-    if (linhas.length < 2) {
+    const rows = parseCsvFull(csvTexto);
+    if (rows.length < 2) {
       toast({ title: "CSV inválido", description: "Cole o cabeçalho + ao menos 1 linha de dados.", variant: "destructive" });
       return;
     }
-    const headers = parseCsvLine(linhas[0]).map((h) => h.replace(/"/g, "").trim());
+    const headers = rows[0].map((h) => h.replace(/"/g, "").toLowerCase().trim());
     const listaAlvo = importLista || (listaFiltro !== "todas" ? listaFiltro : (listas[0]?.id ?? null));
     const novos: Array<Omit<Contato, "id" | "created_at">> = [];
 
-    for (let i = 1; i < linhas.length; i++) {
-      if (!linhas[i].trim()) continue;
-      const cols = parseCsvLine(linhas[i]).map((c) => c.replace(/^"|"$/g, "").trim());
+    const isCnpjBiz =
+      headers.includes("nome da empresa") ||
+      headers.includes("cnpj ou cpf da empresa") ||
+      headers.includes("categoria da empresa") ||
+      headers.includes("razão social da empresa");
+
+    for (let i = 1; i < rows.length; i++) {
+      const cols = rows[i].map((c) => c.replace(/^"|"$/g, "").trim());
       const get = (key: string) => {
-        const idx = headers.indexOf(key);
+        const idx = headers.indexOf(key.toLowerCase());
         return idx >= 0 && cols[idx] ? cols[idx] : "";
       };
 
-      const nome = get("nome") || get("Nome");
-      if (!nome) continue;
-      novos.push({
-        nome,
-        telefone: get("telefone") || get("Telefone"),
-        email: get("email") || get("Email"),
-        empresa: get("empresa") || get("Empresa"),
-        cargo: get("cargo") || get("Cargo"),
-        origem: get("origem") || get("Origem") || "Manual",
-        status: get("status") || get("Status") || "novo",
-        tags: (get("tags") || get("Tags")) ? (get("tags") || get("Tags")).split(/[;,]/).map((t) => t.trim()).filter(Boolean) : [],
-        notas: get("notas") || get("Notas"),
-        lista_id: listaAlvo,
-      });
+      if (isCnpjBiz) {
+        const empresa = get("nome fantasia da empresa") || get("nome da empresa");
+        const nome = get("nome do contato 1") || empresa;
+        const telefoneBruto = get("telefones da empresa");
+        const telefone = telefoneBruto ? telefoneBruto.split(",")[0].trim() : "";
+        const email = get("e-mails da empresa");
+        const cargo = get("cargo / função do contato 1");
+        const segmento = get("categoria da empresa");
+        const porte = get("porte da empresa");
+        const cnpj = get("cnpj ou cpf da empresa");
+        const razao = get("razão social da empresa");
+        const dataAbertura = get("data de abertura da empresa");
+        const contato2 = get("nome do contato 2");
+        const cargo2 = get("cargo / função do contato 2");
+
+        if (!nome && !telefone && !email) continue;
+
+        const tagsAuto: string[] = [];
+        const seg = segmento.toLowerCase();
+        if (seg.includes("odontol")) tagsAuto.push("Odontologia");
+        else if (seg.includes("psicol") || seg.includes("psicanal")) tagsAuto.push("Psicologia");
+        else if (seg.includes("fisioter")) tagsAuto.push("Fisioterapia");
+        else if (seg.includes("médic") || seg.includes("medic")) tagsAuto.push("Médico");
+        else if (seg.includes("comércio") || seg.includes("comerc")) tagsAuto.push("Comércio");
+        if (porte) tagsAuto.push(porte);
+        tagsAuto.push("Cnpj.biz");
+
+        let notas = `CNPJ: ${cnpj} | Razão social: ${razao} | Abertura: ${dataAbertura} | Segmento: ${segmento}`;
+        if (contato2) notas += ` | Contato 2: ${contato2}${cargo2 ? ` (${cargo2})` : ""}`;
+
+        novos.push({
+          nome, telefone, email, empresa, cargo,
+          origem: "Cnpj.biz",
+          status: "novo",
+          tags: tagsAuto,
+          notas,
+          lista_id: listaAlvo,
+        });
+      } else {
+        const nome = get("nome") || get("name") || get("nome completo") || get("nome do contato");
+        const telefone = get("telefone") || get("fone") || get("celular") || get("phone") || get("whatsapp");
+        if (!nome && !telefone) continue;
+        const tagsRaw = get("tags") || get("tag");
+        novos.push({
+          nome: nome || telefone,
+          telefone,
+          email: get("email") || get("e-mail") || get("mail"),
+          empresa: get("empresa") || get("company") || get("nome da empresa"),
+          cargo: get("cargo") || get("função") || get("role"),
+          origem: get("origem") || get("source") || "Importado",
+          status: get("status") || "novo",
+          tags: tagsRaw ? tagsRaw.split(/[;,]/).map((t) => t.trim()).filter(Boolean) : [],
+          notas: get("notas") || get("observações") || get("notes") || "",
+          lista_id: listaAlvo,
+        });
+      }
     }
 
     if (!novos.length) {
-      toast({ title: "Nenhum contato válido encontrado", description: "Verifique se o cabeçalho contém ao menos a coluna 'nome'.", variant: "destructive" });
+      toast({ title: "Nenhum contato válido encontrado", description: "Verifique se o cabeçalho contém ao menos a coluna 'nome' ou 'telefone'.", variant: "destructive" });
       return;
     }
 
@@ -275,7 +352,10 @@ export default function LeadsPage() {
     setModalImport(false);
     setCsvTexto("");
     setImportLista("");
-    toast({ title: `✅ ${novos.length} contatos importados!` });
+    toast({
+      title: `✅ ${novos.length} contatos importados!`,
+      description: isCnpjBiz ? "Formato Cnpj.biz detectado automaticamente" : "Formato CSV genérico",
+    });
     carregar();
   };
 
