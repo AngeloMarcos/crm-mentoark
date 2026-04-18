@@ -18,8 +18,22 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
-  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp,
+  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, MessageCircle,
 } from "lucide-react";
+
+function formatWhatsappNumber(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let digits = raw.replace(/\D/g, "");
+  if (!digits) return null;
+  // Remove leading zeros
+  digits = digits.replace(/^0+/, "");
+  // If doesn't start with country code (Brazil 55) and length is 10 or 11 (DDD + number), prepend 55
+  if (!digits.startsWith("55") && (digits.length === 10 || digits.length === 11)) {
+    digits = "55" + digits;
+  }
+  if (digits.length < 10) return null;
+  return digits;
+}
 import { useToast } from "@/hooks/use-toast";
 import * as XLSX from "xlsx";
 
