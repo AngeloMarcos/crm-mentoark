@@ -9,6 +9,7 @@ import { AuthProvider } from "@/hooks/useAuth";
 import LoginPage from "./pages/Login";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
+import DiscagemPage from "./pages/Discagem";
 import FunilPage from "./pages/Funil";
 import WhatsAppPage from "./pages/WhatsApp";
 import CampanhasPage from "./pages/Campanhas";
@@ -32,6 +33,7 @@ const App = () => (
               <Route path="/login" element={<LoginPage />} />
               <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
               <Route path="/leads" element={<ProtectedRoute><LeadsPage /></ProtectedRoute>} />
+              <Route path="/discagem" element={<ProtectedRoute><DiscagemPage /></ProtectedRoute>} />
               <Route path="/funil" element={<ProtectedRoute><FunilPage /></ProtectedRoute>} />
               <Route path="/whatsapp" element={<ProtectedRoute><WhatsAppPage /></ProtectedRoute>} />
               <Route path="/campanhas" element={<ProtectedRoute><CampanhasPage /></ProtectedRoute>} />
