@@ -8,6 +8,7 @@ import { Eye, EyeOff, LogIn, UserPlus, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import logo from "@/assets/mentoark-logo.png";
 
 export default function LoginPage() {
   const { toast } = useToast();
@@ -60,7 +61,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
-          <div className="w-14 h-14 rounded-2xl bg-primary flex items-center justify-center text-primary-foreground font-bold text-2xl mx-auto">M</div>
+          <img src={logo} alt="MentoArk" className="w-20 h-20 rounded-2xl mx-auto object-cover" />
           <h1 className="text-2xl font-bold">Mento<span className="text-primary">Ark</span></h1>
           <p className="text-sm text-muted-foreground">CRM de automação comercial</p>
         </div>

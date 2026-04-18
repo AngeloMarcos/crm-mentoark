@@ -2,6 +2,7 @@ import {
   LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug, LogOut, ChevronLeft, Brain, ShieldCheck, PhoneCall,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import logo from "@/assets/mentoark-logo.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -38,10 +39,8 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
-      <div className="flex items-center gap-2 px-4 py-5 border-b border-sidebar-border">
-        <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground font-bold text-sm shrink-0">
-          M
-        </div>
+      <div className="flex items-center gap-2 px-4 py-4 border-b border-sidebar-border">
+        <img src={logo} alt="MentoArk" className="w-9 h-9 rounded-lg object-cover shrink-0" />
         {!collapsed && (
           <span className="font-bold text-lg text-sidebar-foreground tracking-tight">
             Mento<span className="text-primary">Ark</span>
