@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug, LogOut, ChevronLeft,
+  LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug, LogOut, ChevronLeft, Brain,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -15,6 +15,7 @@ const items = [
   { title: "WhatsApp", url: "/whatsapp", icon: MessageCircle },
   { title: "Campanhas", url: "/campanhas", icon: Megaphone },
   { title: "Integrações", url: "/integracoes", icon: Plug },
+  { title: "Cérebro do Agente", url: "/cerebro", icon: Brain },
 ];
 
 export function AppSidebar() {
