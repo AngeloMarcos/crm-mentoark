@@ -14,6 +14,133 @@ export type Database = {
   }
   public: {
     Tables: {
+      chamadas: {
+        Row: {
+          contato_id: string
+          created_at: string
+          duracao_segundos: number | null
+          id: string
+          notas: string | null
+          resultado: string
+          user_id: string
+        }
+        Insert: {
+          contato_id: string
+          created_at?: string
+          duracao_segundos?: number | null
+          id?: string
+          notas?: string | null
+          resultado: string
+          user_id: string
+        }
+        Update: {
+          contato_id?: string
+          created_at?: string
+          duracao_segundos?: number | null
+          id?: string
+          notas?: string | null
+          resultado?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chamadas_contato_id_fkey"
+            columns: ["contato_id"]
+            isOneToOne: false
+            referencedRelation: "contatos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      contatos: {
+        Row: {
+          cargo: string | null
+          created_at: string
+          email: string | null
+          empresa: string | null
+          id: string
+          lista_id: string | null
+          nome: string
+          notas: string | null
+          origem: string | null
+          status: string
+          tags: string[] | null
+          telefone: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          cargo?: string | null
+          created_at?: string
+          email?: string | null
+          empresa?: string | null
+          id?: string
+          lista_id?: string | null
+          nome: string
+          notas?: string | null
+          origem?: string | null
+          status?: string
+          tags?: string[] | null
+          telefone?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          cargo?: string | null
+          created_at?: string
+          email?: string | null
+          empresa?: string | null
+          id?: string
+          lista_id?: string | null
+          nome?: string
+          notas?: string | null
+          origem?: string | null
+          status?: string
+          tags?: string[] | null
+          telefone?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contatos_lista_id_fkey"
+            columns: ["lista_id"]
+            isOneToOne: false
+            referencedRelation: "listas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      listas: {
+        Row: {
+          cor: string | null
+          created_at: string
+          descricao: string | null
+          id: string
+          nome: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          cor?: string | null
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          nome: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          cor?: string | null
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          nome?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
