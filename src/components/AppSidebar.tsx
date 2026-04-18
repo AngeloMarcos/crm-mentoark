@@ -1,6 +1,7 @@
 import {
-  LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug, LogOut, ChevronLeft, Brain,
+  LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug, LogOut, ChevronLeft, Brain, ShieldCheck,
 } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 import { NavLink } from "@/components/NavLink";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -23,11 +24,16 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const navigate = useNavigate();
+  const { isAdmin, signOut } = useAuth();
 
-  const handleLogout = () => {
-    localStorage.removeItem("mentoark-auth");
+  const handleLogout = async () => {
+    await signOut();
     navigate("/login");
   };
+
+  const menuItems = isAdmin
+    ? [...items, { title: "Usuários", url: "/usuarios", icon: ShieldCheck }]
+    : items;
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
@@ -46,7 +52,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {items.map((item) => (
+              {menuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
                     <NavLink
