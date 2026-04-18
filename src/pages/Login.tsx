@@ -7,7 +7,6 @@ import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, LogIn, UserPlus, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
 import { useAuth } from "@/hooks/useAuth";
 
 export default function LoginPage() {
