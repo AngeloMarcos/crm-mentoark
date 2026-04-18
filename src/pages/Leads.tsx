@@ -522,28 +522,19 @@ export default function LeadsPage() {
         <Dialog open={modalImport} onOpenChange={setModalImport}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>Importar contatos via CSV</DialogTitle>
+              <DialogTitle>Importar contatos via CSV ou Excel</DialogTitle>
               <DialogDescription>
-                Cole o conteúdo do CSV abaixo. O sistema detecta automaticamente se é o formato do <strong>Cnpj.biz</strong> ou um CSV padrão.
+                Envie um arquivo do seu dispositivo (CSV, XLSX, XLS) ou cole o conteúdo abaixo.
               </DialogDescription>
             </DialogHeader>
 
-            <Tabs defaultValue="cnpjbiz" className="w-full">
-              <TabsList className="grid grid-cols-2 w-full">
-                <TabsTrigger value="cnpjbiz">📋 Cnpj.biz (auto)</TabsTrigger>
-                <TabsTrigger value="simples">CSV simples</TabsTrigger>
-              </TabsList>
-              <TabsContent value="cnpjbiz" className="space-y-2 pt-3">
-                <p className="text-xs text-muted-foreground">
-                  Exporte do Cnpj.biz e cole o conteúdo completo. Mapeamos: empresa, contato 1, telefone, e-mail, cargo, CNPJ, razão social, segmento (vira tag) e porte.
-                </p>
-              </TabsContent>
-              <TabsContent value="simples" className="space-y-2 pt-3">
-                <p className="text-xs text-muted-foreground">
-                  Cabeçalhos esperados: <code>nome, telefone, email, empresa, cargo, origem, status, tags, notas</code>. Tags separadas por <code>;</code>
-                </p>
-              </TabsContent>
-            </Tabs>
+            <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-1">
+              <p className="font-semibold">Formato esperado</p>
+              <p className="text-muted-foreground">
+                Cabeçalhos: <code>nome, telefone, email, empresa, cargo, origem, status, tags, notas</code>.
+                A coluna <code>nome</code> é obrigatória. Tags separadas por <code>;</code>
+              </p>
+            </div>
 
             <div className="space-y-3 py-1">
               <div className="space-y-1.5">
@@ -559,13 +550,30 @@ export default function LeadsPage() {
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="space-y-1.5">
-                <Label>Conteúdo do CSV</Label>
+                <Label>Importar do dispositivo</Label>
+                <label className="flex items-center justify-center gap-2 rounded-md border-2 border-dashed border-border hover:border-primary/50 hover:bg-muted/30 transition-colors cursor-pointer py-6 px-4 text-sm">
+                  <FileUp className="h-5 w-5 text-muted-foreground" />
+                  <span className="text-muted-foreground">
+                    Clique para selecionar um arquivo <strong className="text-foreground">CSV, XLSX ou XLS</strong>
+                  </span>
+                  <input
+                    type="file"
+                    accept=".csv,.xlsx,.xls,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                    className="hidden"
+                    onChange={handleArquivo}
+                  />
+                </label>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Ou cole o conteúdo do CSV</Label>
                 <Textarea
                   value={csvTexto}
                   onChange={(e) => setCsvTexto(e.target.value)}
-                  placeholder="Cole aqui o CSV completo (incluindo a primeira linha com os nomes das colunas)..."
-                  rows={12}
+                  placeholder="Cole aqui o CSV (com a primeira linha de cabeçalhos)..."
+                  rows={10}
                   className="font-mono text-xs"
                 />
               </div>
