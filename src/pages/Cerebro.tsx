@@ -8,10 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database, MessageCircle } from "lucide-react";
+import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database, MessageCircle, FileCode } from "lucide-react";
 import { toast } from "sonner";
 import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
 import { TestarAgente } from "@/components/cerebro/TestarAgente";
+import { PromptAgente } from "@/components/cerebro/PromptAgente";
 
 // ============ TYPES ============
 interface KV { id: string; campo: string; conteudo: string; }
@@ -393,7 +394,7 @@ export default function CerebroPage() {
         </div>
 
         <Tabs defaultValue="personalidade">
-          <TabsList className="grid w-full grid-cols-2 md:grid-cols-7 h-auto">
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-8 h-auto">
             <TabsTrigger value="personalidade"><User className="h-4 w-4 mr-1" /> Personalidade</TabsTrigger>
             <TabsTrigger value="negocio"><Building2 className="h-4 w-4 mr-1" /> Negócio</TabsTrigger>
             <TabsTrigger value="faqs"><HelpCircle className="h-4 w-4 mr-1" /> FAQs</TabsTrigger>
@@ -401,6 +402,7 @@ export default function CerebroPage() {
             <TabsTrigger value="scripts"><FileText className="h-4 w-4 mr-1" /> Scripts</TabsTrigger>
             <TabsTrigger value="vetorial"><Database className="h-4 w-4 mr-1" /> Base Vetorial</TabsTrigger>
             <TabsTrigger value="testar"><MessageCircle className="h-4 w-4 mr-1" /> Testar Agente</TabsTrigger>
+            <TabsTrigger value="prompt"><FileCode className="h-4 w-4 mr-1" /> Prompt</TabsTrigger>
           </TabsList>
           <TabsContent value="personalidade" className="mt-4">
             <KeyValueEditor items={personalidade} setItems={setPersonalidade} labelCampo="Atributo" />
@@ -422,6 +424,9 @@ export default function CerebroPage() {
           </TabsContent>
           <TabsContent value="testar" className="mt-4">
             <TestarAgente />
+          </TabsContent>
+          <TabsContent value="prompt" className="mt-4">
+            <PromptAgente />
           </TabsContent>
         </Tabs>
       </div>
