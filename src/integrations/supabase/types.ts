@@ -44,6 +44,69 @@ export type Database = {
         }
         Relationships: []
       }
+      agentes: {
+        Row: {
+          ativo: boolean
+          created_at: string
+          descricao: string | null
+          evolution_api_key: string | null
+          evolution_instancia: string | null
+          evolution_server_url: string | null
+          id: string
+          max_tokens: number
+          mensagem_boas_vindas: string | null
+          modelo: string
+          nome: string
+          objetivo: string | null
+          persona: string | null
+          regras: string | null
+          temperatura: number
+          tom: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean
+          created_at?: string
+          descricao?: string | null
+          evolution_api_key?: string | null
+          evolution_instancia?: string | null
+          evolution_server_url?: string | null
+          id?: string
+          max_tokens?: number
+          mensagem_boas_vindas?: string | null
+          modelo?: string
+          nome: string
+          objetivo?: string | null
+          persona?: string | null
+          regras?: string | null
+          temperatura?: number
+          tom?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean
+          created_at?: string
+          descricao?: string | null
+          evolution_api_key?: string | null
+          evolution_instancia?: string | null
+          evolution_server_url?: string | null
+          id?: string
+          max_tokens?: number
+          mensagem_boas_vindas?: string | null
+          modelo?: string
+          nome?: string
+          objetivo?: string | null
+          persona?: string | null
+          regras?: string | null
+          temperatura?: number
+          tom?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       campanhas: {
         Row: {
           cliques: number
