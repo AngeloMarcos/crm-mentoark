@@ -28,7 +28,7 @@ export function WorkflowCanvas() {
     validationErrors,
   } = useWorkflowStore();
 
-  const rfRef = useRef<ReactFlowInstance | null>(null);
+  const rfRef = useRef<ReactFlowInstance<any, any> | null>(null);
 
   const errorIds = useMemo(
     () => new Set(validationErrors.map((e: any) => e.nodeId)),
