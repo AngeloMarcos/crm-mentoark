@@ -422,7 +422,16 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      dashboard_resumo: {
+        Row: {
+          convertidos: number | null
+          em_atendimento: number | null
+          novos_hoje: number | null
+          total_leads: number | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       has_role: {
