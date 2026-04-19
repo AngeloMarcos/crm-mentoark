@@ -82,6 +82,45 @@ export type Database = {
           },
         ]
       }
+      conhecimento: {
+        Row: {
+          campo: string | null
+          categoria: string | null
+          conteudo: string
+          contexto: string | null
+          created_at: string
+          id: string
+          indexado: boolean
+          tipo: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          campo?: string | null
+          categoria?: string | null
+          conteudo: string
+          contexto?: string | null
+          created_at?: string
+          id?: string
+          indexado?: boolean
+          tipo: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          campo?: string | null
+          categoria?: string | null
+          conteudo?: string
+          contexto?: string | null
+          created_at?: string
+          id?: string
+          indexado?: boolean
+          tipo?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       contatos: {
         Row: {
           cargo: string | null
