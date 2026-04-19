@@ -111,6 +111,36 @@ export type Database = {
           },
         ]
       }
+      documents: {
+        Row: {
+          content: string
+          created_at: string
+          embedding: string | null
+          id: number
+          metadata: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          embedding?: string | null
+          id?: number
+          metadata?: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          embedding?: string | null
+          id?: number
+          metadata?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       listas: {
         Row: {
           cor: string | null
