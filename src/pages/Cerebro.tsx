@@ -422,6 +422,29 @@ export default function CerebroPage() {
 
   useEffect(() => { carregar(); }, [carregar]);
 
+  // RAG sync — defina VITE_N8N_WEBHOOK_RAG no .env com a URL real do webhook do n8n
+  const [sincronizando, setSincronizando] = useState(false);
+  const sincronizarRAG = async () => {
+    const url = import.meta.env.VITE_N8N_WEBHOOK_RAG as string | undefined;
+    if (!url) return toast.error("Configure VITE_N8N_WEBHOOK_RAG no .env");
+    if (!user) return toast.error("Faça login");
+    setSincronizando(true);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: user.id, source: "cerebro-crm" }),
+      });
+      if (res.ok) toast.success("✅ Sincronização enviada! O RAG será atualizado em instantes.");
+      else toast.error("❌ Erro ao sincronizar. Verifique o webhook do n8n.");
+    } catch {
+      toast.error("❌ Erro ao sincronizar. Verifique o webhook do n8n.");
+    } finally {
+      setSincronizando(false);
+      carregar();
+    }
+  };
+
   const makeHandlers = (tipo: TipoConhecimento) => ({
     items: itens.filter((i) => i.tipo === tipo),
     onSave: async (item: Partial<ConhecimentoItem> & { id?: string }) => {
