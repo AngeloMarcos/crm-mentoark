@@ -544,16 +544,17 @@ export default function CerebroPage() {
           <Card><CardContent className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-primary" /></CardContent></Card>
         ) : (
           <Tabs defaultValue="personalidade">
-            <TabsList className="grid w-full grid-cols-2 md:grid-cols-9 h-auto">
+            <TabsList className="grid w-full grid-cols-2 md:grid-cols-10 h-auto">
               <TabsTrigger value="personalidade"><User className="h-4 w-4 mr-1" /> Personalidade</TabsTrigger>
               <TabsTrigger value="negocio"><Building2 className="h-4 w-4 mr-1" /> Negócio</TabsTrigger>
               <TabsTrigger value="faqs"><HelpCircle className="h-4 w-4 mr-1" /> FAQs</TabsTrigger>
               <TabsTrigger value="objecoes"><Shield className="h-4 w-4 mr-1" /> Objeções</TabsTrigger>
               <TabsTrigger value="scripts"><FileText className="h-4 w-4 mr-1" /> Scripts</TabsTrigger>
               <TabsTrigger value="vetorial"><Database className="h-4 w-4 mr-1" /> Base Vetorial</TabsTrigger>
-              <TabsTrigger value="testar"><MessageCircle className="h-4 w-4 mr-1" /> Testar Agente</TabsTrigger>
               <TabsTrigger value="prompt"><FileCode className="h-4 w-4 mr-1" /> Prompt</TabsTrigger>
+              <TabsTrigger value="testar"><MessageCircle className="h-4 w-4 mr-1" /> Testar Agente</TabsTrigger>
               <TabsTrigger value="config"><Settings className="h-4 w-4 mr-1" /> Configurações</TabsTrigger>
+              <TabsTrigger value="gerador"><Wand2 className="h-4 w-4 mr-1" /> Gerador IA</TabsTrigger>
             </TabsList>
             <TabsContent value="personalidade" className="mt-4">
               <KeyValueEditor {...personalidade} labelCampo="Atributo" />
