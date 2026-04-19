@@ -8,8 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText } from "lucide-react";
+import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database } from "lucide-react";
 import { toast } from "sonner";
+import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
 
 // ============ TYPES ============
 interface KV { id: string; campo: string; conteudo: string; }
@@ -391,12 +392,13 @@ export default function CerebroPage() {
         </div>
 
         <Tabs defaultValue="personalidade">
-          <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 h-auto">
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-6 h-auto">
             <TabsTrigger value="personalidade"><User className="h-4 w-4 mr-1" /> Personalidade</TabsTrigger>
             <TabsTrigger value="negocio"><Building2 className="h-4 w-4 mr-1" /> Negócio</TabsTrigger>
             <TabsTrigger value="faqs"><HelpCircle className="h-4 w-4 mr-1" /> FAQs</TabsTrigger>
             <TabsTrigger value="objecoes"><Shield className="h-4 w-4 mr-1" /> Objeções</TabsTrigger>
             <TabsTrigger value="scripts"><FileText className="h-4 w-4 mr-1" /> Scripts</TabsTrigger>
+            <TabsTrigger value="vetorial"><Database className="h-4 w-4 mr-1" /> Base Vetorial</TabsTrigger>
           </TabsList>
           <TabsContent value="personalidade" className="mt-4">
             <KeyValueEditor items={personalidade} setItems={setPersonalidade} labelCampo="Atributo" />
@@ -412,6 +414,9 @@ export default function CerebroPage() {
           </TabsContent>
           <TabsContent value="scripts" className="mt-4">
             <ScriptsEditor items={scripts} setItems={setScripts} />
+          </TabsContent>
+          <TabsContent value="vetorial" className="mt-4">
+            <BaseVetorial />
           </TabsContent>
         </Tabs>
       </div>
