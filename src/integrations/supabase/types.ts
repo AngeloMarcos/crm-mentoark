@@ -273,6 +273,51 @@ export type Database = {
         }
         Relationships: []
       }
+      integracoes_config: {
+        Row: {
+          api_key: string | null
+          config: Json
+          created_at: string
+          id: string
+          instancia: string | null
+          nome: string
+          status: string
+          tipo: string
+          ultima_sync: string | null
+          updated_at: string
+          url: string | null
+          user_id: string
+        }
+        Insert: {
+          api_key?: string | null
+          config?: Json
+          created_at?: string
+          id?: string
+          instancia?: string | null
+          nome: string
+          status?: string
+          tipo: string
+          ultima_sync?: string | null
+          updated_at?: string
+          url?: string | null
+          user_id: string
+        }
+        Update: {
+          api_key?: string | null
+          config?: Json
+          created_at?: string
+          id?: string
+          instancia?: string | null
+          nome?: string
+          status?: string
+          tipo?: string
+          ultima_sync?: string | null
+          updated_at?: string
+          url?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       listas: {
         Row: {
           cor: string | null
