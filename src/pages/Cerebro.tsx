@@ -8,12 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database, MessageCircle, FileCode, Settings, Loader2, RefreshCw } from "lucide-react";
+import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database, MessageCircle, FileCode, Settings, Loader2, RefreshCw, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
 import { TestarAgente } from "@/components/cerebro/TestarAgente";
 import { PromptAgente } from "@/components/cerebro/PromptAgente";
 import { Configuracoes } from "@/components/cerebro/Configuracoes";
+import { GeradorPrompt } from "@/components/cerebro/GeradorPrompt";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 
