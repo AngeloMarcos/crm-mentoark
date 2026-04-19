@@ -44,6 +44,60 @@ export type Database = {
         }
         Relationships: []
       }
+      campanhas: {
+        Row: {
+          cliques: number
+          conversoes: number
+          cpl: number
+          created_at: string
+          ctr: number
+          id: string
+          impressoes: number
+          investimento: number
+          leads_gerados: number
+          nome: string
+          periodo: string | null
+          plataforma: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          cliques?: number
+          conversoes?: number
+          cpl?: number
+          created_at?: string
+          ctr?: number
+          id?: string
+          impressoes?: number
+          investimento?: number
+          leads_gerados?: number
+          nome: string
+          periodo?: string | null
+          plataforma?: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          cliques?: number
+          conversoes?: number
+          cpl?: number
+          created_at?: string
+          ctr?: number
+          id?: string
+          impressoes?: number
+          investimento?: number
+          leads_gerados?: number
+          nome?: string
+          periodo?: string | null
+          plataforma?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       chamadas: {
         Row: {
           contato_id: string
