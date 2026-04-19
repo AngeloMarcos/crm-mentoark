@@ -62,8 +62,8 @@ function exportCSV(itens: ConhecimentoItem[]) {
 // ============ SHARED HOOKS / TYPES ============
 interface EditorProps {
   items: ConhecimentoItem[];
-  onSave: (item: Partial<ConhecimentoItem> & { id?: string }) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
+  onSave: (item: Partial<ConhecimentoItem> & { id?: string }) => Promise<unknown>;
+  onDelete: (id: string) => Promise<unknown>;
 }
 
 // ============ KEY VALUE EDITOR (personalidade / negocio) ============
