@@ -79,9 +79,9 @@ const emptyForm = {
 
 const renderTemplate = (tpl: string, c: { nome?: string | null; empresa?: string | null; telefone?: string | null }) =>
   (tpl || "")
-    .replaceAll("{{nome}}", c.nome ?? "")
-    .replaceAll("{{empresa}}", c.empresa ?? "")
-    .replaceAll("{{telefone}}", c.telefone ?? "");
+    .split("{{nome}}").join(c.nome ?? "")
+    .split("{{empresa}}").join(c.empresa ?? "")
+    .split("{{telefone}}").join(c.telefone ?? "");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const inWindow = (start: string, end: string) => {
