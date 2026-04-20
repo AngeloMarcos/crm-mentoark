@@ -428,7 +428,7 @@ export default function DisparosPage() {
   const refreshActive = async (id: string) => {
     const [{ data: dsp }, { data: lgs }] = await Promise.all([
       supabase.from("disparos").select("*").eq("id", id).single(),
-      supabase.from("disparo_logs").select("*").eq("disparo_id", id).order("created_at", { ascending: false }).limit(20),
+      supabase.from("disparo_logs").select("*").eq("disparo_id", id).order("created_at", { ascending: true }),
     ]);
     if (dsp) setDisparos((arr) => arr.map((x) => (x.id === id ? (dsp as Disparo) : x)));
     setActiveLogs((lgs as DisparoLog[]) ?? []);
