@@ -146,8 +146,40 @@ export default function DisparosPage() {
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const runningRef = useRef<Set<string>>(new Set());
-  const pauseFlagRef = useRef<Set<string>>(new Set());
+  // Refs do motor de execução (1 disparo ativo por vez)
+  const lockRef = useRef(false);                            // trava reentrância
+  const pauseFlagRef = useRef<Set<string>>(new Set());      // disparos com pedido de pausa
+  const timerRef = useRef<number | null>(null);             // setTimeout do próximo envio
+  const countdownRef = useRef<number | null>(null);         // setInterval do contador
+  const lotePorDisparoRef = useRef<Record<string, number>>({}); // mensagens desde a última pausa
+
+  // Countdown visível para próximo envio (segundos)
+  const [proximoEnvio, setProximoEnvio] = useState(0);
+
+  const FILA_KEY = (id: string) => `disparo_fila_${id}`;
+  const lerEstadoLocal = (id: string): { lote: number; nextAt: number | null } => {
+    try { return JSON.parse(localStorage.getItem(FILA_KEY(id)) ?? "") || { lote: 0, nextAt: null }; }
+    catch { return { lote: 0, nextAt: null }; }
+  };
+  const salvarEstadoLocal = (id: string, st: { lote: number; nextAt: number | null }) => {
+    try { localStorage.setItem(FILA_KEY(id), JSON.stringify(st)); } catch {}
+  };
+  const limparEstadoLocal = (id: string) => { try { localStorage.removeItem(FILA_KEY(id)); } catch {} };
+
+  const limparTimers = () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
+  };
+  const iniciarCountdown = (segundos: number) => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    let restante = Math.ceil(segundos);
+    setProximoEnvio(restante);
+    countdownRef.current = window.setInterval(() => {
+      restante -= 1;
+      setProximoEnvio(restante > 0 ? restante : 0);
+      if (restante <= 0 && countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
+    }, 1000);
+  };
 
   // -------- Carregamento inicial --------
   const carregar = async () => {
