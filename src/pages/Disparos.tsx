@@ -445,16 +445,24 @@ export default function DisparosPage() {
 
   const pausar = async (d: Disparo) => {
     pauseFlagRef.current.add(d.id);
+    limparTimers();
+    setProximoEnvio(0);
     await setStatus(d.id, "pausado");
     toast.info("Disparo pausado");
     carregar();
   };
   const cancelar = async (d: Disparo) => {
     pauseFlagRef.current.add(d.id);
+    limparTimers();
+    setProximoEnvio(0);
+    limparEstadoLocal(d.id);
     await setStatus(d.id, "cancelado", { data_fim: new Date().toISOString() });
     toast.info("Disparo cancelado");
     carregar();
   };
+
+  // Limpa timers ao desmontar
+  useEffect(() => () => { limparTimers(); }, []);
   const excluir = async (id: string) => {
     const { error } = await supabase.from("disparos").delete().eq("id", id);
     if (error) { toast.error(error.message); return; }
