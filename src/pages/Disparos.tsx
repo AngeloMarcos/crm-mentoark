@@ -146,8 +146,40 @@ export default function DisparosPage() {
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const runningRef = useRef<Set<string>>(new Set());
-  const pauseFlagRef = useRef<Set<string>>(new Set());
+  // Refs do motor de execução (1 disparo ativo por vez)
+  const lockRef = useRef(false);                            // trava reentrância
+  const pauseFlagRef = useRef<Set<string>>(new Set());      // disparos com pedido de pausa
+  const timerRef = useRef<number | null>(null);             // setTimeout do próximo envio
+  const countdownRef = useRef<number | null>(null);         // setInterval do contador
+  const lotePorDisparoRef = useRef<Record<string, number>>({}); // mensagens desde a última pausa
+
+  // Countdown visível para próximo envio (segundos)
+  const [proximoEnvio, setProximoEnvio] = useState(0);
+
+  const FILA_KEY = (id: string) => `disparo_fila_${id}`;
+  const lerEstadoLocal = (id: string): { lote: number; nextAt: number | null } => {
+    try { return JSON.parse(localStorage.getItem(FILA_KEY(id)) ?? "") || { lote: 0, nextAt: null }; }
+    catch { return { lote: 0, nextAt: null }; }
+  };
+  const salvarEstadoLocal = (id: string, st: { lote: number; nextAt: number | null }) => {
+    try { localStorage.setItem(FILA_KEY(id), JSON.stringify(st)); } catch {}
+  };
+  const limparEstadoLocal = (id: string) => { try { localStorage.removeItem(FILA_KEY(id)); } catch {} };
+
+  const limparTimers = () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
+  };
+  const iniciarCountdown = (segundos: number) => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    let restante = Math.ceil(segundos);
+    setProximoEnvio(restante);
+    countdownRef.current = window.setInterval(() => {
+      restante -= 1;
+      setProximoEnvio(restante > 0 ? restante : 0);
+      if (restante <= 0 && countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
+    }, 1000);
+  };
 
   // -------- Carregamento inicial --------
   const carregar = async () => {
@@ -298,67 +330,99 @@ export default function DisparosPage() {
     await supabase.from("disparos").update({ status, ...extras }).eq("id", id);
   };
 
+  // Processa o próximo log pendente do disparo (recursivo via setTimeout)
+  const processarProximo = async (d: Disparo) => {
+    if (lockRef.current) return;
+    if (pauseFlagRef.current.has(d.id)) return;
+    if (!evolution) { toast.error("Evolution API não configurada"); return; }
+
+    // Janela de horário
+    if (!inWindow(d.horario_inicio, d.horario_fim)) {
+      toast.info("Fora da janela de horário — aguardando 1 min");
+      iniciarCountdown(60);
+      timerRef.current = window.setTimeout(() => processarProximo(d), 60_000);
+      return;
+    }
+
+    // Pausa anti-bloqueio (a cada N mensagens)
+    const lote = lotePorDisparoRef.current[d.id] ?? lerEstadoLocal(d.id).lote ?? 0;
+    if (d.pausa_a_cada > 0 && lote >= d.pausa_a_cada) {
+      lotePorDisparoRef.current[d.id] = 0;
+      const ms = d.pausa_duracao * 60_000;
+      salvarEstadoLocal(d.id, { lote: 0, nextAt: Date.now() + ms });
+      toast.info(`⏸️ Pausa anti-bloqueio: ${d.pausa_duracao} min`);
+      iniciarCountdown(ms / 1000);
+      timerRef.current = window.setTimeout(() => processarProximo(d), ms);
+      return;
+    }
+
+    // Próximo pendente
+    const { data: pendings } = await supabase
+      .from("disparo_logs").select("*")
+      .eq("disparo_id", d.id).eq("status", "pending")
+      .order("created_at").limit(1);
+    const log = pendings?.[0] as DisparoLog | undefined;
+    if (!log) {
+      limparTimers();
+      limparEstadoLocal(d.id);
+      await setStatus(d.id, "concluido", { data_fim: new Date().toISOString() });
+      toast.success(`✅ Disparo "${d.nome}" concluído`);
+      carregar(); refreshActive(d.id);
+      return;
+    }
+
+    // Trava + envio
+    lockRef.current = true;
+    await supabase.from("disparo_logs").update({ status: "sending", tentativas: log.tentativas + 1 }).eq("id", log.id);
+    let sucesso = false;
+    let erroMsg: string | null = null;
+    try {
+      await enviarMensagem(evolution, log.telefone, log.mensagem_enviada ?? "");
+      sucesso = true;
+    } catch (err: any) {
+      erroMsg = err?.message ?? "erro";
+    }
+
+    if (sucesso) {
+      await supabase.from("disparo_logs").update({ status: "sent", enviado_at: new Date().toISOString() }).eq("id", log.id);
+      const { data: cur } = await supabase.from("disparos").select("enviados").eq("id", d.id).single();
+      await supabase.from("disparos").update({ enviados: ((cur as any)?.enviados ?? 0) + 1 }).eq("id", d.id);
+    } else {
+      await supabase.from("disparo_logs").update({ status: "failed", erro: erroMsg }).eq("id", log.id);
+      const { data: cur } = await supabase.from("disparos").select("falhas").eq("id", d.id).single();
+      await supabase.from("disparos").update({ falhas: ((cur as any)?.falhas ?? 0) + 1 }).eq("id", d.id);
+    }
+    lockRef.current = false;
+
+    lotePorDisparoRef.current[d.id] = (lotePorDisparoRef.current[d.id] ?? 0) + 1;
+    refreshActive(d.id);
+
+    if (pauseFlagRef.current.has(d.id)) return;
+
+    // Sortear intervalo e agendar próximo
+    const intervalo = Math.floor(Math.random() * (d.intervalo_max - d.intervalo_min + 1)) + d.intervalo_min;
+    const ms = intervalo * 1000;
+    salvarEstadoLocal(d.id, { lote: lotePorDisparoRef.current[d.id] ?? 0, nextAt: Date.now() + ms });
+    iniciarCountdown(intervalo);
+    timerRef.current = window.setTimeout(() => processarProximo(d), ms);
+  };
+
   const iniciar = async (d: Disparo) => {
     if (!user) return;
-    if (runningRef.current.has(d.id)) return;
     if (!evolution) { toast.error("Configure a Evolution API em Integrações"); return; }
 
-    await setStatus(d.id, "em_andamento", { data_inicio: d.data_inicio ?? new Date().toISOString() });
-    runningRef.current.add(d.id);
+    limparTimers();
     pauseFlagRef.current.delete(d.id);
-    setActiveId(d.id);
-    carregar();
-
-    let enviadosNoLote = 0;
-    try {
-      while (true) {
-        if (pauseFlagRef.current.has(d.id)) break;
-
-        const { data: pendings } = await supabase
-          .from("disparo_logs").select("*")
-          .eq("disparo_id", d.id).eq("status", "pending")
-          .order("created_at").limit(1);
-        const log = pendings?.[0] as DisparoLog | undefined;
-        if (!log) break;
-
-        if (!inWindow(d.horario_inicio, d.horario_fim)) {
-          await sleep(60_000);
-          continue;
-        }
-
-        await supabase.from("disparo_logs").update({ status: "sending", tentativas: log.tentativas + 1 }).eq("id", log.id);
-        try {
-          await enviarMensagem(evolution, log.telefone, log.mensagem_enviada ?? "");
-          await supabase.from("disparo_logs").update({ status: "sent", enviado_at: new Date().toISOString() }).eq("id", log.id);
-          const { data: cur } = await supabase.from("disparos").select("enviados").eq("id", d.id).single();
-          await supabase.from("disparos").update({ enviados: ((cur as any)?.enviados ?? 0) + 1 }).eq("id", d.id);
-        } catch (err: any) {
-          await supabase.from("disparo_logs").update({ status: "failed", erro: err.message ?? "erro" }).eq("id", log.id);
-          const { data: cur } = await supabase.from("disparos").select("falhas").eq("id", d.id).single();
-          await supabase.from("disparos").update({ falhas: ((cur as any)?.falhas ?? 0) + 1 }).eq("id", d.id);
-        }
-
-        await refreshActive(d.id);
-
-        enviadosNoLote += 1;
-        if (d.pausa_a_cada > 0 && enviadosNoLote % d.pausa_a_cada === 0) {
-          await sleep(d.pausa_duracao * 60_000);
-        } else {
-          const wait = (Math.floor(Math.random() * (d.intervalo_max - d.intervalo_min + 1)) + d.intervalo_min) * 1000;
-          await sleep(wait);
-        }
-      }
-
-      if (!pauseFlagRef.current.has(d.id)) {
-        await setStatus(d.id, "concluido", { data_fim: new Date().toISOString() });
-        toast.success(`✅ Disparo "${d.nome}" concluído`);
-      }
-    } finally {
-      runningRef.current.delete(d.id);
-      pauseFlagRef.current.delete(d.id);
-      carregar();
-      refreshActive(d.id);
+    lockRef.current = false;
+    if (lotePorDisparoRef.current[d.id] === undefined) {
+      lotePorDisparoRef.current[d.id] = lerEstadoLocal(d.id).lote ?? 0;
     }
+
+    await setStatus(d.id, "em_andamento", { data_inicio: d.data_inicio ?? new Date().toISOString() });
+    setActiveId(d.id);
+    await carregar();
+    // dispara imediatamente o primeiro
+    processarProximo({ ...d, status: "em_andamento" });
   };
 
   const refreshActive = async (id: string) => {
@@ -381,16 +445,24 @@ export default function DisparosPage() {
 
   const pausar = async (d: Disparo) => {
     pauseFlagRef.current.add(d.id);
+    limparTimers();
+    setProximoEnvio(0);
     await setStatus(d.id, "pausado");
     toast.info("Disparo pausado");
     carregar();
   };
   const cancelar = async (d: Disparo) => {
     pauseFlagRef.current.add(d.id);
+    limparTimers();
+    setProximoEnvio(0);
+    limparEstadoLocal(d.id);
     await setStatus(d.id, "cancelado", { data_fim: new Date().toISOString() });
     toast.info("Disparo cancelado");
     carregar();
   };
+
+  // Limpa timers ao desmontar
+  useEffect(() => () => { limparTimers(); }, []);
   const excluir = async (id: string) => {
     const { error } = await supabase.from("disparos").delete().eq("id", id);
     if (error) { toast.error(error.message); return; }
@@ -812,10 +884,20 @@ export default function DisparosPage() {
                   </div>
 
                   {activeDisparo.status === "em_andamento" && (
-                    <Alert>
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertDescription className="text-xs">Mantenha esta aba aberta durante o disparo.</AlertDescription>
-                    </Alert>
+                    <>
+                      {proximoEnvio > 0 && (
+                        <div className="rounded-md border border-primary/30 bg-primary/5 p-3 flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">Próximo envio em</span>
+                          <span className="font-mono text-lg font-semibold text-primary tabular-nums">
+                            {Math.floor(proximoEnvio / 60)}:{String(proximoEnvio % 60).padStart(2, "0")}
+                          </span>
+                        </div>
+                      )}
+                      <Alert>
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertDescription className="text-xs">Mantenha esta aba aberta durante o disparo.</AlertDescription>
+                      </Alert>
+                    </>
                   )}
 
                   <div className="flex gap-2">
