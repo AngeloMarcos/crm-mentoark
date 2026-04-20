@@ -306,6 +306,125 @@ export type Database = {
           },
         ]
       }
+      disparo_logs: {
+        Row: {
+          contato_id: string | null
+          created_at: string
+          disparo_id: string
+          enviado_at: string | null
+          erro: string | null
+          id: string
+          mensagem_enviada: string | null
+          nome: string | null
+          status: string
+          telefone: string
+          tentativas: number
+          user_id: string
+        }
+        Insert: {
+          contato_id?: string | null
+          created_at?: string
+          disparo_id: string
+          enviado_at?: string | null
+          erro?: string | null
+          id?: string
+          mensagem_enviada?: string | null
+          nome?: string | null
+          status?: string
+          telefone: string
+          tentativas?: number
+          user_id: string
+        }
+        Update: {
+          contato_id?: string | null
+          created_at?: string
+          disparo_id?: string
+          enviado_at?: string | null
+          erro?: string | null
+          id?: string
+          mensagem_enviada?: string | null
+          nome?: string | null
+          status?: string
+          telefone?: string
+          tentativas?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "disparo_logs_disparo_id_fkey"
+            columns: ["disparo_id"]
+            isOneToOne: false
+            referencedRelation: "disparos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      disparos: {
+        Row: {
+          created_at: string
+          data_fim: string | null
+          data_inicio: string | null
+          enviados: number
+          falhas: number
+          horario_fim: string
+          horario_inicio: string
+          id: string
+          intervalo_max: number
+          intervalo_min: number
+          lista_id: string | null
+          mensagem_template: string | null
+          nome: string
+          pausa_a_cada: number
+          pausa_duracao: number
+          status: string
+          total_leads: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          data_fim?: string | null
+          data_inicio?: string | null
+          enviados?: number
+          falhas?: number
+          horario_fim?: string
+          horario_inicio?: string
+          id?: string
+          intervalo_max?: number
+          intervalo_min?: number
+          lista_id?: string | null
+          mensagem_template?: string | null
+          nome: string
+          pausa_a_cada?: number
+          pausa_duracao?: number
+          status?: string
+          total_leads?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          data_fim?: string | null
+          data_inicio?: string | null
+          enviados?: number
+          falhas?: number
+          horario_fim?: string
+          horario_inicio?: string
+          id?: string
+          intervalo_max?: number
+          intervalo_min?: number
+          lista_id?: string | null
+          mensagem_template?: string | null
+          nome?: string
+          pausa_a_cada?: number
+          pausa_duracao?: number
+          status?: string
+          total_leads?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       documents: {
         Row: {
           content: string
