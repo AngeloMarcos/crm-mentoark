@@ -317,12 +317,20 @@ export default function DisparosPage() {
   };
 
   // -------- Execução --------
-  const enviarMensagem = async (_cfg: EvolutionCfg, telefone: string, texto: string) => {
-    const { data, error } = await supabase.functions.invoke("disparo-send", {
-      body: { telefone, texto },
+  const enviarMensagem = async (cfg: EvolutionCfg, telefone: string, texto: string) => {
+    const baseUrl = cfg.url.replace(/\/$/, "");
+    const res = await fetch(`${baseUrl}/message/sendText/${cfg.instancia}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": cfg.api_key,
+      },
+      body: JSON.stringify({ number: telefone, text: texto }),
     });
-    if (error) throw new Error(error.message || "Erro ao invocar função");
-    if (!data?.ok) throw new Error(data?.error || "Falha no envio");
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status}: ${body}`);
+    }
   };
 
   const setStatus = async (id: string, status: DisparoStatus, extras: Record<string, unknown> = {}) => {
