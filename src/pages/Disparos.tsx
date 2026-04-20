@@ -29,8 +29,8 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  Send, Play, Pause, Trash2, Copy, FileText, RefreshCw, AlertCircle,
-  Upload, ChevronDown, Plus, X, Settings2, Link2, CheckCircle2, XCircle, Activity,
+  Send, Play, Pause, Square, Trash2, Copy, FileText, RefreshCw, AlertCircle, AlertTriangle,
+  Upload, ChevronDown, Plus, X, Settings2, Link2, CheckCircle2, XCircle, Activity, Clock, Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
