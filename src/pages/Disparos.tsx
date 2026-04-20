@@ -331,7 +331,7 @@ export default function DisparosPage() {
         try {
           await enviarMensagem(cfg, log.telefone, log.mensagem_enviada ?? "");
           await supabase.from("disparo_logs").update({ status: "sent", enviado_at: new Date().toISOString() }).eq("id", log.id);
-          await supabase.rpc as any; // noop
+          // contador
           const { data: cur } = await supabase.from("disparos").select("enviados").eq("id", d.id).single();
           await supabase.from("disparos").update({ enviados: ((cur as any)?.enviados ?? 0) + 1 }).eq("id", d.id);
         } catch (err: any) {
