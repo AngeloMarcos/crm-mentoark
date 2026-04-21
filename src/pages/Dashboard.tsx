@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { toast } from "sonner";
 import {
   Users,
   UserPlus,
@@ -14,6 +16,7 @@ import {
   Megaphone,
   MessageCircle,
   Activity,
+  RefreshCw,
 } from "lucide-react";
 import {
   BarChart,
@@ -96,7 +99,7 @@ function KpiCard({
       <CardContent className="flex items-center gap-4 p-5">
         <div
           className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
-            accent ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
+            accent ? "gradient-brand text-white shadow-sm" : "bg-muted text-muted-foreground"
           }`}
         >
           <Icon className="h-6 w-6" />
@@ -134,158 +137,161 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const [stats, setStats] = useState<DashboardStats>(initialStats);
   const [loadingDash, setLoadingDash] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const carregar = useCallback(async () => {
+    if (!user) return;
+    setLoadingDash(true);
+
+    const hojeIso = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+    const seteDiasAtrasIso = new Date(
+      Date.now() - 7 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const quatroSemanasAtras = startOfWeek(
+      new Date(Date.now() - 21 * 24 * 60 * 60 * 1000),
+    );
+
+    const [
+      contatosRes,
+      campanhasRes,
+      chatRes,
+      chamadasRes,
+    ] = await Promise.all([
+      supabase
+        .from("contatos")
+        .select("origem, status, created_at")
+        .eq("user_id", user.id),
+      supabase
+        .from("campanhas")
+        .select("id, nome, status, leads_gerados, cpl")
+        .eq("user_id", user.id),
+      // tabela sem user_id — dados globais
+      supabase
+        .from("n8n_chat_histories")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", seteDiasAtrasIso),
+      supabase
+        .from("chamadas")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .gte("created_at", hojeIso),
+    ]);
+
+    const contatos = contatosRes.data ?? [];
+    const campanhas = campanhasRes.data ?? [];
+
+    const totalLeads = contatos.length;
+    const novosHoje = contatos.filter(
+      (c) => new Date(c.created_at) >= new Date(hojeIso),
+    ).length;
+    const convertidos = contatos.filter((c) => c.status === "fechado").length;
+    const emAtendimento = contatos.filter(
+      (c) => c.status !== "fechado" && c.status !== "perdido",
+    ).length;
+    const taxaConversao =
+      totalLeads > 0 ? Number(((convertidos / totalLeads) * 100).toFixed(1)) : 0;
+
+    const origemMap = new Map<string, number>();
+    contatos.forEach((c) => {
+      const o = c.origem ?? "Sem origem";
+      origemMap.set(o, (origemMap.get(o) ?? 0) + 1);
+    });
+    const leadsPorOrigem = Array.from(origemMap, ([origem, quantidade]) => ({
+      origem,
+      quantidade,
+    }));
+
+    const etapaMap = new Map<string, number>();
+    contatos.forEach((c) => {
+      etapaMap.set(c.status, (etapaMap.get(c.status) ?? 0) + 1);
+    });
+    const conversaoPorEtapa = Array.from(etapaMap, ([etapa, total]) => ({
+      etapa,
+      total,
+    }));
+
+    const campanhasAtivas = campanhas.filter((c) => c.status === "ativa").length;
+    const cplValores = campanhas
+      .map((c) => Number(c.cpl) || 0)
+      .filter((v) => v > 0);
+    const custoMedioLead =
+      cplValores.length > 0
+        ? Number(
+            (
+              cplValores.reduce((s, v) => s + v, 0) / cplValores.length
+            ).toFixed(2),
+          )
+        : 0;
+
+    const rankingCampanhas = [...campanhas]
+      .sort((a, b) => (b.leads_gerados ?? 0) - (a.leads_gerados ?? 0))
+      .slice(0, 5)
+      .map((c) => ({
+        id: c.id,
+        nome: c.nome,
+        leads_gerados: c.leads_gerados ?? 0,
+        cpl: Number(c.cpl) || 0,
+        status: c.status,
+      }));
+
+    // Evolução semanal — últimas 4 semanas
+    const semanas: { semana: string; leads: number; conversoes: number }[] = [];
+    for (let i = 3; i >= 0; i--) {
+      const inicio = startOfWeek(
+        new Date(Date.now() - i * 7 * 24 * 60 * 60 * 1000),
+      );
+      const fim = new Date(inicio);
+      fim.setDate(fim.getDate() + 7);
+      const leadsSem = contatos.filter((c) => {
+        const d = new Date(c.created_at);
+        return d >= inicio && d < fim;
+      }).length;
+      const convSem = contatos.filter((c) => {
+        const d = new Date(c.created_at);
+        return c.status === "fechado" && d >= inicio && d < fim;
+      }).length;
+      semanas.push({
+        semana: inicio.toLocaleDateString("pt-BR", {
+          day: "2-digit",
+          month: "2-digit",
+        }),
+        leads: leadsSem,
+        conversoes: convSem,
+      });
+    }
+    // suprime warning unused
+    void quatroSemanasAtras;
+
+    setStats({
+      totalLeads,
+      novosHoje,
+      emAtendimento,
+      convertidos,
+      taxaConversao,
+      custoMedioLead,
+      campanhasAtivas,
+      mensagensWhatsApp: chatRes.count ?? 0,
+      atendimentosAndamento: chamadasRes.count ?? 0,
+      leadsPorOrigem,
+      conversaoPorEtapa,
+      evolucaoSemanal: semanas,
+      rankingCampanhas,
+    });
+    setLastUpdated(new Date());
+    setLoadingDash(false);
+  }, [user]);
 
   useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-
-    const carregar = async () => {
-      setLoadingDash(true);
-
-      const hojeIso = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
-      const seteDiasAtrasIso = new Date(
-        Date.now() - 7 * 24 * 60 * 60 * 1000,
-      ).toISOString();
-      const quatroSemanasAtras = startOfWeek(
-        new Date(Date.now() - 21 * 24 * 60 * 60 * 1000),
-      );
-
-      const [
-        contatosRes,
-        campanhasRes,
-        chatRes,
-        chamadasRes,
-      ] = await Promise.all([
-        supabase
-          .from("contatos")
-          .select("origem, status, created_at")
-          .eq("user_id", user.id),
-        supabase
-          .from("campanhas")
-          .select("id, nome, status, leads_gerados, cpl")
-          .eq("user_id", user.id),
-        // tabela sem user_id — dados globais
-        supabase
-          .from("n8n_chat_histories")
-          .select("id", { count: "exact", head: true })
-          .gte("created_at", seteDiasAtrasIso),
-        supabase
-          .from("chamadas")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .gte("created_at", hojeIso),
-      ]);
-
-      if (cancelled) return;
-
-      const contatos = contatosRes.data ?? [];
-      const campanhas = campanhasRes.data ?? [];
-
-      const totalLeads = contatos.length;
-      const novosHoje = contatos.filter(
-        (c) => new Date(c.created_at) >= new Date(hojeIso),
-      ).length;
-      const convertidos = contatos.filter((c) => c.status === "fechado").length;
-      const emAtendimento = contatos.filter(
-        (c) => c.status !== "fechado" && c.status !== "perdido",
-      ).length;
-      const taxaConversao =
-        totalLeads > 0 ? Number(((convertidos / totalLeads) * 100).toFixed(1)) : 0;
-
-      const origemMap = new Map<string, number>();
-      contatos.forEach((c) => {
-        const o = c.origem ?? "Sem origem";
-        origemMap.set(o, (origemMap.get(o) ?? 0) + 1);
-      });
-      const leadsPorOrigem = Array.from(origemMap, ([origem, quantidade]) => ({
-        origem,
-        quantidade,
-      }));
-
-      const etapaMap = new Map<string, number>();
-      contatos.forEach((c) => {
-        etapaMap.set(c.status, (etapaMap.get(c.status) ?? 0) + 1);
-      });
-      const conversaoPorEtapa = Array.from(etapaMap, ([etapa, total]) => ({
-        etapa,
-        total,
-      }));
-
-      const campanhasAtivas = campanhas.filter((c) => c.status === "ativa").length;
-      const cplValores = campanhas
-        .map((c) => Number(c.cpl) || 0)
-        .filter((v) => v > 0);
-      const custoMedioLead =
-        cplValores.length > 0
-          ? Number(
-              (
-                cplValores.reduce((s, v) => s + v, 0) / cplValores.length
-              ).toFixed(2),
-            )
-          : 0;
-
-      const rankingCampanhas = [...campanhas]
-        .sort((a, b) => (b.leads_gerados ?? 0) - (a.leads_gerados ?? 0))
-        .slice(0, 5)
-        .map((c) => ({
-          id: c.id,
-          nome: c.nome,
-          leads_gerados: c.leads_gerados ?? 0,
-          cpl: Number(c.cpl) || 0,
-          status: c.status,
-        }));
-
-      // Evolução semanal — últimas 4 semanas
-      const semanas: { semana: string; leads: number; conversoes: number }[] = [];
-      for (let i = 3; i >= 0; i--) {
-        const inicio = startOfWeek(
-          new Date(Date.now() - i * 7 * 24 * 60 * 60 * 1000),
-        );
-        const fim = new Date(inicio);
-        fim.setDate(fim.getDate() + 7);
-        const leadsSem = contatos.filter((c) => {
-          const d = new Date(c.created_at);
-          return d >= inicio && d < fim;
-        }).length;
-        const convSem = contatos.filter((c) => {
-          const d = new Date(c.created_at);
-          return c.status === "fechado" && d >= inicio && d < fim;
-        }).length;
-        semanas.push({
-          semana: inicio.toLocaleDateString("pt-BR", {
-            day: "2-digit",
-            month: "2-digit",
-          }),
-          leads: leadsSem,
-          conversoes: convSem,
-        });
-      }
-      // suprime warning unused
-      void quatroSemanasAtras;
-
-      setStats({
-        totalLeads,
-        novosHoje,
-        emAtendimento,
-        convertidos,
-        taxaConversao,
-        custoMedioLead,
-        campanhasAtivas,
-        mensagensWhatsApp: chatRes.count ?? 0,
-        atendimentosAndamento: chamadasRes.count ?? 0,
-        leadsPorOrigem,
-        conversaoPorEtapa,
-        evolucaoSemanal: semanas,
-        rankingCampanhas,
-      });
-      setLoadingDash(false);
-    };
-
     carregar();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
+  }, [carregar]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await carregar();
+    setRefreshing(false);
+    toast.success("Dados atualizados");
+  };
 
   const d = stats;
 
