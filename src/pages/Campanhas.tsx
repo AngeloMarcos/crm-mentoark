@@ -274,14 +274,14 @@ export default function CampanhasPage() {
           </Button>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           <Card>
             <CardContent className="flex items-center gap-3 p-4">
               <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
                 <DollarSign className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Investimento Total</p>
+                <p className="text-xs text-muted-foreground">Investimento (ativas)</p>
                 <p className="text-lg font-bold">
                   R$ {totalInvestimento.toLocaleString("pt-BR")}
                 </p>
@@ -294,7 +294,7 @@ export default function CampanhasPage() {
                 <Users className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Leads Gerados</p>
+                <p className="text-xs text-muted-foreground">Leads (ativas)</p>
                 <p className="text-lg font-bold">{totalLeads}</p>
               </div>
             </CardContent>
@@ -305,7 +305,7 @@ export default function CampanhasPage() {
                 <TrendingUp className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Conversões</p>
+                <p className="text-xs text-muted-foreground">Conversões (ativas)</p>
                 <p className="text-lg font-bold">{totalConversoes}</p>
               </div>
             </CardContent>
@@ -318,6 +318,28 @@ export default function CampanhasPage() {
               <div>
                 <p className="text-xs text-muted-foreground">CPL Médio</p>
                 <p className="text-lg font-bold">R$ {cplMedio.toLocaleString("pt-BR")}</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 p-4">
+              <div className="w-10 h-10 rounded-xl bg-info/15 text-info flex items-center justify-center">
+                <TrendingUp className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">ROAS</p>
+                <p className="text-lg font-bold">{roas}</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 p-4">
+              <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
+                <Target className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Taxa de Conversão</p>
+                <p className="text-lg font-bold">{taxaConversao}</p>
               </div>
             </CardContent>
           </Card>
