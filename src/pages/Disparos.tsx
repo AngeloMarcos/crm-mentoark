@@ -328,8 +328,8 @@ export default function DisparosPage() {
       body: JSON.stringify({ number: telefone, text: texto }),
     });
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`HTTP ${res.status}: ${body}`);
+      const body = await res.text().catch(() => "sem detalhe");
+      throw new Error(`Evolution API ${res.status}: ${body}`);
     }
   };
 
