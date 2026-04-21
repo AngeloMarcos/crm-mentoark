@@ -10,12 +10,14 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
 import {
   Phone, PhoneCall, PhoneOff, PhoneMissed, ChevronLeft, ChevronRight,
   Building2, Mail, CheckCircle2, XCircle, Clock, CalendarCheck, Loader2,
   SkipForward, Tag, FileText,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { toast as sonnerToast } from "sonner";
 
 interface Contato {
   id: string;
@@ -60,14 +62,27 @@ export default function DiscagemPage() {
 
   const [resultado, setResultado] = useState("");
   const [notas, setNotas] = useState("");
+  const [ultimaChamada, setUltimaChamada] = useState<{
+    contatoId: string;
+    statusAnterior: string;
+    notasAnteriores: string | null;
+  } | null>(null);
 
   useEffect(() => {
     if (!user) return;
     (async () => {
       setLoading(true);
       const [{ data: l }, { data: c }] = await Promise.all([
-        supabase.from("listas").select("id, nome").order("created_at", { ascending: false }),
-        supabase.from("contatos").select("*").order("created_at", { ascending: false }),
+        supabase
+          .from("listas")
+          .select("id, nome")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("contatos")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false }),
       ]);
       setListas(l ?? []);
       setContatos(c ?? []);
@@ -106,10 +121,48 @@ export default function DiscagemPage() {
     window.location.href = `tel:${tel}`;
   };
 
+  const desfazerUltimaChamada = async () => {
+    if (!ultimaChamada) return;
+    await supabase
+      .from("contatos")
+      .update({
+        status: ultimaChamada.statusAnterior,
+        notas: ultimaChamada.notasAnteriores,
+      })
+      .eq("id", ultimaChamada.contatoId);
+
+    const { data: chamadas } = await supabase
+      .from("chamadas")
+      .select("id")
+      .eq("contato_id", ultimaChamada.contatoId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (chamadas?.[0]) {
+      await supabase.from("chamadas").delete().eq("id", chamadas[0].id);
+    }
+
+    setContatos((prev) =>
+      prev.map((c) =>
+        c.id === ultimaChamada.contatoId
+          ? { ...c, status: ultimaChamada.statusAnterior, notas: ultimaChamada.notasAnteriores }
+          : c,
+      ),
+    );
+    setUltimaChamada(null);
+    sonnerToast.success("Chamada desfeita");
+  };
+
   const registrarChamada = async () => {
     if (!atual || !user || !resultado) return;
     setSaving(true);
     const meta = resultados.find((r) => r.value === resultado)!;
+
+    // Salva estado anterior para permitir desfazer
+    const snapshot = {
+      contatoId: atual.id,
+      statusAnterior: atual.status,
+      notasAnteriores: atual.notas,
+    };
 
     // 1) registrar chamada
     const { error: e1 } = await supabase.from("chamadas").insert({
@@ -135,7 +188,15 @@ export default function DiscagemPage() {
       return;
     }
 
-    toast({ title: `✅ ${meta.label}`, description: "Avançando para o próximo..." });
+    setUltimaChamada(snapshot);
+    sonnerToast.success(`✅ ${meta.label}`, {
+      description: "Clique em desfazer para corrigir",
+      duration: 8000,
+      action: {
+        label: "Desfazer",
+        onClick: () => desfazerUltimaChamada(),
+      },
+    });
 
     // Atualiza local + avança
     setContatos((prev) => prev.map((c) => c.id === atual.id ? { ...c, status: meta.novoStatus, notas: novasNotas || atual.notas } : c));
@@ -205,10 +266,18 @@ export default function DiscagemPage() {
 
         {/* Progresso */}
         {totalLista > 0 && (
-          <div className="flex items-center justify-between text-xs text-muted-foreground bg-muted/40 rounded-lg p-3">
-            <span>📋 {totalLista} contato(s) na seleção</span>
-            <span>✅ {contatados} já contatado(s)</span>
-            <span>📞 {totalFila} na fila</span>
+          <div className="space-y-2 bg-muted/40 rounded-lg p-3">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">
+                {contatados} de {totalLista} contatados
+              </span>
+              <span className="font-medium">{(totalLista > 0 ? Math.round((contatados / totalLista) * 100) : 0)}%</span>
+            </div>
+            <Progress value={totalLista > 0 ? Math.round((contatados / totalLista) * 100) : 0} className="h-2" />
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{totalFila} na fila</span>
+              {atual && <span>Contato {indice + 1} de {totalFila}</span>}
+            </div>
           </div>
         )}
 
