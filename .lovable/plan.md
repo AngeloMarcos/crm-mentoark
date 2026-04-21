@@ -1,50 +1,94 @@
 
 
-## Redesign visual: tema azul-roxo degradê
+## Correções de segurança, bugs e UX
 
-Aplicação de um redesign visual completo do MentoArk com paleta azul → roxo, glows, orbs de luz ambiente e degradês em sidebar, header, botões e cards. Nenhuma lógica de negócio será tocada.
+Seis correções pontuais cobrindo filtro de tenant, lógica do funil, validação de campanha, padronização de confirmação de delete, error boundary global e utilitário de telefone.
 
-### Aviso importante
+### Status prévio detectado
 
-A mensagem original veio com vários blocos JSX **vazios** (todo o conteúdo entre `<` e `>` foi perdido na renderização) nos arquivos `AppSidebar.tsx`, `AppHeader.tsx` e `CRMLayout.tsx`. Não posso copiar-colar literalmente porque o resultado seria componentes em branco que quebram o app.
-
-Vou **reconstruir o JSX desses 3 arquivos** preservando 100% da estrutura/comportamento atual e aplicando as classes novas (degradês, glows, orbs, avatar com iniciais do email, linha degradê no header, etc.) descritas pelos comentários do snippet. Os arquivos onde o conteúdo veio íntegro (`index.css` e `button.tsx`) serão substituídos exatamente como pedido.
-
-Se você quiser revisar os JSX reconstruídos antes da aplicação, me avise — caso contrário, sigo com a interpretação abaixo.
+- **Funil — filtro `user_id` + guard**: já estão aplicados (linhas 80 e 85 de `Funil.tsx`). Nenhuma alteração necessária aqui.
+- **Funil — `proximaEtapa`**: bug confirmado na linha 68 (`>= etapas.length - 2`) — vai ser corrigido.
 
 ### Alterações por arquivo
 
-**1. `src/index.css`** — substituição completa pelo CSS fornecido (paleta azul/roxo, utilitários `.gradient-brand`, `.gradient-brand-text`, `.gradient-brand-subtle`, `.sidebar-gradient`, `.glow-primary`, `.glow-accent`, `.card-gradient-border`, `.shimmer`, `--radius: 0.75rem`).
+**1. `src/pages/WhatsApp.tsx`** — adicionar comentário acima da query do `n8n_chat_histories` (linha ~64) explicando que a tabela não tem coluna `user_id` e o acesso é controlado pela RLS `Authenticated can read chat histories`. Mesma nota acima da segunda query (linha ~123). Nenhuma mudança lógica.
 
-**2. `src/components/AppSidebar.tsx`** — mantém imports, lista `items`, lógica de `isAdmin`/`signOut`/`menuItems`. Aplica:
-- `<Sidebar>` com classe `sidebar-gradient` e borda degradê
-- Header da logo com `gradient-brand` no fundo do quadrado da logo + texto `Mento` normal e `Ark` com `gradient-brand-text`
-- Itens ativos com fundo `gradient-brand-subtle` + texto `gradient-brand-text` + barra lateral degradê; hover com `bg-sidebar-accent`
-- Detecção de ativo via `location.pathname` (igual ao snippet)
-- Footer "Sair" mantém comportamento atual
+**2. `src/pages/Dashboard.tsx`** — adicionar comentário `// tabela sem user_id — dados globais` acima do `supabase.from("n8n_chat_histories")` (linha ~167).
 
-**3. `src/components/AppHeader.tsx`** — adiciona `useAuth` para extrair iniciais do email (`user.email.slice(0,2).toUpperCase()`, fallback `"U"`). Aplica:
-- Linha degradê (1px) na base do header via pseudo/elemento com `gradient-brand`
-- Botões `Bell` e toggle de tema mantidos com hover suave
-- Avatar circular com `gradient-brand` + iniciais em branco e `glow-primary` discreto
+**3. `src/pages/Funil.tsx`** — corrigir `proximaEtapa` (linhas 66-70):
 
-**4. `src/components/CRMLayout.tsx`** — mantém `SidebarProvider` + `AppSidebar` + `AppHeader` + `<main>{children}</main>`. Acrescenta:
-- Wrapper com fundo `bg-background` e `relative overflow-hidden`
-- 3 orbs de luz ambiente (`absolute`, `rounded-full`, `blur-3xl`, `opacity-20/30`) posicionados em cantos diferentes com cores primary e accent — puramente decorativos, `pointer-events-none`
-- Conteúdo principal com `relative z-10` para ficar acima dos orbs
+```ts
+function proximaEtapa(status: string): FunilStatus | null {
+  if (status === "fechado" || status === "perdido") return null;
+  const idx = etapas.indexOf(status as FunilStatus);
+  return idx === -1 || idx >= etapas.length - 1 ? null : etapas[idx + 1];
+}
+```
 
-**5. `src/components/ui/button.tsx`** — única mudança: variante `default` do `cva` passa de `bg-primary text-primary-foreground hover:bg-primary/90` para `gradient-brand text-white hover:opacity-90 shadow-sm transition-all duration-200`. Demais variantes intactas.
+Isso permite "agendado" → "fechado" (hoje retorna null indevidamente).
+
+**4. `src/pages/Campanhas.tsx`** — duas mudanças:
+
+- Em `salvar()` (linha 160), antes de `setSalvando(true)`, validar:
+  ```ts
+  if (form.cliques > form.impressoes && form.impressoes > 0) {
+    toast.error("Cliques não podem ser maiores que impressões.");
+    return;
+  }
+  ```
+- Substituir `confirm()` nativo na função `remover` por `AlertDialog`. Mudanças:
+  - Importar `AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle` de `@/components/ui/alert-dialog`.
+  - Adicionar state `const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);`.
+  - Refatorar `remover` para receber só `id: string` e remover o `confirm()`; o botão da tabela passa a chamar `setConfirmDeleteId(c.id)`.
+  - Adicionar `<AlertDialog>` no final do JSX (antes do fechamento do `<CRMLayout>`), com título "Excluir campanha?", descrição mencionando que a ação é irreversível, e action chamando `confirmDeleteId && remover(confirmDeleteId)` seguido de `setConfirmDeleteId(null)`.
+
+**5. `src/components/ErrorBoundary.tsx`** (novo) — class component padrão com `getDerivedStateFromError` + `componentDidCatch`. Fallback UI centralizado com:
+- Card com `glass` + `card-gradient-border`
+- Ícone `AlertTriangle` em círculo `bg-destructive/15 text-destructive`
+- Título "Algo deu errado" e mensagem de erro
+- Botão "Recarregar página" que reseta state e chama `window.location.reload()`
+
+(O snippet recebido tinha JSX vazio por renderização — vou reconstruir com classes consistentes ao tema azul-roxo já aplicado.)
+
+**6. `src/components/CRMLayout.tsx`** — importar `ErrorBoundary` e envolver `{children}` no `<main>`:
+
+```tsx
+<main className="flex-1 overflow-auto p-6">
+  <ErrorBoundary>{children}</ErrorBoundary>
+</main>
+```
+
+**7. `src/lib/utils.ts`** — adicionar ao final:
+
+```ts
+/** Formata telefone para padrão WhatsApp: DDI55 + 10-11 dígitos */
+export function formatPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let digits = raw.replace(/\D/g, "").replace(/^0+/, "");
+  if (!digits) return null;
+  if (!digits.startsWith("55") && (digits.length === 10 || digits.length === 11)) {
+    digits = "55" + digits;
+  }
+  return digits.length >= 12 ? digits : null;
+}
+```
+
+Sem remover duplicatas em outros arquivos (consolidação fica para depois).
 
 ### Arquivos tocados
 
 ```text
+NOVO:
+  src/components/ErrorBoundary.tsx
+
 EDITADO:
-  src/index.css                       (substituição completa)
-  src/components/AppSidebar.tsx       (reconstruído com degradês)
-  src/components/AppHeader.tsx        (reconstruído com avatar de iniciais + linha degradê)
-  src/components/CRMLayout.tsx        (reconstruído com orbs ambiente)
-  src/components/ui/button.tsx        (variante default → gradient-brand)
+  src/pages/WhatsApp.tsx        (apenas comentários)
+  src/pages/Dashboard.tsx       (apenas comentário)
+  src/pages/Funil.tsx           (proximaEtapa)
+  src/pages/Campanhas.tsx       (validação CTR + AlertDialog delete)
+  src/components/CRMLayout.tsx  (envolver children com ErrorBoundary)
+  src/lib/utils.ts              (append formatPhone)
 ```
 
-Nenhum outro arquivo será modificado. Lógica de auth, rotas, store, páginas e edge functions permanecem idênticas.
+Nenhuma migration, nenhuma mudança em RLS, nenhuma alteração em outras páginas ou componentes.
 
