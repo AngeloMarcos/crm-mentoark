@@ -196,21 +196,33 @@ export default function IntegracoesPage() {
   };
 
   const testarConexao = async () => {
-    if (!form.url) {
-      toast.error("Informe a URL para testar.");
-      return;
-    }
+    if (!template) return;
+    if (!form.url) { toast.error("Informe a URL para testar."); return; }
     setTestando(true);
     try {
-      const res = await fetch(form.url, { method: "GET", mode: "no-cors" });
-      // no-cors devolve opaque; consideramos sucesso se não lançou
-      const ok = res.type === "opaque" || res.ok;
-      if (ok) {
-        setForm((f) => ({ ...f, status: "conectado" }));
-        toast.success("Conexão bem-sucedida ✅");
+      if (template.tipo === "evolution") {
+        if (!form.api_key) { toast.error("Informe a API Key para testar."); setTestando(false); return; }
+        const url = form.url.replace(/\/$/, "") + "/instance/fetchInstances";
+        const res = await fetch(url, {
+          method: "GET",
+          headers: { "apikey": form.api_key },
+        });
+        if (res.ok) {
+          setForm((f) => ({ ...f, status: "conectado" }));
+          toast.success("Evolution API conectada ✅");
+        } else {
+          setForm((f) => ({ ...f, status: "erro" }));
+          toast.error(`Falha: HTTP ${res.status} — verifique URL e API Key`);
+        }
       } else {
-        setForm((f) => ({ ...f, status: "erro" }));
-        toast.error("A URL respondeu com erro.");
+        const res = await fetch(form.url, { method: "GET" });
+        if (res.ok || res.type === "opaque") {
+          setForm((f) => ({ ...f, status: "conectado" }));
+          toast.success("Conexão bem-sucedida ✅");
+        } else {
+          setForm((f) => ({ ...f, status: "erro" }));
+          toast.error("A URL respondeu com erro.");
+        }
       }
     } catch (e: any) {
       setForm((f) => ({ ...f, status: "erro" }));
