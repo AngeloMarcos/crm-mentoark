@@ -61,6 +61,8 @@ export default function WhatsAppPage() {
 
   const carregar = async () => {
     setLoading(true);
+    // Tabela n8n_chat_histories não possui coluna user_id — acesso é controlado
+    // pela RLS "Authenticated can read chat histories" (visível a autenticados).
     const { data, error } = await (supabase as any)
       .from("n8n_chat_histories")
       .select("id, session_id, message, created_at")
@@ -120,6 +122,7 @@ export default function WhatsAppPage() {
 
   const abrirConversa = async (c: Conversa) => {
     // Buscar tudo dessa sessão (caso passe do limite)
+    // Tabela n8n_chat_histories não possui coluna user_id — acesso controlado por RLS.
     const { data, error } = await (supabase as any)
       .from("n8n_chat_histories")
       .select("id, session_id, message, created_at")

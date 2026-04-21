@@ -31,6 +31,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   BarChart,
   Bar,
   XAxis,
@@ -101,6 +111,7 @@ export default function CampanhasPage() {
   const [modalCampanha, setModalCampanha] = useState(false);
   const [editing, setEditing] = useState<Campanha | null>(null);
   const [form, setForm] = useState(formInicial);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const carregar = async () => {
     if (!user) return;
@@ -163,6 +174,10 @@ export default function CampanhasPage() {
       toast.error("Informe o nome da campanha");
       return;
     }
+    if (form.cliques > form.impressoes && form.impressoes > 0) {
+      toast.error("Cliques não podem ser maiores que impressões.");
+      return;
+    }
     setSalvando(true);
     const { ctr, cpl } = calcularDerivados();
     const payload = {
@@ -207,9 +222,8 @@ export default function CampanhasPage() {
     carregar();
   };
 
-  const remover = async (c: Campanha) => {
-    if (!confirm(`Remover a campanha "${c.nome}"?`)) return;
-    const { error } = await supabase.from("campanhas").delete().eq("id", c.id);
+  const remover = async (id: string) => {
+    const { error } = await supabase.from("campanhas").delete().eq("id", id);
     if (error) {
       toast.error(`Erro ao remover: ${error.message}`);
       return;
@@ -429,7 +443,7 @@ export default function CampanhasPage() {
                           <Button
                             size="icon"
                             variant="ghost"
-                            onClick={() => remover(c)}
+                            onClick={() => setConfirmDeleteId(c.id)}
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
@@ -606,6 +620,31 @@ export default function CampanhasPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={!!confirmDeleteId}
+        onOpenChange={(o) => !o && setConfirmDeleteId(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir campanha?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação é irreversível. Todos os dados desta campanha serão removidos permanentemente.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (confirmDeleteId) remover(confirmDeleteId);
+                setConfirmDeleteId(null);
+              }}
+            >
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </CRMLayout>
   );
 }

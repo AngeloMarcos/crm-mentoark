@@ -164,6 +164,7 @@ export default function DashboardPage() {
           .from("campanhas")
           .select("id, nome, status, leads_gerados, cpl")
           .eq("user_id", user.id),
+        // tabela sem user_id — dados globais
         supabase
           .from("n8n_chat_histories")
           .select("id", { count: "exact", head: true })

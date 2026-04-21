@@ -64,9 +64,9 @@ function daysSince(date: string) {
 }
 
 function proximaEtapa(status: string): FunilStatus | null {
+  if (status === "fechado" || status === "perdido") return null;
   const idx = etapas.indexOf(status as FunilStatus);
-  if (idx === -1 || idx >= etapas.length - 2) return null; // não avança a partir de fechado/perdido
-  return etapas[idx + 1];
+  return idx === -1 || idx >= etapas.length - 1 ? null : etapas[idx + 1];
 }
 
 export default function FunilPage() {
