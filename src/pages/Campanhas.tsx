@@ -60,6 +60,7 @@ import {
   Pencil,
   Trash2,
   Loader2,
+  Target,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -178,6 +179,14 @@ export default function CampanhasPage() {
       toast.error("Cliques não podem ser maiores que impressões.");
       return;
     }
+    if (Number(form.investimento) < 0) {
+      toast.error("Investimento não pode ser negativo");
+      return;
+    }
+    if (Number(form.leads_gerados) < 0 || Number(form.conversoes) < 0) {
+      toast.error("Leads e conversões não podem ser negativos");
+      return;
+    }
     setSalvando(true);
     const { ctr, cpl } = calcularDerivados();
     const payload = {
@@ -232,10 +241,14 @@ export default function CampanhasPage() {
     carregar();
   };
 
-  const totalInvestimento = campanhas.reduce((s, c) => s + Number(c.investimento || 0), 0);
-  const totalLeads = campanhas.reduce((s, c) => s + (c.leads_gerados || 0), 0);
-  const totalConversoes = campanhas.reduce((s, c) => s + (c.conversoes || 0), 0);
+  const ativas = campanhas.filter((c) => c.status === "ativa");
+  const totalInvestimento = ativas.reduce((s, c) => s + Number(c.investimento || 0), 0);
+  const totalLeads = ativas.reduce((s, c) => s + (c.leads_gerados || 0), 0);
+  const totalConversoes = ativas.reduce((s, c) => s + (c.conversoes || 0), 0);
   const cplMedio = totalLeads > 0 ? Number((totalInvestimento / totalLeads).toFixed(2)) : 0;
+  const roas = totalInvestimento > 0 ? (totalConversoes / totalInvestimento).toFixed(2) : "—";
+  const taxaConversao =
+    totalLeads > 0 ? ((totalConversoes / totalLeads) * 100).toFixed(1) + "%" : "—";
 
   const chartData = campanhas.map((c) => ({
     nome: c.nome.length > 15 ? c.nome.slice(0, 15) + "..." : c.nome,
