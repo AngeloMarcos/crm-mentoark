@@ -277,6 +277,8 @@ export default function LeadsPage() {
     const headers = rows[0].map((h) => h.replace(/"/g, "").toLowerCase().trim());
     const listaAlvo = importLista || (listaFiltro !== "todas" ? listaFiltro : (listas[0]?.id ?? null));
     const novos: Array<Omit<Contato, "id" | "created_at">> = [];
+    const ignorados: Array<{ linha: number; nome: string; motivo: string }> = [];
+    const totalLinhas = rows.length - 1;
 
     const isCnpjBiz =
       headers.includes("nome da empresa") ||
@@ -315,7 +317,14 @@ export default function LeadsPage() {
         const contato2 = get("nome do contato 2");
         const cargo2 = get("cargo / função do contato 2");
 
-        if (!nome && !telefone && !email) continue;
+        if (!nome && !telefone && !email) {
+          ignorados.push({ linha: i + 1, nome: "(vazio)", motivo: "sem nome, telefone ou e-mail" });
+          continue;
+        }
+        if (!telefone) {
+          ignorados.push({ linha: i + 1, nome: nome || empresa || "(sem nome)", motivo: "telefone inválido" });
+          continue;
+        }
 
         const tagsAuto: string[] = [];
         const seg = segmento.toLowerCase();
@@ -345,7 +354,14 @@ export default function LeadsPage() {
         const telefoneRaw =
           get("telefone") || get("telefones") || get("fone") || get("celular") ||
           get("phone") || get("whatsapp");
-        if (!nome && !telefoneRaw) continue;
+        if (!nome && !telefoneRaw) {
+          ignorados.push({ linha: i + 1, nome: "(vazio)", motivo: "sem nome e sem telefone" });
+          continue;
+        }
+        if (!telefoneRaw) {
+          ignorados.push({ linha: i + 1, nome: nome || "(sem nome)", motivo: "telefone inválido" });
+          continue;
+        }
         const tagsRaw = get("tags") || get("tag");
         novos.push({
           nome: nome || telefoneRaw,
@@ -363,7 +379,11 @@ export default function LeadsPage() {
     }
 
     if (!novos.length) {
-      toast({ title: "Nenhum contato válido encontrado", description: "Verifique se o cabeçalho contém ao menos a coluna 'nome' ou 'telefone'.", variant: "destructive" });
+      toast({
+        title: "Nenhum contato válido encontrado",
+        description: `${totalLinhas} linha(s) lida(s), ${ignorados.length} ignorada(s). Verifique se há colunas 'nome' e 'telefone'.`,
+        variant: "destructive",
+      });
       return;
     }
 
@@ -380,9 +400,18 @@ export default function LeadsPage() {
     setCsvTexto("");
     setImportLista("");
     toast({
-      title: `✅ ${novos.length} contatos importados!`,
-      description: isCnpjBiz ? "Formato Cnpj.biz detectado automaticamente" : "Formato CSV genérico",
+      title: `✅ Importação concluída`,
+      description: `${novos.length} importados, ${ignorados.length} ignorados de ${totalLinhas} linhas${isCnpjBiz ? " • formato Cnpj.biz" : ""}`,
     });
+    if (ignorados.length > 0) {
+      const exemplos = ignorados.slice(0, 3)
+        .map((r) => `Linha ${r.linha}: '${r.nome}' — ${r.motivo}`)
+        .join(" • ");
+      toast({
+        title: `⚠️ ${ignorados.length} linha(s) ignorada(s)`,
+        description: exemplos,
+      });
+    }
     carregar();
   };
 
