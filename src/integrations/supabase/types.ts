@@ -581,6 +581,94 @@ export type Database = {
         }
         Relationships: []
       }
+      tarefas: {
+        Row: {
+          concluida_at: string | null
+          contato_id: string | null
+          created_at: string
+          descricao: string | null
+          id: string
+          prazo: string | null
+          prioridade: string
+          status: string
+          titulo: string
+          user_id: string
+        }
+        Insert: {
+          concluida_at?: string | null
+          contato_id?: string | null
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          prazo?: string | null
+          prioridade?: string
+          status?: string
+          titulo: string
+          user_id: string
+        }
+        Update: {
+          concluida_at?: string | null
+          contato_id?: string | null
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          prazo?: string | null
+          prioridade?: string
+          status?: string
+          titulo?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tarefas_contato_id_fkey"
+            columns: ["contato_id"]
+            isOneToOne: false
+            referencedRelation: "contatos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      timeline_eventos: {
+        Row: {
+          contato_id: string
+          created_at: string
+          data_evento: string
+          descricao: string | null
+          id: string
+          tipo: string
+          titulo: string
+          user_id: string
+        }
+        Insert: {
+          contato_id: string
+          created_at?: string
+          data_evento?: string
+          descricao?: string | null
+          id?: string
+          tipo: string
+          titulo: string
+          user_id: string
+        }
+        Update: {
+          contato_id?: string
+          created_at?: string
+          data_evento?: string
+          descricao?: string | null
+          id?: string
+          tipo?: string
+          titulo?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "timeline_eventos_contato_id_fkey"
+            columns: ["contato_id"]
+            isOneToOne: false
+            referencedRelation: "contatos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_roles: {
         Row: {
           created_at: string
