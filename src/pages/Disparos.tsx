@@ -957,47 +957,15 @@ export default function DisparosPage() {
 
                   {/* ⚙️ Editor ao vivo de intervalos — aplica no próximo envio */}
                   {(activeDisparo.status === "em_andamento" || activeDisparo.status === "pausado") && (
-                    <div className="rounded-md border border-border/60 p-3 bg-muted/10 space-y-3">
-                      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                        <Settings2 className="h-3.5 w-3.5" />
-                        Intervalo entre mensagens (aplica no próximo envio)
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <Label className="text-[11px] text-muted-foreground">Mín (s)</Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={600}
-                            value={activeDisparo.intervalo_min}
-                            onChange={async (e) => {
-                              const v = Math.max(1, Math.min(600, Number(e.target.value) || 1));
-                              setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_min: v } : x));
-                              await supabase.from("disparos").update({ intervalo_min: v }).eq("id", activeDisparo.id);
-                            }}
-                            className="h-8"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-[11px] text-muted-foreground">Máx (s)</Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={600}
-                            value={activeDisparo.intervalo_max}
-                            onChange={async (e) => {
-                              const v = Math.max(1, Math.min(600, Number(e.target.value) || 1));
-                              setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_max: v } : x));
-                              await supabase.from("disparos").update({ intervalo_max: v }).eq("id", activeDisparo.id);
-                            }}
-                            className="h-8"
-                          />
-                        </div>
-                      </div>
-                      {activeDisparo.intervalo_min > activeDisparo.intervalo_max && (
-                        <p className="text-[11px] text-destructive">Mín deve ser ≤ Máx</p>
-                      )}
-                    </div>
+                    <IntervaloEditor
+                      key={activeDisparo.id}
+                      disparoId={activeDisparo.id}
+                      intervaloMin={activeDisparo.intervalo_min}
+                      intervaloMax={activeDisparo.intervalo_max}
+                      onUpdate={(min, max) => {
+                        setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_min: min, intervalo_max: max } : x));
+                      }}
+                    />
                   )}
 
                   {activeDisparo.status === "em_andamento" && (
