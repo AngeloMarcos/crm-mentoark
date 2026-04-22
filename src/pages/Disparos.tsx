@@ -291,23 +291,47 @@ export default function DisparosPage() {
     }).select().single();
     if (error || !created) { toast.error(error?.message ?? "Erro ao criar"); return; }
 
-    // 2) gera logs (rodízio aleatório de variações)
+    // 2) gera logs (rodízio aleatório de variações) — pré-valida telefones
     const ativas = variacoes.filter((v) => v.trim());
+    let invalidos = 0;
     const rows = contatosSelecionados.map((c) => {
       const tpl = ativas[Math.floor(Math.random() * ativas.length)];
+      const norm = normalizarTelefoneBR(c.telefone);
+      if (!norm.valido) {
+        invalidos++;
+        return {
+          disparo_id: created.id,
+          contato_id: c.id ?? null,
+          user_id: user.id,
+          nome: c.nome,
+          telefone: (c.telefone ?? "").toString(),
+          mensagem_enviada: renderTemplate(tpl, c),
+          status: "invalido",
+          erro: norm.motivo ?? "Telefone inválido",
+        };
+      }
       return {
         disparo_id: created.id,
         contato_id: c.id ?? null,
         user_id: user.id,
         nome: c.nome,
-        telefone: c.telefone!,
-        mensagem_enviada: renderTemplate(tpl, c),
+        telefone: norm.jid!,
+        mensagem_enviada: renderTemplate(tpl, { ...c, telefone: norm.jid }),
         status: "pending",
       };
     });
     if (rows.length) await supabase.from("disparo_logs").insert(rows);
+    // Já contabiliza invalidos como "falhas pré-detectadas" no agregado do disparo
+    if (invalidos > 0) {
+      await supabase.from("disparos").update({ falhas: invalidos }).eq("id", created.id);
+    }
 
-    toast.success("🚀 Fila criada — iniciando disparo");
+    const validos = rows.length - invalidos;
+    if (invalidos > 0) {
+      toast.success(`🚀 ${validos} enviados para fila · ${invalidos} ignorados (telefone inválido)`);
+    } else {
+      toast.success("🚀 Fila criada — iniciando disparo");
+    }
     await carregar();
     setActiveId(created.id);
     iniciar(created as Disparo);
