@@ -625,7 +625,18 @@ export default function LeadsPage() {
                   {filtered.map((c) => (
                     <TableRow key={c.id} className="cursor-pointer hover:bg-muted/40" onClick={() => abrirEdicao(c)}>
                       <TableCell>
-                        <p className="font-medium">{c.nome}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium">{c.nome}</p>
+                          {(tarefasPendentes.get(c.id) ?? 0) > 0 && (
+                            <Badge
+                              className="bg-destructive text-white text-[10px] h-4 px-1 gap-0.5"
+                              title={`${tarefasPendentes.get(c.id)} tarefa(s) pendente(s)`}
+                            >
+                              <ListTodo className="h-2.5 w-2.5" />
+                              {tarefasPendentes.get(c.id)}
+                            </Badge>
+                          )}
+                        </div>
                         {c.empresa && (
                           <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                             <Building2 className="h-3 w-3" />{c.empresa}
@@ -830,74 +841,167 @@ export default function LeadsPage() {
 
         {/* ============ MODAL: Novo / Editar Contato ============ */}
         <Dialog open={modalContato} onOpenChange={setModalContato}>
-          <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{editing ? "Editar contato" : "Novo contato"}</DialogTitle>
             </DialogHeader>
-            <div className="space-y-3 py-2">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Nome *</Label>
-                  <Input value={contatoForm.nome} onChange={(e) => setContatoForm({ ...contatoForm, nome: e.target.value })} />
+
+            {editing ? (
+              <Tabs defaultValue="dados" className="w-full">
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="dados">Dados</TabsTrigger>
+                  <TabsTrigger value="timeline">Timeline</TabsTrigger>
+                  <TabsTrigger value="tarefas" className="gap-1.5">
+                    Tarefas
+                    {(tarefasPendentes.get(editing.id) ?? 0) > 0 && (
+                      <Badge className="bg-destructive text-white text-[10px] h-4 px-1">
+                        {tarefasPendentes.get(editing.id)}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="dados" className="space-y-3 py-2">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>Nome *</Label>
+                      <Input value={contatoForm.nome} onChange={(e) => setContatoForm({ ...contatoForm, nome: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Telefone</Label>
+                      <Input value={contatoForm.telefone} onChange={(e) => setContatoForm({ ...contatoForm, telefone: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>E-mail</Label>
+                      <Input value={contatoForm.email} onChange={(e) => setContatoForm({ ...contatoForm, email: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Empresa</Label>
+                      <Input value={contatoForm.empresa} onChange={(e) => setContatoForm({ ...contatoForm, empresa: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Cargo</Label>
+                      <Input value={contatoForm.cargo} onChange={(e) => setContatoForm({ ...contatoForm, cargo: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Origem</Label>
+                      <Input value={contatoForm.origem} onChange={(e) => setContatoForm({ ...contatoForm, origem: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Status</Label>
+                      <Select value={contatoForm.status} onValueChange={(v) => setContatoForm({ ...contatoForm, status: v })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {statusOptions.map((s) => (
+                            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Lista</Label>
+                      <Select value={contatoForm.lista_id} onValueChange={(v) => setContatoForm({ ...contatoForm, lista_id: v })}>
+                        <SelectTrigger><SelectValue placeholder="Sem lista" /></SelectTrigger>
+                        <SelectContent>
+                          {listas.map((l) => (
+                            <SelectItem key={l.id} value={l.id}>{l.nome}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Tags (separadas por vírgula)</Label>
+                    <Input value={contatoForm.tags} onChange={(e) => setContatoForm({ ...contatoForm, tags: e.target.value })} placeholder="Ex: VIP, Urgente, Indicação" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Notas</Label>
+                    <Textarea value={contatoForm.notas} onChange={(e) => setContatoForm({ ...contatoForm, notas: e.target.value })} rows={4} />
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setModalContato(false)}>Cancelar</Button>
+                    <Button onClick={salvarContato} disabled={!contatoForm.nome.trim()}>
+                      Salvar alterações
+                    </Button>
+                  </DialogFooter>
+                </TabsContent>
+
+                <TabsContent value="timeline" className="py-2">
+                  <LeadTimeline contatoId={editing.id} />
+                </TabsContent>
+
+                <TabsContent value="tarefas" className="py-2">
+                  <LeadTarefas contatoId={editing.id} onChange={recarregarTarefas} />
+                </TabsContent>
+              </Tabs>
+            ) : (
+              <>
+                <div className="space-y-3 py-2">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>Nome *</Label>
+                      <Input value={contatoForm.nome} onChange={(e) => setContatoForm({ ...contatoForm, nome: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Telefone</Label>
+                      <Input value={contatoForm.telefone} onChange={(e) => setContatoForm({ ...contatoForm, telefone: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>E-mail</Label>
+                      <Input value={contatoForm.email} onChange={(e) => setContatoForm({ ...contatoForm, email: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Empresa</Label>
+                      <Input value={contatoForm.empresa} onChange={(e) => setContatoForm({ ...contatoForm, empresa: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Cargo</Label>
+                      <Input value={contatoForm.cargo} onChange={(e) => setContatoForm({ ...contatoForm, cargo: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Origem</Label>
+                      <Input value={contatoForm.origem} onChange={(e) => setContatoForm({ ...contatoForm, origem: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Status</Label>
+                      <Select value={contatoForm.status} onValueChange={(v) => setContatoForm({ ...contatoForm, status: v })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {statusOptions.map((s) => (
+                            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Lista</Label>
+                      <Select value={contatoForm.lista_id} onValueChange={(v) => setContatoForm({ ...contatoForm, lista_id: v })}>
+                        <SelectTrigger><SelectValue placeholder="Sem lista" /></SelectTrigger>
+                        <SelectContent>
+                          {listas.map((l) => (
+                            <SelectItem key={l.id} value={l.id}>{l.nome}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Tags (separadas por vírgula)</Label>
+                    <Input value={contatoForm.tags} onChange={(e) => setContatoForm({ ...contatoForm, tags: e.target.value })} placeholder="Ex: VIP, Urgente, Indicação" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Notas</Label>
+                    <Textarea value={contatoForm.notas} onChange={(e) => setContatoForm({ ...contatoForm, notas: e.target.value })} rows={4} />
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Telefone</Label>
-                  <Input value={contatoForm.telefone} onChange={(e) => setContatoForm({ ...contatoForm, telefone: e.target.value })} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>E-mail</Label>
-                  <Input value={contatoForm.email} onChange={(e) => setContatoForm({ ...contatoForm, email: e.target.value })} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Empresa</Label>
-                  <Input value={contatoForm.empresa} onChange={(e) => setContatoForm({ ...contatoForm, empresa: e.target.value })} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Cargo</Label>
-                  <Input value={contatoForm.cargo} onChange={(e) => setContatoForm({ ...contatoForm, cargo: e.target.value })} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Origem</Label>
-                  <Input value={contatoForm.origem} onChange={(e) => setContatoForm({ ...contatoForm, origem: e.target.value })} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Status</Label>
-                  <Select value={contatoForm.status} onValueChange={(v) => setContatoForm({ ...contatoForm, status: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {statusOptions.map((s) => (
-                        <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Lista</Label>
-                  <Select value={contatoForm.lista_id} onValueChange={(v) => setContatoForm({ ...contatoForm, lista_id: v })}>
-                    <SelectTrigger><SelectValue placeholder="Sem lista" /></SelectTrigger>
-                    <SelectContent>
-                      {listas.map((l) => (
-                        <SelectItem key={l.id} value={l.id}>{l.nome}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Tags (separadas por vírgula)</Label>
-                <Input value={contatoForm.tags} onChange={(e) => setContatoForm({ ...contatoForm, tags: e.target.value })} placeholder="Ex: VIP, Urgente, Indicação" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Notas</Label>
-                <Textarea value={contatoForm.notas} onChange={(e) => setContatoForm({ ...contatoForm, notas: e.target.value })} rows={4} />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setModalContato(false)}>Cancelar</Button>
-              <Button onClick={salvarContato} disabled={!contatoForm.nome.trim()}>
-                {editing ? "Salvar alterações" : "Criar contato"}
-              </Button>
-            </DialogFooter>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setModalContato(false)}>Cancelar</Button>
+                  <Button onClick={salvarContato} disabled={!contatoForm.nome.trim()}>
+                    Criar contato
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
           </DialogContent>
         </Dialog>
       </div>
