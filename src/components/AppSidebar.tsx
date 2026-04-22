@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug,
-  LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send,
+  LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/mentoark-logo.png";
@@ -18,6 +18,7 @@ const items = [
   { title: "Funil de Vendas",   url: "/funil",       icon: Kanban          },
   { title: "WhatsApp",          url: "/whatsapp",    icon: MessageCircle   },
   { title: "Disparos",          url: "/disparos",    icon: Send            },
+  { title: "Workflows",         url: "/workflows",   icon: GitBranch       },
   { title: "Campanhas",         url: "/campanhas",   icon: Megaphone       },
   { title: "Integrações",       url: "/integracoes", icon: Plug            },
   { title: "Agentes",           url: "/agentes",     icon: Bot             },
