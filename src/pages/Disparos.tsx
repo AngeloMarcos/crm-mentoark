@@ -37,6 +37,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Link } from "react-router-dom";
 import * as XLSX from "xlsx";
+import { normalizarTelefoneBR } from "@/lib/phone";
 
 type DisparoStatus = "rascunho" | "em_andamento" | "pausado" | "concluido" | "cancelado";
 
