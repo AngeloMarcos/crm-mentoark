@@ -24,23 +24,23 @@ export default function WorkflowsPage() {
     <CRMLayout>
       <div className="flex flex-col h-[calc(100vh-4rem)]">
         {/* Toolbar */}
-        <div className="flex items-center justify-between gap-3 pb-4 border-b border-border">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-3 pb-4 border-b border-border flex-wrap">
+          <div className="flex items-center gap-3 min-w-0 flex-wrap">
             <div className="w-10 h-10 rounded-lg gradient-brand flex items-center justify-center shrink-0 glow-primary">
               <GitBranch className="h-5 w-5 text-white" />
             </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight">Workflow Builder</h1>
-              <p className="text-sm text-muted-foreground">
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Workflow Builder</h1>
+              <p className="text-xs sm:text-sm text-muted-foreground">
                 Arraste nós da paleta para construir automações
               </p>
             </div>
-            <Badge variant="secondary" className="ml-2">
+            <Badge variant="secondary" className="ml-0 sm:ml-2">
               {nodes.length} nós · {edges.length} conexões
             </Badge>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant="outline"
               size="sm"
@@ -60,10 +60,10 @@ export default function WorkflowsPage() {
           </div>
         </div>
 
-        {/* Canvas + Paleta */}
-        <div className="flex-1 flex gap-4 pt-4 min-h-0">
+        {/* Canvas + Paleta — empilha em mobile, lado a lado em md+ */}
+        <div className="flex-1 flex flex-col md:flex-row gap-4 pt-4 min-h-0">
           <NodePalette />
-          <div className="flex-1 rounded-lg border border-border overflow-hidden bg-card">
+          <div className="flex-1 min-h-[400px] rounded-lg border border-border overflow-hidden bg-card">
             <WorkflowCanvas />
           </div>
         </div>

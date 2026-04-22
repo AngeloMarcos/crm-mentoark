@@ -114,10 +114,10 @@ function DraggableCard({ contato, onClick }: { contato: Contato; onClick: () => 
       onClick={onClick}
       className={`p-3 cursor-grab active:cursor-grabbing hover:border-primary/40 transition-colors border-t-2 ${etapaCor[contato.status as FunilStatus] ?? ""} ${isDragging ? "opacity-30" : ""}`}
     >
-      <div className="space-y-2">
-        <div className="flex items-start justify-between">
-          <p className="font-medium text-sm">{contato.nome}</p>
-          <TempIcon className={`h-4 w-4 ${tempColor[contato.temperatura] || "text-info"}`} />
+      <div className="space-y-2 min-w-0">
+        <div className="flex items-start justify-between gap-2 min-w-0">
+          <p className="font-medium text-sm break-words line-clamp-2 min-w-0 flex-1">{contato.nome}</p>
+          <TempIcon className={`h-4 w-4 shrink-0 ${tempColor[contato.temperatura] || "text-info"}`} />
         </div>
         {contato.origem && (
           <div className="flex flex-wrap gap-1">

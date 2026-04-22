@@ -870,7 +870,7 @@ export default function DisparosPage() {
 
               {/* 4b. Mensagem + variações */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <Label>Mensagem * {variacoes.length > 1 && <span className="text-xs text-muted-foreground ml-2">({variacoes.length} variações)</span>}</Label>
                   <Button type="button" size="sm" variant="outline" onClick={addVariacao} disabled={variacoes.length >= 5}>
                     <Plus className="h-3.5 w-3.5" /> Adicionar variação

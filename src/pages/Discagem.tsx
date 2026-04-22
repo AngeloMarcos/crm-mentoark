@@ -315,15 +315,15 @@ export default function DiscagemPage() {
               </div>
 
               {/* Telefone gigante + botão ligar */}
-              <div className="bg-primary/5 border border-primary/20 rounded-xl p-5 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <Phone className="h-7 w-7 text-primary" />
-                  <div>
+              <div className="bg-primary/5 border border-primary/20 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Phone className="h-7 w-7 text-primary shrink-0" />
+                  <div className="min-w-0">
                     <p className="text-xs text-muted-foreground uppercase tracking-wider">Telefone</p>
-                    <p className="text-2xl font-mono font-bold">{atual.telefone}</p>
+                    <p className="text-2xl font-mono font-bold break-all">{atual.telefone}</p>
                   </div>
                 </div>
-                <Button size="lg" onClick={ligarAgora} className="gap-2 shrink-0">
+                <Button size="lg" onClick={ligarAgora} className="gap-2 shrink-0 w-full sm:w-auto">
                   <PhoneCall className="h-5 w-5" /> Ligar agora
                 </Button>
               </div>

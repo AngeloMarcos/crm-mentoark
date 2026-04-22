@@ -58,7 +58,7 @@ export function NodePalette() {
   };
 
   return (
-    <div className="w-64 shrink-0 border-r border-border bg-card/40 h-full overflow-y-auto p-3 space-y-4">
+    <div className="w-full md:w-64 md:shrink-0 border-b md:border-b-0 md:border-r border-border bg-card/40 max-h-64 md:max-h-none md:h-full overflow-y-auto p-3 space-y-4 rounded-lg md:rounded-none">
       <h3 className="text-sm font-semibold tracking-tight">Componentes</h3>
       {categories.map((cat) => (
         <div key={cat.label} className="space-y-2">
