@@ -499,6 +499,35 @@ export default function LeadsPage() {
     toast({ title: `✅ ${filtrados.length} contatos exportados` });
   };
 
+  // ============ VALIDAR LISTA NO WHATSAPP ============
+  const [validandoWa, setValidandoWa] = useState(false);
+  const validarListaWhatsApp = async () => {
+    if (!user) return;
+    const ids = filtered.map((c) => c.id);
+    if (ids.length === 0) {
+      toast({ title: "Nenhum contato para validar" });
+      return;
+    }
+    if (!confirm(`Validar ${ids.length} contato(s) no WhatsApp?\n\nIsso consulta a Evolution API e marca números inexistentes com a tag "whatsapp_invalido".`)) return;
+    setValidandoWa(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("validar-numeros-whatsapp", {
+        body: { contato_ids: ids },
+      });
+      if (error) throw error;
+      const r = data as { total: number; validos: number; invalidos: number; fixos: number };
+      toast({
+        title: "✅ Validação concluída",
+        description: `${r.validos} válidos · ${r.invalidos} inválidos (${r.fixos} fixos detectados)`,
+      });
+      carregar();
+    } catch (err: any) {
+      toast({ title: "Erro na validação", description: err.message, variant: "destructive" });
+    } finally {
+      setValidandoWa(false);
+    }
+  };
+
   // ============ FILTROS ============
   const filtered = contatos.filter((c) => {
     const s = search.toLowerCase();
