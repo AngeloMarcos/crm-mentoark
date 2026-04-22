@@ -359,10 +359,25 @@ export default function DisparosPage() {
   };
 
   // Processa o próximo log pendente do disparo (recursivo via setTimeout)
-  const processarProximo = async (d: Disparo) => {
+  const processarProximo = async (dIn: Disparo) => {
     if (lockRef.current) return;
-    if (pauseFlagRef.current.has(d.id)) return;
+    if (pauseFlagRef.current.has(dIn.id)) return;
     if (!evolution) { toast.error("Evolution API não configurada"); return; }
+
+    // 🔄 Sempre recarrega configuração mais recente do disparo (intervalos ao vivo)
+    const { data: live } = await supabase
+      .from("disparos")
+      .select("*")
+      .eq("id", dIn.id)
+      .maybeSingle();
+    const d: Disparo = (live as Disparo) ?? dIn;
+
+    // Se foi cancelado/pausado/concluído via UI ou outra aba, para aqui
+    if (d.status === "cancelado" || d.status === "pausado" || d.status === "concluido") {
+      limparTimers();
+      setProximoEnvio(0);
+      return;
+    }
 
     // Janela de horário
     if (!inWindow(d.horario_inicio, d.horario_fim)) {
@@ -376,7 +391,7 @@ export default function DisparosPage() {
     const lote = lotePorDisparoRef.current[d.id] ?? lerEstadoLocal(d.id).lote ?? 0;
     if (d.pausa_a_cada > 0 && lote >= d.pausa_a_cada) {
       lotePorDisparoRef.current[d.id] = 0;
-      const ms = d.pausa_duracao * 60_000;
+      const ms = Math.max(1, d.pausa_duracao) * 60_000;
       salvarEstadoLocal(d.id, { lote: 0, nextAt: Date.now() + ms });
       toast.info(`⏸️ Pausa anti-bloqueio: ${d.pausa_duracao} min`);
       iniciarCountdown(ms / 1000);
@@ -427,8 +442,10 @@ export default function DisparosPage() {
 
     if (pauseFlagRef.current.has(d.id)) return;
 
-    // Sortear intervalo e agendar próximo
-    const intervalo = Math.floor(Math.random() * (d.intervalo_max - d.intervalo_min + 1)) + d.intervalo_min;
+    // Sortear intervalo e agendar próximo (clamp defensivo: min>=1, max>=min)
+    const minS = Math.max(1, Number(d.intervalo_min) || 1);
+    const maxS = Math.max(minS, Number(d.intervalo_max) || minS);
+    const intervalo = Math.floor(Math.random() * (maxS - minS + 1)) + minS;
     const ms = intervalo * 1000;
     salvarEstadoLocal(d.id, { lote: lotePorDisparoRef.current[d.id] ?? 0, nextAt: Date.now() + ms });
     iniciarCountdown(intervalo);
@@ -937,6 +954,51 @@ export default function DisparosPage() {
                       </div>
                     );
                   })()}
+
+                  {/* ⚙️ Editor ao vivo de intervalos — aplica no próximo envio */}
+                  {(activeDisparo.status === "em_andamento" || activeDisparo.status === "pausado") && (
+                    <div className="rounded-md border border-border/60 p-3 bg-muted/10 space-y-3">
+                      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                        <Settings2 className="h-3.5 w-3.5" />
+                        Intervalo entre mensagens (aplica no próximo envio)
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-[11px] text-muted-foreground">Mín (s)</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={600}
+                            value={activeDisparo.intervalo_min}
+                            onChange={async (e) => {
+                              const v = Math.max(1, Math.min(600, Number(e.target.value) || 1));
+                              setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_min: v } : x));
+                              await supabase.from("disparos").update({ intervalo_min: v }).eq("id", activeDisparo.id);
+                            }}
+                            className="h-8"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[11px] text-muted-foreground">Máx (s)</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={600}
+                            value={activeDisparo.intervalo_max}
+                            onChange={async (e) => {
+                              const v = Math.max(1, Math.min(600, Number(e.target.value) || 1));
+                              setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_max: v } : x));
+                              await supabase.from("disparos").update({ intervalo_max: v }).eq("id", activeDisparo.id);
+                            }}
+                            className="h-8"
+                          />
+                        </div>
+                      </div>
+                      {activeDisparo.intervalo_min > activeDisparo.intervalo_max && (
+                        <p className="text-[11px] text-destructive">Mín deve ser ≤ Máx</p>
+                      )}
+                    </div>
+                  )}
 
                   {activeDisparo.status === "em_andamento" && (
                     <Alert>
