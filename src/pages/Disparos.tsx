@@ -442,8 +442,10 @@ export default function DisparosPage() {
 
     if (pauseFlagRef.current.has(d.id)) return;
 
-    // Sortear intervalo e agendar próximo
-    const intervalo = Math.floor(Math.random() * (d.intervalo_max - d.intervalo_min + 1)) + d.intervalo_min;
+    // Sortear intervalo e agendar próximo (clamp defensivo: min>=1, max>=min)
+    const minS = Math.max(1, Number(d.intervalo_min) || 1);
+    const maxS = Math.max(minS, Number(d.intervalo_max) || minS);
+    const intervalo = Math.floor(Math.random() * (maxS - minS + 1)) + minS;
     const ms = intervalo * 1000;
     salvarEstadoLocal(d.id, { lote: lotePorDisparoRef.current[d.id] ?? 0, nextAt: Date.now() + ms });
     iniciarCountdown(intervalo);
