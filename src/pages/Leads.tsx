@@ -21,8 +21,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadTimeline } from "@/components/leads/LeadTimeline";
 import { LeadTarefas } from "@/components/leads/LeadTarefas";
 import {
-  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, MessageCircle, Download, ListTodo,
+  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, MessageCircle, Download, ListTodo, ShieldCheck,
 } from "lucide-react";
+import { normalizarTelefoneBR } from "@/lib/phone";
 
 function formatWhatsappNumber(raw: string | null | undefined): string | null {
   if (!raw) return null;
