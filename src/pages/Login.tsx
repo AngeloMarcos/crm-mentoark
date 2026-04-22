@@ -58,15 +58,27 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md space-y-6">
+    <div className="relative min-h-screen flex items-center justify-center bg-background p-4 overflow-hidden">
+      {/* Aurora orbs */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -top-32 -left-32 w-[28rem] h-[28rem] rounded-full bg-primary/25 blur-3xl opacity-40" />
+        <div className="absolute -bottom-40 -right-32 w-[32rem] h-[32rem] rounded-full bg-accent/25 blur-3xl opacity-35" />
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[24rem] h-[24rem] rounded-full bg-primary/15 blur-3xl opacity-25" />
+      </div>
+
+      <div className="relative z-10 w-full max-w-md space-y-6 animate-fade-in">
         <div className="text-center space-y-2">
-          <img src={logo} alt="MentoArk" className="w-20 h-20 rounded-2xl mx-auto object-cover" />
-          <h1 className="text-2xl font-bold">Mento<span className="text-primary">Ark</span></h1>
+          <div className="ring-gradient mx-auto w-fit animate-breathe">
+            <img src={logo} alt="MentoArk" className="w-20 h-20 rounded-2xl object-cover bg-card" />
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight">
+            <span className="text-foreground">Mento</span>
+            <span className="gradient-text-animated">Ark</span>
+          </h1>
           <p className="text-sm text-muted-foreground">CRM de automação comercial</p>
         </div>
 
-        <Card>
+        <Card className="card-gradient-border glow-soft">
           <CardHeader className="text-center pb-4">
             <CardTitle className="text-lg">{isLogin ? "Entrar" : "Criar Conta"}</CardTitle>
             <CardDescription>{isLogin ? "Acesse sua conta para continuar" : "Preencha os dados para se cadastrar"}</CardDescription>
@@ -93,7 +105,7 @@ export default function LoginPage() {
                   </Button>
                 </div>
               </div>
-              <Button type="submit" className="w-full gap-2" disabled={loading}>
+              <Button type="submit" className="w-full gap-2 btn-gradient" disabled={loading}>
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : isLogin ? <LogIn className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
                 {loading ? "Aguarde..." : isLogin ? "Entrar" : "Cadastrar"}
               </Button>

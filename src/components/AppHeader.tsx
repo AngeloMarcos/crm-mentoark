@@ -11,9 +11,19 @@ export function AppHeader() {
   const initials = user?.email ? user.email.slice(0, 2).toUpperCase() : "U";
 
   return (
-    <header className="relative h-14 border-b border-border flex items-center justify-between px-4 bg-card/50 backdrop-blur-sm">
-      {/* Linha degradê na base do header */}
-      <div className="absolute bottom-0 left-0 right-0 h-px gradient-brand opacity-60 pointer-events-none" />
+    <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20">
+      {/* Linha degradê animada na base do header */}
+      <div className="absolute bottom-0 left-0 right-0 h-[2px] pointer-events-none overflow-hidden">
+        <div
+          className="h-full w-full"
+          style={{
+            background:
+              "linear-gradient(90deg, transparent, hsl(226 85% 52%), hsl(262 83% 58%), hsl(226 85% 52%), transparent)",
+            backgroundSize: "200% 100%",
+            animation: "gradient-shift 6s linear infinite",
+          }}
+        />
+      </div>
 
       <div className="flex items-center gap-2">
         <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
@@ -23,7 +33,7 @@ export function AppHeader() {
         {/* Notificações */}
         <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground relative">
           <Bell className="h-5 w-5" />
-          <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full gradient-brand" />
+          <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full gradient-brand pulse-gradient" />
         </Button>
 
         {/* Toggle tema */}
@@ -36,9 +46,11 @@ export function AppHeader() {
           {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
         </Button>
 
-        {/* Avatar degradê */}
-        <div className="w-8 h-8 rounded-full gradient-brand flex items-center justify-center text-white text-xs font-semibold ml-1 glow-primary">
-          {initials}
+        {/* Avatar com anel degradê */}
+        <div className="ring-gradient glow-primary ml-1">
+          <div className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-semibold gradient-brand-text">
+            {initials}
+          </div>
         </div>
       </div>
     </header>

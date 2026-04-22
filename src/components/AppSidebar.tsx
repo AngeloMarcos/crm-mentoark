@@ -44,16 +44,18 @@ export function AppSidebar() {
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border sidebar-gradient">
       {/* Logo */}
-      <div className="flex items-center gap-2 px-4 py-4 border-b border-sidebar-border">
-        <div className="w-9 h-9 rounded-lg gradient-brand flex items-center justify-center shrink-0 glow-primary overflow-hidden">
+      <div className="relative flex items-center gap-2 px-4 py-4 border-b border-sidebar-border/60">
+        <div className="w-9 h-9 rounded-lg gradient-brand flex items-center justify-center shrink-0 animate-breathe overflow-hidden">
           <img src={logo} alt="MentoArk" className="w-full h-full object-cover" />
         </div>
         {!collapsed && (
           <span className="font-bold text-lg tracking-tight">
             <span className="text-sidebar-foreground">Mento</span>
-            <span className="gradient-brand-text">Ark</span>
+            <span className="gradient-text-animated">Ark</span>
           </span>
         )}
+        {/* Linha degradê fina abaixo do logo */}
+        <div className="absolute bottom-0 left-3 right-3 h-px gradient-brand opacity-40" />
       </div>
 
       <SidebarContent className="pt-2">
@@ -70,16 +72,20 @@ export function AppSidebar() {
                       <NavLink
                         to={item.url}
                         end={item.url === "/dashboard"}
-                        className={`relative flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+                        className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
                           isActive
-                            ? "gradient-brand-subtle font-medium"
-                            : "text-sidebar-foreground hover:bg-sidebar-accent"
+                            ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(262_83%_58%/0.20)]"
+                            : "text-sidebar-foreground hover:bg-sidebar-accent hover:translate-x-1"
                         }`}
                       >
                         {isActive && (
-                          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-1 rounded-r gradient-brand" />
+                          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-7 w-[3px] rounded-r gradient-brand shadow-[0_0_12px_hsl(262_83%_58%/0.6)]" />
                         )}
-                        <item.icon className={`h-5 w-5 shrink-0 ${isActive ? "text-primary" : ""}`} />
+                        <item.icon
+                          className={`h-5 w-5 shrink-0 transition-colors ${
+                            isActive ? "text-primary" : "group-hover:text-primary"
+                          }`}
+                        />
                         {!collapsed && (
                           <span className={isActive ? "gradient-brand-text" : ""}>{item.title}</span>
                         )}
@@ -93,7 +99,7 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border p-3">
+      <SidebarFooter className="relative border-t border-sidebar-border/60 p-3 before:content-[''] before:absolute before:top-0 before:left-3 before:right-3 before:h-px before:gradient-brand before:opacity-40">
         <SidebarMenuButton
           onClick={handleLogout}
           className="flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent transition-colors"
