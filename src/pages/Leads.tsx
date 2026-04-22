@@ -563,6 +563,10 @@ export default function LeadsPage() {
             <Button variant="outline" size="sm" onClick={exportarCsv}>
               <Download className="h-4 w-4 mr-1" /> Exportar CSV
             </Button>
+            <Button variant="outline" size="sm" onClick={validarListaWhatsApp} disabled={validandoWa}>
+              {validandoWa ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />}
+              Validar lista no WhatsApp
+            </Button>
             <Button size="sm" onClick={abrirNovo}>
               <Plus className="h-4 w-4 mr-1" /> Novo Contato
             </Button>
