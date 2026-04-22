@@ -100,6 +100,115 @@ const inWindow = (start: string, end: string) => {
   return cur >= sh * 60 + sm && cur <= eh * 60 + em;
 };
 
+/** Editor de intervalo ao vivo — usa estado local para evitar salvar a cada tecla. */
+function IntervaloEditor({
+  disparoId,
+  intervaloMin,
+  intervaloMax,
+  onUpdate,
+}: {
+  disparoId: string;
+  intervaloMin: number;
+  intervaloMax: number;
+  onUpdate: (min: number, max: number) => void;
+}) {
+  const [minStr, setMinStr] = useState(String(intervaloMin));
+  const [maxStr, setMaxStr] = useState(String(intervaloMax));
+  const [saving, setSaving] = useState(false);
+
+  // Sincroniza quando o disparo carregado muda externamente
+  useEffect(() => { setMinStr(String(intervaloMin)); }, [intervaloMin]);
+  useEffect(() => { setMaxStr(String(intervaloMax)); }, [intervaloMax]);
+
+  const persistir = async (min: number, max: number) => {
+    const minClamp = Math.max(1, Math.min(3600, Math.floor(min) || 1));
+    const maxClamp = Math.max(minClamp, Math.min(3600, Math.floor(max) || minClamp));
+    setMinStr(String(minClamp));
+    setMaxStr(String(maxClamp));
+    setSaving(true);
+    const { error } = await supabase
+      .from("disparos")
+      .update({ intervalo_min: minClamp, intervalo_max: maxClamp })
+      .eq("id", disparoId);
+    setSaving(false);
+    if (error) { toast.error("Erro ao salvar intervalo: " + error.message); return; }
+    onUpdate(minClamp, maxClamp);
+    toast.success(`Intervalo atualizado: ${minClamp}s – ${maxClamp}s`);
+  };
+
+  const aplicarPreset = (min: number, max: number) => persistir(min, max);
+
+  const presets = [
+    { label: "30s–1min", min: 30, max: 60 },
+    { label: "1–3min", min: 60, max: 180 },
+    { label: "3–5min", min: 180, max: 300 },
+    { label: "5–10min", min: 300, max: 600 },
+  ];
+
+  return (
+    <div className="rounded-md border border-border/60 p-3 bg-muted/10 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <Settings2 className="h-3.5 w-3.5" />
+          Intervalo entre mensagens
+        </div>
+        {saving && <span className="text-[10px] text-info">salvando...</span>}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label className="text-[11px] text-muted-foreground">Mín (segundos)</Label>
+          <Input
+            type="number"
+            min={1}
+            max={3600}
+            value={minStr}
+            onChange={(e) => setMinStr(e.target.value)}
+            onBlur={() => persistir(Number(minStr), Number(maxStr))}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            className="h-8"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11px] text-muted-foreground">Máx (segundos)</Label>
+          <Input
+            type="number"
+            min={1}
+            max={3600}
+            value={maxStr}
+            onChange={(e) => setMaxStr(e.target.value)}
+            onBlur={() => persistir(Number(minStr), Number(maxStr))}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            className="h-8"
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {presets.map((p) => {
+          const ativo = intervaloMin === p.min && intervaloMax === p.max;
+          return (
+            <Button
+              key={p.label}
+              type="button"
+              size="sm"
+              variant={ativo ? "default" : "outline"}
+              className="h-7 px-2 text-[11px]"
+              onClick={() => aplicarPreset(p.min, p.max)}
+            >
+              {p.label}
+            </Button>
+          );
+        })}
+      </div>
+
+      <p className="text-[10px] text-muted-foreground leading-relaxed">
+        Aplica no <strong>próximo envio</strong>. Pressione Enter ou clique fora para salvar.
+      </p>
+    </div>
+  );
+}
+
 export default function DisparosPage() {
   const { user } = useAuth();
 
@@ -957,47 +1066,15 @@ export default function DisparosPage() {
 
                   {/* ⚙️ Editor ao vivo de intervalos — aplica no próximo envio */}
                   {(activeDisparo.status === "em_andamento" || activeDisparo.status === "pausado") && (
-                    <div className="rounded-md border border-border/60 p-3 bg-muted/10 space-y-3">
-                      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                        <Settings2 className="h-3.5 w-3.5" />
-                        Intervalo entre mensagens (aplica no próximo envio)
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <Label className="text-[11px] text-muted-foreground">Mín (s)</Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={600}
-                            value={activeDisparo.intervalo_min}
-                            onChange={async (e) => {
-                              const v = Math.max(1, Math.min(600, Number(e.target.value) || 1));
-                              setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_min: v } : x));
-                              await supabase.from("disparos").update({ intervalo_min: v }).eq("id", activeDisparo.id);
-                            }}
-                            className="h-8"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-[11px] text-muted-foreground">Máx (s)</Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={600}
-                            value={activeDisparo.intervalo_max}
-                            onChange={async (e) => {
-                              const v = Math.max(1, Math.min(600, Number(e.target.value) || 1));
-                              setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_max: v } : x));
-                              await supabase.from("disparos").update({ intervalo_max: v }).eq("id", activeDisparo.id);
-                            }}
-                            className="h-8"
-                          />
-                        </div>
-                      </div>
-                      {activeDisparo.intervalo_min > activeDisparo.intervalo_max && (
-                        <p className="text-[11px] text-destructive">Mín deve ser ≤ Máx</p>
-                      )}
-                    </div>
+                    <IntervaloEditor
+                      key={activeDisparo.id}
+                      disparoId={activeDisparo.id}
+                      intervaloMin={activeDisparo.intervalo_min}
+                      intervaloMax={activeDisparo.intervalo_max}
+                      onUpdate={(min, max) => {
+                        setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_min: min, intervalo_max: max } : x));
+                      }}
+                    />
                   )}
 
                   {activeDisparo.status === "em_andamento" && (
