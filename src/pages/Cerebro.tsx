@@ -517,6 +517,81 @@ export default function CerebroPage() {
     { label: "Scripts", value: scripts.items.length, icon: FileText, color: "text-warning" },
   ];
 
+  // Busca global
+  const [globalSearch, setGlobalSearch] = useState("");
+  const buscaResultados = useMemo(() => {
+    const q = globalSearch.trim().toLowerCase();
+    if (!q) return [];
+    return itens.filter(
+      (i) =>
+        (i.campo ?? "").toLowerCase().includes(q) ||
+        (i.conteudo ?? "").toLowerCase().includes(q) ||
+        (i.categoria ?? "").toLowerCase().includes(q),
+    );
+  }, [itens, globalSearch]);
+
+  const tipoLabel: Record<TipoConhecimento, string> = {
+    personalidade: "Personalidade",
+    negocio: "Negócio",
+    faq: "FAQ",
+    objecao: "Objeção",
+    script: "Script",
+  };
+
+  // Importar CSV/XLSX
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importando, setImportando] = useState(false);
+
+  const importarArquivo = async (file: File) => {
+    if (!user) {
+      toast.error("Faça login");
+      return;
+    }
+    setImportando(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const linhas = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+
+      const tiposValidos: TipoConhecimento[] = ["personalidade", "negocio", "faq", "objecao", "script"];
+      const registros = linhas
+        .map((l) => {
+          const tipo = String(l.tipo ?? "").trim().toLowerCase() as TipoConhecimento;
+          const conteudo = String(l.conteudo ?? "").trim();
+          if (!tipo || !tiposValidos.includes(tipo) || !conteudo) return null;
+          return {
+            user_id: user.id,
+            tipo,
+            campo: String(l.campo ?? "").trim() || null,
+            conteudo,
+            categoria: String(l.categoria ?? "").trim() || null,
+            contexto: String(l.contexto ?? "").trim() || null,
+            indexado: false,
+          };
+        })
+        .filter((r): r is NonNullable<typeof r> => r !== null);
+
+      if (registros.length === 0) {
+        toast.error("Nenhuma linha válida. Colunas esperadas: tipo, campo, conteudo, categoria, contexto");
+        return;
+      }
+
+      const { error } = await (supabase as any).from("conhecimento").insert(registros);
+      if (error) {
+        toast.error("Erro ao importar: " + error.message);
+        return;
+      }
+      toast.success(`${registros.length} item(ns) importado(s) (${linhas.length - registros.length} ignorados)`);
+      carregar();
+    } catch {
+      toast.error("Erro ao processar arquivo");
+    } finally {
+      setImportando(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   return (
     <CRMLayout>
       <div className="space-y-6">
