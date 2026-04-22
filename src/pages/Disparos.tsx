@@ -1032,17 +1032,20 @@ export default function DisparosPage() {
               <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="todos">Todos</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="sending">Sending</SelectItem>
-                <SelectItem value="sent">Sent</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
+                <SelectItem value="pending">Pendentes</SelectItem>
+                <SelectItem value="sending">Enviando</SelectItem>
+                <SelectItem value="sent">Enviados</SelectItem>
+                <SelectItem value="failed">Falhas reais</SelectItem>
+                <SelectItem value="invalido">Inválidos</SelectItem>
               </SelectContent>
             </Select>
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={() => logsDisparo && carregarLogs(logsDisparo.id)}>
                 <RefreshCw className="h-4 w-4" /> Atualizar
               </Button>
-              <Button size="sm" variant="outline" onClick={reenviarFalhas}>Reenviar falhas</Button>
+              <Button size="sm" variant="outline" onClick={reenviarFalhas} title="Reprocessa apenas falhas reais — ignora telefones inválidos">
+                Reenviar falhas reais
+              </Button>
             </div>
           </div>
           <div className="max-h-[60vh] overflow-auto border border-border/60 rounded-md">
