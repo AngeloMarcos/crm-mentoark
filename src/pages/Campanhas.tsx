@@ -61,6 +61,7 @@ import {
   Trash2,
   Loader2,
   Target,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -269,9 +270,15 @@ export default function CampanhasPage() {
               Performance de campanhas e mídia paga
             </p>
           </div>
-          <Button onClick={abrirCriar}>
-            <Plus className="h-4 w-4" /> Nova Campanha
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={carregar} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Atualizar
+            </Button>
+            <Button onClick={abrirCriar}>
+              <Plus className="h-4 w-4" /> Nova Campanha
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
