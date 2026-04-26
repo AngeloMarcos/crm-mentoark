@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  crm-api:
+    build: .
+    container_name: crm-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://mentoark:Mentoark@2025@147.93.9.172:5432/crm}
+      JWT_SECRET: ${JWT_SECRET:-mentoark2025jwtsecretkey32chars!!}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+      REFRESH_TOKEN_EXPIRES_IN: ${REFRESH_TOKEN_EXPIRES_IN:-30d}
+      PORT: 3000
+      NODE_ENV: production
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://crm.mentoark.com.br}
+    expose:
+      - "3000"
+    networks:
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "proxy"
+      traefik.http.routers.crm-api.rule: "Host(`api.mentoark.com.br`)"
+      traefik.http.routers.crm-api.entrypoints: "websecure"
+      traefik.http.routers.crm-api.tls.certresolver: "letsencrypt"
+      traefik.http.services.crm-api.loadbalancer.server.port: "3000"
+
+networks:
+  proxy:
+    external: true

@@ -1,10 +1,25 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
+export interface AppUser {
+  id: string;
+  email: string;
+  role?: string;
+  display_name?: string;
+  user_metadata?: { display_name?: string; [key: string]: any };
+  app_metadata?: { role?: string; [key: string]: any };
+  aud?: string;
+}
+
+export interface AppSession {
+  access_token: string;
+  refresh_token?: string;
+  user: AppUser;
+}
+
 interface AuthContextValue {
-  user: User | null;
-  session: Session | null;
+  user: AppUser | null;
+  session: AppSession | null;
   isAdmin: boolean;
   loading: boolean;
   signOut: () => Promise<void>;
@@ -13,31 +28,31 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
+  const [session, setSession] = useState<AppSession | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const checkAdmin = async (uid: string) => {
-    const { data } = await supabase.from("user_roles").select("role").eq("user_id", uid).eq("role", "admin").maybeSingle();
-    setIsAdmin(!!data);
+  const resolveAdmin = (u: AppUser | null) => {
+    if (!u) { setIsAdmin(false); return; }
+    // Role is embedded in the JWT — no extra network call needed
+    const role = u.role ?? u.app_metadata?.role ?? u.user_metadata?.role;
+    setIsAdmin(role === 'admin');
   };
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, sess) => {
-      setSession(sess);
-      setUser(sess?.user ?? null);
-      if (sess?.user) {
-        setTimeout(() => checkAdmin(sess.user.id), 0);
-      } else {
-        setIsAdmin(false);
-      }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, sess: any) => {
+      const s = sess as AppSession | null;
+      setSession(s);
+      setUser(s?.user ?? null);
+      resolveAdmin(s?.user ?? null);
     });
 
-    supabase.auth.getSession().then(({ data: { session: sess } }) => {
-      setSession(sess);
-      setUser(sess?.user ?? null);
-      if (sess?.user) checkAdmin(sess.user.id);
+    supabase.auth.getSession().then(({ data }: any) => {
+      const s = data?.session as AppSession | null;
+      setSession(s);
+      setUser(s?.user ?? null);
+      resolveAdmin(s?.user ?? null);
       setLoading(false);
     });
 
@@ -46,6 +61,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    setUser(null);
+    setSession(null);
+    setIsAdmin(false);
   };
 
   return (
@@ -58,7 +76,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) {
-    // Fallback to avoid crash if hook is read before provider mounts (HMR/strict mode).
     return {
       user: null,
       session: null,
