@@ -17,6 +17,7 @@ import { TestarAgente } from "@/components/cerebro/TestarAgente";
 import { PromptAgente } from "@/components/cerebro/PromptAgente";
 import { Configuracoes } from "@/components/cerebro/Configuracoes";
 import { GeradorPrompt } from "@/components/cerebro/GeradorPrompt";
+import { SetupAgente } from "@/components/cerebro/SetupAgente";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -420,6 +421,7 @@ export default function CerebroPage() {
   const { user } = useAuth();
   const [itens, setItens] = useState<ConhecimentoItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [setupOpen, setSetupOpen] = useState(false);
 
   const carregar = useCallback(async () => {
     if (!user) return;
@@ -614,6 +616,9 @@ export default function CerebroPage() {
                 if (f) importarArquivo(f);
               }}
             />
+            <Button onClick={() => setSetupOpen(true)} size="lg" className="gap-2">
+              <Wand2 className="h-4 w-4" /> Configurar Agente
+            </Button>
             <Button variant="outline" onClick={carregar} size="lg" disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Atualizar
             </Button>
@@ -751,6 +756,8 @@ export default function CerebroPage() {
           </Tabs>
         )}
       </div>
+
+      <SetupAgente open={setupOpen} onClose={() => setSetupOpen(false)} onConcluir={carregar} />
     </CRMLayout>
   );
 }
