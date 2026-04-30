@@ -252,7 +252,7 @@ export default function IntegracoesPage() {
     };
     const { error } = await supabase
       .from("integracoes_config")
-      .upsert(payload, { onConflict: "user_id,tipo" });
+      .upsert(payload);
     setSalvando(false);
     if (error) {
       toast.error(`Erro ao salvar: ${error.message}`);

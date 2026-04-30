@@ -58,7 +58,7 @@ export function LeadTarefas({
       .from("tarefas")
       .select("id, titulo, status, prioridade, prazo, concluida_at")
       .eq("contato_id", contatoId)
-      .order("prazo", { ascending: true, nullsFirst: false });
+      .order("prazo", { ascending: true });
     if (error) toast.error("Erro ao carregar tarefas");
     else setTarefas(data ?? []);
     setLoading(false);
