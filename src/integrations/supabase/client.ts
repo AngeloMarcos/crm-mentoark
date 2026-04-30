@@ -227,7 +227,9 @@ class QueryBuilder {
   insert(data: any) { this._op = 'insert'; this._insertData = data; return this; }
   update(data: any) { this._op = 'update'; this._updateData = data; return this; }
   delete() { this._op = 'delete'; return this; }
-  upsert(data: any) { this._op = 'insert'; this._insertData = data; return this; }
+  upsert(data: any, _opts?: { onConflict?: string; ignoreDuplicates?: boolean }) {
+    this._op = 'insert'; this._insertData = data; return this;
+  }
 
   eq(col: string, val: any)        { this._filters.push({ col, op: 'eq', val }); return this; }
   in(col: string, vals: any[])     { this._filters.push({ col, op: 'in', val: vals }); return this; }
@@ -239,7 +241,7 @@ class QueryBuilder {
   not(col: string, op: string, val: any) { this._filters.push({ col, op: 'not_is' as FilterOp, val }); return this; }
   neq(col: string, val: any)       { return this; } // ignored — server handles ownership
 
-  order(col: string, opts: { ascending?: boolean } = {}) {
+  order(col: string, opts: { ascending?: boolean; nullsFirst?: boolean; nullsLast?: boolean; foreignTable?: string } = {}) {
     this._orderCol = col; this._orderAsc = opts.ascending !== false;
     return this;
   }
