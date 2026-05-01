@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dig *)",
+      "Bash(sshpass -p 'Mentoark@2025' ssh *)",
+      "Bash(sshpass -p 'Mentoark@2025' scp *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 30,
+            "statusMessage": "Verificando containers...",
+            "command": "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // \"\"'); if echo \"$CMD\" | grep -qE 'docker[[:space:]]+compose[[:space:]]+build|docker-compose[[:space:]]+build'; then STATUS=$(sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'docker ps --format \"table {{.Names}}\\t{{.Image}}\\t{{.Status}}\"' 2>/dev/null); printf '{\"systemMessage\": %s}' \"$(printf 'Containers apos o build:\\n%s' \"$STATUS\" | jq -Rs .)\"; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

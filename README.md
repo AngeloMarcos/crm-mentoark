@@ -1,3 +1,3 @@
-# Welcome to your Lovable project
+# MentoArk CRM
 
-TODO: Document your project here
+CRM de automação comercial com IA e WhatsApp. Veja [CLAUDE.md](./CLAUDE.md) para guia completo de desenvolvimento e deploy.
