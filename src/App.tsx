@@ -20,6 +20,7 @@ import CerebroPage from "./pages/Cerebro";
 import AgentesPage from "./pages/Agentes";
 import UsuariosPage from "./pages/Usuarios";
 import WorkflowsPage from "./pages/Workflows";
+import DocsPage from "./pages/Docs";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -48,6 +49,7 @@ const App = () => (
               <Route path="/agentes" element={<ProtectedRoute><AgentesPage /></ProtectedRoute>} />
               <Route path="/workflows" element={<ProtectedRoute><WorkflowsPage /></ProtectedRoute>} />
               <Route path="/usuarios" element={<ProtectedRoute requireAdmin><UsuariosPage /></ProtectedRoute>} />
+              <Route path="/docs" element={<ProtectedRoute><DocsPage /></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </AuthProvider>

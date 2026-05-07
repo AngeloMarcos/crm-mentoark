@@ -21,9 +21,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadTimeline } from "@/components/leads/LeadTimeline";
 import { LeadTarefas } from "@/components/leads/LeadTarefas";
 import {
-  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, MessageCircle, Download, ListTodo, ShieldCheck,
+  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, MessageCircle, Download, ListTodo, ShieldCheck, SearchCheck,
 } from "lucide-react";
 import { normalizarTelefoneBR } from "@/lib/phone";
+import { BuscarLeadsModal } from "@/components/campanhas/BuscarLeadsModal";
 
 function formatWhatsappNumber(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -98,6 +99,7 @@ export default function LeadsPage() {
   const [modalLista, setModalLista] = useState(false);
   const [modalImport, setModalImport] = useState(false);
   const [modalContato, setModalContato] = useState(false);
+  const [modalBuscarLeads, setModalBuscarLeads] = useState(false);
   const [editing, setEditing] = useState<Contato | null>(null);
 
   // Form lista
@@ -579,6 +581,9 @@ export default function LeadsPage() {
               {validandoWa ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />}
               Validar lista no WhatsApp
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setModalBuscarLeads(true)}>
+              <SearchCheck className="h-4 w-4 mr-1" /> Buscar Leads
+            </Button>
             <Button size="sm" onClick={abrirNovo}>
               <Plus className="h-4 w-4 mr-1" /> Novo Contato
             </Button>
@@ -1051,6 +1056,11 @@ export default function LeadsPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      <BuscarLeadsModal
+        open={modalBuscarLeads}
+        onClose={() => { setModalBuscarLeads(false); carregar(); }}
+      />
     </CRMLayout>
   );
 }

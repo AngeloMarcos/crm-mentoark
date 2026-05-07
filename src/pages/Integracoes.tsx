@@ -37,6 +37,8 @@ import {
   Eye,
   EyeOff,
   Plug,
+  MapPin,
+  Brain,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -71,6 +73,8 @@ const iconMap = {
   Database,
   Webhook,
   RefreshCw,
+  MapPin,
+  Brain,
 } as const;
 
 const statusConfig: Record<IntegStatus, { label: string; color: string; icon: any }> = {
@@ -129,6 +133,22 @@ const TEMPLATES: Template[] = [
     icone: "RefreshCw",
     campos: { url: true },
     urlLabel: "URL do Webhook (saída)",
+  },
+  {
+    tipo: "google_places",
+    nome: "Google Places API",
+    descricao: "Busca de leads por localização e segmento",
+    icone: "MapPin",
+    campos: { api_key: true },
+    urlLabel: "",
+  },
+  {
+    tipo: "openai",
+    nome: "OpenAI",
+    descricao: "Scoring e análise de leads por IA",
+    icone: "Brain",
+    campos: { api_key: true },
+    urlLabel: "",
   },
 ];
 

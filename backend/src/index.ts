@@ -17,6 +17,7 @@ import n8nChatRouter from './routes/n8n_chat_histories';
 import dashboardRouter from './routes/dashboard';
 import usuariosRouter from './routes/usuarios';
 import functionsRouter from './routes/functions';
+import leadsBuscarRouter from './routes/leads-buscar';
 
 const app = express();
 
@@ -29,7 +30,7 @@ const staticOrigins = (process.env.CORS_ORIGIN || 'https://crm.mentoark.com.br')
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // curl, server-to-server
+    if (!origin) return cb(null, true);
     if (staticOrigins.includes(origin)) return cb(null, true);
     if (/\.lovable\.app$/.test(new URL(origin).hostname)) return cb(null, true);
     if (/\.lovableproject\.com$/.test(new URL(origin).hostname)) return cb(null, true);
@@ -62,7 +63,7 @@ for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
 
-// Tabelas compartilhadas (sem user_id) — migração para banco único
+// Tabelas compartilhadas (sem user_id) — banco único com Lovable
 const SHARED_TABLES = ['dados_cliente', 'chat_messages', 'chats'];
 for (const table of SHARED_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table, { userIdCol: null }));
@@ -76,6 +77,7 @@ app.use('/api/documents', documentsRouter(pool));
 app.use('/api/n8n_chat_histories', n8nChatRouter(pool));
 app.use('/api/dashboard', dashboardRouter(pool));
 app.use('/api/functions', functionsRouter(pool));
+app.use('/api/leads', leadsBuscarRouter(pool));
 
 // Virtual tables for Supabase compatibility
 app.use('/api', usuariosRouter(pool));
