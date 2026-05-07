@@ -49,6 +49,12 @@ for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
 
+// Tabelas compartilhadas (sem user_id) — migração para banco único
+const SHARED_TABLES = ['dados_cliente', 'chat_messages', 'chats'];
+for (const table of SHARED_TABLES) {
+  app.use(`/api/${table}`, makeCrud(pool, table, { userIdCol: null }));
+}
+
 // Specialized routes
 app.use('/api/contatos', contatosRouter(pool));
 app.use('/api/disparos', disparosRouter(pool));
