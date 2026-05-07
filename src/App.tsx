@@ -9,6 +9,7 @@ import { AuthProvider } from "@/hooks/useAuth";
 import LoginPage from "./pages/Login";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
+import ContatosPage from "./pages/Contatos";
 import DiscagemPage from "./pages/Discagem";
 import FunilPage from "./pages/Funil";
 import WhatsAppPage from "./pages/WhatsApp";
