@@ -14,6 +14,7 @@ import {
 const items = [
   { title: "Dashboard",         url: "/dashboard",   icon: LayoutDashboard },
   { title: "Leads",             url: "/leads",       icon: Users           },
+  { title: "Contatos",          url: "/contatos",    icon: Contact         },
   { title: "Discagem",          url: "/discagem",    icon: PhoneCall       },
   { title: "Funil de Vendas",   url: "/funil",       icon: Kanban          },
   { title: "WhatsApp",          url: "/whatsapp",    icon: MessageCircle   },
