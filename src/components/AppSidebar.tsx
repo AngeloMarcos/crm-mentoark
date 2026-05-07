@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug,
-  LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch,
+  LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch, Contact,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/mentoark-logo.png";
