@@ -199,6 +199,60 @@ export type Database = {
           },
         ]
       }
+      chat_messages: {
+        Row: {
+          active: boolean | null
+          bot_message: string | null
+          created_at: string
+          id: number
+          message_type: string | null
+          nomewpp: string | null
+          phone: string | null
+          user_message: string | null
+        }
+        Insert: {
+          active?: boolean | null
+          bot_message?: string | null
+          created_at?: string
+          id?: number
+          message_type?: string | null
+          nomewpp?: string | null
+          phone?: string | null
+          user_message?: string | null
+        }
+        Update: {
+          active?: boolean | null
+          bot_message?: string | null
+          created_at?: string
+          id?: number
+          message_type?: string | null
+          nomewpp?: string | null
+          phone?: string | null
+          user_message?: string | null
+        }
+        Relationships: []
+      }
+      chats: {
+        Row: {
+          created_at: string
+          id: number
+          phone: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: number
+          phone?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: number
+          phone?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       conhecimento: {
         Row: {
           campo: string | null
@@ -305,6 +359,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      dados_cliente: {
+        Row: {
+          atendimento_ia: boolean | null
+          created_at: string
+          id: number
+          nomewpp: string | null
+          Setor: string | null
+          telefone: string | null
+        }
+        Insert: {
+          atendimento_ia?: boolean | null
+          created_at?: string
+          id?: number
+          nomewpp?: string | null
+          Setor?: string | null
+          telefone?: string | null
+        }
+        Update: {
+          atendimento_ia?: boolean | null
+          created_at?: string
+          id?: number
+          nomewpp?: string | null
+          Setor?: string | null
+          telefone?: string | null
+        }
+        Relationships: []
       }
       disparo_logs: {
         Row: {
