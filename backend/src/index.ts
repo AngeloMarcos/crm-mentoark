@@ -21,8 +21,21 @@ import functionsRouter from './routes/functions';
 const app = express();
 
 // ── Middleware ──────────────────────────────────────────────
+// CORS: aceita origens fixas + qualquer subdomínio lovable.app/lovableproject.com
+const staticOrigins = (process.env.CORS_ORIGIN || 'https://crm.mentoark.com.br')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // curl, server-to-server
+    if (staticOrigins.includes(origin)) return cb(null, true);
+    if (/\.lovable\.app$/.test(new URL(origin).hostname)) return cb(null, true);
+    if (/\.lovableproject\.com$/.test(new URL(origin).hostname)) return cb(null, true);
+    if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
+    return cb(new Error(`CORS bloqueado: ${origin}`));
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
