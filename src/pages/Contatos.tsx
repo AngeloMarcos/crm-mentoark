@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -42,6 +43,7 @@ function formatDate(iso: string) {
 
 export default function ContatosPage() {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [data, setData] = useState<DadoCliente[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -165,7 +167,11 @@ export default function ContatosPage() {
               {paginatedData.map((c) => {
                 const iaAtiva = c.atendimento_ia === true;
                 return (
-                  <Card key={c.id} className="card-gradient-border hover:shadow-lg transition-shadow">
+                  <Card 
+                    key={c.id} 
+                    className="card-gradient-border hover:shadow-lg transition-shadow cursor-pointer"
+                    onClick={() => navigate(`/contatos/${c.id}`)}
+                  >
                     <CardContent className="p-5 space-y-3">
                       <div className="flex items-start gap-3">
                         <div className="w-10 h-10 rounded-lg gradient-brand-subtle flex items-center justify-center shrink-0">

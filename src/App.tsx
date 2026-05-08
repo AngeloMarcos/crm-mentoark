@@ -10,6 +10,7 @@ import LoginPage from "./pages/Login";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
 import ContatosPage from "./pages/Contatos";
+import ContatoDetalhePage from "./pages/ContatoDetalhe";
 import DiscagemPage from "./pages/Discagem";
 import FunilPage from "./pages/Funil";
 import WhatsAppPage from "./pages/WhatsApp";
@@ -39,6 +40,7 @@ const App = () => (
               <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
               <Route path="/leads" element={<ProtectedRoute><LeadsPage /></ProtectedRoute>} />
               <Route path="/contatos" element={<ProtectedRoute><ContatosPage /></ProtectedRoute>} />
+              <Route path="/contatos/:id" element={<ProtectedRoute><ContatoDetalhePage /></ProtectedRoute>} />
               <Route path="/discagem" element={<ProtectedRoute><DiscagemPage /></ProtectedRoute>} />
               <Route path="/funil" element={<ProtectedRoute><FunilPage /></ProtectedRoute>} />
               <Route path="/whatsapp" element={<ProtectedRoute><WhatsAppPage /></ProtectedRoute>} />
