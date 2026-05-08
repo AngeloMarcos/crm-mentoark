@@ -101,6 +101,27 @@ export default function ContatoDetalhePage() {
     };
 
     fetchData();
+
+    // Inscrição Realtime para mudanças no contato atual
+    const channel = supabase
+      .channel(`public:dados_cliente:id=eq.${id}`)
+      .on(
+        "postgres_changes",
+        { 
+          event: "UPDATE", 
+          schema: "public", 
+          table: "dados_cliente",
+          filter: `id=eq.${id}`
+        },
+        (payload) => {
+          setContato(payload.new as DadoCliente);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [id, toast]);
 
   const toggleIA = async (active: boolean) => {
