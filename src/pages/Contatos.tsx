@@ -165,7 +165,11 @@ export default function ContatosPage() {
               {paginatedData.map((c) => {
                 const iaAtiva = c.atendimento_ia === true;
                 return (
-                  <Card key={c.id} className="card-gradient-border hover:shadow-lg transition-shadow">
+                  <Card 
+                    key={c.id} 
+                    className="card-gradient-border hover:shadow-lg transition-shadow cursor-pointer"
+                    onClick={() => navigate(`/contatos/${c.id}`)}
+                  >
                     <CardContent className="p-5 space-y-3">
                       <div className="flex items-start gap-3">
                         <div className="w-10 h-10 rounded-lg gradient-brand-subtle flex items-center justify-center shrink-0">
