@@ -43,6 +43,7 @@ function formatDate(iso: string) {
 
 export default function ContatosPage() {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [data, setData] = useState<DadoCliente[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
