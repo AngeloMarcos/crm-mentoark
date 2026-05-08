@@ -241,9 +241,9 @@ export default function DiscagemPage() {
         </div>
 
         {/* Filtros */}
-        <div className="flex gap-3 flex-wrap">
+        <div className="flex flex-col sm:flex-row gap-3">
           <Select value={listaSelecionada} onValueChange={setListaSelecionada}>
-            <SelectTrigger className="flex-1 min-w-[200px]">
+            <SelectTrigger className="w-full sm:flex-1">
               <SelectValue placeholder="Lista" />
             </SelectTrigger>
             <SelectContent>
@@ -254,7 +254,7 @@ export default function DiscagemPage() {
             </SelectContent>
           </Select>
           <Select value={filtroStatus} onValueChange={setFiltroStatus}>
-            <SelectTrigger className="w-[220px]">
+            <SelectTrigger className="w-full sm:w-[220px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

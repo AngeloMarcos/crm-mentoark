@@ -734,7 +734,7 @@ export default function DisparosPage() {
   // -------- Render --------
   return (
     <CRMLayout>
-      <div className="p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
@@ -1214,7 +1214,7 @@ export default function DisparosPage() {
 
       {/* Dialog Logs */}
       <Dialog open={logsOpen} onOpenChange={setLogsOpen}>
-        <DialogContent className="max-w-4xl">
+        <DialogContent className="w-[95vw] max-w-4xl">
           <DialogHeader>
             <DialogTitle>Logs do Disparo {logsDisparo ? `— ${logsDisparo.nome}` : ""}</DialogTitle>
             <DialogDescription>Histórico individual de envios.</DialogDescription>

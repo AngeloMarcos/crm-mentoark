@@ -121,6 +121,7 @@ function KeyValueEditor({ items, onSave, onDelete, labelCampo }: EditorProps & {
         <Button onClick={() => openDialog()} size="sm"><Plus className="h-4 w-4" /> Adicionar</Button>
       </CardHeader>
       <CardContent>
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -144,6 +145,7 @@ function KeyValueEditor({ items, onSave, onDelete, labelCampo }: EditorProps & {
             ))}
           </TableBody>
         </Table>
+        </div>
       </CardContent>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -390,14 +392,14 @@ function ScriptsEditor({ items, onSave, onDelete }: EditorProps) {
       </div>
 
       <Dialog open={!!preview} onOpenChange={(o) => !o && setPreview(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-2xl">
           <DialogHeader><DialogTitle>{preview?.campo}</DialogTitle></DialogHeader>
           <pre className="whitespace-pre-wrap font-mono text-sm bg-muted p-4 rounded-lg max-h-96 overflow-auto">{preview?.conteudo}</pre>
         </DialogContent>
       </Dialog>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-2xl">
           <DialogHeader><DialogTitle>{editingId ? "Editar" : "Novo"} Script</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <Input placeholder="Nome do script" value={nome} onChange={(e) => setNome(e.target.value)} />

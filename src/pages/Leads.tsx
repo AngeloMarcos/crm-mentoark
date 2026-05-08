@@ -591,8 +591,8 @@ export default function LeadsPage() {
         </div>
 
         {/* Filtros */}
-        <div className="flex gap-3 flex-wrap">
-          <div className="relative flex-1 min-w-[220px]">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Buscar por nome, telefone, e-mail ou empresa..."
@@ -601,24 +601,26 @@ export default function LeadsPage() {
               className="pl-9"
             />
           </div>
-          <Select value={listaFiltro} onValueChange={setListaFiltro}>
-            <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todas">Todas as listas</SelectItem>
-              {listas.map((l) => (
-                <SelectItem key={l.id} value={l.id}>{l.nome}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos">Todos status</SelectItem>
-              {statusOptions.map((s) => (
-                <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex gap-2 flex-wrap">
+            <Select value={listaFiltro} onValueChange={setListaFiltro}>
+              <SelectTrigger className="w-full sm:w-[180px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="todas">Todas as listas</SelectItem>
+                {listas.map((l) => (
+                  <SelectItem key={l.id} value={l.id}>{l.nome}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-full sm:w-[150px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="todos">Todos status</SelectItem>
+                {statusOptions.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         {/* Tags rápidas das listas */}
@@ -661,15 +663,16 @@ export default function LeadsPage() {
                 <p className="text-sm mt-1">Importe um CSV ou adicione manualmente seu primeiro contato.</p>
               </div>
             ) : (
+              <div className="overflow-x-auto rounded-lg border border-border">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Nome / Empresa</TableHead>
-                    <TableHead>Contato</TableHead>
-                    <TableHead>Origem</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Tags</TableHead>
-                    <TableHead className="w-[100px]"></TableHead>
+                    <TableHead className="min-w-[160px]">Nome / Empresa</TableHead>
+                    <TableHead className="min-w-[130px]">Contato</TableHead>
+                    <TableHead className="hidden sm:table-cell">Origem</TableHead>
+                    <TableHead className="min-w-[110px]">Status</TableHead>
+                    <TableHead className="hidden md:table-cell">Tags</TableHead>
+                    <TableHead className="w-[80px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -724,7 +727,7 @@ export default function LeadsPage() {
                           </p>
                         )}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         <Badge variant="outline" className="text-xs">{c.origem ?? "Manual"}</Badge>
                       </TableCell>
                       <TableCell>
@@ -732,7 +735,7 @@ export default function LeadsPage() {
                           {statusOptions.find((s) => s.value === c.status)?.label ?? c.status}
                         </Badge>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden md:table-cell">
                         <div className="flex gap-1 flex-wrap">
                           {(c.tags ?? []).slice(0, 3).map((t) => (
                             <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
@@ -756,6 +759,7 @@ export default function LeadsPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -892,7 +896,7 @@ export default function LeadsPage() {
 
         {/* ============ MODAL: Novo / Editar Contato ============ */}
         <Dialog open={modalContato} onOpenChange={setModalContato}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{editing ? "Editar contato" : "Novo contato"}</DialogTitle>
             </DialogHeader>
@@ -913,7 +917,7 @@ export default function LeadsPage() {
                 </TabsList>
 
                 <TabsContent value="dados" className="space-y-3 py-2">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label>Nome *</Label>
                       <Input value={contatoForm.nome} onChange={(e) => setContatoForm({ ...contatoForm, nome: e.target.value })} />
@@ -988,7 +992,7 @@ export default function LeadsPage() {
             ) : (
               <>
                 <div className="space-y-3 py-2">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label>Nome *</Label>
                       <Input value={contatoForm.nome} onChange={(e) => setContatoForm({ ...contatoForm, nome: e.target.value })} />

@@ -361,7 +361,7 @@ export default function DocsPage() {
 
   return (
     <CRMLayout>
-      <div className="flex h-[calc(100vh-4rem)] -m-6 overflow-hidden">
+      <div className="flex h-[calc(100vh-4rem)] -m-4 md:-m-6 overflow-hidden">
 
         {/* ── Sidebar desktop ─────────────────────────── */}
         <aside className="hidden md:flex flex-col w-64 shrink-0 border-r border-border bg-card overflow-hidden">
@@ -432,7 +432,7 @@ export default function DocsPage() {
           </div>
 
           {/* Article content */}
-          <div ref={contentRef} className="flex-1 overflow-y-auto px-6 py-8">
+          <div ref={contentRef} className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8">
             {currentArticle ? (
               <ArticleView article={currentArticle} section={currentSection} />
             ) : (

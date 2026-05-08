@@ -305,7 +305,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && fechar()}>
-      <DialogContent className="max-w-3xl max-h-[92vh] flex flex-col gap-0 p-0">
+      <DialogContent className="w-[95vw] max-w-3xl max-h-[92vh] flex flex-col gap-0 p-0">
         <DialogHeader className="px-6 pt-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
             <Search className="h-5 w-5 text-primary" />
@@ -319,7 +319,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
 
           {/* Filtros */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="col-span-2 space-y-1.5">
               <Label className="text-xs">Segmento *</Label>
               <Select value={segmento} onValueChange={setSegmento}>
@@ -396,7 +396,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
               </div>
 
               {resultados.length > 0 && (
-                <div className="rounded-lg border overflow-hidden">
+                <div className="rounded-lg border overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>

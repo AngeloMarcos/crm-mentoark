@@ -348,7 +348,7 @@ export default function AgentesPage() {
           }
         }}
       >
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {editing ? "Editar agente" : "Novo agente"}
@@ -359,7 +359,7 @@ export default function AgentesPage() {
           </DialogHeader>
 
           <Tabs defaultValue="identidade">
-            <TabsList className="grid grid-cols-4 w-full">
+            <TabsList className="grid grid-cols-2 sm:grid-cols-4 w-full">
               <TabsTrigger value="identidade">Identidade</TabsTrigger>
               <TabsTrigger value="comportamento">Comportamento</TabsTrigger>
               <TabsTrigger value="whatsapp">WhatsApp</TabsTrigger>

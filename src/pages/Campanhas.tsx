@@ -281,7 +281,7 @@ export default function CampanhasPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 md:gap-4">
           <Card>
             <CardContent className="flex items-center gap-3 p-4">
               <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
@@ -423,6 +423,7 @@ export default function CampanhasPage() {
                 Nenhuma campanha ainda. Clique em <strong>Nova Campanha</strong> para começar.
               </div>
             ) : (
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -495,6 +496,7 @@ export default function CampanhasPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -510,7 +512,7 @@ export default function CampanhasPage() {
           }
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {editing ? "Editar campanha" : "Nova campanha"}

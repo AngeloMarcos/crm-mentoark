@@ -60,34 +60,39 @@ export default function UsuariosPage() {
             {loading ? (
               <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
             ) : (
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Nome</TableHead>
-                    <TableHead>E-mail</TableHead>
+                    <TableHead className="hidden sm:table-cell">E-mail</TableHead>
                     <TableHead>Papel</TableHead>
-                    <TableHead>Cadastrado em</TableHead>
+                    <TableHead className="hidden md:table-cell">Cadastrado em</TableHead>
                     <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {users.map((u) => (
                     <TableRow key={u.user_id}>
-                      <TableCell className="font-medium">{u.display_name ?? "—"}</TableCell>
-                      <TableCell>{u.email}</TableCell>
+                      <TableCell className="font-medium">
+                        <div>{u.display_name ?? "—"}</div>
+                        <div className="sm:hidden text-xs text-muted-foreground truncate max-w-[140px]">{u.email}</div>
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">{u.email}</TableCell>
                       <TableCell>
                         {u.is_admin ? <Badge className="bg-primary/15 text-primary border-0">Admin</Badge> : <Badge variant="secondary">Usuário</Badge>}
                       </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{new Date(u.created_at).toLocaleDateString("pt-BR")}</TableCell>
+                      <TableCell className="hidden md:table-cell text-muted-foreground text-sm">{new Date(u.created_at).toLocaleDateString("pt-BR")}</TableCell>
                       <TableCell className="text-right">
                         <Button variant="outline" size="sm" onClick={() => toggleAdmin(u)} disabled={u.user_id === currentUser?.id}>
-                          {u.is_admin ? <><ShieldOff className="h-4 w-4 mr-1" /> Remover admin</> : <><Shield className="h-4 w-4 mr-1" /> Tornar admin</>}
+                          {u.is_admin ? <><ShieldOff className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Remover admin</span></> : <><Shield className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Tornar admin</span></>}
                         </Button>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>
