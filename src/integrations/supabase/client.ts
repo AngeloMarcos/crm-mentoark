@@ -1,7 +1,14 @@
+import { createClient } from '@supabase/supabase-js';
+
 // Custom HTTP client that mirrors the @supabase/supabase-js interface.
 // All calls are forwarded to the backend REST API at VITE_API_URL.
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) || 'http://localhost:3000';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+// Real Supabase client for Realtime and other features not covered by the shim
+const _realSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ── Internal state ───────────────────────────────────────────────────────────
 
