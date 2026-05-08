@@ -45,6 +45,10 @@ export default function ContatosPage() {
   const [data, setData] = useState<DadoCliente[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [setorFilter, setSetorFilter] = useState("TODOS");
+  const [iaFilter, setIaFilter] = useState("TODOS");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
 
   useEffect(() => {
     (async () => {
@@ -63,13 +67,41 @@ export default function ContatosPage() {
   }, [toast]);
 
   const filtered = useMemo(() => {
+    let result = data;
+
+    // Busca por texto
     const q = query.trim().toLowerCase();
-    if (!q) return data;
-    return data.filter(d =>
-      (d.nomewpp || "").toLowerCase().includes(q) ||
-      (d.telefone || "").toLowerCase().includes(q)
-    );
-  }, [data, query]);
+    if (q) {
+      result = result.filter(d =>
+        (d.nomewpp || "").toLowerCase().includes(q) ||
+        (d.telefone || "").toLowerCase().includes(q)
+      );
+    }
+
+    // Filtro por setor
+    if (setorFilter !== "TODOS") {
+      result = result.filter(d => (d.Setor || "").trim().toUpperCase() === setorFilter);
+    }
+
+    // Filtro por IA
+    if (iaFilter !== "TODOS") {
+      const active = iaFilter === "ATIVA";
+      result = result.filter(d => d.atendimento_ia === active);
+    }
+
+    return result;
+  }, [data, query, setorFilter, iaFilter]);
+
+  const totalPages = Math.ceil(filtered.length / itemsPerPage);
+  const paginatedData = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filtered.slice(start, start + itemsPerPage);
+  }, [filtered, currentPage]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query, setorFilter, iaFilter]);
 
   return (
     <CRMLayout>
