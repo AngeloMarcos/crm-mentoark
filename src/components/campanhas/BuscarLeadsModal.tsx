@@ -18,8 +18,11 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
+  Collapsible, CollapsibleContent, CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   Search, Loader2, ChevronDown, UserPlus, CheckSquare, Square,
-  Flame, Thermometer, Snowflake, Phone, Mail, MapPin, Hash, Send,
+  Flame, Thermometer, Snowflake, Phone, Mail, MapPin, Hash, Send, Eye,
 } from "lucide-react";
 import { toast } from "sonner";
 
