@@ -53,7 +53,7 @@ export default function ContatosPage() {
   const itemsPerPage = 20;
 
   useEffect(() => {
-    (async () => {
+    const fetchContatos = async () => {
       setLoading(true);
       const { data, error } = await supabase
         .from("dados_cliente")
@@ -65,7 +65,28 @@ export default function ContatosPage() {
         setData((data || []) as DadoCliente[]);
       }
       setLoading(false);
-    })();
+    };
+
+    fetchContatos();
+
+    // Inscrição Realtime
+    const channel = supabase
+      .channel("public:dados_cliente")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "dados_cliente" },
+        (payload) => {
+          const updatedRecord = payload.new as DadoCliente;
+          setData((prev) =>
+            prev.map((item) => (item.id === updatedRecord.id ? updatedRecord : item))
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [toast]);
 
   const filtered = useMemo(() => {
