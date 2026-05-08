@@ -9,6 +9,11 @@ export const pool = new Pool({
   connectionTimeoutMillis: 5000,
 });
 
+// Configura o search_path para incluir o schema 'auth'
+pool.on('connect', (client) => {
+  client.query('SET search_path TO public, auth');
+});
+
 pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err);
 });
