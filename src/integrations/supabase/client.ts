@@ -419,6 +419,9 @@ export const supabase = {
   auth,
   from: (table: string) => new QueryBuilder(table),
   functions,
+  channel: (name: string) => _realSupabase.channel(name),
+  removeChannel: (channel: any) => _realSupabase.removeChannel(channel),
+  removeAllChannels: () => _realSupabase.removeAllChannels(),
 };
 
 export default supabase;
