@@ -30,8 +30,8 @@ interface DadoCliente {
 
 interface Message {
   id: number;
-  content: string;
-  sender_type: 'user' | 'bot' | 'agent' | string;
+  user_message: string | null;
+  bot_message: string | null;
   created_at: string;
   phone: string;
 }
