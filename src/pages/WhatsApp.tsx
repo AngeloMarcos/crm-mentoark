@@ -90,11 +90,12 @@ export default function WhatsAppPage() {
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await (supabase as any)
-      .from("n8n_chat_histories")
-      .select("id, session_id, message, created_at")
+    const { data, error } = await supabase
+      .from("chat_messages")
+      .select("*")
       .order("created_at", { ascending: false })
       .limit(2000);
+    
     if (error) {
       toast.error("Erro ao carregar conversas: " + error.message);
       setRows([]);
@@ -106,32 +107,56 @@ export default function WhatsAppPage() {
 
   useEffect(() => {
     carregar();
-    const i = setInterval(carregar, 60000);
+    const i = setInterval(carregar, 30000); // 30s update
     return () => clearInterval(i);
   }, []);
 
   const filtradas = useMemo(() => {
     const since = PERIODOS[periodo]();
-    const filtered = since ? rows.filter((r) => r.created_at >= since) : rows;
+    const filteredRows = since ? rows.filter((r) => r.created_at >= since) : rows;
+    
     const map = new Map<string, Conversa>();
-    for (const r of filtered) {
-      const cur = map.get(r.session_id);
+    
+    for (const r of filteredRows) {
+      const phone = r.phone || "unknown";
+      let cur = map.get(phone);
+      
+      const newMessages: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[] = [];
+      if (r.user_message) {
+        newMessages.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
+      }
+      if (r.bot_message) {
+        newMessages.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
+      }
+
       if (!cur) {
-        map.set(r.session_id, {
-          session_id: r.session_id,
-          mensagens: [r],
+        map.set(phone, {
+          session_id: phone,
+          nome: r.nomewpp,
+          mensagens: newMessages,
           ultima_atividade: r.created_at,
-          ultima_mensagem: r.message?.content ?? "",
-          total: 1,
+          ultima_mensagem: r.user_message || r.bot_message || "",
+          total: newMessages.length,
         });
       } else {
-        cur.mensagens.push(r);
-        cur.total += 1;
+        cur.mensagens.push(...newMessages);
+        cur.total += newMessages.length;
+        if (new Date(r.created_at) > new Date(cur.ultima_atividade)) {
+          cur.ultima_atividade = r.created_at;
+          cur.ultima_mensagem = r.user_message || r.bot_message || cur.ultima_mensagem;
+        }
       }
     }
+    
     let list = Array.from(map.values());
     const q = search.trim().toLowerCase();
-    if (q) list = list.filter((c) => c.session_id.toLowerCase().includes(q.replace(/\D/g, "")) || c.ultima_mensagem.toLowerCase().includes(q));
+    if (q) {
+      list = list.filter((c) => 
+        c.session_id.toLowerCase().includes(q.replace(/\D/g, "")) || 
+        c.ultima_mensagem.toLowerCase().includes(q) ||
+        (c.nome && c.nome.toLowerCase().includes(q))
+      );
+    }
     return list.sort((a, b) => (a.ultima_atividade < b.ultima_atividade ? 1 : -1));
   }, [rows, search, periodo]);
 
