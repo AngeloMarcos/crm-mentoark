@@ -12,15 +12,18 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 
 interface ChatRow {
-  id?: number;
-  session_id: string;
-  message: { type?: string; content?: string; [k: string]: unknown };
+  id: number;
+  phone: string;
+  nomewpp: string | null;
+  user_message: string | null;
+  bot_message: string | null;
   created_at: string;
 }
 
 interface Conversa {
-  session_id: string;
-  mensagens: ChatRow[];
+  session_id: string; // We'll use phone as session_id
+  nome: string | null;
+  mensagens: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[];
   ultima_atividade: string;
   ultima_mensagem: string;
   total: number;
@@ -87,11 +90,12 @@ export default function WhatsAppPage() {
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await (supabase as any)
-      .from("n8n_chat_histories")
-      .select("id, session_id, message, created_at")
+    const { data, error } = await supabase
+      .from("chat_messages")
+      .select("*")
       .order("created_at", { ascending: false })
       .limit(2000);
+    
     if (error) {
       toast.error("Erro ao carregar conversas: " + error.message);
       setRows([]);
@@ -103,61 +107,91 @@ export default function WhatsAppPage() {
 
   useEffect(() => {
     carregar();
-    const i = setInterval(carregar, 60000);
+    const i = setInterval(carregar, 30000); // 30s update
     return () => clearInterval(i);
   }, []);
 
   const filtradas = useMemo(() => {
     const since = PERIODOS[periodo]();
-    const filtered = since ? rows.filter((r) => r.created_at >= since) : rows;
+    const filteredRows = since ? rows.filter((r) => r.created_at >= since) : rows;
+    
     const map = new Map<string, Conversa>();
-    for (const r of filtered) {
-      const cur = map.get(r.session_id);
+    
+    for (const r of filteredRows) {
+      const phone = r.phone || "unknown";
+      let cur = map.get(phone);
+      
+      const newMessages: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[] = [];
+      if (r.user_message) {
+        newMessages.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
+      }
+      if (r.bot_message) {
+        newMessages.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
+      }
+
       if (!cur) {
-        map.set(r.session_id, {
-          session_id: r.session_id,
-          mensagens: [r],
+        map.set(phone, {
+          session_id: phone,
+          nome: r.nomewpp,
+          mensagens: newMessages,
           ultima_atividade: r.created_at,
-          ultima_mensagem: r.message?.content ?? "",
-          total: 1,
+          ultima_mensagem: r.user_message || r.bot_message || "",
+          total: newMessages.length,
         });
       } else {
-        cur.mensagens.push(r);
-        cur.total += 1;
+        cur.mensagens.push(...newMessages);
+        cur.total += newMessages.length;
+        if (new Date(r.created_at) > new Date(cur.ultima_atividade)) {
+          cur.ultima_atividade = r.created_at;
+          cur.ultima_mensagem = r.user_message || r.bot_message || cur.ultima_mensagem;
+        }
       }
     }
+    
     let list = Array.from(map.values());
     const q = search.trim().toLowerCase();
-    if (q) list = list.filter((c) => c.session_id.toLowerCase().includes(q.replace(/\D/g, "")) || c.ultima_mensagem.toLowerCase().includes(q));
+    if (q) {
+      list = list.filter((c) => 
+        c.session_id.toLowerCase().includes(q.replace(/\D/g, "")) || 
+        c.ultima_mensagem.toLowerCase().includes(q) ||
+        (c.nome && c.nome.toLowerCase().includes(q))
+      );
+    }
     return list.sort((a, b) => (a.ultima_atividade < b.ultima_atividade ? 1 : -1));
   }, [rows, search, periodo]);
 
   const kpis = useMemo(() => {
     const hojeIso = PERIODOS.hoje();
-    const hoje = rows.filter((r) => r.created_at >= hojeIso);
-    const sessoesHoje = new Set(hoje.map((r) => r.session_id));
+    const hojeRows = rows.filter((r) => r.created_at >= hojeIso);
+    const sessoesHoje = new Set(hojeRows.map((r) => r.phone));
+    
     const allSessoes = new Map<string, number>();
-    rows.forEach((r) => allSessoes.set(r.session_id, (allSessoes.get(r.session_id) ?? 0) + 1));
+    rows.forEach((r) => {
+      const p = r.phone || "unknown";
+      allSessoes.set(p, (allSessoes.get(p) ?? 0) + 1);
+    });
+    
     const maior = allSessoes.size ? Math.max(...allSessoes.values()) : 0;
     const media = allSessoes.size ? Math.round(rows.length / allSessoes.size) : 0;
-    return { conversasHoje: sessoesHoje.size, mensagensHoje: hoje.length, media, maior };
+    return { conversasHoje: sessoesHoje.size, mensagensHoje: hojeRows.length, media, maior };
   }, [rows]);
 
-  const buscarLead = async (sessionId: string) => {
+  const buscarLead = async (phone: string) => {
     if (!user) return;
-    const digits = sessionId.replace(/\D/g, "");
+    const digits = phone.replace(/\D/g, "");
     if (digits.length < 8) return;
     setLeadLoading(true);
+    // Buscamos em dados_cliente que parece ser o padrão aqui
     const { data } = await supabase
-      .from("contatos")
-      .select("id, nome, status")
-      .eq("user_id", user.id)
+      .from("dados_cliente")
+      .select("id, nomewpp, Setor")
       .ilike("telefone", `%${digits.slice(-9)}%`)
       .limit(1)
       .maybeSingle();
+    
     if (data) {
-      setLead({ id: data.id, nome: data.nome, status: data.status });
-      setLeadStatus(data.status);
+      setLead({ id: String(data.id), nome: data.nomewpp || "Sem nome", status: data.Setor || "novo" });
+      setLeadStatus(data.Setor || "novo");
     } else {
       setLead(null);
     }
@@ -168,26 +202,34 @@ export default function WhatsAppPage() {
     if (!lead) return;
     setLeadSaving(true);
     const { error } = await supabase
-      .from("contatos")
-      .update({ status: leadStatus })
+      .from("dados_cliente")
+      .update({ Setor: leadStatus })
       .eq("id", lead.id);
     setLeadSaving(false);
     if (error) {
-      toast.error("Erro ao salvar status");
+      toast.error("Erro ao salvar setor");
       return;
     }
     setLead({ ...lead, status: leadStatus });
-    toast.success("Status atualizado");
+    toast.success("Setor atualizado");
   };
 
   const abrirConversa = async (c: Conversa) => {
-    const { data, error } = await (supabase as any)
-      .from("n8n_chat_histories")
-      .select("id, session_id, message, created_at")
-      .eq("session_id", c.session_id)
+    const { data, error } = await supabase
+      .from("chat_messages")
+      .select("*")
+      .eq("phone", c.session_id)
       .order("created_at", { ascending: true });
+    
     if (error) return toast.error(error.message);
-    setSelecionada({ ...c, mensagens: (data ?? []) as ChatRow[] });
+    
+    const msgs: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[] = [];
+    (data || []).forEach(r => {
+      if (r.user_message) msgs.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
+      if (r.bot_message) msgs.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
+    });
+
+    setSelecionada({ ...c, mensagens: msgs });
     setChatSearch("");
     setLead(null);
     setLeadStatus("novo");
@@ -202,10 +244,10 @@ export default function WhatsAppPage() {
   const exportarTxt = () => {
     if (!selecionada) return;
     const linhas = selecionada.mensagens.map((m) => {
-      const isHuman = m.message?.type === "human";
+      const isHuman = m.type === "human";
       const autor = isHuman ? "Lead" : "Agente";
       const data = new Date(m.created_at).toLocaleString("pt-BR");
-      return `[${data}] ${autor}: ${m.message?.content ?? ""}`;
+      return `[${data}] ${autor}: ${m.content}`;
     });
     const cabecalho = [
       `Conversa WhatsApp — ${formatPhone(selecionada.session_id)}`,
@@ -230,7 +272,7 @@ export default function WhatsAppPage() {
     const q = chatSearch.trim().toLowerCase();
     if (!q) return selecionada.mensagens;
     return selecionada.mensagens.filter((m) =>
-      (m.message?.content ?? "").toLowerCase().includes(q),
+      m.content.toLowerCase().includes(q),
     );
   }, [selecionada, chatSearch]);
 
@@ -381,13 +423,13 @@ export default function WhatsAppPage() {
 
           <div className="flex-1 overflow-y-auto mt-3 space-y-3 pr-2">
             {mensagensFiltradas.map((m, idx) => {
-              const isHuman = m.message?.type === "human";
+              const isHuman = m.type === "human";
               return (
                 <div key={m.id ?? idx} className={`flex ${isHuman ? "justify-end" : "justify-start"}`}>
                   <div className={`max-w-[80%] rounded-lg px-3 py-2 ${isHuman ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
                     {!isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1"><Bot className="h-3 w-3" /> Agente</div>}
                     {isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1 justify-end"><User className="h-3 w-3" /> Lead</div>}
-                    <p className="text-sm whitespace-pre-wrap break-words">{m.message?.content ?? ""}</p>
+                    <p className="text-sm whitespace-pre-wrap break-words">{m.content}</p>
                     <p className="text-[10px] opacity-60 mt-1 text-right">{new Date(m.created_at).toLocaleString("pt-BR")}</p>
                   </div>
                 </div>

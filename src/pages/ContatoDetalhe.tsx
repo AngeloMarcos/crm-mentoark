@@ -30,8 +30,8 @@ interface DadoCliente {
 
 interface Message {
   id: number;
-  content: string;
-  sender_type: 'user' | 'bot' | 'agent' | string;
+  user_message: string | null;
+  bot_message: string | null;
   created_at: string;
   phone: string;
 }
@@ -287,28 +287,36 @@ export default function ContatoDetalhePage() {
                     <p>Nenhuma mensagem trocada ainda.</p>
                   </div>
                 ) : (
-                  messages.map((msg) => {
-                    const isBot = msg.sender_type === 'bot' || msg.sender_type === 'agent';
+                  messages.flatMap((msg) => {
+                    const items = [];
+                    if (msg.user_message) {
+                      items.push({ id: `u-${msg.id}`, content: msg.user_message, isBot: false, created_at: msg.created_at });
+                    }
+                    if (msg.bot_message) {
+                      items.push({ id: `b-${msg.id}`, content: msg.bot_message, isBot: true, created_at: msg.created_at });
+                    }
+                    return items;
+                  }).map((item) => {
                     return (
                       <div 
-                        key={msg.id} 
+                        key={item.id} 
                         className={cn(
                           "flex flex-col max-w-[80%]",
-                          isBot ? "self-end items-end" : "self-start items-start"
+                          item.isBot ? "self-end items-end" : "self-start items-start"
                         )}
                       >
                         <div 
                           className={cn(
                             "rounded-2xl px-4 py-2 text-sm shadow-sm",
-                            isBot 
+                            item.isBot 
                               ? "bg-primary text-primary-foreground rounded-tr-none" 
                               : "bg-muted text-foreground rounded-tl-none border border-border/50"
                           )}
                         >
-                          <p className="whitespace-pre-wrap">{msg.content}</p>
+                          <p className="whitespace-pre-wrap">{item.content}</p>
                         </div>
                         <span className="text-[10px] text-muted-foreground mt-1 px-1">
-                          {formatDate(msg.created_at)}
+                          {formatDate(item.created_at)}
                         </span>
                       </div>
                     );
