@@ -272,7 +272,7 @@ export default function WhatsAppPage() {
     const q = chatSearch.trim().toLowerCase();
     if (!q) return selecionada.mensagens;
     return selecionada.mensagens.filter((m) =>
-      (m.message?.content ?? "").toLowerCase().includes(q),
+      m.content.toLowerCase().includes(q),
     );
   }, [selecionada, chatSearch]);
 
