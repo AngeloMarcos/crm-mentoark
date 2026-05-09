@@ -162,30 +162,36 @@ export default function WhatsAppPage() {
 
   const kpis = useMemo(() => {
     const hojeIso = PERIODOS.hoje();
-    const hoje = rows.filter((r) => r.created_at >= hojeIso);
-    const sessoesHoje = new Set(hoje.map((r) => r.session_id));
+    const hojeRows = rows.filter((r) => r.created_at >= hojeIso);
+    const sessoesHoje = new Set(hojeRows.map((r) => r.phone));
+    
     const allSessoes = new Map<string, number>();
-    rows.forEach((r) => allSessoes.set(r.session_id, (allSessoes.get(r.session_id) ?? 0) + 1));
+    rows.forEach((r) => {
+      const p = r.phone || "unknown";
+      allSessoes.set(p, (allSessoes.get(p) ?? 0) + 1);
+    });
+    
     const maior = allSessoes.size ? Math.max(...allSessoes.values()) : 0;
     const media = allSessoes.size ? Math.round(rows.length / allSessoes.size) : 0;
-    return { conversasHoje: sessoesHoje.size, mensagensHoje: hoje.length, media, maior };
+    return { conversasHoje: sessoesHoje.size, mensagensHoje: hojeRows.length, media, maior };
   }, [rows]);
 
-  const buscarLead = async (sessionId: string) => {
+  const buscarLead = async (phone: string) => {
     if (!user) return;
-    const digits = sessionId.replace(/\D/g, "");
+    const digits = phone.replace(/\D/g, "");
     if (digits.length < 8) return;
     setLeadLoading(true);
+    // Buscamos em dados_cliente que parece ser o padrão aqui
     const { data } = await supabase
-      .from("contatos")
-      .select("id, nome, status")
-      .eq("user_id", user.id)
+      .from("dados_cliente")
+      .select("id, nomewpp, Setor")
       .ilike("telefone", `%${digits.slice(-9)}%`)
       .limit(1)
       .maybeSingle();
+    
     if (data) {
-      setLead({ id: data.id, nome: data.nome, status: data.status });
-      setLeadStatus(data.status);
+      setLead({ id: String(data.id), nome: data.nomewpp || "Sem nome", status: data.Setor || "novo" });
+      setLeadStatus(data.Setor || "novo");
     } else {
       setLead(null);
     }
@@ -196,26 +202,34 @@ export default function WhatsAppPage() {
     if (!lead) return;
     setLeadSaving(true);
     const { error } = await supabase
-      .from("contatos")
-      .update({ status: leadStatus })
+      .from("dados_cliente")
+      .update({ Setor: leadStatus })
       .eq("id", lead.id);
     setLeadSaving(false);
     if (error) {
-      toast.error("Erro ao salvar status");
+      toast.error("Erro ao salvar setor");
       return;
     }
     setLead({ ...lead, status: leadStatus });
-    toast.success("Status atualizado");
+    toast.success("Setor atualizado");
   };
 
   const abrirConversa = async (c: Conversa) => {
-    const { data, error } = await (supabase as any)
-      .from("n8n_chat_histories")
-      .select("id, session_id, message, created_at")
-      .eq("session_id", c.session_id)
+    const { data, error } = await supabase
+      .from("chat_messages")
+      .select("*")
+      .eq("phone", c.session_id)
       .order("created_at", { ascending: true });
+    
     if (error) return toast.error(error.message);
-    setSelecionada({ ...c, mensagens: (data ?? []) as ChatRow[] });
+    
+    const msgs: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[] = [];
+    (data || []).forEach(r => {
+      if (r.user_message) msgs.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
+      if (r.bot_message) msgs.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
+    });
+
+    setSelecionada({ ...c, mensagens: msgs });
     setChatSearch("");
     setLead(null);
     setLeadStatus("novo");
@@ -230,10 +244,10 @@ export default function WhatsAppPage() {
   const exportarTxt = () => {
     if (!selecionada) return;
     const linhas = selecionada.mensagens.map((m) => {
-      const isHuman = m.message?.type === "human";
+      const isHuman = m.type === "human";
       const autor = isHuman ? "Lead" : "Agente";
       const data = new Date(m.created_at).toLocaleString("pt-BR");
-      return `[${data}] ${autor}: ${m.message?.content ?? ""}`;
+      return `[${data}] ${autor}: ${m.content}`;
     });
     const cabecalho = [
       `Conversa WhatsApp — ${formatPhone(selecionada.session_id)}`,
