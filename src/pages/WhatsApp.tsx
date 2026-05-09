@@ -12,15 +12,18 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 
 interface ChatRow {
-  id?: number;
-  session_id: string;
-  message: { type?: string; content?: string; [k: string]: unknown };
+  id: number;
+  phone: string;
+  nomewpp: string | null;
+  user_message: string | null;
+  bot_message: string | null;
   created_at: string;
 }
 
 interface Conversa {
-  session_id: string;
-  mensagens: ChatRow[];
+  session_id: string; // We'll use phone as session_id
+  nome: string | null;
+  mensagens: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[];
   ultima_atividade: string;
   ultima_mensagem: string;
   total: number;
