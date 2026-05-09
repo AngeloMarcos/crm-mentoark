@@ -423,13 +423,13 @@ export default function WhatsAppPage() {
 
           <div className="flex-1 overflow-y-auto mt-3 space-y-3 pr-2">
             {mensagensFiltradas.map((m, idx) => {
-              const isHuman = m.message?.type === "human";
+              const isHuman = m.type === "human";
               return (
                 <div key={m.id ?? idx} className={`flex ${isHuman ? "justify-end" : "justify-start"}`}>
                   <div className={`max-w-[80%] rounded-lg px-3 py-2 ${isHuman ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
                     {!isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1"><Bot className="h-3 w-3" /> Agente</div>}
                     {isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1 justify-end"><User className="h-3 w-3" /> Lead</div>}
-                    <p className="text-sm whitespace-pre-wrap break-words">{m.message?.content ?? ""}</p>
+                    <p className="text-sm whitespace-pre-wrap break-words">{m.content}</p>
                     <p className="text-[10px] opacity-60 mt-1 text-right">{new Date(m.created_at).toLocaleString("pt-BR")}</p>
                   </div>
                 </div>
