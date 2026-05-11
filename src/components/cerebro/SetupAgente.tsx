@@ -39,11 +39,11 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
   const [testando, setTestando] = useState(false);
 
   const [data, setData] = useState({
-    // Passo 1
+    // Passo 1: Negócio
     agente_nome: "", empresa: "", segmento: "", vende: "", diferencial: "",
     produto_nome: "", produto_preco: "", produto_beneficios: "",
     cliente_ideal: "", dores: "",
-    // Passo 2
+    // Passo 2: Personalidade
     tom: "profissional", emojis: "moderado", idioma: "Português BR", persona: "",
     objetivo: "", cta: "", horario: "", deve_fazer: "", nao_fazer: "",
     quando_transferir: "", modelo: "gpt-4o-mini", temperatura: 0.7,
