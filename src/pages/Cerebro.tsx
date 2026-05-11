@@ -16,7 +16,7 @@ import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
 import { TestarAgente } from "@/components/cerebro/TestarAgente";
 import { PromptAgente } from "@/components/cerebro/PromptAgente";
 import { Configuracoes } from "@/components/cerebro/Configuracoes";
-import { GeradorPrompt } from "@/components/cerebro/GeradorPrompt";
+// GeradorPrompt removido pois agora está integrado no SetupAgente
 import { SetupAgente } from "@/components/cerebro/SetupAgente";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -721,7 +721,6 @@ export default function CerebroPage() {
                 <TabsTrigger value="prompt"><FileCode className="h-4 w-4 mr-1" /> Prompt</TabsTrigger>
                 <TabsTrigger value="testar"><MessageCircle className="h-4 w-4 mr-1" /> Testar</TabsTrigger>
                 <TabsTrigger value="config"><Settings className="h-4 w-4 mr-1" /> Configurações</TabsTrigger>
-                <TabsTrigger value="gerador"><Wand2 className="h-4 w-4 mr-1" /> Gerador IA</TabsTrigger>
               </TabsList>
             </div>
 
@@ -751,9 +750,6 @@ export default function CerebroPage() {
             </TabsContent>
             <TabsContent value="config" className="mt-4">
               <Configuracoes />
-            </TabsContent>
-            <TabsContent value="gerador" className="mt-4">
-              <GeradorPrompt />
             </TabsContent>
           </Tabs>
         )}
