@@ -49,11 +49,11 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
     quando_transferir: "", modelo: "gpt-4o-mini", temperatura: 0.7,
     // Passo 3
     ferramentas: [
-      { id: "cerebro", nome: "Cerebro", ativa: true, desc: "Busca informações internas na base de conhecimento" },
-      { id: "criar_reuniao", nome: "criar_reuniao", ativa: true, desc: "Agenda reunião (coleta nome, email, data/hora, duração 50min)" },
-      { id: "cancelar_reuniao", nome: "cancelar_reuniao", ativa: true, desc: "Cancela agendamento" },
-      { id: "reagendar_reuniao", nome: "reagendar_reuniao", ativa: true, desc: "Reagenda compromisso" },
-      { id: "transferir_humano", nome: "transferir_humano", ativa: true, desc: "Passa o atendimento para um humano" }
+      { id: "cerebro", nome: "Cerebro", ativa: true, desc: "Use para buscar informações sobre produtos, serviços e FAQ. Nunca invente — acione o Cerebro.", extra: {} },
+      { id: "criar_reuniao", nome: "criar_reuniao", ativa: true, desc: "Agenda reunião. Coleta obrigatoriamente: nome completo, e-mail e data/hora. ISO 8601 fuso -03:00. Duração: 50 min.", extra: { duracao: 50 } },
+      { id: "cancelar_reuniao", nome: "cancelar_reuniao", ativa: true, desc: "Cancela agendamento. Coleta o e-mail usado no agendamento.", extra: {} },
+      { id: "reagendar_reuniao", nome: "reagendar_reuniao", ativa: true, desc: "Reagenda. Coleta e-mail e novo horário.", extra: {} },
+      { id: "transferir_humano", nome: "transferir_humano", ativa: true, desc: "Transfere para atendente humano quando solicitado ou necessário.", extra: {} }
     ],
     // Passo 4
     abertura: "",
@@ -95,6 +95,12 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
 
   const removeObjecao = (i: number) => {
     update("objecoes", data.objecoes.filter((_, idx) => idx !== i));
+  };
+
+  const addFerramentaPersonalizada = () => {
+    const nome = prompt("Nome da ferramenta:");
+    if (!nome) return;
+    update("ferramentas", [...data.ferramentas, { id: `custom_${Date.now()}`, nome, ativa: true, desc: "", extra: {} }]);
   };
 
   const testarEvolution = async () => {
@@ -379,29 +385,72 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
             </div>
           )}
 
-          {/* PASSO 3 */}
+          {/* PASSO 3: FERRAMENTAS */}
           {step === 3 && (
             <div className="space-y-4">
-              <Label>Ative as ferramentas necessárias</Label>
-              {data.ferramentas.map((f, i) => (
-                <Card key={f.id} className="p-4">
-                  <div className="flex items-start gap-4">
-                    <Checkbox checked={f.ativa} onCheckedChange={v => {
-                      const list = [...data.ferramentas];
-                      list[i].ativa = !!v;
-                      update("ferramentas", list);
-                    }} />
-                    <div className="flex-1 space-y-2">
-                      <Label>{f.nome}</Label>
-                      <Input value={f.desc} onChange={e => {
-                        const list = [...data.ferramentas];
-                        list[i].desc = e.target.value;
-                        update("ferramentas", list);
-                      }} />
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="text-lg font-semibold">Ferramentas do workflow n8n</h3>
+                  <p className="text-sm text-muted-foreground">Selecione as ferramentas que seu workflow disponibiliza para o agente.</p>
+                </div>
+                <Button size="sm" variant="outline" onClick={addFerramentaPersonalizada}>
+                  <Plus className="h-4 w-4 mr-2" /> Personalizada
+                </Button>
+              </div>
+              
+              <div className="grid gap-4">
+                {data.ferramentas.map((f, i) => (
+                  <Card key={f.id} className={`p-4 transition-colors ${f.ativa ? "border-primary/50 bg-primary/5" : "opacity-70"}`}>
+                    <div className="flex items-start gap-4">
+                      <div className="pt-1">
+                        <Switch 
+                          checked={f.ativa} 
+                          onCheckedChange={v => {
+                            const list = [...data.ferramentas];
+                            list[i].ativa = !!v;
+                            update("ferramentas", list);
+                          }} 
+                        />
+                      </div>
+                      <div className="flex-1 space-y-3">
+                        <div className="flex justify-between">
+                          <Label className="text-base font-bold">{f.nome}</Label>
+                          {f.id.startsWith("custom_") && (
+                            <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => update("ferramentas", data.ferramentas.filter((_, idx) => idx !== i))}>
+                              <Trash2 className="h-3 w-3 text-destructive" />
+                            </Button>
+                          )}
+                        </div>
+                        <Textarea 
+                          placeholder="Descrição da ferramenta para a IA..." 
+                          value={f.desc} 
+                          onChange={e => {
+                            const list = [...data.ferramentas];
+                            list[i].desc = e.target.value;
+                            update("ferramentas", list);
+                          }}
+                          className="text-sm min-h-[60px]"
+                        />
+                        {f.id === "criar_reuniao" && f.ativa && (
+                          <div className="flex items-center gap-3 pt-1">
+                            <Label className="text-xs">Duração em minutos:</Label>
+                            <Input 
+                              type="number" 
+                              className="w-20 h-8" 
+                              value={f.extra?.duracao || 50} 
+                              onChange={e => {
+                                const list = [...data.ferramentas];
+                                list[i].extra = { ...f.extra, duracao: parseInt(e.target.value) || 50 };
+                                update("ferramentas", list);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </Card>
-              ))}
+                  </Card>
+                ))}
+              </div>
             </div>
           )}
 
