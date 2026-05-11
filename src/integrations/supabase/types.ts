@@ -59,11 +59,17 @@ export type Database = {
           nome: string
           objetivo: string | null
           persona: string | null
+          rag_ativo: boolean | null
+          rag_resultados: number | null
+          rag_threshold: number | null
           regras: string | null
           temperatura: number
           tom: string
           updated_at: string
           user_id: string
+          webhook_indexacao: string | null
+          webhook_principal: string | null
+          webhook_teste: string | null
         }
         Insert: {
           ativo?: boolean
@@ -79,11 +85,17 @@ export type Database = {
           nome: string
           objetivo?: string | null
           persona?: string | null
+          rag_ativo?: boolean | null
+          rag_resultados?: number | null
+          rag_threshold?: number | null
           regras?: string | null
           temperatura?: number
           tom?: string
           updated_at?: string
           user_id: string
+          webhook_indexacao?: string | null
+          webhook_principal?: string | null
+          webhook_teste?: string | null
         }
         Update: {
           ativo?: boolean
@@ -99,11 +111,17 @@ export type Database = {
           nome?: string
           objetivo?: string | null
           persona?: string | null
+          rag_ativo?: boolean | null
+          rag_resultados?: number | null
+          rag_threshold?: number | null
           regras?: string | null
           temperatura?: number
           tom?: string
           updated_at?: string
           user_id?: string
+          webhook_indexacao?: string | null
+          webhook_principal?: string | null
+          webhook_teste?: string | null
         }
         Relationships: []
       }

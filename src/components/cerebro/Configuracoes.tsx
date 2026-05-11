@@ -9,76 +9,119 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Webhook, Cpu, Database, Phone, Save, CheckCircle2, XCircle, Loader2, Info } from "lucide-react";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 
 interface AgentConfig {
   webhook_principal: string;
   webhook_indexacao: string;
   webhook_teste: string;
-  modelo_llm: string;
+  modelo: string;
   temperatura: number;
-  janela_contexto: number;
   rag_threshold: number;
   rag_resultados: number;
   rag_ativo: boolean;
-  telefone_teste: string;
+  evolution_server_url: string;
+  evolution_api_key: string;
+  evolution_instancia: string;
 }
-
-const STORAGE_KEY = "crm_agent_config";
 
 const defaultConfig: AgentConfig = {
   webhook_principal: "",
   webhook_indexacao: "",
   webhook_teste: "",
-  modelo_llm: "gpt-4.1-mini",
+  modelo: "gpt-4o-mini",
   temperatura: 0.7,
-  janela_contexto: 50,
   rag_threshold: 0.7,
   rag_resultados: 5,
   rag_ativo: true,
-  telefone_teste: "",
+  evolution_server_url: "",
+  evolution_api_key: "",
+  evolution_instancia: ""
 };
 
 type TestStatus = "idle" | "loading" | "ok" | "fail";
 
 export function Configuracoes() {
+  const { user } = useAuth();
   const [config, setConfig] = useState<AgentConfig>(defaultConfig);
   const [tests, setTests] = useState<Record<string, TestStatus>>({});
+  const [loading, setLoading] = useState(true);
+  const [salvando, setSalvando] = useState(false);
 
   useEffect(() => {
+    if (user) carregarConfig();
+  }, [user]);
+
+  const carregarConfig = async () => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setConfig({ ...defaultConfig, ...JSON.parse(raw) });
-      // Compat com TestarAgente
-      const legacyUrl = localStorage.getItem("n8n_webhook_url");
-      const legacyTel = localStorage.getItem("n8n_telefone_teste");
-      setConfig((c) => ({
-        ...c,
-        webhook_teste: c.webhook_teste || legacyUrl || "",
-        telefone_teste: c.telefone_teste || legacyTel || "",
-      }));
-    } catch {}
-  }, []);
+      const { data, error } = await supabase
+        .from("agentes")
+        .select("*")
+        .eq("user_id", user?.id)
+        .maybeSingle();
+
+      if (data) {
+        setConfig({
+          webhook_principal: data.webhook_principal || "",
+          webhook_indexacao: data.webhook_indexacao || "",
+          webhook_teste: data.webhook_teste || "",
+          modelo: data.modelo || "gpt-4o-mini",
+          temperatura: Number(data.temperatura) || 0.7,
+          rag_threshold: Number(data.rag_threshold) || 0.7,
+          rag_resultados: data.rag_resultados || 5,
+          rag_ativo: data.rag_ativo ?? true,
+          evolution_server_url: data.evolution_server_url || "",
+          evolution_api_key: data.evolution_api_key || "",
+          evolution_instancia: data.evolution_instancia || ""
+        });
+      }
+    } catch (e) {
+      toast.error("Erro ao carregar configurações");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const update = <K extends keyof AgentConfig>(k: K, v: AgentConfig[K]) =>
     setConfig((c) => ({ ...c, [k]: v }));
 
-  const salvar = () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    // Mantém compatibilidade com a aba Testar Agente
-    if (config.webhook_teste) localStorage.setItem("n8n_webhook_url", config.webhook_teste);
-    if (config.telefone_teste) localStorage.setItem("n8n_telefone_teste", config.telefone_teste);
-    toast.success("Configurações salvas");
+  const salvar = async () => {
+    if (!user) return;
+    setSalvando(true);
+    try {
+      const { error } = await supabase
+        .from("agentes")
+        .update({
+          webhook_principal: config.webhook_principal,
+          webhook_indexacao: config.webhook_indexacao,
+          webhook_teste: config.webhook_teste,
+          modelo: config.modelo,
+          temperatura: config.temperatura,
+          rag_threshold: config.rag_threshold,
+          rag_resultados: config.rag_resultados,
+          rag_ativo: config.rag_ativo,
+          evolution_server_url: config.evolution_server_url,
+          evolution_api_key: config.evolution_api_key,
+          evolution_instancia: config.evolution_instancia
+        })
+        .eq("user_id", user.id);
+
+      if (error) throw error;
+      toast.success("Configurações salvas no banco de dados");
+    } catch (e) {
+      toast.error("Erro ao salvar");
+    } finally {
+      setSalvando(false);
+    }
   };
 
   const testar = async (key: string, url: string) => {
     if (!url) return toast.error("Informe a URL primeiro");
     setTests((t) => ({ ...t, [key]: "loading" }));
     try {
-      const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 8000);
-      const res = await fetch(url, { method: "GET", signal: ctrl.signal });
-      clearTimeout(tid);
-      setTests((t) => ({ ...t, [key]: res.ok || res.status < 500 ? "ok" : "fail" }));
+      const res = await fetch(url, { method: "GET" });
+      setTests((t) => ({ ...t, [key]: res.ok ? "ok" : "fail" }));
     } catch {
       setTests((t) => ({ ...t, [key]: "fail" }));
     }
@@ -104,9 +147,10 @@ export function Configuracoes() {
     </div>
   );
 
+  if (loading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin text-primary" /></div>;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* Webhooks */}
       <Card className="lg:col-span-2">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base"><Webhook className="h-4 w-4 text-primary" /> Webhooks n8n</CardTitle>
@@ -118,7 +162,6 @@ export function Configuracoes() {
         </CardContent>
       </Card>
 
-      {/* Modelo */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base"><Cpu className="h-4 w-4 text-primary" /> Modelo LLM</CardTitle>
@@ -126,12 +169,13 @@ export function Configuracoes() {
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label className="text-xs">Modelo</Label>
-            <Select value={config.modelo_llm} onValueChange={(v) => update("modelo_llm", v)}>
+            <Select value={config.modelo} onValueChange={(v) => update("modelo", v)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
+                <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
+                <SelectItem value="gpt-4o">gpt-4o</SelectItem>
                 <SelectItem value="gpt-4.1-mini">gpt-4.1-mini</SelectItem>
                 <SelectItem value="gpt-4.1">gpt-4.1</SelectItem>
-                <SelectItem value="gpt-4o">gpt-4o</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -142,18 +186,9 @@ export function Configuracoes() {
             </div>
             <Slider min={0} max={1} step={0.1} value={[config.temperatura]} onValueChange={([v]) => update("temperatura", v)} />
           </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">Janela de contexto (mensagens)</Label>
-            <Input type="number" min={1} value={config.janela_contexto} onChange={(e) => update("janela_contexto", Number(e.target.value) || 0)} />
-          </div>
-          <div className="flex gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md p-2 border">
-            <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            <span>Estas configurações são apenas referência visual. Altere no n8n para aplicar.</span>
-          </div>
         </CardContent>
       </Card>
 
-      {/* RAG */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -179,35 +214,12 @@ export function Configuracoes() {
             <Label className="text-xs">Número de resultados</Label>
             <Input type="number" min={1} max={50} value={config.rag_resultados} onChange={(e) => update("rag_resultados", Number(e.target.value) || 0)} />
           </div>
-          <div className="flex gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md p-2 border">
-            <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            <span>Altere estes valores também na função <code className="bg-muted px-1 rounded">match_documents</code> no Supabase.</span>
-          </div>
         </CardContent>
       </Card>
 
-      {/* Telefone teste */}
-      <Card className="lg:col-span-2">
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base"><Phone className="h-4 w-4 text-primary" /> Telefone de teste</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Label className="text-xs">Usado pelo Chat de Teste como session_id</Label>
-          <Input
-            value={config.telefone_teste}
-            onChange={(e) => update("telefone_teste", e.target.value.replace(/\D/g, ""))}
-            placeholder="5511999998888"
-            inputMode="numeric"
-            maxLength={15}
-          />
-          <p className="text-[11px] text-muted-foreground">Apenas números com DDI (ex: 55 + DDD + número).</p>
-        </CardContent>
-      </Card>
-
-      {/* Salvar */}
       <div className="lg:col-span-2 flex justify-end">
-        <Button onClick={salvar} size="lg">
-          <Save className="h-4 w-4 mr-2" /> Salvar configurações
+        <Button onClick={salvar} size="lg" disabled={salvando}>
+          {salvando ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />} Salvar configurações
         </Button>
       </div>
     </div>
