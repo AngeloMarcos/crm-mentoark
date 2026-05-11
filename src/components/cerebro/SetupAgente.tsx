@@ -121,16 +121,16 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
   };
 
   const jsonGerado = () => {
-    return {
+    const json = {
       agente: {
-        nome: data.agente_nome,
-        empresa: data.empresa,
+        nome: data.agente_nome || "⚠️ NOME AUSENTE",
+        empresa: data.empresa || "⚠️ EMPRESA AUSENTE",
         segmento: data.segmento,
         idioma: data.idioma,
         modelo: data.modelo,
         temperatura: data.temperatura
       },
-      identidade: `Você é ${data.agente_nome}, atendente da ${data.empresa}. ${data.persona}`,
+      identidade: `Você é ${data.agente_nome || "[Nome]"}, atendente da ${data.empresa || "[Empresa]"}. ${data.persona}`,
       sobre_empresa: `${data.empresa} atua em ${data.segmento}. Diferenciais: ${data.diferencial}`,
       produto: { nome: data.produto_nome, preco: data.produto_preco, beneficios: data.produto_beneficios },
       cliente_ideal: { perfil: data.cliente_ideal, dores: data.dores },
@@ -141,9 +141,9 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
       },
       ferramentas: data.ferramentas.filter(f => f.ativa).map(f => ({ nome: f.nome, descricao: f.desc })),
       fluxo_atendimento: {
-        abertura: data.abertura,
+        abertura: data.abertura || "⚠️ MENSAGEM DE ABERTURA AUSENTE",
         qualificacao: data.qualificacao.filter(Boolean),
-        objetivo: data.objetivo,
+        objetivo: data.objetivo || "⚠️ OBJETIVO AUSENTE",
         cta: data.cta
       },
       objecoes: data.objecoes.filter(o => o.gatilho).map(o => ({ gatilho: o.gatilho, resposta: o.resposta })),
@@ -155,6 +155,7 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
       horario_atendimento: data.horario,
       objetivo_final: data.objetivo
     };
+    return json;
   };
 
   const salvar = async () => {
@@ -589,12 +590,41 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
                 </div>
               </Card>
 
-              <div className="space-y-2">
-                <Label>JSON Gerado (Preview)</Label>
-                <div className="relative">
-                  <pre className="p-4 bg-muted rounded-lg text-[10px] max-h-60 overflow-auto font-mono">{JSON.stringify(jsonGerado(), null, 2)}</pre>
-                  <Button size="icon" variant="ghost" className="absolute top-2 right-2" onClick={() => { navigator.clipboard.writeText(JSON.stringify(jsonGerado(), null, 2)); toast.success("Copiado!"); }}><Copy className="h-4 w-4"/></Button>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <Label className="text-sm font-bold">JSON Gerado (Prompt Estruturado)</Label>
+                  {Object.values(jsonGerado()).some(v => JSON.stringify(v).includes("⚠️")) && (
+                    <Badge variant="destructive" className="animate-pulse">Campos Pendentes</Badge>
+                  )}
                 </div>
+                <div className="relative group">
+                  <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent rounded-lg pointer-events-none border border-primary/10" />
+                  <pre className="p-4 bg-zinc-950 text-zinc-300 rounded-lg text-[11px] max-h-[400px] overflow-auto font-mono leading-relaxed scrollbar-thin scrollbar-thumb-zinc-800">
+                    {JSON.stringify(jsonGerado(), null, 2).split('\n').map((line, i) => {
+                      const isWarning = line.includes("⚠️");
+                      return (
+                        <div key={i} className={`${isWarning ? "bg-destructive/20 text-destructive-foreground px-1 -mx-1 rounded" : ""}`}>
+                          {line}
+                        </div>
+                      );
+                    })}
+                  </pre>
+                  <Button 
+                    size="sm" 
+                    variant="secondary" 
+                    className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg" 
+                    onClick={() => { 
+                      const cleanJson = JSON.stringify(jsonGerado(), null, 2).replace(/⚠️ /g, "");
+                      navigator.clipboard.writeText(cleanJson); 
+                      toast.success("JSON copiado para o clipboard!"); 
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5 mr-2" /> Copiar JSON
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground italic">
+                  * Campos marcados com ⚠️ devem ser preenchidos para um melhor desempenho do agente.
+                </p>
               </div>
             </div>
           )}
