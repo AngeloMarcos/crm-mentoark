@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Building2, Bot, Wrench, MessageCircle, Code2 } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Loader2, ChevronRight, ChevronLeft, Building2, Bot, Wrench, MessageCircle, Code2, Check, Copy, Wand2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -27,68 +28,142 @@ const STEPS = [
   { id: 5, label: "Config", icon: Code2 },
 ];
 
-const FERRAMENTAS_PADRAO = [
-  { id: "cerebro", nome: "Cerebro", desc: "Busca informações internas na base de conhecimento" },
-  { id: "criar_reuniao", nome: "criar_reuniao", desc: "Agenda reunião (nome, email, data/hora)" },
-  { id: "cancelar_reuniao", nome: "cancelar_reuniao", desc: "Cancela agendamento" },
-  { id: "reagendar_reuniao", nome: "reagendar_reuniao", desc: "Reagenda compromisso" },
-  { id: "transferir_humano", nome: "transferir_humano", desc: "Passa o atendimento para um humano" },
-];
+const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
+const IDIOMAS = ["Português BR", "Espanhol", "Inglês"];
+const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
 
 export function SetupAgente({ open, onClose, onConcluir }: Props) {
   const { user } = useAuth();
   const [step, setStep] = useState(1);
-  const [data, setData] = useState<any>({
-    agente_nome: "", empresa: "", segmento: "", vende: "", diferencial: "", produto_nome: "", produto_preco: "", produto_beneficios: "", cliente_ideal: "", dores: "",
-    tom: "profissional", emojis: "moderado", idioma: "Português BR", persona: "", objetivo: "", cta: "", horario: "", deve_fazer: "", nao_fazer: "", quando_transferir: "", modelo: "gpt-4o-mini", temperatura: 0.7,
-    ferramentas: FERRAMENTAS_PADRAO.map(f => ({ ...f, ativa: true })),
-    abertura: "", qualificacao: [""], objecoes: [{ gatilho: "", resposta: "" }], follow_up: { dia_1: "", dia_3: "", dia_7: "" }, encerramento: "",
-    webhook_principal: "", webhook_indexacao: "", webhook_teste: "", evolution_server_url: "", evolution_api_key: "", evolution_instancia: "", rag_threshold: 0.7, rag_resultados: 5, rag_ativo: true
-  });
   const [salvando, setSalvando] = useState(false);
+  const [testando, setTestando] = useState(false);
 
-  const updateData = (path: string, val: any) => {
-    setData((prev: any) => {
-      const keys = path.split('.');
-      const newData = { ...prev };
-      let current = newData;
-      for (let i = 0; i < keys.length - 1; i++) current = current[keys[i]];
-      current[keys[keys.length - 1]] = val;
-      return newData;
-    });
+  const [data, setData] = useState({
+    // Passo 1
+    agente_nome: "", empresa: "", segmento: "", vende: "", diferencial: "",
+    produto_nome: "", produto_preco: "", produto_beneficios: "",
+    cliente_ideal: "", dores: "",
+    // Passo 2
+    tom: "profissional", emojis: "moderado", idioma: "Português BR", persona: "",
+    objetivo: "", cta: "", horario: "", deve_fazer: "", nao_fazer: "",
+    quando_transferir: "", modelo: "gpt-4o-mini", temperatura: 0.7,
+    // Passo 3
+    ferramentas: [
+      { id: "cerebro", nome: "Cerebro", ativa: true, desc: "Busca informações internas na base de conhecimento" },
+      { id: "criar_reuniao", nome: "criar_reuniao", ativa: true, desc: "Agenda reunião (coleta nome, email, data/hora, duração 50min)" },
+      { id: "cancelar_reuniao", nome: "cancelar_reuniao", ativa: true, desc: "Cancela agendamento" },
+      { id: "reagendar_reuniao", nome: "reagendar_reuniao", ativa: true, desc: "Reagenda compromisso" },
+      { id: "transferir_humano", nome: "transferir_humano", ativa: true, desc: "Passa o atendimento para um humano" }
+    ],
+    // Passo 4
+    abertura: "",
+    qualificacao: [""],
+    objecoes: [{ gatilho: "", resposta: "" }],
+    follow_up: { dia_1: "", dia_3: "", dia_7: "" },
+    encerramento: "",
+    // Passo 5
+    webhook_principal: "", webhook_indexacao: "", webhook_teste: "",
+    evolution_server_url: "", evolution_api_key: "", evolution_instancia: "",
+    rag_threshold: 0.7, rag_resultados: 5, rag_ativo: true
+  });
+
+  const update = (key: string, val: any) => setData(p => ({ ...p, [key]: val }));
+
+  const addQualificacao = () => {
+    if (data.qualificacao.length < 8) update("qualificacao", [...data.qualificacao, ""]);
   };
 
-  const gerarJSON = () => {
+  const updateQualificacao = (i: number, val: string) => {
+    const list = [...data.qualificacao];
+    list[i] = val;
+    update("qualificacao", list);
+  };
+
+  const removeQualificacao = (i: number) => {
+    update("qualificacao", data.qualificacao.filter((_, idx) => idx !== i));
+  };
+
+  const addObjecao = () => {
+    if (data.objecoes.length < 6) update("objecoes", [...data.objecoes, { gatilho: "", resposta: "" }]);
+  };
+
+  const updateObjecao = (i: number, key: "gatilho" | "resposta", val: string) => {
+    const list = [...data.objecoes];
+    list[i][key] = val;
+    update("objecoes", list);
+  };
+
+  const removeObjecao = (i: number) => {
+    update("objecoes", data.objecoes.filter((_, idx) => idx !== i));
+  };
+
+  const testarEvolution = async () => {
+    if (!data.evolution_server_url || !data.evolution_api_key) return toast.error("Preencha os dados da Evolution");
+    setTestando(true);
+    try {
+      const res = await fetch(`${data.evolution_server_url}/instance/fetchInstances`, {
+        headers: { apikey: data.evolution_api_key }
+      });
+      if (res.ok) toast.success("Conexão OK!");
+      else toast.error("Falha na conexão");
+    } catch { toast.error("Erro de conexão"); }
+    finally { setTestando(false); }
+  };
+
+  const jsonGerado = () => {
     return {
-      agente: { nome: data.agente_nome, empresa: data.empresa, segmento: data.segmento, idioma: data.idioma, modelo: data.modelo, temperatura: data.temperatura },
+      agente: {
+        nome: data.agente_nome,
+        empresa: data.empresa,
+        segmento: data.segmento,
+        idioma: data.idioma,
+        modelo: data.modelo,
+        temperatura: data.temperatura
+      },
       identidade: `Você é ${data.agente_nome}, atendente da ${data.empresa}. ${data.persona}`,
       sobre_empresa: `${data.empresa} atua em ${data.segmento}. Diferenciais: ${data.diferencial}`,
       produto: { nome: data.produto_nome, preco: data.produto_preco, beneficios: data.produto_beneficios },
       cliente_ideal: { perfil: data.cliente_ideal, dores: data.dores },
-      tom_de_voz: { estilo: data.tom, emojis: data.emojis, regras: ["Mensagens curtas", "Máximo 3 linhas"] },
-      ferramentas: data.ferramentas.filter((f: any) => f.ativa),
-      fluxo_atendimento: { abertura: data.abertura, qualificacao: data.qualificacao.filter(Boolean), objetivo: data.objetivo, cta: data.cta },
-      objecoes: data.objecoes.filter((o: any) => o.gatilho),
+      tom_de_voz: {
+        estilo: data.tom,
+        emojis: data.emojis,
+        regras: ["Mensagens curtas", "Nunca mais de 3 linhas", "Ser direto e cordial"]
+      },
+      ferramentas: data.ferramentas.filter(f => f.ativa).map(f => ({ nome: f.nome, descricao: f.desc })),
+      fluxo_atendimento: {
+        abertura: data.abertura,
+        qualificacao: data.qualificacao.filter(Boolean),
+        objetivo: data.objetivo,
+        cta: data.cta
+      },
+      objecoes: data.objecoes.filter(o => o.gatilho).map(o => ({ gatilho: o.gatilho, resposta: o.resposta })),
       follow_up: data.follow_up,
       encerramento: data.encerramento,
-      regras_inviolaveis: data.nao_fazer.split('\n'),
-      deve_fazer: data.deve_fazer.split('\n'),
+      regras_inviolaveis: data.nao_fazer.split("\n").filter(Boolean),
+      deve_fazer: data.deve_fazer.split("\n").filter(Boolean),
       quando_transferir: data.quando_transferir,
       horario_atendimento: data.horario,
       objetivo_final: data.objetivo
     };
   };
 
-  const salvarTudo = async () => {
-    if (!user) return toast.error("Faça login");
+  const salvar = async () => {
+    if (!user) return;
     setSalvando(true);
     try {
-      const json = gerarJSON();
+      const json = jsonGerado();
+
+      // Salva conhecimento
+      await supabase.from("conhecimento").delete().eq("user_id", user.id).in("tipo", ["negocio", "personalidade"]);
       await supabase.from("conhecimento").insert([
-        { user_id: user.id, tipo: "negocio", campo: "dados", conteudo: JSON.stringify(data) },
-        { user_id: user.id, tipo: "personalidade", campo: "dados", conteudo: JSON.stringify(data) }
+        { user_id: user.id, tipo: "negocio", campo: "config", conteudo: JSON.stringify(data) },
+        { user_id: user.id, tipo: "personalidade", campo: "config", conteudo: JSON.stringify(data) }
       ]);
-      await supabase.from("agentes").update({
+
+      // Atualiza agentes
+      const { data: agente } = await supabase.from("agentes").select("id").eq("user_id", user.id).maybeSingle();
+      const agenteData = {
+        user_id: user.id,
         nome: data.agente_nome,
         evolution_server_url: data.evolution_server_url,
         evolution_api_key: data.evolution_api_key,
@@ -100,72 +175,238 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
         rag_resultados: data.rag_resultados,
         rag_ativo: data.rag_ativo,
         modelo: data.modelo,
-        temperatura: data.temperatura
-      }).eq("user_id", user.id);
+        temperatura: data.temperatura,
+        ativo: true
+      };
+
+      if (agente) await supabase.from("agentes").update(agenteData).eq("id", agente.id);
+      else await supabase.from("agentes").insert(agenteData);
+
+      // Prompt
       await supabase.from("agent_prompts").update({ ativo: false }).eq("user_id", user.id);
-      await supabase.from("agent_prompts").insert({ user_id: user.id, nome: "Setup Wizard " + new Date().toLocaleDateString(), conteudo: JSON.stringify(json, null, 2), ativo: true });
-      toast.success("Agente configurado!");
+      await supabase.from("agent_prompts").insert({
+        user_id: user.id,
+        nome: `Wizard Prompt ${new Date().toLocaleDateString()}`,
+        conteudo: JSON.stringify(json, null, 2),
+        ativo: true,
+        created_by: user.email
+      });
+
+      toast.success("Agente configurado com sucesso!");
       onConcluir();
       onClose();
-    } catch { toast.error("Erro ao salvar"); } finally { setSalvando(false); }
+    } catch (e) {
+      toast.error("Erro ao salvar");
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const StepIcon = ({ id, active, done }: { id: number, active: boolean, done: boolean }) => {
+    const Icon = STEPS.find(s => s.id === id)!.icon;
+    return (
+      <div className={`flex flex-col items-center gap-1 flex-1 ${active ? "text-primary" : done ? "text-success" : "text-muted-foreground"}`}>
+        <div className={`p-2 rounded-full ${active ? "bg-primary/10" : done ? "bg-success/10" : "bg-muted"}`}>
+          {done ? <Check className="h-5 w-5" /> : <Icon className="h-5 w-5" />}
+        </div>
+        <span className="text-[10px] uppercase font-bold tracking-wider">{STEPS.find(s => s.id === id)!.label}</span>
+      </div>
+    );
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Wizard de Configuração</DialogTitle></DialogHeader>
-        <div className="flex gap-4 mb-6 pt-4">
-          {STEPS.map((s) => <div key={s.id} className={`flex-1 flex flex-col items-center gap-1 ${step >= s.id ? "text-primary" : "text-muted-foreground"}`}><s.icon className="h-6 w-6" /><span className="text-xs">{s.label}</span></div>)}
+    <Dialog open={open} onOpenChange={v => !v && onClose()}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0">
+        <div className="p-6 border-b bg-muted/30">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Wand2 className="h-5 w-5 text-primary" /> Setup do Agente</DialogTitle></DialogHeader>
+          <div className="flex justify-between mt-6 relative">
+            <div className="absolute top-4 left-0 right-0 h-0.5 bg-muted -z-10" />
+            {STEPS.map(s => <StepIcon key={s.id} id={s.id} active={step === s.id} done={step > s.id} />)}
+          </div>
         </div>
-        {step === 1 && (
-          <div className="space-y-4">
-            <h3 className="font-bold">Negócio</h3>
-            <Input placeholder="Nome da empresa" value={data.empresa} onChange={e => updateData("empresa", e.target.value)} />
-            <Textarea placeholder="O que vende?" value={data.vende} onChange={e => updateData("vende", e.target.value)} />
-            <Input placeholder="Nome do Produto" value={data.produto_nome} onChange={e => updateData("produto_nome", e.target.value)} />
-            <Input placeholder="Dores do cliente" value={data.dores} onChange={e => updateData("dores", e.target.value)} />
-          </div>
-        )}
-        {step === 2 && (
-          <div className="space-y-4">
-            <h3 className="font-bold">Personalidade</h3>
-            <Select value={data.tom} onValueChange={v => updateData("tom", v)}>
-              <SelectTrigger><SelectValue placeholder="Tom de voz" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="profissional">Profissional</SelectItem>
-                <SelectItem value="amigavel">Amigável</SelectItem>
-              </SelectContent>
-            </Select>
-            <Textarea placeholder="Persona do agente" value={data.persona} onChange={e => updateData("persona", e.target.value)} />
-          </div>
-        )}
-        {step === 3 && (
-          <div className="space-y-4">
-            <h3 className="font-bold">Ferramentas</h3>
-            {data.ferramentas.map((f: any, i: number) => (
-              <div key={f.id} className="flex items-center gap-2">
-                <Checkbox checked={f.ativa} onCheckedChange={v => updateData(`ferramentas.${i}.ativa`, v)} />
-                <Label>{f.nome}</Label>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* PASSO 1 */}
+          {step === 1 && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2"><Label>Nome do Agente</Label><Input value={data.agente_nome} onChange={e => update("agente_nome", e.target.value)} /></div>
+                <div className="space-y-2"><Label>Empresa</Label><Input value={data.empresa} onChange={e => update("empresa", e.target.value)} /></div>
               </div>
-            ))}
-          </div>
-        )}
-        {step === 4 && (
-          <div className="space-y-4">
-            <h3 className="font-bold">Fluxo</h3>
-            <Textarea placeholder="Mensagem de abertura" value={data.abertura} onChange={e => updateData("abertura", e.target.value)} />
-          </div>
-        )}
-        {step === 5 && (
-          <div className="space-y-4">
-            <h3 className="font-bold">Configuração Técnica</h3>
-            <Input placeholder="Evolution API URL" value={data.evolution_server_url} onChange={e => updateData("evolution_server_url", e.target.value)} />
-            <pre className="bg-muted p-4 rounded text-xs overflow-x-auto">{JSON.stringify(gerarJSON(), null, 2)}</pre>
-          </div>
-        )}
-        <div className="flex justify-between pt-6">
-          <Button disabled={step === 1} onClick={() => setStep(s => s - 1)}>Anterior</Button>
-          {step < 5 ? <Button onClick={() => setStep(s => s + 1)}>Próximo</Button> : <Button onClick={salvarTudo} disabled={salvando}>{salvando ? <Loader2 className="animate-spin"/> : "Finalizar"}</Button>}
+              <div className="space-y-2"><Label>Segmento</Label><Input value={data.segmento} onChange={e => update("segmento", e.target.value)} /></div>
+              <div className="space-y-2"><Label>O que vende?</Label><Input value={data.vende} onChange={e => update("vende", e.target.value)} /></div>
+              <div className="space-y-2"><Label>Diferencial</Label><Input value={data.diferencial} onChange={e => update("diferencial", e.target.value)} /></div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2"><Label>Produto</Label><Input value={data.produto_nome} onChange={e => update("produto_nome", e.target.value)} /></div>
+                <div className="space-y-2"><Label>Preço</Label><Input value={data.produto_preco} onChange={e => update("produto_preco", e.target.value)} /></div>
+              </div>
+              <div className="space-y-2"><Label>Benefícios</Label><Textarea value={data.produto_beneficios} onChange={e => update("produto_beneficios", e.target.value)} /></div>
+              <div className="space-y-2"><Label>Cliente Ideal</Label><Input value={data.cliente_ideal} onChange={e => update("cliente_ideal", e.target.value)} /></div>
+              <div className="space-y-2"><Label>Dores</Label><Textarea value={data.dores} onChange={e => update("dores", e.target.value)} /></div>
+            </div>
+          )}
+
+          {/* PASSO 2 */}
+          {step === 2 && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label>Tom</Label>
+                  <Select value={data.tom} onValueChange={v => update("tom", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{TONS.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Emojis</Label>
+                  <Select value={data.emojis} onValueChange={v => update("emojis", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="bastante">Bastante</SelectItem><SelectItem value="moderado">Moderado</SelectItem><SelectItem value="nao">Não</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Idioma</Label>
+                  <Select value={data.idioma} onValueChange={v => update("idioma", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{IDIOMAS.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2"><Label>Persona</Label><Textarea value={data.persona} onChange={e => update("persona", e.target.value)} /></div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2"><Label>Objetivo</Label><Input value={data.objetivo} onChange={e => update("objetivo", e.target.value)} /></div>
+                <div className="space-y-2"><Label>CTA</Label><Input value={data.cta} onChange={e => update("cta", e.target.value)} /></div>
+              </div>
+              <div className="space-y-2"><Label>Horário</Label><Input value={data.horario} onChange={e => update("horario", e.target.value)} /></div>
+              <div className="space-y-2"><Label>Deve Fazer</Label><Textarea value={data.deve_fazer} onChange={e => update("deve_fazer", e.target.value)} placeholder="Uma regra por linha" /></div>
+              <div className="space-y-2"><Label>Não Fazer</Label><Textarea value={data.nao_fazer} onChange={e => update("nao_fazer", e.target.value)} /></div>
+              <div className="space-y-2"><Label>Quando Transferir</Label><Input value={data.quando_transferir} onChange={e => update("quando_transferir", e.target.value)} /></div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Modelo</Label>
+                  <Select value={data.modelo} onValueChange={v => update("modelo", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{MODELOS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between"><Label>Temperatura</Label><span>{data.temperatura}</span></div>
+                  <Slider value={[data.temperatura]} min={0} max={1} step={0.1} onValueChange={([v]) => update("temperatura", v)} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PASSO 3 */}
+          {step === 3 && (
+            <div className="space-y-4">
+              <Label>Ative as ferramentas necessárias</Label>
+              {data.ferramentas.map((f, i) => (
+                <Card key={f.id} className="p-4">
+                  <div className="flex items-start gap-4">
+                    <Checkbox checked={f.ativa} onCheckedChange={v => {
+                      const list = [...data.ferramentas];
+                      list[i].ativa = !!v;
+                      update("ferramentas", list);
+                    }} />
+                    <div className="flex-1 space-y-2">
+                      <Label>{f.nome}</Label>
+                      <Input value={f.desc} onChange={e => {
+                        const list = [...data.ferramentas];
+                        list[i].desc = e.target.value;
+                        update("ferramentas", list);
+                      }} />
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {/* PASSO 4 */}
+          {step === 4 && (
+            <div className="space-y-6">
+              <div className="space-y-2"><Label>Mensagem de Abertura</Label><Textarea value={data.abertura} onChange={e => update("abertura", e.target.value)} /></div>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center"><Label>Perguntas de Qualificação (Máx 8)</Label><Button size="sm" variant="outline" onClick={addQualificacao} disabled={data.qualificacao.length >= 8}><Plus className="h-4 w-4 mr-1"/> Adicionar</Button></div>
+                {data.qualificacao.map((q, i) => (
+                  <div key={i} className="flex gap-2">
+                    <Input value={q} onChange={e => updateQualificacao(i, e.target.value)} placeholder={`Pergunta ${i+1}`} />
+                    <Button size="icon" variant="ghost" onClick={() => removeQualificacao(i)}><Trash2 className="h-4 w-4 text-destructive"/></Button>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center"><Label>Objeções (Máx 6)</Label><Button size="sm" variant="outline" onClick={addObjecao} disabled={data.objecoes.length >= 6}><Plus className="h-4 w-4 mr-1"/> Adicionar</Button></div>
+                {data.objecoes.map((o, i) => (
+                  <Card key={i} className="p-3 space-y-2">
+                    <div className="flex justify-between"><span className="text-xs font-bold">Objeção {i+1}</span><Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => removeObjecao(i)}><Trash2 className="h-3 w-3"/></Button></div>
+                    <Input placeholder="Gatilho/Dúvida" value={o.gatilho} onChange={e => updateObjecao(i, "gatilho", e.target.value)} />
+                    <Textarea placeholder="Resposta sugerida" value={o.resposta} onChange={e => updateObjecao(i, "resposta", e.target.value)} rows={2} />
+                  </Card>
+                ))}
+              </div>
+              <div className="space-y-3">
+                <Label>Follow-up</Label>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-1"><Label className="text-[10px]">Dia 1</Label><Textarea value={data.follow_up.dia_1} onChange={e => update("follow_up", { ...data.follow_up, dia_1: e.target.value })} /></div>
+                  <div className="space-y-1"><Label className="text-[10px]">Dia 3</Label><Textarea value={data.follow_up.dia_3} onChange={e => update("follow_up", { ...data.follow_up, dia_3: e.target.value })} /></div>
+                  <div className="space-y-1"><Label className="text-[10px]">Dia 7</Label><Textarea value={data.follow_up.dia_7} onChange={e => update("follow_up", { ...data.follow_up, dia_7: e.target.value })} /></div>
+                </div>
+              </div>
+              <div className="space-y-2"><Label>Mensagem de Encerramento</Label><Textarea value={data.encerramento} onChange={e => update("encerramento", e.target.value)} /></div>
+            </div>
+          )}
+
+          {/* PASSO 5 */}
+          {step === 5 && (
+            <div className="space-y-6">
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><Wrench className="h-4 w-4" /> Webhooks n8n</h4>
+                <div className="space-y-3">
+                  <div className="space-y-1"><Label className="text-xs">Principal (WhatsApp)</Label><Input value={data.webhook_principal} onChange={e => update("webhook_principal", e.target.value)} /></div>
+                  <div className="space-y-1"><Label className="text-xs">Indexação (RAG)</Label><Input value={data.webhook_indexacao} onChange={e => update("webhook_indexacao", e.target.value)} /></div>
+                  <div className="space-y-1"><Label className="text-xs">Teste</Label><Input value={data.webhook_teste} onChange={e => update("webhook_teste", e.target.value)} /></div>
+                </div>
+              </Card>
+
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><MessageCircle className="h-4 w-4" /> Evolution API</h4>
+                <div className="space-y-3">
+                  <div className="space-y-1"><Label className="text-xs">Server URL</Label><Input value={data.evolution_server_url} onChange={e => update("evolution_server_url", e.target.value)} /></div>
+                  <div className="space-y-1"><Label className="text-xs">API Key</Label><Input type="password" value={data.evolution_api_key} onChange={e => update("evolution_api_key", e.target.value)} /></div>
+                  <div className="space-y-1"><Label className="text-xs">Instância</Label><Input value={data.evolution_instancia} onChange={e => update("evolution_instancia", e.target.value)} /></div>
+                  <Button variant="outline" className="w-full" onClick={testarEvolution} disabled={testando}>{testando && <Loader2 className="animate-spin mr-2 h-4 w-4"/>} Testar Conexão</Button>
+                </div>
+              </Card>
+
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><Code2 className="h-4 w-4" /> RAG Config</h4>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between"><Label>Ativo</Label><Switch checked={data.rag_ativo} onCheckedChange={v => update("rag_ativo", v)} /></div>
+                  <div className="space-y-1"><div className="flex justify-between"><Label>Threshold</Label><span>{data.rag_threshold}</span></div><Slider value={[data.rag_threshold]} min={0.5} max={1} step={0.05} onValueChange={([v]) => update("rag_threshold", v)} /></div>
+                  <div className="space-y-1"><Label>Resultados</Label><Input type="number" value={data.rag_resultados} onChange={e => update("rag_resultados", parseInt(e.target.value))} /></div>
+                </div>
+              </Card>
+
+              <div className="space-y-2">
+                <Label>JSON Gerado (Preview)</Label>
+                <div className="relative">
+                  <pre className="p-4 bg-muted rounded-lg text-[10px] max-h-60 overflow-auto font-mono">{JSON.stringify(jsonGerado(), null, 2)}</pre>
+                  <Button size="icon" variant="ghost" className="absolute top-2 right-2" onClick={() => { navigator.clipboard.writeText(JSON.stringify(jsonGerado(), null, 2)); toast.success("Copiado!"); }}><Copy className="h-4 w-4"/></Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 border-t flex justify-between bg-muted/10">
+          <Button variant="ghost" onClick={() => setStep(s => s - 1)} disabled={step === 1}><ChevronLeft className="h-4 w-4 mr-2" /> Anterior</Button>
+          {step < 5 ? (
+            <Button onClick={() => setStep(s => s + 1)}>Próximo <ChevronRight className="h-4 w-4 ml-2" /></Button>
+          ) : (
+            <Button onClick={salvar} disabled={salvando}>{salvando ? <Loader2 className="animate-spin mr-2 h-4 w-4" /> : <Check className="h-4 w-4 mr-2" />} Finalizar e Salvar</Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>
