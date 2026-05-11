@@ -58,8 +58,12 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
     // Passo 4
     abertura: "",
     qualificacao: [""],
-    objecoes: [{ gatilho: "", resposta: "" }],
-    follow_up: { dia_1: "", dia_3: "", dia_7: "" },
+    objecoes: [
+      { gatilho: "Não tenho tempo", resposta: "Sem problema! Pode ser num horário flexível. Qual funciona melhor?" },
+      { gatilho: "Vou pensar", resposta: "Claro! Ficou alguma dúvida que posso esclarecer? 😊" },
+      { gatilho: "Tá caro", resposta: "Entendo! Me conta qual faixa faria sentido — provavelmente tenho algo que se encaixa." }
+    ],
+    follow_up: { dia_1: "Oi! Passando para ver se conseguiu ler minha última mensagem.", dia_3: "Ainda interessado? Ficamos à disposição para tirar qualquer dúvida.", dia_7: "Notei que ainda não decidimos o próximo passo. Gostaria de encerrar por aqui ou agendamos um papo rápido?" },
     encerramento: "",
     // Passo 5
     webhook_principal: "", webhook_indexacao: "", webhook_teste: "",
@@ -454,38 +458,103 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
             </div>
           )}
 
-          {/* PASSO 4 */}
+          {/* PASSO 4: FLUXO & OBJEÇÕES */}
           {step === 4 && (
             <div className="space-y-6">
-              <div className="space-y-2"><Label>Mensagem de Abertura</Label><Textarea value={data.abertura} onChange={e => update("abertura", e.target.value)} /></div>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center"><Label>Perguntas de Qualificação (Máx 8)</Label><Button size="sm" variant="outline" onClick={addQualificacao} disabled={data.qualificacao.length >= 8}><Plus className="h-4 w-4 mr-1"/> Adicionar</Button></div>
-                {data.qualificacao.map((q, i) => (
-                  <div key={i} className="flex gap-2">
-                    <Input value={q} onChange={e => updateQualificacao(i, e.target.value)} placeholder={`Pergunta ${i+1}`} />
-                    <Button size="icon" variant="ghost" onClick={() => removeQualificacao(i)}><Trash2 className="h-4 w-4 text-destructive"/></Button>
-                  </div>
-                ))}
+              <div className="space-y-2">
+                <Label className="text-base font-bold">Mensagem de Abertura</Label>
+                <Textarea 
+                  placeholder="Mensagem exata do primeiro contato..." 
+                  value={data.abertura} 
+                  onChange={e => update("abertura", e.target.value)} 
+                  rows={3}
+                />
               </div>
+
               <div className="space-y-3">
-                <div className="flex justify-between items-center"><Label>Objeções (Máx 6)</Label><Button size="sm" variant="outline" onClick={addObjecao} disabled={data.objecoes.length >= 6}><Plus className="h-4 w-4 mr-1"/> Adicionar</Button></div>
-                {data.objecoes.map((o, i) => (
-                  <Card key={i} className="p-3 space-y-2">
-                    <div className="flex justify-between"><span className="text-xs font-bold">Objeção {i+1}</span><Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => removeObjecao(i)}><Trash2 className="h-3 w-3"/></Button></div>
-                    <Input placeholder="Gatilho/Dúvida" value={o.gatilho} onChange={e => updateObjecao(i, "gatilho", e.target.value)} />
-                    <Textarea placeholder="Resposta sugerida" value={o.resposta} onChange={e => updateObjecao(i, "resposta", e.target.value)} rows={2} />
-                  </Card>
-                ))}
-              </div>
-              <div className="space-y-3">
-                <Label>Follow-up</Label>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-1"><Label className="text-[10px]">Dia 1</Label><Textarea value={data.follow_up.dia_1} onChange={e => update("follow_up", { ...data.follow_up, dia_1: e.target.value })} /></div>
-                  <div className="space-y-1"><Label className="text-[10px]">Dia 3</Label><Textarea value={data.follow_up.dia_3} onChange={e => update("follow_up", { ...data.follow_up, dia_3: e.target.value })} /></div>
-                  <div className="space-y-1"><Label className="text-[10px]">Dia 7</Label><Textarea value={data.follow_up.dia_7} onChange={e => update("follow_up", { ...data.follow_up, dia_7: e.target.value })} /></div>
+                <div className="flex justify-between items-center">
+                  <Label className="text-base font-bold">Perguntas de Qualificação</Label>
+                  <Button size="sm" variant="outline" onClick={addQualificacao} disabled={data.qualificacao.length >= 8}>
+                    <Plus className="h-4 w-4 mr-1"/> Adicionar Pergunta
+                  </Button>
+                </div>
+                <div className="grid gap-2">
+                  {data.qualificacao.map((q, i) => (
+                    <div key={i} className="flex gap-2 items-center">
+                      <div className="flex-none w-6 h-6 rounded-full bg-muted flex items-center justify-center text-[10px] font-bold">{i+1}</div>
+                      <Input value={q} onChange={e => updateQualificacao(i, e.target.value)} placeholder={`Ex: Qual sua maior dificuldade hoje?`} />
+                      <Button size="icon" variant="ghost" onClick={() => removeQualificacao(i)} className="shrink-0"><Trash2 className="h-4 w-4 text-destructive"/></Button>
+                    </div>
+                  ))}
+                  {data.qualificacao.length === 0 && <p className="text-xs text-muted-foreground italic p-2 border border-dashed rounded text-center">Nenhuma pergunta adicionada.</p>}
                 </div>
               </div>
-              <div className="space-y-2"><Label>Mensagem de Encerramento</Label><Textarea value={data.encerramento} onChange={e => update("encerramento", e.target.value)} /></div>
+
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <Label className="text-base font-bold">Tratamento de Objeções</Label>
+                  <Button size="sm" variant="outline" onClick={addObjecao} disabled={data.objecoes.length >= 8}>
+                    <Plus className="h-4 w-4 mr-1"/> Adicionar Objeção
+                  </Button>
+                </div>
+                <div className="grid gap-3">
+                  {data.objecoes.map((o, i) => (
+                    <Card key={i} className="p-3 border-l-4 border-l-primary/30 relative">
+                      <Button size="icon" variant="ghost" className="absolute top-1 right-1 h-6 w-6" onClick={() => removeObjecao(i)}><Trash2 className="h-3 w-3 text-destructive"/></Button>
+                      <div className="space-y-2 pr-6">
+                        <Input placeholder="Objeção do cliente (Gatilho)" value={o.gatilho} onChange={e => updateObjecao(i, "gatilho", e.target.value)} className="font-semibold text-xs h-8" />
+                        <Textarea placeholder="Resposta da IA para contornar" value={o.resposta} onChange={e => updateObjecao(i, "resposta", e.target.value)} rows={2} className="text-xs" />
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <Label className="text-base font-bold">Follow-up Automático</Label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] uppercase tracking-wider font-bold">Dia 1</Label>
+                    <Textarea 
+                      placeholder="Após 1 dia sem resposta..." 
+                      value={data.follow_up.dia_1} 
+                      onChange={e => update("follow_up", { ...data.follow_up, dia_1: e.target.value })} 
+                      rows={2}
+                      className="text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] uppercase tracking-wider font-bold">Dia 3</Label>
+                    <Textarea 
+                      placeholder="Após 3 dias sem resposta..." 
+                      value={data.follow_up.dia_3} 
+                      onChange={e => update("follow_up", { ...data.follow_up, dia_3: e.target.value })} 
+                      rows={2}
+                      className="text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] uppercase tracking-wider font-bold">Dia 7</Label>
+                    <Textarea 
+                      placeholder="Após 7 dias (Última tentativa)..." 
+                      value={data.follow_up.dia_7} 
+                      onChange={e => update("follow_up", { ...data.follow_up, dia_7: e.target.value })} 
+                      rows={2}
+                      className="text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-base font-bold">Mensagem de Encerramento</Label>
+                <Textarea 
+                  placeholder="Mensagem ao encerrar ou redirecionar..." 
+                  value={data.encerramento} 
+                  onChange={e => update("encerramento", e.target.value)} 
+                  rows={2}
+                />
+              </div>
             </div>
           )}
 
