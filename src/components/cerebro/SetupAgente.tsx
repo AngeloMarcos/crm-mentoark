@@ -29,7 +29,7 @@ const STEPS = [
 ];
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
-const IDIOMAS = ["Português BR", "Espanhol", "Inglês"];
+const IDIOMAS = ["Português BR", "Português PT", "Espanhol", "Inglês"];
 const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
 
 export function SetupAgente({ open, onClose, onConcluir }: Props) {
@@ -244,72 +244,136 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* PASSO 1 */}
+          {/* PASSO 1: NEGÓCIO */}
           {step === 1 && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>Nome do Agente</Label><Input value={data.agente_nome} onChange={e => update("agente_nome", e.target.value)} /></div>
-                <div className="space-y-2"><Label>Empresa</Label><Input value={data.empresa} onChange={e => update("empresa", e.target.value)} /></div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Nome do Agente</Label>
+                  <Input placeholder="Ex: Sofia" value={data.agente_nome} onChange={e => update("agente_nome", e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Nome da Empresa</Label>
+                  <Input placeholder="Ex: Imobiliária Central" value={data.empresa} onChange={e => update("empresa", e.target.value)} />
+                </div>
               </div>
-              <div className="space-y-2"><Label>Segmento</Label><Input value={data.segmento} onChange={e => update("segmento", e.target.value)} /></div>
-              <div className="space-y-2"><Label>O que vende?</Label><Input value={data.vende} onChange={e => update("vende", e.target.value)} /></div>
-              <div className="space-y-2"><Label>Diferencial</Label><Input value={data.diferencial} onChange={e => update("diferencial", e.target.value)} /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>Produto</Label><Input value={data.produto_nome} onChange={e => update("produto_nome", e.target.value)} /></div>
-                <div className="space-y-2"><Label>Preço</Label><Input value={data.produto_preco} onChange={e => update("produto_preco", e.target.value)} /></div>
+              <div className="space-y-2">
+                <Label>Segmento</Label>
+                <Input placeholder="Ex: Imóveis residenciais" value={data.segmento} onChange={e => update("segmento", e.target.value)} />
               </div>
-              <div className="space-y-2"><Label>Benefícios</Label><Textarea value={data.produto_beneficios} onChange={e => update("produto_beneficios", e.target.value)} /></div>
-              <div className="space-y-2"><Label>Cliente Ideal</Label><Input value={data.cliente_ideal} onChange={e => update("cliente_ideal", e.target.value)} /></div>
-              <div className="space-y-2"><Label>Dores</Label><Textarea value={data.dores} onChange={e => update("dores", e.target.value)} /></div>
+              <div className="space-y-2">
+                <Label>O que você vende/oferece?</Label>
+                <Input placeholder="Ex: Apartamentos de alto padrão" value={data.vende} onChange={e => update("vende", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Diferencial Competitivo</Label>
+                <Input placeholder="Ex: Atendimento 24h e tour virtual" value={data.diferencial} onChange={e => update("diferencial", e.target.value)} />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Produto/Plano Principal</Label>
+                  <Input placeholder="Ex: Consultoria Premium" value={data.produto_nome} onChange={e => update("produto_nome", e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Preço</Label>
+                  <Input placeholder="Ex: R$ 497/mês" value={data.produto_preco} onChange={e => update("produto_preco", e.target.value)} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Principais Benefícios</Label>
+                <Textarea placeholder="Descreva os ganhos do cliente..." value={data.produto_beneficios} onChange={e => update("produto_beneficios", e.target.value)} rows={2} />
+              </div>
+              <div className="space-y-2">
+                <Label>Quem é o cliente ideal?</Label>
+                <Input placeholder="Ex: Investidores de imóveis" value={data.cliente_ideal} onChange={e => update("cliente_ideal", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Principais Dores do Cliente</Label>
+                <Textarea placeholder="O que tira o sono do seu cliente?" value={data.dores} onChange={e => update("dores", e.target.value)} rows={2} />
+              </div>
             </div>
           )}
 
-          {/* PASSO 2 */}
+          {/* PASSO 2: PERSONALIDADE */}
           {step === 2 && (
             <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2">
-                  <Label>Tom</Label>
+                  <Label>Tom de Voz</Label>
                   <Select value={data.tom} onValueChange={v => update("tom", v)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>{TONS.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                    <SelectContent>
+                      {TONS.map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                    </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Emojis</Label>
+                  <Label>Uso de Emojis</Label>
                   <Select value={data.emojis} onValueChange={v => update("emojis", v)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="bastante">Bastante</SelectItem><SelectItem value="moderado">Moderado</SelectItem><SelectItem value="nao">Não</SelectItem></SelectContent>
+                    <SelectContent>
+                      <SelectItem value="bastante">Bastante</SelectItem>
+                      <SelectItem value="moderado">Moderado</SelectItem>
+                      <SelectItem value="nao">Não usar</SelectItem>
+                    </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
                   <Label>Idioma</Label>
                   <Select value={data.idioma} onValueChange={v => update("idioma", v)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>{IDIOMAS.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}</SelectContent>
+                    <SelectContent>
+                      {IDIOMAS.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
+                    </SelectContent>
                   </Select>
                 </div>
               </div>
-              <div className="space-y-2"><Label>Persona</Label><Textarea value={data.persona} onChange={e => update("persona", e.target.value)} /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>Objetivo</Label><Input value={data.objetivo} onChange={e => update("objetivo", e.target.value)} /></div>
-                <div className="space-y-2"><Label>CTA</Label><Input value={data.cta} onChange={e => update("cta", e.target.value)} /></div>
+              <div className="space-y-2">
+                <Label>Persona</Label>
+                <Textarea placeholder="Como o agente se apresenta e se comporta?" value={data.persona} onChange={e => update("persona", e.target.value)} rows={3} />
               </div>
-              <div className="space-y-2"><Label>Horário</Label><Input value={data.horario} onChange={e => update("horario", e.target.value)} /></div>
-              <div className="space-y-2"><Label>Deve Fazer</Label><Textarea value={data.deve_fazer} onChange={e => update("deve_fazer", e.target.value)} placeholder="Uma regra por linha" /></div>
-              <div className="space-y-2"><Label>Não Fazer</Label><Textarea value={data.nao_fazer} onChange={e => update("nao_fazer", e.target.value)} /></div>
-              <div className="space-y-2"><Label>Quando Transferir</Label><Input value={data.quando_transferir} onChange={e => update("quando_transferir", e.target.value)} /></div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Modelo</Label>
+                  <Label>Objetivo Principal</Label>
+                  <Input placeholder="Ex: Qualificar lead e agendar reunião" value={data.objetivo} onChange={e => update("objetivo", e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>CTA Principal</Label>
+                  <Input placeholder="Ex: Agendar demonstração gratuita" value={data.cta} onChange={e => update("cta", e.target.value)} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Horário de Atendimento Humano</Label>
+                <Input placeholder="Ex: Seg-Sex, 9h às 18h" value={data.horario} onChange={e => update("horario", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>O agente DEVE fazer</Label>
+                <Textarea placeholder="Regra 1&#10;Regra 2..." value={data.deve_fazer} onChange={e => update("deve_fazer", e.target.value)} rows={3} />
+              </div>
+              <div className="space-y-2">
+                <Label>O agente NÃO DEVE fazer</Label>
+                <Textarea placeholder="Regra 1&#10;Regra 2..." value={data.nao_fazer} onChange={e => update("nao_fazer", e.target.value)} rows={3} />
+              </div>
+              <div className="space-y-2">
+                <Label>Critério de Transferência</Label>
+                <Input placeholder="Quando o cliente pedir falar com humano..." value={data.quando_transferir} onChange={e => update("quando_transferir", e.target.value)} />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                <div className="space-y-2">
+                  <Label>Modelo de IA</Label>
                   <Select value={data.modelo} onValueChange={v => update("modelo", v)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>{MODELOS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+                    <SelectContent>
+                      {MODELOS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between"><Label>Temperatura</Label><span>{data.temperatura}</span></div>
-                  <Slider value={[data.temperatura]} min={0} max={1} step={0.1} onValueChange={([v]) => update("temperatura", v)} />
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <Label>Temperatura</Label>
+                    <span className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">{data.temperatura}</span>
+                  </div>
+                  <Slider value={[data.temperatura]} min={0} max={1} step={0.1} onValueChange={([v]) => update("temperatura", v)} className="py-2" />
                 </div>
               </div>
             </div>
