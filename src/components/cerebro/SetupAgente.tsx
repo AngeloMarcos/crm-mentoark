@@ -153,12 +153,30 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
     try {
       const json = jsonGerado();
 
-      // Salva conhecimento
+      // Salva conhecimento individualmente para aparecer nas abas do Cerebro
       await supabase.from("conhecimento").delete().eq("user_id", user.id).in("tipo", ["negocio", "personalidade"]);
-      await supabase.from("conhecimento").insert([
-        { user_id: user.id, tipo: "negocio", campo: "config", conteudo: JSON.stringify(data) },
-        { user_id: user.id, tipo: "personalidade", campo: "config", conteudo: JSON.stringify(data) }
-      ]);
+      
+      const conhecimentoRows: any[] = [];
+      
+      // Negócio
+      const fieldsNeg = ["empresa", "segmento", "vende", "diferencial", "produto_nome", "produto_preco", "produto_beneficios", "cliente_ideal", "dores"];
+      fieldsNeg.forEach(f => {
+        if (data[f as keyof typeof data]) {
+          conhecimentoRows.push({ user_id: user.id, tipo: "negocio", campo: f, conteudo: String(data[f as keyof typeof data]), indexado: false });
+        }
+      });
+
+      // Personalidade
+      const fieldsPer = ["tom", "emojis", "idioma", "persona", "objetivo", "cta", "horario", "deve_fazer", "nao_fazer", "quando_transferir"];
+      fieldsPer.forEach(f => {
+        if (data[f as keyof typeof data]) {
+          conhecimentoRows.push({ user_id: user.id, tipo: "personalidade", campo: f, conteudo: String(data[f as keyof typeof data]), indexado: false });
+        }
+      });
+
+      if (conhecimentoRows.length > 0) {
+        await supabase.from("conhecimento").insert(conhecimentoRows);
+      }
 
       // Atualiza agentes
       const { data: agente } = await supabase.from("agentes").select("id").eq("user_id", user.id).maybeSingle();
