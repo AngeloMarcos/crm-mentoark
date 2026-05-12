@@ -641,7 +641,19 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
           {step < 5 ? (
             <Button onClick={() => setStep(s => s + 1)}>Próximo <ChevronRight className="h-4 w-4 ml-2" /></Button>
           ) : (
-            <Button onClick={salvar} disabled={salvando}>{salvando ? <Loader2 className="animate-spin mr-2 h-4 w-4" /> : <Check className="h-4 w-4 mr-2" />} Finalizar e Salvar</Button>
+            <Button 
+              onClick={salvar} 
+              disabled={salvando || salvo}
+              className={salvo ? "bg-success hover:bg-success text-white" : ""}
+            >
+              {salvando ? (
+                <><Loader2 className="animate-spin mr-2 h-4 w-4" /> Salvando...</>
+              ) : salvo ? (
+                <><Check className="h-4 w-4 mr-2" /> Salvo com Sucesso!</>
+              ) : (
+                <><Check className="h-4 w-4 mr-2" /> Finalizar e Salvar</>
+              )}
+            </Button>
           )}
         </div>
       </DialogContent>
