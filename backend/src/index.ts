@@ -24,7 +24,6 @@ import catalogoRouter from './routes/catalogo';
 const app = express();
 
 // ── Middleware ──────────────────────────────────────────────
-// CORS: aceita origens fixas + qualquer subdomínio lovable.app/lovableproject.com
 const staticOrigins = (process.env.CORS_ORIGIN || 'https://crm.mentoark.com.br')
   .split(',')
   .map(s => s.trim())
@@ -50,13 +49,10 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 // ── Public routes ───────────────────────────────────────────
 app.use('/auth', authRouter);
 
-// ── Protected routes (JWT required) ─────────────────────────
 // Rota pública do catálogo para n8n (deve vir antes do middleware de auth)
-app.use('/api/catalogo/n8n', (req, res, next) => {
-  // Passa para o router do catálogo, que deve lidar com a rota /n8n/:userId
-  next();
-});
+app.use('/api/catalogo/n8n', catalogoRouter(pool));
 
+// ── Protected routes (JWT required) ─────────────────────────
 app.use('/api', authMiddleware);
 
 // Standard CRUD tables (generic factory)
