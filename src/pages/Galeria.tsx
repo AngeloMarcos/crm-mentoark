@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Label } from "@/components/ui/label";
 import { Images, Upload, Trash2, Copy, Loader2, Check, X, Pencil, Tag } from "lucide-react";
 import { toast } from "sonner";
+import { BackgroundRemoverModal } from "@/components/catalogo/BackgroundRemoverModal";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => localStorage.getItem("access_token") || "";
