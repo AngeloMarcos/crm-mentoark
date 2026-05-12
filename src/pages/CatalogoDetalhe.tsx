@@ -14,6 +14,21 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SendWhatsAppModal } from "@/components/catalogo/SendWhatsAppModal";
+import { 
+  DndContext, 
+  closestCenter, 
+  KeyboardSensor, 
+  PointerSensor, 
+  useSensor, 
+  useSensors 
+} from "@dnd-kit/core";
+import { 
+  arrayMove, 
+  SortableContext, 
+  sortableKeyboardCoordinates, 
+  rectSortingStrategy 
+} from "@dnd-kit/sortable";
+import { ProductCard } from "@/components/catalogo/ProductCard";
 
 interface Produto {
   id: string;
