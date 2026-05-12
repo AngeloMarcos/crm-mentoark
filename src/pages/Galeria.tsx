@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Images, Upload, Trash2, Copy, Loader2, Check, X } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Images, Upload, Trash2, Copy, Loader2, Check, X, Pencil, Tag } from "lucide-react";
 import { toast } from "sonner";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
