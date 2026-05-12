@@ -39,7 +39,12 @@ export function AppSidebar() {
   };
 
   const menuItems = isAdmin
-    ? [...items, { title: "Usuários", url: "/usuarios", icon: ShieldCheck }]
+    ? [
+        ...items,
+        { title: "Workflows",         url: "/workflows",   icon: GitBranch       },
+        { title: "Usuários",          url: "/usuarios",    icon: ShieldCheck     },
+        { title: "Documentação",      url: "/docs",        icon: BookOpen        },
+      ]
     : items;
 
   return (
