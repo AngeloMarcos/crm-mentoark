@@ -134,10 +134,11 @@ export default function CatalogoDetalhePage() {
                     <span className="text-success font-bold">R$ {p.preco}</span>
                     {p.preco_promocional && <span className="text-xs line-through opacity-50">R$ {p.preco_promocional}</span>}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-1 flex-wrap">
+                    <Button variant="outline" size="sm" className="px-2" title="Enviar via WhatsApp" onClick={() => setModalSend({ open: true, type: "product", id: p.id })}><Send className="h-4 w-4" /></Button>
                     <Button variant="outline" size="sm" onClick={() => { setActiveProduto(p); setModalGaleria(true); }}>Imagens</Button>
-                    <Button variant="ghost" size="sm" onClick={() => { setEditingProduto(p); setForm({...p, preco: p.preco||0, preco_promocional: p.preco_promocional||0, estoque: p.estoque||0, descricao: p.descricao||"", codigo: p.codigo||""}); setModalProduto(true); }}>Editar</Button>
-                    <Button variant="ghost" size="sm" onClick={async () => { await api.from(`catalogos/${id}/produtos`).delete().eq("id", p.id); carregar(); }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingProduto(p); setForm({...p, preco: p.preco||0, preco_promocional: p.preco_promocional||0, estoque: p.estoque||0, descricao: p.descricao||"", codigo: p.codigo||""}); setModalProduto(true); }}><Pencil className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={async () => { if(confirm("Remover produto?")) { await api.from(`catalogos/${id}/produtos`).delete().eq("id", p.id); carregar(); } }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
                   </div>
                 </CardContent>
               </Card>
