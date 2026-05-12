@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Search, Loader2, Phone, User, Calendar, Bot, ChevronLeft, ChevronRight } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useToast } from "@/hooks/use-toast";
 
 interface DadoCliente {
@@ -55,7 +55,7 @@ export default function ContatosPage() {
   useEffect(() => {
     const fetchContatos = async () => {
       setLoading(true);
-      const { data, error } = await supabase
+      const { data, error } = await api
         .from("dados_cliente")
         .select("*")
         .order("created_at", { ascending: false });
@@ -70,7 +70,7 @@ export default function ContatosPage() {
     fetchContatos();
 
     // Inscrição Realtime
-    const channel = supabase
+    const channel = api
       .channel("public:dados_cliente")
       .on(
         "postgres_changes",
@@ -85,7 +85,7 @@ export default function ContatosPage() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      api.removeChannel(channel);
     };
   }, [toast]);
 

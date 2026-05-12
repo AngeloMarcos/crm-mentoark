@@ -1,7 +1,7 @@
-// src/integrations/supabase/client.ts
-// Cliente HTTP customizado — espelha a interface @supabase/supabase-js
+// src/integrations/api/client.ts
+// Cliente HTTP customizado — espelha a interface @api/api-js
 // Todas as chamadas vão para VITE_API_URL (backend Express próprio)
-// NÃO usa Supabase real — zero dependência externa
+// NÃO usa Database real — zero dependência externa
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 
@@ -273,7 +273,7 @@ export async function uploadImagem(url: string, file: File, fields?: Record<stri
 }
 
 // ── Export ────────────────────────────────────────────────────
-export const supabase = {
+export const api = {
   auth,
   from: (table: string) => new QueryBuilder(table),
   functions,
@@ -290,4 +290,4 @@ export const supabase = {
   removeAllChannels: () => {},
 };
 
-export default supabase;
+export default api;

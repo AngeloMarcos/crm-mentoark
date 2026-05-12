@@ -60,7 +60,7 @@ router.post('/login', async (req: Request, res: Response) => {
       valid = await bcrypt.compare(password, user.password_hash);
     }
 
-    // Fallback: try pgcrypto crypt() comparison for Supabase-migrated passwords
+    // Fallback: try pgcrypto crypt() comparison for Database-migrated passwords
     if (!valid && user.password_hash) {
       const r = await pool.query(
         "SELECT crypt($1, password_hash) = password_hash AS ok FROM users WHERE id = $2",

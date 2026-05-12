@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { Shield, ShieldOff, Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
@@ -24,8 +24,8 @@ export default function UsuariosPage() {
 
   const load = async () => {
     setLoading(true);
-    const { data: profiles } = await supabase.from("profiles").select("user_id, email, display_name, created_at").order("created_at", { ascending: false });
-    const { data: roles } = await supabase.from("user_roles").select("user_id, role");
+    const { data: profiles } = await api.from("profiles").select("user_id, email, display_name, created_at").order("created_at", { ascending: false });
+    const { data: roles } = await api.from("user_roles").select("user_id, role");
     const adminSet = new Set((roles ?? []).filter((r) => r.role === "admin").map((r) => r.user_id));
     setUsers((profiles ?? []).map((p) => ({ ...p, is_admin: adminSet.has(p.user_id) })));
     setLoading(false);
@@ -35,11 +35,11 @@ export default function UsuariosPage() {
 
   const toggleAdmin = async (u: UserRow) => {
     if (u.is_admin) {
-      const { error } = await supabase.from("user_roles").delete().eq("user_id", u.user_id).eq("role", "admin");
+      const { error } = await api.from("user_roles").delete().eq("user_id", u.user_id).eq("role", "admin");
       if (error) return toast.error(error.message);
       toast.success(`${u.email} não é mais admin`);
     } else {
-      const { error } = await supabase.from("user_roles").insert({ user_id: u.user_id, role: "admin" });
+      const { error } = await api.from("user_roles").insert({ user_id: u.user_id, role: "admin" });
       if (error) return toast.error(error.message);
       toast.success(`${u.email} agora é admin`);
     }

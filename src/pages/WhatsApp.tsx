@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Search, Bot, User, Phone, MessageCircle, RefreshCw, Loader2, Copy, ExternalLink, FileDown, UserCheck, Save } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 
@@ -90,7 +90,7 @@ export default function WhatsAppPage() {
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("chat_messages")
       .select("*")
       .order("created_at", { ascending: false })
@@ -182,7 +182,7 @@ export default function WhatsAppPage() {
     if (digits.length < 8) return;
     setLeadLoading(true);
     // Buscamos em dados_cliente que parece ser o padrão aqui
-    const { data } = await supabase
+    const { data } = await api
       .from("dados_cliente")
       .select("id, nomewpp, Setor")
       .ilike("telefone", `%${digits.slice(-9)}%`)
@@ -201,7 +201,7 @@ export default function WhatsAppPage() {
   const salvarStatusLead = async () => {
     if (!lead) return;
     setLeadSaving(true);
-    const { error } = await supabase
+    const { error } = await api
       .from("dados_cliente")
       .update({ Setor: leadStatus })
       .eq("id", lead.id);
@@ -215,7 +215,7 @@ export default function WhatsAppPage() {
   };
 
   const abrirConversa = async (c: Conversa) => {
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("chat_messages")
       .select("*")
       .eq("phone", c.session_id)

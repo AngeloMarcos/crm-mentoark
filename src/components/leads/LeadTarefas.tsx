@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,7 +54,7 @@ export function LeadTarefas({
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("tarefas")
       .select("id, titulo, status, prioridade, prazo, concluida_at")
       .eq("contato_id", contatoId)
@@ -72,7 +72,7 @@ export function LeadTarefas({
   const criar = async () => {
     if (!user || !titulo.trim()) return;
     setSaving(true);
-    const { error } = await supabase.from("tarefas").insert({
+    const { error } = await api.from("tarefas").insert({
       user_id: user.id,
       contato_id: contatoId,
       titulo: titulo.trim(),
@@ -94,7 +94,7 @@ export function LeadTarefas({
 
   const toggleConcluida = async (t: Tarefa, checked: boolean) => {
     const novoStatus = checked ? "concluida" : "pendente";
-    const { error } = await supabase
+    const { error } = await api
       .from("tarefas")
       .update({
         status: novoStatus,
@@ -114,7 +114,7 @@ export function LeadTarefas({
   };
 
   const excluir = async (id: string) => {
-    const { error } = await supabase.from("tarefas").delete().eq("id", id);
+    const { error } = await api.from("tarefas").delete().eq("id", id);
     if (error) {
       toast.error("Erro ao excluir");
       return;

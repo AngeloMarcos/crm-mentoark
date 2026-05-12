@@ -35,7 +35,7 @@ const categories = [
   {
     label: "Dados",
     items: [
-      { type: "supabase_query", label: "Query Banco", icon: Search, color: "text-cyan-500", defaults: { operation: "select", tableName: "contatos", columns: "*", limit: 10 } },
+      { type: "database_query", label: "Query Banco", icon: Search, color: "text-cyan-500", defaults: { operation: "select", tableName: "contatos", columns: "*", limit: 10 } },
       { type: "lead_capture", label: "Capturar Lead", icon: UserPlus, color: "text-teal-500", defaults: { phoneField: "{{phone}}", nameField: "{{nome}}", emailField: "", initialStage: "novo" } },
     ],
   },

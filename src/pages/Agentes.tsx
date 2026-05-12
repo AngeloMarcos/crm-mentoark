@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CRMLayout } from "@/components/CRMLayout";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -106,7 +106,7 @@ export default function AgentesPage() {
   const carregar = async () => {
     if (!user) return;
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("agentes")
       .select("*")
       .eq("user_id", user.id)
@@ -178,7 +178,7 @@ export default function AgentesPage() {
     };
 
     if (editing) {
-      const { error } = await supabase
+      const { error } = await api
         .from("agentes")
         .update(payload)
         .eq("id", editing.id);
@@ -189,7 +189,7 @@ export default function AgentesPage() {
       }
       toast.success("✅ Agente salvo!");
     } else {
-      const { error } = await supabase
+      const { error } = await api
         .from("agentes")
         .insert([{ ...payload, user_id: user.id }]);
       setSalvando(false);
@@ -207,7 +207,7 @@ export default function AgentesPage() {
 
   const remover = async (a: Agente) => {
     if (!confirm(`Remover o agente "${a.nome}"?`)) return;
-    const { error } = await supabase.from("agentes").delete().eq("id", a.id);
+    const { error } = await api.from("agentes").delete().eq("id", a.id);
     if (error) {
       toast.error(`Erro ao remover: ${error.message}`);
       return;

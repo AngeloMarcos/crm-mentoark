@@ -90,7 +90,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
     const whereClause = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
 
-    // Count-only mode (Supabase head: true)
+    // Count-only mode (Database head: true)
     if (req.query.head === '1' || req.query.head === 'true') {
       const r = await pool.query(`SELECT COUNT(*) FROM ${tableName}${whereClause}`, params);
       return res.json({ count: parseInt(r.rows[0].count, 10), data: null });
