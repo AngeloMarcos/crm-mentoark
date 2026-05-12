@@ -1069,11 +1069,12 @@ export default function DisparosPage() {
                   {(() => {
                     const total = activeDisparo.total_leads || 0;
                     const done = activeDisparo.enviados + activeDisparo.falhas;
-                    const pct = total ? Math.round((done / total) * 100) : 0;
+                    const totalEfetivo = activeLogs.filter(l => l.status !== 'invalido' && l.status !== 'duplicado').length || total;
+                    const pct = totalEfetivo ? Math.round((done / totalEfetivo) * 100) : 0;
                     return (
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">{done} / {total} processados</span>
+                          <span className="text-muted-foreground">{done} / {totalEfetivo} processados</span>
                           <span className="font-medium">{pct}%</span>
                         </div>
                         <Progress value={pct} className="h-2" />
@@ -1081,18 +1082,22 @@ export default function DisparosPage() {
                     );
                   })()}
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="rounded-md border border-border/60 p-3 text-center">
-                      <div className="text-xs text-muted-foreground">Pendentes</div>
-                      <div className="text-lg font-semibold">{Math.max(0, activeDisparo.total_leads - activeDisparo.enviados - activeDisparo.falhas)}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="rounded-md border border-border/60 p-2 text-center">
+                      <div className="text-[10px] text-muted-foreground uppercase">Pendentes</div>
+                      <div className="text-sm font-bold">{activeLogs.filter(l => l.status === 'pending').length}</div>
                     </div>
-                    <div className="rounded-md border border-success/30 bg-success/10 p-3 text-center">
-                      <div className="text-xs text-success">Enviados</div>
-                      <div className="text-lg font-semibold text-success">{activeDisparo.enviados}</div>
+                    <div className="rounded-md border border-success/30 bg-success/5 p-2 text-center">
+                      <div className="text-[10px] text-success uppercase">Enviados</div>
+                      <div className="text-sm font-bold text-success">{activeDisparo.enviados}</div>
                     </div>
-                    <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-center">
-                      <div className="text-xs text-destructive">Falhas</div>
-                      <div className="text-lg font-semibold text-destructive">{activeDisparo.falhas}</div>
+                    <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-center">
+                      <div className="text-[10px] text-destructive uppercase">Falhas Reais</div>
+                      <div className="text-sm font-bold text-destructive">{activeLogs.filter(l => l.status === 'failed').length}</div>
+                    </div>
+                    <div className="rounded-md border border-warning/30 bg-warning/5 p-2 text-center">
+                      <div className="text-[10px] text-warning uppercase">Inválidos</div>
+                      <div className="text-sm font-bold text-warning">{activeLogs.filter(l => l.status === 'invalido' || l.status === 'duplicado').length}</div>
                     </div>
                   </div>
 
