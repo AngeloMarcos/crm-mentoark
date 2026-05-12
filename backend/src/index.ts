@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 
 import { pool } from './db';
 import { authMiddleware } from './middleware';
@@ -18,6 +19,9 @@ import dashboardRouter from './routes/dashboard';
 import usuariosRouter from './routes/usuarios';
 import functionsRouter from './routes/functions';
 import leadsBuscarRouter from './routes/leads-buscar';
+import catalogoRouter from './routes/catalogo';
+
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 
 const app = express();
 
@@ -41,8 +45,53 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+// ── Servir imagens de upload (público, sem JWT) ──────────────
+app.use('/uploads', express.static(UPLOADS_DIR));
+
 // ── Public routes ───────────────────────────────────────────
 app.use('/auth', authRouter);
+
+// Endpoint público do catálogo para n8n (sem JWT)
+app.get('/api/catalogo/n8n/:userId', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT c.id AS catalogo_id, c.nome AS catalogo, c.descricao AS catalogo_descricao,
+              p.id AS produto_id, p.nome AS produto, p.descricao, p.preco,
+              pi.url AS imagem_url, pi.legenda, pi.ordem AS imagem_ordem
+       FROM catalogos c
+       JOIN produtos p ON p.catalogo_id = c.id AND p.ativo = true
+       LEFT JOIN produto_imagens pi ON pi.produto_id = p.id
+       WHERE c.user_id = $1 AND c.ativo = true
+       ORDER BY c.id, p.ordem ASC, pi.ordem ASC`,
+      [req.params.userId]
+    );
+    const catalogMap = new Map<string, any>();
+    for (const row of r.rows) {
+      if (!catalogMap.has(row.catalogo_id)) {
+        catalogMap.set(row.catalogo_id, {
+          id: row.catalogo_id, nome: row.catalogo,
+          descricao: row.catalogo_descricao, produtos: new Map(),
+        });
+      }
+      const cat = catalogMap.get(row.catalogo_id)!;
+      if (!cat.produtos.has(row.produto_id)) {
+        cat.produtos.set(row.produto_id, {
+          id: row.produto_id, nome: row.produto,
+          descricao: row.descricao, preco: row.preco, imagens: [],
+        });
+      }
+      if (row.imagem_url) {
+        cat.produtos.get(row.produto_id)!.imagens.push({ url: row.imagem_url, legenda: row.legenda });
+      }
+    }
+    const result = Array.from(catalogMap.values()).map(c => ({
+      ...c, produtos: Array.from(c.produtos.values()),
+    }));
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
+});
 
 // ── Protected routes (JWT required) ─────────────────────────
 app.use('/api', authMiddleware);
@@ -81,6 +130,9 @@ app.use('/api/leads', leadsBuscarRouter(pool));
 
 // Virtual tables for Supabase compatibility
 app.use('/api', usuariosRouter(pool));
+
+// Catálogo (protegido — vem depois do authMiddleware)
+app.use('/api/catalogo', catalogoRouter(pool));
 
 // ── Health check ─────────────────────────────────────────────
 app.get('/health', async (_req, res) => {

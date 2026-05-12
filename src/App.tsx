@@ -22,6 +22,8 @@ import AgentesPage from "./pages/Agentes";
 import UsuariosPage from "./pages/Usuarios";
 import WorkflowsPage from "./pages/Workflows";
 import DocsPage from "./pages/Docs";
+import CatalogoPage from "./pages/Catalogo";
+import CatalogoDetalhePage from "./pages/CatalogoDetalhe";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -52,6 +54,8 @@ const App = () => (
               <Route path="/workflows" element={<ProtectedRoute><WorkflowsPage /></ProtectedRoute>} />
               <Route path="/usuarios" element={<ProtectedRoute requireAdmin><UsuariosPage /></ProtectedRoute>} />
               <Route path="/docs" element={<ProtectedRoute><DocsPage /></ProtectedRoute>} />
+              <Route path="/catalogo" element={<ProtectedRoute><CatalogoPage /></ProtectedRoute>} />
+              <Route path="/catalogo/:id" element={<ProtectedRoute><CatalogoDetalhePage /></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </AuthProvider>
