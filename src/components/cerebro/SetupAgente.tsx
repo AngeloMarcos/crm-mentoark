@@ -222,10 +222,14 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
         ativo: true,
         created_by: user.email
       });
-
+      
+      setSalvo(true);
       toast.success("Agente configurado com sucesso!");
-      onConcluir();
-      onClose();
+      
+      setTimeout(() => {
+        onConcluir();
+        onClose();
+      }, 1500);
     } catch (e) {
       toast.error("Erro ao salvar");
     } finally {
