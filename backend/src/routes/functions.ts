@@ -90,11 +90,11 @@ export default function functions(pool: Pool): Router {
       // Update invalid tags
       if (invalidosIds.size) {
         const ids = Array.from(invalidosIds);
-        const rows = (await pool.query(`SELECT id, tags FROM contatos WHERE id = ANY($1)`, [ids])).rows;
+        const rows = (await pool.query(`SELECT id, tags FROM contatos WHERE id = ANY($1) AND user_id = $2`, [ids, userId])).rows;
         for (const c of rows) {
           const tags: string[] = Array.isArray(c.tags) ? c.tags : [];
           if (!tags.includes('whatsapp_invalido')) {
-            await pool.query(`UPDATE contatos SET tags = $1 WHERE id = $2`, [[...tags, 'whatsapp_invalido'], c.id]);
+            await pool.query(`UPDATE contatos SET tags = $1 WHERE id = $2 AND user_id = $3`, [[...tags, 'whatsapp_invalido'], c.id, userId]);
           }
         }
       }
