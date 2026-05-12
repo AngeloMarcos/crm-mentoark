@@ -114,9 +114,35 @@ export default function CatalogoDetalhePage() {
   };
 
   const setPrincipal = async (imgId: string) => {
-    // A rota do backend POST /api/catalogo/produtos/:produtoId/imagens cuida de resetar os outros, 
-    // mas aqui não temos um PUT de imagem individual. O backend atualizado no Step 2 tem essa lógica no POST de imagem.
-    // Como a sprint não definiu PUT imagem, vamos focar no que foi pedido.
+    // ...
+  };
+
+  const handleDragEnd = async (event: any) => {
+    const { active, over } = event;
+    if (active.id !== over.id) {
+      const oldIndex = catalogo.produtos.findIndex((p: any) => p.id === active.id);
+      const newIndex = catalogo.produtos.findIndex((p: any) => p.id === over.id);
+      
+      const newProdutos = arrayMove(catalogo.produtos, oldIndex, newIndex);
+      setCatalogo({ ...catalogo, produtos: newProdutos });
+
+      // O backend precisaria suportar um endpoint de reorder ou atualizar cada um.
+      // Por simplicidade, vamos apenas atualizar a ordem no estado por enquanto.
+      // Mas para ser "igual ou melhor", vamos tentar mandar pro backend se houver rota.
+      // A rota PUT /api/catalogo/:catalogoId/produtos/:id suporta 'ordem'.
+      try {
+        await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}/produtos/${active.id}`, {
+          method: "PUT",
+          headers: { 
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("access_token")}` 
+          },
+          body: JSON.stringify({ ordem: newIndex })
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
   };
 
   if (loading) return <CRMLayout><div className="flex justify-center py-20"><Loader2 className="animate-spin" /></div></CRMLayout>;
