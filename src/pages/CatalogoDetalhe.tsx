@@ -191,6 +191,13 @@ export default function CatalogoDetalhePage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <SendWhatsAppModal
+        open={modalSend.open}
+        onOpenChange={(open) => setModalSend(prev => ({ ...prev, open }))}
+        type={modalSend.type}
+        id={modalSend.id}
+      />
     </CRMLayout>
   );
 }
