@@ -20,6 +20,7 @@ import usuariosRouter from './routes/usuarios';
 import functionsRouter from './routes/functions';
 import leadsBuscarRouter from './routes/leads-buscar';
 import catalogoRouter from './routes/catalogo';
+import { initCronJobs } from './cron';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 
@@ -153,6 +154,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 const PORT = parseInt(process.env.PORT || '3000', 10);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`API running on port ${PORT}`);
+  initCronJobs();
 });
 
 export default app;
