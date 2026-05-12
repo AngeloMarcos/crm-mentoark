@@ -220,5 +220,22 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     return res.status(204).send();
   }));
 
+  // DELETE / (bulk delete por filtros de query string)
+  router.delete('/', wrap(async (req: AuthRequest, res: Response) => {
+    const userId = userIdCol ? req.userId ?? null : null;
+    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
+
+    const { conditions, params } = buildWhere(req.query as any, userIdCol, userId);
+
+    // Nunca deletar tudo sem nenhum filtro
+    if (!conditions.length) {
+      return res.status(400).json({ message: 'Bulk delete requer pelo menos um filtro' });
+    }
+
+    const sql = `DELETE FROM ${tableName} WHERE ${conditions.join(' AND ')}`;
+    await pool.query(sql, params);
+    return res.status(204).send();
+  }));
+
   return router;
 }
