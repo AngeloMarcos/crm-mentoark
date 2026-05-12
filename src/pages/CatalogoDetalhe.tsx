@@ -5,15 +5,15 @@ import { api, uploadImagem } from "@/integrations/database/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, ArrowLeft, Pencil, Trash2, Loader2, ImageOff, Star, Copy, Image as ImageIcon, Send } from "lucide-react";
+import { Plus, ArrowLeft, Pencil, Trash2, Loader2, ImageOff, Star, Copy, Image as ImageIcon, Send, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Search } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { SendWhatsAppModal } from "@/components/catalogo/SendWhatsAppModal";
 import { 
   DndContext, 
@@ -71,30 +71,60 @@ export default function CatalogoDetalhePage() {
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await api.from("catalogos").select("*").eq("id", id).single();
-    if (error) toast.error("Erro ao carregar catálogo");
-    else {
+    try {
       const res = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
       });
+      if (!res.ok) throw new Error("Erro ao carregar catálogo");
       const dataFull = await res.json();
       setCatalogo(dataFull);
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
+  };
+
+  const carregarGaleria = async () => {
+    try {
+      const r = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/galeria?limit=40&q=${pickerSearch}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+      });
+      const d = await r.json();
+      setGaleriaImagens(d.images || []);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   useEffect(() => { carregar(); }, [id]);
 
+  useEffect(() => {
+    if (modalPicker) carregarGaleria();
+  }, [modalPicker, pickerSearch]);
+
   const salvarProduto = async () => {
-    if (editingProduto) {
-      await api.from(`catalogos/${id}/produtos`).update(form).eq("id", editingProduto.id);
-      toast.success("Produto atualizado");
-    } else {
-      await api.from(`catalogos/${id}/produtos`).insert([form]);
-      toast.success("Produto criado");
+    const url = editingProduto 
+      ? `/api/catalogo/${id}/produtos/${editingProduto.id}`
+      : `/api/catalogo/${id}/produtos`;
+    
+    try {
+      const r = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}${url}`, {
+        method: editingProduto ? "PUT" : "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token")}` 
+        },
+        body: JSON.stringify(form)
+      });
+      if (r.ok) {
+        toast.success(editingProduto ? "Produto atualizado" : "Produto criado");
+        setModalProduto(false);
+        carregar();
+      }
+    } catch (err: any) {
+      toast.error(err.message);
     }
-    setModalProduto(false);
-    carregar();
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -105,7 +135,7 @@ export default function CatalogoDetalhePage() {
       }
       toast.success("Upload concluído");
       carregar();
-      // Atualiza o activeProduto com os novos dados
+      // Refresh active product images
       const updatedRes = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
       });
@@ -116,18 +146,6 @@ export default function CatalogoDetalhePage() {
       toast.error(err.message);
     }
   };
-
-  const carregarGaleria = async () => {
-    const r = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/galeria?limit=40&q=${pickerSearch}`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
-    });
-    const d = await r.json();
-    setGaleriaImagens(d.images || []);
-  };
-
-  useEffect(() => {
-    if (modalPicker) carregarGaleria();
-  }, [modalPicker, pickerSearch]);
 
   const vincularImagem = async (galeriaId: string) => {
     if (!activeProduto) return;
@@ -157,10 +175,6 @@ export default function CatalogoDetalhePage() {
     }
   };
 
-  const setPrincipal = async (imgId: string) => {
-    // ...
-  };
-
   const handleDragEnd = async (event: any) => {
     const { active, over } = event;
     if (active.id !== over.id) {
@@ -170,10 +184,6 @@ export default function CatalogoDetalhePage() {
       const newProdutos = arrayMove(catalogo.produtos, oldIndex, newIndex);
       setCatalogo({ ...catalogo, produtos: newProdutos });
 
-      // O backend precisaria suportar um endpoint de reorder ou atualizar cada um.
-      // Por simplicidade, vamos apenas atualizar a ordem no estado por enquanto.
-      // Mas para ser "igual ou melhor", vamos tentar mandar pro backend se houver rota.
-      // A rota PUT /api/catalogo/:catalogoId/produtos/:id suporta 'ordem'.
       try {
         await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}/produtos/${active.id}`, {
           method: "PUT",
@@ -227,7 +237,7 @@ export default function CatalogoDetalhePage() {
                     onSend={() => setModalSend({ open: true, type: "product", id: p.id })}
                     onImages={() => { setActiveProduto(p); setModalGaleria(true); }}
                     onEdit={() => { setEditingProduto(p); setForm({...p, preco: p.preco||0, preco_promocional: p.preco_promocional||0, estoque: p.estoque||0, descricao: p.descricao||"", codigo: p.codigo||""}); setModalProduto(true); }}
-                    onDelete={async () => { if(confirm("Remover produto?")) { await api.from(`catalogos/${id}/produtos`).delete().eq("id", p.id); carregar(); } }}
+                    onDelete={async () => { if(confirm("Remover produto?")) { await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}/produtos/${p.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` } }); carregar(); } }}
                   />
                 ))}
               </div>
@@ -240,7 +250,7 @@ export default function CatalogoDetalhePage() {
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{editingProduto ? "Editar" : "Novo"} Produto</DialogTitle></DialogHeader>
           <Tabs defaultValue="dados">
-            <TabsList><TabsTrigger value="dados">Dados</TabsTrigger><TabsTrigger value="imagens">Imagens</TabsTrigger></TabsList>
+            <TabsList><TabsTrigger value="dados">Dados</TabsTrigger></TabsList>
             <TabsContent value="dados" className="space-y-3 pt-4">
               <Input placeholder="Nome" value={form.nome} onChange={(e) => setForm({...form, nome: e.target.value})} />
               <Textarea placeholder="Descrição" value={form.descricao} onChange={(e) => setForm({...form, descricao: e.target.value})} />
@@ -251,9 +261,6 @@ export default function CatalogoDetalhePage() {
               <Input placeholder="Código" value={form.codigo} onChange={(e) => setForm({...form, codigo: e.target.value})} />
               <div className="flex items-center gap-2"><Switch checked={form.ativo} onCheckedChange={(v) => setForm({...form, ativo: v})} /> Ativo</div>
             </TabsContent>
-            <TabsContent value="imagens" className="pt-4">
-              <p className="text-sm text-muted-foreground">Salve o produto primeiro para gerenciar imagens.</p>
-            </TabsContent>
           </Tabs>
           <DialogFooter><Button onClick={salvarProduto}>Salvar</Button></DialogFooter>
         </DialogContent>
@@ -262,21 +269,62 @@ export default function CatalogoDetalhePage() {
       <Dialog open={modalGaleria} onOpenChange={setModalGaleria}>
         <DialogContent className="max-w-3xl">
           <DialogHeader><DialogTitle>Galeria: {activeProduto?.nome}</DialogTitle></DialogHeader>
-          <div className="grid grid-cols-3 gap-2 py-4">
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 py-4">
             {activeProduto?.imagens?.map(img => (
               <div key={img.id} className="relative group">
                 <img src={img.url} className="w-full aspect-square object-cover rounded" />
                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition-opacity">
-                  <Button size="icon" variant="ghost" onClick={() => { navigator.clipboard.writeText(img.url); toast.success("URL copiada"); }}><Copy className="h-4 w-4" /></Button>
-                  <Button size="icon" variant="ghost" onClick={async () => { await api.from("catalogo/imagens").delete().eq("id", img.id); carregar(); }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                  <Button size="icon" variant="ghost" className="text-white hover:text-white hover:bg-white/20" onClick={() => { navigator.clipboard.writeText(img.url); toast.success("URL copiada"); }}><Copy className="h-4 w-4" /></Button>
+                  <Button size="icon" variant="ghost" className="text-white hover:text-red-400 hover:bg-white/20" onClick={async () => { if(confirm("Remover imagem?")) { await api.from("catalogo/imagens").delete().eq("id", img.id); carregar(); } }}><Trash2 className="h-4 w-4" /></Button>
                 </div>
                 {img.principal && <Star className="absolute top-1 left-1 h-4 w-4 fill-yellow-400 text-yellow-400" />}
               </div>
             ))}
-            <label className="border-2 border-dashed rounded flex flex-col items-center justify-center aspect-square cursor-pointer hover:bg-muted">
-              <Plus /> <span className="text-xs">Upload</span>
+            <label className="border-2 border-dashed rounded flex flex-col items-center justify-center aspect-square cursor-pointer hover:bg-muted text-muted-foreground transition-colors">
+              <Plus className="h-6 w-6 mb-1" /> <span className="text-[10px]">Upload</span>
               <input type="file" hidden multiple accept="image/*" onChange={handleUpload} />
             </label>
+            <Button 
+              variant="outline" 
+              className="border-2 border-dashed flex flex-col items-center justify-center aspect-square h-auto text-muted-foreground"
+              onClick={() => setModalPicker(true)}
+            >
+              <ImageIcon className="h-6 w-6 mb-1" />
+              <span className="text-[10px]">Galeria</span>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={modalPicker} onOpenChange={setModalPicker}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle>Selecionar da Galeria</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="relative">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input 
+                placeholder="Buscar na galeria..." 
+                className="pl-8" 
+                value={pickerSearch} 
+                onChange={e => setPickerSearch(e.target.value)} 
+              />
+            </div>
+            <ScrollArea className="h-[400px]">
+              <div className="grid grid-cols-4 gap-2">
+                {galeriaImagens.map(img => (
+                  <div 
+                    key={img.id} 
+                    className="aspect-square relative group cursor-pointer border-2 border-transparent hover:border-primary rounded overflow-hidden"
+                    onClick={() => vincularImagem(img.id)}
+                  >
+                    <img src={img.url} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <Plus className="text-white h-6 w-6" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
           </div>
         </DialogContent>
       </Dialog>
