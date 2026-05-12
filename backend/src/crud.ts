@@ -86,6 +86,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
   // GET all (with optional count=only)
   router.get('/', wrap(async (req: AuthRequest, res: Response) => {
     const userId = userIdCol ? req.userId ?? null : null;
+    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
     const { conditions, params, nextIdx } = buildWhere(req.query as any, userIdCol, userId);
 
     const whereClause = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
