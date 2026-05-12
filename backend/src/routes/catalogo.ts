@@ -217,7 +217,7 @@ export default function catalogoRouter(pool: Pool): Router {
 
   // ── ENDPOINT PÚBLICO PARA O N8N ──────────────────────────
   // GET /api/catalogo/n8n/:userId — sem autenticação JWT, para o agente n8n buscar produtos
-  router.get('/n8n/:userId', async (req: Request, res: Response) => {
+  router.get('/fetch/:userId', async (req: Request, res: Response) => {
     try {
       const { catalogo_id, nome } = req.query;
       let sql = `
