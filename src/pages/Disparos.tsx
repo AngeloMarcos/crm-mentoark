@@ -147,7 +147,7 @@ function IntervaloEditor({
   useEffect(() => { setMaxStr(String(intervaloMax)); }, [intervaloMax]);
 
   const persistir = async (min: number, max: number) => {
-    const minClamp = Math.max(1, Math.min(3600, Math.floor(min) || 1));
+    const minClamp = Math.max(30, Math.min(3600, Math.floor(min) || 30));
     const maxClamp = Math.max(minClamp, Math.min(3600, Math.floor(max) || minClamp));
     setMinStr(String(minClamp));
     setMaxStr(String(maxClamp));
@@ -186,7 +186,7 @@ function IntervaloEditor({
           <Label className="text-[11px] text-muted-foreground">Mín (segundos)</Label>
           <Input
             type="number"
-            min={1}
+            min={30}
             max={3600}
             value={minStr}
             onChange={(e) => setMinStr(e.target.value)}
@@ -199,7 +199,7 @@ function IntervaloEditor({
           <Label className="text-[11px] text-muted-foreground">Máx (segundos)</Label>
           <Input
             type="number"
-            min={1}
+            min={30}
             max={3600}
             value={maxStr}
             onChange={(e) => setMaxStr(e.target.value)}
@@ -339,6 +339,7 @@ export default function DisparosPage() {
         .from("contatos")
         .select("id, nome, telefone, empresa")
         .eq("user_id", user.id).eq("lista_id", listaId)
+        .eq("opt_out", false)
         .not("telefone", "is", null);
       setListaContatos((data as Contato[]) ?? []);
     };
@@ -604,7 +605,7 @@ export default function DisparosPage() {
     if (pauseFlagRef.current.has(d.id)) return;
 
     // Sortear intervalo e agendar próximo (clamp defensivo: min>=1, max>=min)
-    const minS = Math.max(1, Number(d.intervalo_min) || 1);
+    const minS = Math.max(30, Number(d.intervalo_min) || 30);
     const maxS = Math.max(minS, Number(d.intervalo_max) || minS);
     const intervalo = Math.floor(Math.random() * (maxS - minS + 1)) + minS;
     const ms = intervalo * 1000;
@@ -702,10 +703,13 @@ export default function DisparosPage() {
   };
   const reenviarFalhas = async () => {
     if (!logsDisparo) return;
-    const { error } = await api.from("disparo_logs")
-      .update({ status: "pending", erro: null }).eq("disparo_id", logsDisparo.id).eq("status", "failed");
+    const { count, error } = await api.from("disparo_logs")
+      .update({ status: "pending", erro: null })
+      .eq("disparo_id", logsDisparo.id)
+      .eq("status", "failed")
+      .lte("tentativas", 3);
     if (error) { toast.error(error.message); return; }
-    toast.success("Falhas resetadas para pending");
+    toast.success(`${count || 0} falhas resetadas para reenvio (máx 3 tentativas)`);
     await carregarLogs(logsDisparo.id);
   };
   const filteredLogs = useMemo(
@@ -1065,11 +1069,12 @@ export default function DisparosPage() {
                   {(() => {
                     const total = activeDisparo.total_leads || 0;
                     const done = activeDisparo.enviados + activeDisparo.falhas;
-                    const pct = total ? Math.round((done / total) * 100) : 0;
+                    const totalEfetivo = activeLogs.filter(l => l.status !== 'invalido' && l.status !== 'duplicado').length || total;
+                    const pct = totalEfetivo ? Math.round((done / totalEfetivo) * 100) : 0;
                     return (
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">{done} / {total} processados</span>
+                          <span className="text-muted-foreground">{done} / {totalEfetivo} processados</span>
                           <span className="font-medium">{pct}%</span>
                         </div>
                         <Progress value={pct} className="h-2" />
@@ -1077,18 +1082,22 @@ export default function DisparosPage() {
                     );
                   })()}
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="rounded-md border border-border/60 p-3 text-center">
-                      <div className="text-xs text-muted-foreground">Pendentes</div>
-                      <div className="text-lg font-semibold">{Math.max(0, activeDisparo.total_leads - activeDisparo.enviados - activeDisparo.falhas)}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="rounded-md border border-border/60 p-2 text-center">
+                      <div className="text-[10px] text-muted-foreground uppercase">Pendentes</div>
+                      <div className="text-sm font-bold">{activeLogs.filter(l => l.status === 'pending').length}</div>
                     </div>
-                    <div className="rounded-md border border-success/30 bg-success/10 p-3 text-center">
-                      <div className="text-xs text-success">Enviados</div>
-                      <div className="text-lg font-semibold text-success">{activeDisparo.enviados}</div>
+                    <div className="rounded-md border border-success/30 bg-success/5 p-2 text-center">
+                      <div className="text-[10px] text-success uppercase">Enviados</div>
+                      <div className="text-sm font-bold text-success">{activeDisparo.enviados}</div>
                     </div>
-                    <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-center">
-                      <div className="text-xs text-destructive">Falhas</div>
-                      <div className="text-lg font-semibold text-destructive">{activeDisparo.falhas}</div>
+                    <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-center">
+                      <div className="text-[10px] text-destructive uppercase">Falhas Reais</div>
+                      <div className="text-sm font-bold text-destructive">{activeLogs.filter(l => l.status === 'failed').length}</div>
+                    </div>
+                    <div className="rounded-md border border-warning/30 bg-warning/5 p-2 text-center">
+                      <div className="text-[10px] text-warning uppercase">Inválidos</div>
+                      <div className="text-sm font-bold text-warning">{activeLogs.filter(l => l.status === 'invalido' || l.status === 'duplicado').length}</div>
                     </div>
                   </div>
 
