@@ -23,8 +23,8 @@ const items = [
   { title: "Campanhas",         url: "/campanhas",   icon: Megaphone       },
   { title: "Integrações",       url: "/integracoes", icon: Plug            },
   { title: "Agentes",           url: "/agentes",     icon: Bot             },
-  { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain           },
   { title: "Catálogo",          url: "/catalogo",    icon: LayoutGrid      },
+  { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain           },
   { title: "Documentação",     url: "/docs",        icon: BookOpen        },
 ];
 

@@ -26,7 +26,6 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 const app = express();
 
 // ── Middleware ──────────────────────────────────────────────
-// CORS: aceita origens fixas + qualquer subdomínio lovable.app/lovableproject.com
 const staticOrigins = (process.env.CORS_ORIGIN || 'https://crm.mentoark.com.br')
   .split(',')
   .map(s => s.trim())
@@ -38,7 +37,7 @@ app.use(cors({
     if (staticOrigins.includes(origin)) return cb(null, true);
     if (/\.lovable\.app$/.test(new URL(origin).hostname)) return cb(null, true);
     if (/\.lovableproject\.com$/.test(new URL(origin).hostname)) return cb(null, true);
-    if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
+    if (process.env.NODE_ENV !== 'production' && /^https?:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
     return cb(new Error(`CORS bloqueado: ${origin}`));
   },
   credentials: true,
@@ -107,6 +106,9 @@ const SIMPLE_TABLES = [
   'agentes',
   'conhecimento',
   'integracoes_config',
+  'catalogos',
+  'produtos',
+  'produto_imagens',
 ];
 for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
@@ -127,12 +129,10 @@ app.use('/api/n8n_chat_histories', n8nChatRouter(pool));
 app.use('/api/dashboard', dashboardRouter(pool));
 app.use('/api/functions', functionsRouter(pool));
 app.use('/api/leads', leadsBuscarRouter(pool));
-
-// Virtual tables for Supabase compatibility
-app.use('/api', usuariosRouter(pool));
-
-// Catálogo (protegido — vem depois do authMiddleware)
 app.use('/api/catalogo', catalogoRouter(pool));
+
+// Virtual tables for Database compatibility
+app.use('/api', usuariosRouter(pool));
 
 // ── Health check ─────────────────────────────────────────────
 app.get('/health', async (_req, res) => {

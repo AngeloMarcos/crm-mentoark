@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Copy, Save, Loader2, Eye, RotateCcw, Trash2, FileCode, Code2 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 
 interface AgentPrompt {
@@ -63,7 +63,7 @@ export function PromptAgente() {
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await (supabase as any)
+    const { data, error } = await (api as any)
       .from("agent_prompts")
       .select("*")
       .order("created_at", { ascending: false });
@@ -82,8 +82,8 @@ export function PromptAgente() {
     if (!novoNome.trim() || !editor.trim()) return toast.error("Preencha nome e conteúdo");
     setSalvando(true);
     // desativa atuais
-    await (supabase as any).from("agent_prompts").update({ ativo: false }).eq("user_id", user.id).eq("ativo", true);
-    const { error } = await (supabase as any).from("agent_prompts").insert({
+    await (api as any).from("agent_prompts").update({ ativo: false }).eq("user_id", user.id).eq("ativo", true);
+    const { error } = await (api as any).from("agent_prompts").insert({
       user_id: user.id,
       nome: novoNome.trim(),
       conteudo: editor,
@@ -100,15 +100,15 @@ export function PromptAgente() {
 
   const restaurar = async (p: AgentPrompt) => {
     if (!user) return;
-    await (supabase as any).from("agent_prompts").update({ ativo: false }).eq("user_id", user.id).eq("ativo", true);
-    const { error } = await (supabase as any).from("agent_prompts").update({ ativo: true }).eq("id", p.id);
+    await (api as any).from("agent_prompts").update({ ativo: false }).eq("user_id", user.id).eq("ativo", true);
+    const { error } = await (api as any).from("agent_prompts").update({ ativo: true }).eq("id", p.id);
     if (error) return toast.error(error.message);
     toast.success(`Versão "${p.nome}" ativada`);
     carregar();
   };
 
   const deletar = async (p: AgentPrompt) => {
-    const { error } = await (supabase as any).from("agent_prompts").delete().eq("id", p.id);
+    const { error } = await (api as any).from("agent_prompts").delete().eq("id", p.id);
     if (error) return toast.error(error.message);
     toast.success("Versão removida");
     carregar();

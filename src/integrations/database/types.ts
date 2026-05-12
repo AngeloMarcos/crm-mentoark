@@ -9,7 +9,7 @@ export type Json =
 export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
+  __InternalDatabase: {
     PostgrestVersion: "14.5"
   }
   public: {
@@ -789,6 +789,139 @@ export type Database = {
         }
         Relationships: []
       }
+      catalogos: {
+        Row: {
+          ativo: boolean
+          capa_url: string | null
+          created_at: string
+          descricao: string | null
+          id: string
+          nome: string
+          ordem: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean
+          capa_url?: string | null
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          nome: string
+          ordem?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean
+          capa_url?: string | null
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          nome?: string
+          ordem?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      produtos: {
+        Row: {
+          ativo: boolean
+          catalogo_id: string
+          codigo: string | null
+          created_at: string
+          descricao: string | null
+          estoque: number | null
+          id: string
+          nome: string
+          ordem: number | null
+          preco: number | null
+          preco_promocional: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean
+          catalogo_id: string
+          codigo?: string | null
+          created_at?: string
+          descricao?: string | null
+          estoque?: number | null
+          id?: string
+          nome: string
+          ordem?: number | null
+          preco?: number | null
+          preco_promocional?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean
+          catalogo_id?: string
+          codigo?: string | null
+          created_at?: string
+          descricao?: string | null
+          estoque?: number | null
+          id?: string
+          nome?: string
+          ordem?: number | null
+          preco?: number | null
+          preco_promocional?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "produtos_catalogo_id_fkey"
+            columns: ["catalogo_id"]
+            isOneToOne: false
+            referencedRelation: "catalogos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      produto_imagens: {
+        Row: {
+          created_at: string
+          id: string
+          legenda: string | null
+          ordem: number | null
+          principal: boolean
+          produto_id: string
+          url: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          legenda?: string | null
+          ordem?: number | null
+          principal?: boolean
+          produto_id: string
+          url: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          legenda?: string | null
+          ordem?: number | null
+          principal?: boolean
+          produto_id?: string
+          url?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "produto_imagens_produto_id_fkey"
+            columns: ["produto_id"]
+            isOneToOne: false
+            referencedRelation: "produtos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       dashboard_resumo: {
@@ -820,7 +953,7 @@ export type Database = {
   }
 }
 
-type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+type DatabaseWithoutInternals = Omit<Database, "__InternalDatabase">
 
 type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
 

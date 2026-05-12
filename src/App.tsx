@@ -20,6 +20,8 @@ import IntegracoesPage from "./pages/Integracoes";
 import CerebroPage from "./pages/Cerebro";
 import AgentesPage from "./pages/Agentes";
 import UsuariosPage from "./pages/Usuarios";
+import CatalogoPage from "./pages/Catalogo";
+import CatalogoDetalhePage from "./pages/CatalogoDetalhe";
 import WorkflowsPage from "./pages/Workflows";
 import DocsPage from "./pages/Docs";
 import CatalogoPage from "./pages/Catalogo";
@@ -51,6 +53,8 @@ const App = () => (
               <Route path="/integracoes" element={<ProtectedRoute><IntegracoesPage /></ProtectedRoute>} />
               <Route path="/cerebro" element={<ProtectedRoute><CerebroPage /></ProtectedRoute>} />
               <Route path="/agentes" element={<ProtectedRoute><AgentesPage /></ProtectedRoute>} />
+              <Route path="/catalogo" element={<ProtectedRoute><CatalogoPage /></ProtectedRoute>} />
+              <Route path="/catalogo/:id" element={<ProtectedRoute><CatalogoDetalhePage /></ProtectedRoute>} />
               <Route path="/workflows" element={<ProtectedRoute><WorkflowsPage /></ProtectedRoute>} />
               <Route path="/usuarios" element={<ProtectedRoute requireAdmin><UsuariosPage /></ProtectedRoute>} />
               <Route path="/docs" element={<ProtectedRoute><DocsPage /></ProtectedRoute>} />

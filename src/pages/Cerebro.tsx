@@ -16,9 +16,9 @@ import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
 import { TestarAgente } from "@/components/cerebro/TestarAgente";
 import { PromptAgente } from "@/components/cerebro/PromptAgente";
 import { Configuracoes } from "@/components/cerebro/Configuracoes";
-import { GeradorPrompt } from "@/components/cerebro/GeradorPrompt";
+// GeradorPrompt removido pois agora está integrado no SetupAgente
 import { SetupAgente } from "@/components/cerebro/SetupAgente";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 
 // ============ TYPES ============
@@ -428,7 +428,7 @@ export default function CerebroPage() {
   const carregar = useCallback(async () => {
     if (!user) return;
     setLoading(true);
-    const { data, error } = await (supabase as any)
+    const { data, error } = await (api as any)
       .from("conhecimento")
       .select("id, tipo, categoria, campo, conteudo, contexto, indexado")
       .eq("user_id", user.id)
@@ -472,7 +472,7 @@ export default function CerebroPage() {
     onSave: async (item: Partial<ConhecimentoItem> & { id?: string }) => {
       if (!user) return toast.error("Faça login");
       if (item.id) {
-        const { error } = await (supabase as any)
+        const { error } = await (api as any)
           .from("conhecimento")
           .update({
             categoria: item.categoria ?? null,
@@ -485,7 +485,7 @@ export default function CerebroPage() {
         if (error) return toast.error(error.message);
         toast.success("Atualizado");
       } else {
-        const { error } = await (supabase as any).from("conhecimento").insert({
+        const { error } = await (api as any).from("conhecimento").insert({
           user_id: user.id,
           tipo,
           categoria: item.categoria ?? null,
@@ -500,7 +500,7 @@ export default function CerebroPage() {
       carregar();
     },
     onDelete: async (id: string) => {
-      const { error } = await (supabase as any).from("conhecimento").delete().eq("id", id);
+      const { error } = await (api as any).from("conhecimento").delete().eq("id", id);
       if (error) return toast.error(error.message);
       toast.success("Removido");
       setItens((prev) => prev.filter((i) => i.id !== id));
@@ -581,7 +581,7 @@ export default function CerebroPage() {
         return;
       }
 
-      const { error } = await (supabase as any).from("conhecimento").insert(registros);
+      const { error } = await (api as any).from("conhecimento").insert(registros);
       if (error) {
         toast.error("Erro ao importar: " + error.message);
         return;
@@ -721,7 +721,6 @@ export default function CerebroPage() {
                 <TabsTrigger value="prompt"><FileCode className="h-4 w-4 mr-1" /> Prompt</TabsTrigger>
                 <TabsTrigger value="testar"><MessageCircle className="h-4 w-4 mr-1" /> Testar</TabsTrigger>
                 <TabsTrigger value="config"><Settings className="h-4 w-4 mr-1" /> Configurações</TabsTrigger>
-                <TabsTrigger value="gerador"><Wand2 className="h-4 w-4 mr-1" /> Gerador IA</TabsTrigger>
               </TabsList>
             </div>
 
@@ -751,9 +750,6 @@ export default function CerebroPage() {
             </TabsContent>
             <TabsContent value="config" className="mt-4">
               <Configuracoes />
-            </TabsContent>
-            <TabsContent value="gerador" className="mt-4">
-              <GeradorPrompt />
             </TabsContent>
           </Tabs>
         )}

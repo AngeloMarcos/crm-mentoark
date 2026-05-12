@@ -1,14 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, ChevronRight, ChevronLeft, Building2, Bot, FileCode, MessageCircle, Check, Copy, Wand2 } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, ChevronRight, ChevronLeft, Building2, Bot, Wrench, MessageCircle, Code2, Check, Copy, Wand2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 
 interface Props {
@@ -20,527 +24,620 @@ interface Props {
 const STEPS = [
   { id: 1, label: "Negócio", icon: Building2 },
   { id: 2, label: "Personalidade", icon: Bot },
-  { id: 3, label: "Prompt", icon: FileCode },
-  { id: 4, label: "WhatsApp", icon: MessageCircle },
+  { id: 3, label: "Ferramentas", icon: Wrench },
+  { id: 4, label: "Fluxo", icon: MessageCircle },
+  { id: 5, label: "Config", icon: Code2 },
 ];
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
+const IDIOMAS = ["Português BR", "Português PT", "Espanhol", "Inglês"];
 const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
-
-function gerarPrompt(neg: NegocioData, per: PersonalidadeData): string {
-  const emoji =
-    per.emojis === "bastante"
-      ? "Use emojis de forma natural e frequente para tornar a conversa mais leve."
-      : per.emojis === "nao"
-      ? "NÃO utilize emojis."
-      : "Use emojis com moderação para tornar a conversa mais amigável.";
-
-  return `Você é ${per.nome || "[nome do agente]"}, atendente digital da ${neg.empresa || "[empresa]"}.
-
-## SOBRE A EMPRESA
-${neg.empresa} atua no segmento de ${neg.segmento} e oferece ${neg.vende}.
-Diferencial competitivo: ${neg.diferencial}
-
-## PRODUTO / SERVIÇO
-Nome: ${neg.produto_nome}${neg.produto_preco ? `\nPreço: ${neg.produto_preco}` : ""}
-Benefícios: ${neg.produto_beneficios}
-
-## CLIENTE IDEAL
-${neg.cliente_ideal}
-Principais dores: ${neg.dores}
-Objeções comuns: ${neg.objecoes}
-
-## SUA PERSONALIDADE
-Tom de voz: ${per.tom}
-${per.persona ? `Persona: ${per.persona}` : ""}
-${emoji}
-
-## OBJETIVO
-${per.objetivo}
-${per.cta ? `CTA principal: ${per.cta}` : ""}
-
-## REGRAS — O QUE VOCÊ DEVE FAZER
-${per.deve_fazer || "- Ser sempre cordial e prestativo\n- Responder de forma clara e objetiva\n- Qualificar o lead antes de apresentar o produto"}
-
-## REGRAS — O QUE VOCÊ NÃO DEVE FAZER
-${per.nao_fazer || "- NÃO inventar informações sobre produtos ou preços\n- NÃO prometer prazos ou descontos sem autorização\n- NUNCA ser rude ou impaciente"}
-
-## QUANDO TRANSFERIR PARA HUMANO
-${per.quando_transferir || "Quando o cliente solicitar explicitamente falar com um atendente humano ou quando a situação exigir autorização especial."}
-
-${per.horario ? `## HORÁRIO DE ATENDIMENTO\n${per.horario}\nFora desse horário, informe quando estará disponível e ofereça enviar informações por escrito.` : ""}
-
----
-Responda SEMPRE em ${per.idioma || "Português BR"}.
-Seja conciso — respostas curtas, diretas e envolventes.`;
-}
-
-interface NegocioData {
-  empresa: string;
-  segmento: string;
-  vende: string;
-  diferencial: string;
-  produto_nome: string;
-  produto_preco: string;
-  produto_beneficios: string;
-  cliente_ideal: string;
-  dores: string;
-  objecoes: string;
-}
-
-interface PersonalidadeData {
-  nome: string;
-  tom: string;
-  persona: string;
-  objetivo: string;
-  cta: string;
-  horario: string;
-  deve_fazer: string;
-  nao_fazer: string;
-  quando_transferir: string;
-  emojis: string;
-  idioma: string;
-  modelo: string;
-  temperatura: number;
-}
-
-interface WhatsAppData {
-  evolution_server_url: string;
-  evolution_api_key: string;
-  evolution_instancia: string;
-}
-
-const negInicial: NegocioData = {
-  empresa: "", segmento: "", vende: "", diferencial: "",
-  produto_nome: "", produto_preco: "", produto_beneficios: "",
-  cliente_ideal: "", dores: "", objecoes: "",
-};
-
-const perInicial: PersonalidadeData = {
-  nome: "", tom: "profissional", persona: "", objetivo: "Qualificar leads e apresentar o produto",
-  cta: "", horario: "", deve_fazer: "", nao_fazer: "", quando_transferir: "",
-  emojis: "moderado", idioma: "Português BR", modelo: "gpt-4o-mini", temperatura: 0.7,
-};
-
-const waInicial: WhatsAppData = {
-  evolution_server_url: "", evolution_api_key: "", evolution_instancia: "",
-};
 
 export function SetupAgente({ open, onClose, onConcluir }: Props) {
   const { user } = useAuth();
   const [step, setStep] = useState(1);
-  const [neg, setNeg] = useState<NegocioData>(negInicial);
-  const [per, setPer] = useState<PersonalidadeData>(perInicial);
-  const [wa, setWa] = useState<WhatsAppData>(waInicial);
-  const [prompt, setPrompt] = useState("");
-  const [promptNome, setPromptNome] = useState("Prompt Principal v1");
   const [salvando, setSalvando] = useState(false);
   const [testando, setTestando] = useState(false);
 
-  function atualizarNeg(k: keyof NegocioData, v: string) {
-    setNeg((p) => ({ ...p, [k]: v }));
-  }
-  function atualizarPer(k: keyof PersonalidadeData, v: string | number) {
-    setPer((p) => ({ ...p, [k]: v }));
-  }
+  const [data, setData] = useState({
+    // Passo 1: Negócio
+    agente_nome: "", empresa: "", segmento: "", vende: "", diferencial: "",
+    produto_nome: "", produto_preco: "", produto_beneficios: "",
+    cliente_ideal: "", dores: "",
+    // Passo 2: Personalidade
+    tom: "profissional", emojis: "moderado", idioma: "Português BR", persona: "",
+    objetivo: "", cta: "", horario: "", deve_fazer: "", nao_fazer: "",
+    quando_transferir: "", modelo: "gpt-4o-mini", temperatura: 0.7,
+    // Passo 3
+    ferramentas: [
+      { id: "cerebro", nome: "Cerebro", ativa: true, desc: "Use para buscar informações sobre produtos, serviços e FAQ. Nunca invente — acione o Cerebro.", extra: {} },
+      { id: "criar_reuniao", nome: "criar_reuniao", ativa: true, desc: "Agenda reunião. Coleta obrigatoriamente: nome completo, e-mail e data/hora. ISO 8601 fuso -03:00. Duração: 50 min.", extra: { duracao: 50 } },
+      { id: "cancelar_reuniao", nome: "cancelar_reuniao", ativa: true, desc: "Cancela agendamento. Coleta o e-mail usado no agendamento.", extra: {} },
+      { id: "reagendar_reuniao", nome: "reagendar_reuniao", ativa: true, desc: "Reagenda. Coleta e-mail e novo horário.", extra: {} },
+      { id: "transferir_humano", nome: "transferir_humano", ativa: true, desc: "Transfere para atendente humano quando solicitado ou necessário.", extra: {} }
+    ],
+    // Passo 4
+    abertura: "",
+    qualificacao: [""],
+    objecoes: [
+      { gatilho: "Não tenho tempo", resposta: "Sem problema! Pode ser num horário flexível. Qual funciona melhor?" },
+      { gatilho: "Vou pensar", resposta: "Claro! Ficou alguma dúvida que posso esclarecer? 😊" },
+      { gatilho: "Tá caro", resposta: "Entendo! Me conta qual faixa faria sentido — provavelmente tenho algo que se encaixa." }
+    ],
+    follow_up: { dia_1: "Oi! Passando para ver se conseguiu ler minha última mensagem.", dia_3: "Ainda interessado? Ficamos à disposição para tirar qualquer dúvida.", dia_7: "Notei que ainda não decidimos o próximo passo. Gostaria de encerrar por aqui ou agendamos um papo rápido?" },
+    encerramento: "",
+    // Passo 5
+    webhook_principal: "", webhook_indexacao: "", webhook_teste: "",
+    evolution_server_url: "", evolution_api_key: "", evolution_instancia: "",
+    rag_threshold: 0.7, rag_resultados: 5, rag_ativo: true
+  });
 
-  function irParaStep(n: number) {
-    if (n === 3) setPrompt(gerarPrompt(neg, per));
-    setStep(n);
-  }
+  const update = (key: string, val: any) => setData(p => ({ ...p, [key]: val }));
 
-  async function testarConexaoEvolution() {
-    if (!wa.evolution_server_url || !wa.evolution_api_key) {
-      return toast.error("Preencha URL e API Key primeiro");
-    }
+  const addQualificacao = () => {
+    if (data.qualificacao.length < 8) update("qualificacao", [...data.qualificacao, ""]);
+  };
+
+  const updateQualificacao = (i: number, val: string) => {
+    const list = [...data.qualificacao];
+    list[i] = val;
+    update("qualificacao", list);
+  };
+
+  const removeQualificacao = (i: number) => {
+    update("qualificacao", data.qualificacao.filter((_, idx) => idx !== i));
+  };
+
+  const addObjecao = () => {
+    if (data.objecoes.length < 6) update("objecoes", [...data.objecoes, { gatilho: "", resposta: "" }]);
+  };
+
+  const updateObjecao = (i: number, key: "gatilho" | "resposta", val: string) => {
+    const list = [...data.objecoes];
+    list[i][key] = val;
+    update("objecoes", list);
+  };
+
+  const removeObjecao = (i: number) => {
+    update("objecoes", data.objecoes.filter((_, idx) => idx !== i));
+  };
+
+  const addFerramentaPersonalizada = () => {
+    const nome = prompt("Nome da ferramenta:");
+    if (!nome) return;
+    update("ferramentas", [...data.ferramentas, { id: `custom_${Date.now()}`, nome, ativa: true, desc: "", extra: {} }]);
+  };
+
+  const testarEvolution = async () => {
+    if (!data.evolution_server_url || !data.evolution_api_key) return toast.error("Preencha os dados da Evolution");
     setTestando(true);
     try {
-      const res = await fetch(`${wa.evolution_server_url}/instance/fetchInstances`, {
-        headers: { apikey: wa.evolution_api_key },
+      const res = await fetch(`${data.evolution_server_url}/instance/fetchInstances`, {
+        headers: { apikey: data.evolution_api_key }
       });
-      if (res.ok) toast.success("Conexão com Evolution OK!");
-      else toast.error("Falha na conexão: " + res.status);
-    } catch {
-      toast.error("Não foi possível conectar ao Evolution");
-    } finally {
-      setTestando(false);
-    }
-  }
+      if (res.ok) toast.success("Conexão OK!");
+      else toast.error("Falha na conexão");
+    } catch { toast.error("Erro de conexão"); }
+    finally { setTestando(false); }
+  };
 
-  async function salvarTudo() {
-    if (!user) return toast.error("Faça login");
+  const jsonGerado = () => {
+    const json = {
+      agente: {
+        nome: data.agente_nome || "⚠️ NOME AUSENTE",
+        empresa: data.empresa || "⚠️ EMPRESA AUSENTE",
+        segmento: data.segmento,
+        idioma: data.idioma,
+        modelo: data.modelo,
+        temperatura: data.temperatura
+      },
+      identidade: `Você é ${data.agente_nome || "[Nome]"}, atendente da ${data.empresa || "[Empresa]"}. ${data.persona}`,
+      sobre_empresa: `${data.empresa} atua em ${data.segmento}. Diferenciais: ${data.diferencial}`,
+      produto: { nome: data.produto_nome, preco: data.produto_preco, beneficios: data.produto_beneficios },
+      cliente_ideal: { perfil: data.cliente_ideal, dores: data.dores },
+      tom_de_voz: {
+        estilo: data.tom,
+        emojis: data.emojis,
+        regras: ["Mensagens curtas", "Nunca mais de 3 linhas", "Ser direto e cordial"]
+      },
+      ferramentas: data.ferramentas.filter(f => f.ativa).map(f => ({ nome: f.nome, descricao: f.desc })),
+      fluxo_atendimento: {
+        abertura: data.abertura || "⚠️ MENSAGEM DE ABERTURA AUSENTE",
+        qualificacao: data.qualificacao.filter(Boolean),
+        objetivo: data.objetivo || "⚠️ OBJETIVO AUSENTE",
+        cta: data.cta
+      },
+      objecoes: data.objecoes.filter(o => o.gatilho).map(o => ({ gatilho: o.gatilho, resposta: o.resposta })),
+      follow_up: data.follow_up,
+      encerramento: data.encerramento,
+      regras_inviolaveis: data.nao_fazer.split("\n").filter(Boolean),
+      deve_fazer: data.deve_fazer.split("\n").filter(Boolean),
+      quando_transferir: data.quando_transferir,
+      horario_atendimento: data.horario,
+      objetivo_final: data.objetivo
+    };
+    return json;
+  };
+
+  const salvar = async () => {
+    if (!user) return;
     setSalvando(true);
     try {
-      const uid = user.id;
+      const json = jsonGerado();
 
-      // 1. Salva conhecimento tipo 'negocio'
-      const camposNegocio = [
-        { campo: "empresa", conteudo: neg.empresa },
-        { campo: "segmento", conteudo: neg.segmento },
-        { campo: "vende", conteudo: neg.vende },
-        { campo: "diferencial", conteudo: neg.diferencial },
-        { campo: "produto_nome", conteudo: neg.produto_nome },
-        { campo: "produto_preco", conteudo: neg.produto_preco },
-        { campo: "produto_beneficios", conteudo: neg.produto_beneficios },
-        { campo: "cliente_ideal", conteudo: neg.cliente_ideal },
-        { campo: "dores", conteudo: neg.dores },
-        { campo: "objecoes", conteudo: neg.objecoes },
-      ].filter((c) => c.conteudo.trim());
+      // Salva conhecimento individualmente para aparecer nas abas do Cerebro
+      await api.from("conhecimento").delete().eq("user_id", user.id).in("tipo", ["negocio", "personalidade"]);
+      
+      const conhecimentoRows: any[] = [];
+      
+      // Negócio
+      const fieldsNeg = ["empresa", "segmento", "vende", "diferencial", "produto_nome", "produto_preco", "produto_beneficios", "cliente_ideal", "dores"];
+      fieldsNeg.forEach(f => {
+        if (data[f as keyof typeof data]) {
+          conhecimentoRows.push({ user_id: user.id, tipo: "negocio", campo: f, conteudo: String(data[f as keyof typeof data]), indexado: false });
+        }
+      });
 
-      for (const c of camposNegocio) {
-        await supabase.from("conhecimento").insert({
-          user_id: uid, tipo: "negocio",
-          campo: c.campo, conteudo: c.conteudo, indexado: false,
-        });
+      // Personalidade
+      const fieldsPer = ["tom", "emojis", "idioma", "persona", "objetivo", "cta", "horario", "deve_fazer", "nao_fazer", "quando_transferir"];
+      fieldsPer.forEach(f => {
+        if (data[f as keyof typeof data]) {
+          conhecimentoRows.push({ user_id: user.id, tipo: "personalidade", campo: f, conteudo: String(data[f as keyof typeof data]), indexado: false });
+        }
+      });
+
+      if (conhecimentoRows.length > 0) {
+        await api.from("conhecimento").insert(conhecimentoRows);
       }
 
-      // 2. Salva conhecimento tipo 'personalidade'
-      const camposPersonalidade = [
-        { campo: "nome_agente", conteudo: per.nome },
-        { campo: "tom_de_voz", conteudo: per.tom },
-        { campo: "persona", conteudo: per.persona },
-        { campo: "objetivo", conteudo: per.objetivo },
-        { campo: "deve_fazer", conteudo: per.deve_fazer },
-        { campo: "nao_fazer", conteudo: per.nao_fazer },
-        { campo: "quando_transferir", conteudo: per.quando_transferir },
-      ].filter((c) => c.conteudo.trim());
-
-      for (const c of camposPersonalidade) {
-        await supabase.from("conhecimento").insert({
-          user_id: uid, tipo: "personalidade",
-          campo: c.campo, conteudo: c.conteudo, indexado: false,
-        });
-      }
-
-      // 3. Salva ou atualiza agente
-      const { data: agentesExist } = await supabase
-        .from("agentes")
-        .select("id")
-        .eq("user_id", uid)
-        .limit(1);
-
-      const agenteDados = {
-        user_id: uid,
-        nome: per.nome || "Agente Principal",
-        persona: per.persona,
-        tom: per.tom,
-        objetivo: per.objetivo,
-        modelo: per.modelo,
-        temperatura: per.temperatura,
-        evolution_server_url: wa.evolution_server_url || null,
-        evolution_api_key: wa.evolution_api_key || null,
-        evolution_instancia: wa.evolution_instancia || null,
-        ativo: true,
+      // Atualiza agentes
+      const { data: agente } = await api.from("agentes").select("id").eq("user_id", user.id).maybeSingle();
+      const agenteData = {
+        user_id: user.id,
+        nome: data.agente_nome,
+        evolution_server_url: data.evolution_server_url,
+        evolution_api_key: data.evolution_api_key,
+        evolution_instancia: data.evolution_instancia,
+        webhook_principal: data.webhook_principal,
+        webhook_indexacao: data.webhook_indexacao,
+        webhook_teste: data.webhook_teste,
+        rag_threshold: data.rag_threshold,
+        rag_resultados: data.rag_resultados,
+        rag_ativo: data.rag_ativo,
+        modelo: data.modelo,
+        temperatura: data.temperatura,
+        ativo: true
       };
 
-      if (agentesExist && agentesExist.length > 0) {
-        await supabase.from("agentes").update(agenteDados).eq("id", agentesExist[0].id);
-      } else {
-        await supabase.from("agentes").insert(agenteDados);
-      }
+      if (agente) await api.from("agentes").update(agenteData).eq("id", agente.id);
+      else await api.from("agentes").insert(agenteData);
 
-      // 4. Desativa prompts anteriores e salva novo como ativo
-      await supabase.from("agent_prompts").update({ ativo: false }).eq("user_id", uid);
-      await supabase.from("agent_prompts").insert({
-        user_id: uid,
-        nome: promptNome,
-        conteudo: prompt,
+      // Prompt
+      await api.from("agent_prompts").update({ ativo: false }).eq("user_id", user.id);
+      await api.from("agent_prompts").insert({
+        user_id: user.id,
+        nome: `Wizard Prompt ${new Date().toLocaleDateString()}`,
+        conteudo: JSON.stringify(json, null, 2),
         ativo: true,
-        created_by: user.email,
+        created_by: user.email
       });
 
       toast.success("Agente configurado com sucesso!");
       onConcluir();
       onClose();
-    } catch (err: any) {
-      toast.error(err?.message || "Erro ao salvar configurações");
+    } catch (e) {
+      toast.error("Erro ao salvar");
     } finally {
       setSalvando(false);
     }
-  }
+  };
 
-  function resetar() {
-    setStep(1);
-    setNeg(negInicial);
-    setPer(perInicial);
-    setWa(waInicial);
-    setPrompt("");
-  }
+  const StepIcon = ({ id, active, done }: { id: number, active: boolean, done: boolean }) => {
+    const Icon = STEPS.find(s => s.id === id)!.icon;
+    return (
+      <div className={`flex flex-col items-center gap-1 flex-1 ${active ? "text-primary" : done ? "text-success" : "text-muted-foreground"}`}>
+        <div className={`p-2 rounded-full ${active ? "bg-primary/10" : done ? "bg-success/10" : "bg-muted"}`}>
+          {done ? <Check className="h-5 w-5" /> : <Icon className="h-5 w-5" />}
+        </div>
+        <span className="text-[10px] uppercase font-bold tracking-wider">{STEPS.find(s => s.id === id)!.label}</span>
+      </div>
+    );
+  };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) { resetar(); onClose(); } }}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-xl">
-            <Wand2 className="h-5 w-5 text-primary" />
-            Configurar Agente IA
-          </DialogTitle>
-        </DialogHeader>
-
-        {/* Stepper */}
-        <div className="flex items-center gap-1 mb-6">
-          {STEPS.map((s, i) => {
-            const Icon = s.icon;
-            const active = step === s.id;
-            const done = step > s.id;
-            return (
-              <div key={s.id} className="flex items-center gap-1 flex-1">
-                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
-                  done ? "bg-success/15 text-success" :
-                  active ? "bg-primary/15 text-primary" :
-                  "bg-muted text-muted-foreground"
-                }`}>
-                  {done ? <Check className="h-3.5 w-3.5" /> : <Icon className="h-3.5 w-3.5" />}
-                  <span className="hidden sm:inline">{s.label}</span>
-                </div>
-                {i < STEPS.length - 1 && (
-                  <div className={`h-px flex-1 mx-1 ${step > s.id ? "bg-success/40" : "bg-border"}`} />
-                )}
-              </div>
-            );
-          })}
+    <Dialog open={open} onOpenChange={v => !v && onClose()}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0">
+        <div className="p-6 border-b bg-muted/30">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Wand2 className="h-5 w-5 text-primary" /> Setup do Agente</DialogTitle></DialogHeader>
+          <div className="flex justify-between mt-6 relative">
+            <div className="absolute top-4 left-0 right-0 h-0.5 bg-muted -z-10" />
+            {STEPS.map(s => <StepIcon key={s.id} id={s.id} active={step === s.id} done={step > s.id} />)}
+          </div>
         </div>
 
-        {/* ── STEP 1: NEGÓCIO ── */}
-        {step === 1 && (
-          <div className="space-y-5">
-            <p className="text-sm text-muted-foreground">
-              Conte-nos sobre seu negócio. Essas informações alimentarão o cérebro do agente.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Nome da empresa *</Label>
-                <Input placeholder="Ex: MentoArk" value={neg.empresa} onChange={(e) => atualizarNeg("empresa", e.target.value)} />
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* PASSO 1: NEGÓCIO */}
+          {step === 1 && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Nome do Agente</Label>
+                  <Input placeholder="Ex: Sofia" value={data.agente_nome} onChange={e => update("agente_nome", e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Nome da Empresa</Label>
+                  <Input placeholder="Ex: Imobiliária Central" value={data.empresa} onChange={e => update("empresa", e.target.value)} />
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label>Segmento de atuação *</Label>
-                <Input placeholder="Ex: Educação, SaaS, Varejo..." value={neg.segmento} onChange={(e) => atualizarNeg("segmento", e.target.value)} />
+              <div className="space-y-2">
+                <Label>Segmento</Label>
+                <Input placeholder="Ex: Imóveis residenciais" value={data.segmento} onChange={e => update("segmento", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>O que você vende/oferece?</Label>
+                <Input placeholder="Ex: Apartamentos de alto padrão" value={data.vende} onChange={e => update("vende", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Diferencial Competitivo</Label>
+                <Input placeholder="Ex: Atendimento 24h e tour virtual" value={data.diferencial} onChange={e => update("diferencial", e.target.value)} />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Produto/Plano Principal</Label>
+                  <Input placeholder="Ex: Consultoria Premium" value={data.produto_nome} onChange={e => update("produto_nome", e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Preço</Label>
+                  <Input placeholder="Ex: R$ 497/mês" value={data.produto_preco} onChange={e => update("produto_preco", e.target.value)} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Principais Benefícios</Label>
+                <Textarea placeholder="Descreva os ganhos do cliente..." value={data.produto_beneficios} onChange={e => update("produto_beneficios", e.target.value)} rows={2} />
+              </div>
+              <div className="space-y-2">
+                <Label>Quem é o cliente ideal?</Label>
+                <Input placeholder="Ex: Investidores de imóveis" value={data.cliente_ideal} onChange={e => update("cliente_ideal", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Principais Dores do Cliente</Label>
+                <Textarea placeholder="O que tira o sono do seu cliente?" value={data.dores} onChange={e => update("dores", e.target.value)} rows={2} />
               </div>
             </div>
-            <div className="space-y-1.5">
-              <Label>O que você vende? *</Label>
-              <Input placeholder="Ex: Plataforma de automação comercial com IA" value={neg.vende} onChange={(e) => atualizarNeg("vende", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Diferencial competitivo</Label>
-              <Input placeholder="Ex: Única plataforma que integra WhatsApp + CRM + IA em um só lugar" value={neg.diferencial} onChange={(e) => atualizarNeg("diferencial", e.target.value)} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Nome do produto/plano principal</Label>
-                <Input placeholder="Ex: Plano Pro" value={neg.produto_nome} onChange={(e) => atualizarNeg("produto_nome", e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Preço / Investimento</Label>
-                <Input placeholder="Ex: R$ 497/mês" value={neg.produto_preco} onChange={(e) => atualizarNeg("produto_preco", e.target.value)} />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Principais benefícios do produto</Label>
-              <Textarea rows={2} placeholder="Ex: Automatiza 80% dos atendimentos, aumenta conversão em 3x, reduz custo operacional" value={neg.produto_beneficios} onChange={(e) => atualizarNeg("produto_beneficios", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Quem é seu cliente ideal?</Label>
-              <Input placeholder="Ex: Pequenas e médias empresas com time de vendas ativo" value={neg.cliente_ideal} onChange={(e) => atualizarNeg("cliente_ideal", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Principais dores do cliente</Label>
-              <Textarea rows={2} placeholder="Ex: Perde leads por falta de follow-up, atendimento lento, equipe sobrecarregada" value={neg.dores} onChange={(e) => atualizarNeg("dores", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Objeções mais comuns</Label>
-              <Textarea rows={2} placeholder="Ex: 'É muito caro', 'Não tenho tempo para implementar', 'Já tenho um sistema'" value={neg.objecoes} onChange={(e) => atualizarNeg("objecoes", e.target.value)} />
-            </div>
-          </div>
-        )}
+          )}
 
-        {/* ── STEP 2: PERSONALIDADE ── */}
-        {step === 2 && (
-          <div className="space-y-5">
-            <p className="text-sm text-muted-foreground">
-              Defina como seu agente vai se comportar e se comunicar.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Nome do agente *</Label>
-                <Input placeholder="Ex: Sofia, Max, Ara..." value={per.nome} onChange={(e) => atualizarPer("nome", e.target.value)} />
+          {/* PASSO 2: PERSONALIDADE */}
+          {step === 2 && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label>Tom de Voz</Label>
+                  <Select value={data.tom} onValueChange={v => update("tom", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {TONS.map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Uso de Emojis</Label>
+                  <Select value={data.emojis} onValueChange={v => update("emojis", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="bastante">Bastante</SelectItem>
+                      <SelectItem value="moderado">Moderado</SelectItem>
+                      <SelectItem value="nao">Não usar</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Idioma</Label>
+                  <Select value={data.idioma} onValueChange={v => update("idioma", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {IDIOMAS.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label>Tom de voz *</Label>
-                <Select value={per.tom} onValueChange={(v) => atualizarPer("tom", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {TONS.map((t) => <SelectItem key={t} value={t} className="capitalize">{t.charAt(0).toUpperCase() + t.slice(1)}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+              <div className="space-y-2">
+                <Label>Persona</Label>
+                <Textarea placeholder="Como o agente se apresenta e se comporta?" value={data.persona} onChange={e => update("persona", e.target.value)} rows={3} />
               </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Persona / Apresentação</Label>
-              <Textarea rows={2} placeholder="Ex: Sou especialista em automação comercial e estou aqui para ajudar você a escalar suas vendas sem aumentar a equipe." value={per.persona} onChange={(e) => atualizarPer("persona", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Objetivo principal da conversa *</Label>
-              <Input placeholder="Ex: Qualificar o lead e agendar uma demonstração" value={per.objetivo} onChange={(e) => atualizarPer("objetivo", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>CTA (chamada para ação)</Label>
-              <Input placeholder="Ex: Agendar demo gratuita, Enviar proposta, Fazer cadastro" value={per.cta} onChange={(e) => atualizarPer("cta", e.target.value)} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Uso de emojis</Label>
-                <Select value={per.emojis} onValueChange={(v) => atualizarPer("emojis", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="bastante">Usar bastante 😊🎯🚀</SelectItem>
-                    <SelectItem value="moderado">Usar com moderação</SelectItem>
-                    <SelectItem value="nao">Não usar</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Objetivo Principal</Label>
+                  <Input placeholder="Ex: Qualificar lead e agendar reunião" value={data.objetivo} onChange={e => update("objetivo", e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>CTA Principal</Label>
+                  <Input placeholder="Ex: Agendar demonstração gratuita" value={data.cta} onChange={e => update("cta", e.target.value)} />
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label>Horário de atendimento</Label>
-                <Input placeholder="Ex: Seg a Sex, 8h às 18h" value={per.horario} onChange={(e) => atualizarPer("horario", e.target.value)} />
+              <div className="space-y-2">
+                <Label>Horário de Atendimento Humano</Label>
+                <Input placeholder="Ex: Seg-Sex, 9h às 18h" value={data.horario} onChange={e => update("horario", e.target.value)} />
               </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>O agente DEVE fazer</Label>
-              <Textarea rows={2} placeholder="Ex: Sempre perguntar o nome do cliente&#10;Confirmar interesse antes de apresentar preço&#10;Oferecer conteúdo de valor" value={per.deve_fazer} onChange={(e) => atualizarPer("deve_fazer", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>O agente NÃO DEVE fazer</Label>
-              <Textarea rows={2} placeholder="Ex: NÃO inventar preços ou prazos&#10;NUNCA falar mal de concorrentes&#10;PROIBIDO dar desconto sem aprovação" value={per.nao_fazer} onChange={(e) => atualizarPer("nao_fazer", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Quando transferir para humano?</Label>
-              <Input placeholder="Ex: Quando o cliente pedir ou quando houver reclamação grave" value={per.quando_transferir} onChange={(e) => atualizarPer("quando_transferir", e.target.value)} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Modelo LLM</Label>
-                <Select value={per.modelo} onValueChange={(v) => atualizarPer("modelo", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {MODELOS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+              <div className="space-y-2">
+                <Label>O agente DEVE fazer</Label>
+                <Textarea placeholder="Regra 1&#10;Regra 2..." value={data.deve_fazer} onChange={e => update("deve_fazer", e.target.value)} rows={3} />
               </div>
-              <div className="space-y-1.5">
-                <Label>Temperatura: <span className="text-primary font-mono">{per.temperatura}</span></Label>
-                <input
-                  type="range" min={0} max={1} step={0.1}
-                  value={per.temperatura}
-                  onChange={(e) => atualizarPer("temperatura", parseFloat(e.target.value))}
-                  className="w-full accent-primary"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Preciso</span><span>Criativo</span>
+              <div className="space-y-2">
+                <Label>O agente NÃO DEVE fazer</Label>
+                <Textarea placeholder="Regra 1&#10;Regra 2..." value={data.nao_fazer} onChange={e => update("nao_fazer", e.target.value)} rows={3} />
+              </div>
+              <div className="space-y-2">
+                <Label>Critério de Transferência</Label>
+                <Input placeholder="Quando o cliente pedir falar com humano..." value={data.quando_transferir} onChange={e => update("quando_transferir", e.target.value)} />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                <div className="space-y-2">
+                  <Label>Modelo de IA</Label>
+                  <Select value={data.modelo} onValueChange={v => update("modelo", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MODELOS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <Label>Temperatura</Label>
+                    <span className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">{data.temperatura}</span>
+                  </div>
+                  <Slider value={[data.temperatura]} min={0} max={1} step={0.1} onValueChange={([v]) => update("temperatura", v)} className="py-2" />
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* ── STEP 3: PROMPT ── */}
-        {step === 3 && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">
-                Prompt gerado automaticamente. Revise e edite à vontade.
-              </p>
-              <Button variant="outline" size="sm" onClick={() => setPrompt(gerarPrompt(neg, per))}>
-                <Wand2 className="h-3.5 w-3.5 mr-1" /> Regenerar
-              </Button>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Nome desta versão</Label>
-              <Input value={promptNome} onChange={(e) => setPromptNome(e.target.value)} placeholder="Ex: Prompt Principal v1" />
-            </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between mb-1">
-                <Label>Prompt do sistema</Label>
-                <Button variant="ghost" size="sm" onClick={() => { navigator.clipboard.writeText(prompt); toast.success("Copiado!"); }}>
-                  <Copy className="h-3.5 w-3.5 mr-1" /> Copiar
+          {/* PASSO 3: FERRAMENTAS */}
+          {step === 3 && (
+            <div className="space-y-4">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="text-lg font-semibold">Ferramentas do workflow n8n</h3>
+                  <p className="text-sm text-muted-foreground">Selecione as ferramentas que seu workflow disponibiliza para o agente.</p>
+                </div>
+                <Button size="sm" variant="outline" onClick={addFerramentaPersonalizada}>
+                  <Plus className="h-4 w-4 mr-2" /> Personalizada
                 </Button>
               </div>
-              <Textarea
-                rows={18}
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                className="font-mono text-sm resize-none"
-                placeholder="O prompt será gerado com base nas informações preenchidas..."
-              />
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{prompt.length} caracteres</span>
-                <span>{prompt.split(/\s+/).filter(Boolean).length} palavras</span>
+              
+              <div className="grid gap-4">
+                {data.ferramentas.map((f, i) => (
+                  <Card key={f.id} className={`p-4 transition-colors ${f.ativa ? "border-primary/50 bg-primary/5" : "opacity-70"}`}>
+                    <div className="flex items-start gap-4">
+                      <div className="pt-1">
+                        <Switch 
+                          checked={f.ativa} 
+                          onCheckedChange={v => {
+                            const list = [...data.ferramentas];
+                            list[i].ativa = !!v;
+                            update("ferramentas", list);
+                          }} 
+                        />
+                      </div>
+                      <div className="flex-1 space-y-3">
+                        <div className="flex justify-between">
+                          <Label className="text-base font-bold">{f.nome}</Label>
+                          {f.id.startsWith("custom_") && (
+                            <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => update("ferramentas", data.ferramentas.filter((_, idx) => idx !== i))}>
+                              <Trash2 className="h-3 w-3 text-destructive" />
+                            </Button>
+                          )}
+                        </div>
+                        <Textarea 
+                          placeholder="Descrição da ferramenta para a IA..." 
+                          value={f.desc} 
+                          onChange={e => {
+                            const list = [...data.ferramentas];
+                            list[i].desc = e.target.value;
+                            update("ferramentas", list);
+                          }}
+                          className="text-sm min-h-[60px]"
+                        />
+                        {f.id === "criar_reuniao" && f.ativa && (
+                          <div className="flex items-center gap-3 pt-1">
+                            <Label className="text-xs">Duração em minutos:</Label>
+                            <Input 
+                              type="number" 
+                              className="w-20 h-8" 
+                              value={f.extra?.duracao || 50} 
+                              onChange={e => {
+                                const list = [...data.ferramentas];
+                                list[i].extra = { ...f.extra, duracao: parseInt(e.target.value) || 50 };
+                                update("ferramentas", list);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+                ))}
               </div>
             </div>
-            <div className="flex flex-wrap gap-1">
-              {["PROIBIDO", "NUNCA", "SEMPRE", "OBRIGATÓRIO"].map((kw) =>
-                prompt.includes(kw) ? (
-                  <Badge key={kw} variant="outline" className="text-destructive border-destructive/30 text-xs">
-                    {kw} detectado
-                  </Badge>
-                ) : null
-              )}
-            </div>
-          </div>
-        )}
+          )}
 
-        {/* ── STEP 4: WHATSAPP ── */}
-        {step === 4 && (
-          <div className="space-y-5">
-            <p className="text-sm text-muted-foreground">
-              Configure a integração com o WhatsApp via Evolution API. <span className="text-primary">Opcional</span> — pode configurar depois em Agentes.
-            </p>
-            <div className="space-y-1.5">
-              <Label>URL do servidor Evolution</Label>
-              <Input placeholder="Ex: https://disparo.mentoark.com.br" value={wa.evolution_server_url} onChange={(e) => setWa((p) => ({ ...p, evolution_server_url: e.target.value }))} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>API Key</Label>
-              <Input type="password" placeholder="Sua apikey da Evolution" value={wa.evolution_api_key} onChange={(e) => setWa((p) => ({ ...p, evolution_api_key: e.target.value }))} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Nome da instância</Label>
-              <Input placeholder="Ex: mentoark-principal" value={wa.evolution_instancia} onChange={(e) => setWa((p) => ({ ...p, evolution_instancia: e.target.value }))} />
-            </div>
-            {wa.evolution_server_url && wa.evolution_api_key && (
-              <Button variant="outline" onClick={testarConexaoEvolution} disabled={testando}>
-                {testando ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                Testar Conexão
-              </Button>
-            )}
-            <div className="rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground space-y-1">
-              <p className="font-medium text-foreground">Resumo do que será salvo:</p>
-              <p>✓ {Object.values(neg).filter(Boolean).length} campos de negócio no Cérebro</p>
-              <p>✓ Personalidade do agente <strong>{per.nome || "sem nome"}</strong></p>
-              <p>✓ Prompt principal "{promptNome}" ativado</p>
-              {wa.evolution_instancia && <p>✓ WhatsApp: instância <strong>{wa.evolution_instancia}</strong></p>}
-            </div>
-          </div>
-        )}
+          {/* PASSO 4: FLUXO & OBJEÇÕES */}
+          {step === 4 && (
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <Label className="text-base font-bold">Mensagem de Abertura</Label>
+                <Textarea 
+                  placeholder="Mensagem exata do primeiro contato..." 
+                  value={data.abertura} 
+                  onChange={e => update("abertura", e.target.value)} 
+                  rows={3}
+                />
+              </div>
 
-        {/* Navegação */}
-        <div className="flex items-center justify-between pt-4 border-t">
-          <Button variant="outline" onClick={() => step > 1 ? setStep(step - 1) : onClose()} disabled={salvando}>
-            <ChevronLeft className="h-4 w-4 mr-1" />
-            {step === 1 ? "Cancelar" : "Voltar"}
-          </Button>
-          <div className="flex gap-2">
-            {step < 4 && (
-              <Button onClick={() => irParaStep(step + 1)}>
-                Próximo <ChevronRight className="h-4 w-4 ml-1" />
-              </Button>
-            )}
-            {step === 4 && (
-              <Button onClick={salvarTudo} disabled={salvando} className="gap-2">
-                {salvando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                Salvar e Ativar Agente
-              </Button>
-            )}
-          </div>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <Label className="text-base font-bold">Perguntas de Qualificação</Label>
+                  <Button size="sm" variant="outline" onClick={addQualificacao} disabled={data.qualificacao.length >= 8}>
+                    <Plus className="h-4 w-4 mr-1"/> Adicionar Pergunta
+                  </Button>
+                </div>
+                <div className="grid gap-2">
+                  {data.qualificacao.map((q, i) => (
+                    <div key={i} className="flex gap-2 items-center">
+                      <div className="flex-none w-6 h-6 rounded-full bg-muted flex items-center justify-center text-[10px] font-bold">{i+1}</div>
+                      <Input value={q} onChange={e => updateQualificacao(i, e.target.value)} placeholder={`Ex: Qual sua maior dificuldade hoje?`} />
+                      <Button size="icon" variant="ghost" onClick={() => removeQualificacao(i)} className="shrink-0"><Trash2 className="h-4 w-4 text-destructive"/></Button>
+                    </div>
+                  ))}
+                  {data.qualificacao.length === 0 && <p className="text-xs text-muted-foreground italic p-2 border border-dashed rounded text-center">Nenhuma pergunta adicionada.</p>}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <Label className="text-base font-bold">Tratamento de Objeções</Label>
+                  <Button size="sm" variant="outline" onClick={addObjecao} disabled={data.objecoes.length >= 8}>
+                    <Plus className="h-4 w-4 mr-1"/> Adicionar Objeção
+                  </Button>
+                </div>
+                <div className="grid gap-3">
+                  {data.objecoes.map((o, i) => (
+                    <Card key={i} className="p-3 border-l-4 border-l-primary/30 relative">
+                      <Button size="icon" variant="ghost" className="absolute top-1 right-1 h-6 w-6" onClick={() => removeObjecao(i)}><Trash2 className="h-3 w-3 text-destructive"/></Button>
+                      <div className="space-y-2 pr-6">
+                        <Input placeholder="Objeção do cliente (Gatilho)" value={o.gatilho} onChange={e => updateObjecao(i, "gatilho", e.target.value)} className="font-semibold text-xs h-8" />
+                        <Textarea placeholder="Resposta da IA para contornar" value={o.resposta} onChange={e => updateObjecao(i, "resposta", e.target.value)} rows={2} className="text-xs" />
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <Label className="text-base font-bold">Follow-up Automático</Label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] uppercase tracking-wider font-bold">Dia 1</Label>
+                    <Textarea 
+                      placeholder="Após 1 dia sem resposta..." 
+                      value={data.follow_up.dia_1} 
+                      onChange={e => update("follow_up", { ...data.follow_up, dia_1: e.target.value })} 
+                      rows={2}
+                      className="text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] uppercase tracking-wider font-bold">Dia 3</Label>
+                    <Textarea 
+                      placeholder="Após 3 dias sem resposta..." 
+                      value={data.follow_up.dia_3} 
+                      onChange={e => update("follow_up", { ...data.follow_up, dia_3: e.target.value })} 
+                      rows={2}
+                      className="text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] uppercase tracking-wider font-bold">Dia 7</Label>
+                    <Textarea 
+                      placeholder="Após 7 dias (Última tentativa)..." 
+                      value={data.follow_up.dia_7} 
+                      onChange={e => update("follow_up", { ...data.follow_up, dia_7: e.target.value })} 
+                      rows={2}
+                      className="text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-base font-bold">Mensagem de Encerramento</Label>
+                <Textarea 
+                  placeholder="Mensagem ao encerrar ou redirecionar..." 
+                  value={data.encerramento} 
+                  onChange={e => update("encerramento", e.target.value)} 
+                  rows={2}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* PASSO 5 */}
+          {step === 5 && (
+            <div className="space-y-6">
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><Wrench className="h-4 w-4" /> Webhooks n8n</h4>
+                <div className="space-y-3">
+                  <div className="space-y-1"><Label className="text-xs">Principal (WhatsApp)</Label><Input value={data.webhook_principal} onChange={e => update("webhook_principal", e.target.value)} /></div>
+                  <div className="space-y-1"><Label className="text-xs">Indexação (RAG)</Label><Input value={data.webhook_indexacao} onChange={e => update("webhook_indexacao", e.target.value)} /></div>
+                  <div className="space-y-1"><Label className="text-xs">Teste</Label><Input value={data.webhook_teste} onChange={e => update("webhook_teste", e.target.value)} /></div>
+                </div>
+              </Card>
+
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><MessageCircle className="h-4 w-4" /> Evolution API</h4>
+                <div className="space-y-3">
+                  <div className="space-y-1"><Label className="text-xs">Server URL</Label><Input value={data.evolution_server_url} onChange={e => update("evolution_server_url", e.target.value)} /></div>
+                  <div className="space-y-1"><Label className="text-xs">API Key</Label><Input type="password" value={data.evolution_api_key} onChange={e => update("evolution_api_key", e.target.value)} /></div>
+                  <div className="space-y-1"><Label className="text-xs">Instância</Label><Input value={data.evolution_instancia} onChange={e => update("evolution_instancia", e.target.value)} /></div>
+                  <Button variant="outline" className="w-full" onClick={testarEvolution} disabled={testando}>{testando && <Loader2 className="animate-spin mr-2 h-4 w-4"/>} Testar Conexão</Button>
+                </div>
+              </Card>
+
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><Code2 className="h-4 w-4" /> RAG Config</h4>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between"><Label>Ativo</Label><Switch checked={data.rag_ativo} onCheckedChange={v => update("rag_ativo", v)} /></div>
+                  <div className="space-y-1"><div className="flex justify-between"><Label>Threshold</Label><span>{data.rag_threshold}</span></div><Slider value={[data.rag_threshold]} min={0.5} max={1} step={0.05} onValueChange={([v]) => update("rag_threshold", v)} /></div>
+                  <div className="space-y-1"><Label>Resultados</Label><Input type="number" value={data.rag_resultados} onChange={e => update("rag_resultados", parseInt(e.target.value))} /></div>
+                </div>
+              </Card>
+
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <Label className="text-sm font-bold">JSON Gerado (Prompt Estruturado)</Label>
+                  {Object.values(jsonGerado()).some(v => JSON.stringify(v).includes("⚠️")) && (
+                    <Badge variant="destructive" className="animate-pulse">Campos Pendentes</Badge>
+                  )}
+                </div>
+                <div className="relative group">
+                  <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent rounded-lg pointer-events-none border border-primary/10" />
+                  <pre className="p-4 bg-zinc-950 text-zinc-300 rounded-lg text-[11px] max-h-[400px] overflow-auto font-mono leading-relaxed scrollbar-thin scrollbar-thumb-zinc-800">
+                    {JSON.stringify(jsonGerado(), null, 2).split('\n').map((line, i) => {
+                      const isWarning = line.includes("⚠️");
+                      return (
+                        <div key={i} className={`${isWarning ? "bg-destructive/20 text-destructive-foreground px-1 -mx-1 rounded" : ""}`}>
+                          {line}
+                        </div>
+                      );
+                    })}
+                  </pre>
+                  <Button 
+                    size="sm" 
+                    variant="secondary" 
+                    className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg" 
+                    onClick={() => { 
+                      const cleanJson = JSON.stringify(jsonGerado(), null, 2).replace(/⚠️ /g, "");
+                      navigator.clipboard.writeText(cleanJson); 
+                      toast.success("JSON copiado para o clipboard!"); 
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5 mr-2" /> Copiar JSON
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground italic">
+                  * Campos marcados com ⚠️ devem ser preenchidos para um melhor desempenho do agente.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 border-t flex justify-between bg-muted/10">
+          <Button variant="ghost" onClick={() => setStep(s => s - 1)} disabled={step === 1}><ChevronLeft className="h-4 w-4 mr-2" /> Anterior</Button>
+          {step < 5 ? (
+            <Button onClick={() => setStep(s => s + 1)}>Próximo <ChevronRight className="h-4 w-4 ml-2" /></Button>
+          ) : (
+            <Button onClick={salvar} disabled={salvando}>{salvando ? <Loader2 className="animate-spin mr-2 h-4 w-4" /> : <Check className="h-4 w-4 mr-2" />} Finalizar e Salvar</Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

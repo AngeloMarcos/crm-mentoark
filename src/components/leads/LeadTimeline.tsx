@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,7 +64,7 @@ export function LeadTimeline({ contatoId }: { contatoId: string }) {
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("timeline_eventos")
       .select("id, tipo, titulo, descricao, data_evento")
       .eq("contato_id", contatoId)
@@ -82,7 +82,7 @@ export function LeadTimeline({ contatoId }: { contatoId: string }) {
   const adicionar = async () => {
     if (!user || !titulo.trim()) return;
     setSaving(true);
-    const { error } = await supabase.from("timeline_eventos").insert({
+    const { error } = await api.from("timeline_eventos").insert({
       user_id: user.id,
       contato_id: contatoId,
       tipo,
