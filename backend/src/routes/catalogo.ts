@@ -174,6 +174,232 @@ export default function catalogoRouter(pool: Pool): Router {
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // ── WHATSAPP SEND ─────────────────────────────────────────
+
+  /**
+   * POST /api/catalogo/whatsapp/produto
+   * Envia um produto específico para um ou mais contatos via WhatsApp (Evolution API).
+   *
+   * Body: {
+   *   produto_id: string,
+   *   contatos: string[],          // lista de JIDs ou números normalizados
+   *   mensagem_extra?: string,     // texto adicional após os dados do produto
+   *   intervalo_ms?: number        // delay entre envios (default 3500ms)
+   * }
+   */
+  router.post('/whatsapp/produto', async (req: AuthRequest, res: Response) => {
+    try {
+      const { produto_id, contatos, mensagem_extra = '', intervalo_ms = 3500 } = req.body;
+      if (!produto_id || !Array.isArray(contatos) || contatos.length === 0) {
+        return res.status(400).json({ message: 'produto_id e contatos[] são obrigatórios.' });
+      }
+
+      // Busca produto + imagem principal
+      const pRes = await pool.query(
+        `SELECT p.*, pi.url AS img_url
+         FROM produtos p
+         LEFT JOIN produto_imagens pi ON pi.produto_id = p.id AND pi.principal = true
+         WHERE p.id = $1 AND p.user_id = $2`,
+        [produto_id, req.userId]
+      );
+      if (!pRes.rows.length) return res.status(404).json({ message: 'Produto não encontrado.' });
+      const produto = pRes.rows[0];
+
+      // Busca config da Evolution API
+      const evoRes = await pool.query(
+        `SELECT url, api_key, instancia FROM integracoes_config
+         WHERE user_id = $1 AND tipo = 'evolution' AND status = 'conectado' LIMIT 1`,
+        [req.userId]
+      );
+      if (!evoRes.rows.length) {
+        return res.status(400).json({ message: 'Integração Evolution API não configurada.' });
+      }
+      const { url: evoUrl, api_key: evoKey, instancia } = evoRes.rows[0];
+
+      // Monta legenda do produto
+      const preco = produto.preco ? `R$ ${Number(produto.preco).toFixed(2).replace('.', ',')}` : '';
+      const promo = produto.preco_promocional
+        ? ` ~~${preco}~~ *R$ ${Number(produto.preco_promocional).toFixed(2).replace('.', ',')}*`
+        : preco ? `*${preco}*` : '';
+      const caption = [
+        `🛍️ *${produto.nome}*`,
+        produto.descricao || '',
+        promo,
+        produto.codigo ? `🏷️ Código: ${produto.codigo}` : '',
+        produto.estoque != null ? `📦 Estoque: ${produto.estoque} un.` : '',
+        mensagem_extra || '',
+      ].filter(Boolean).join('\n');
+
+      const resultados: any[] = [];
+      const base = (evoUrl || '').replace(/\/$/, '');
+
+      for (const numero of contatos) {
+        try {
+          let resp: any;
+          if (produto.img_url) {
+            // Envia como imagem com legenda
+            const r = await fetch(`${base}/message/sendMedia/${instancia}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', apikey: evoKey },
+              body: JSON.stringify({
+                number: numero,
+                mediatype: 'image',
+                mimetype: 'image/jpeg',
+                media: produto.img_url,
+                caption,
+                fileName: `${produto.nome.replace(/\s+/g, '_')}.jpg`,
+              }),
+            });
+            resp = await r.json();
+          } else {
+            // Sem imagem — envia como texto
+            const r = await fetch(`${base}/message/sendText/${instancia}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', apikey: evoKey },
+              body: JSON.stringify({ number: numero, text: caption }),
+            });
+            resp = await r.json();
+          }
+          resultados.push({ numero, status: 'enviado', resp });
+        } catch (e: any) {
+          resultados.push({ numero, status: 'erro', erro: e.message });
+        }
+
+        // Intervalo anti-ban entre envios
+        if (contatos.indexOf(numero) < contatos.length - 1) {
+          await new Promise(r => setTimeout(r, Math.max(2000, Number(intervalo_ms))));
+        }
+      }
+
+      return res.json({ enviados: resultados.filter(r => r.status === 'enviado').length, erros: resultados.filter(r => r.status === 'erro').length, resultados });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  /**
+   * POST /api/catalogo/whatsapp/catalogo
+   * Envia todos os produtos (com imagem) de um catálogo para um ou mais contatos.
+   * Envia uma mensagem de introdução + cada produto individualmente com delay.
+   *
+   * Body: {
+   *   catalogo_id: string,
+   *   contatos: string[],
+   *   intro?: string,              // mensagem de introdução
+   *   intervalo_ms?: number        // delay entre produtos (default 4000ms)
+   *   max_produtos?: number        // limite de produtos por envio (default 10)
+   * }
+   */
+  router.post('/whatsapp/catalogo', async (req: AuthRequest, res: Response) => {
+    try {
+      const { catalogo_id, contatos, intro, intervalo_ms = 4000, max_produtos = 10 } = req.body;
+      if (!catalogo_id || !Array.isArray(contatos) || contatos.length === 0) {
+        return res.status(400).json({ message: 'catalogo_id e contatos[] são obrigatórios.' });
+      }
+
+      // Valida catálogo
+      const catRes = await pool.query(
+        'SELECT * FROM catalogos WHERE id = $1 AND user_id = $2 AND ativo = true',
+        [catalogo_id, req.userId]
+      );
+      if (!catRes.rows.length) return res.status(404).json({ message: 'Catálogo não encontrado.' });
+      const catalogo = catRes.rows[0];
+
+      // Busca produtos com imagem principal
+      const prodRes = await pool.query(
+        `SELECT p.*, pi.url AS img_url
+         FROM produtos p
+         LEFT JOIN produto_imagens pi ON pi.produto_id = p.id AND pi.principal = true
+         WHERE p.catalogo_id = $1 AND p.ativo = true
+         ORDER BY p.ordem ASC, p.created_at ASC
+         LIMIT $2`,
+        [catalogo_id, Number(max_produtos)]
+      );
+      const produtos = prodRes.rows;
+
+      if (produtos.length === 0) {
+        return res.status(400).json({ message: 'Catálogo sem produtos ativos.' });
+      }
+
+      // Busca config Evolution API
+      const evoRes = await pool.query(
+        `SELECT url, api_key, instancia FROM integracoes_config
+         WHERE user_id = $1 AND tipo = 'evolution' AND status = 'conectado' LIMIT 1`,
+        [req.userId]
+      );
+      if (!evoRes.rows.length) {
+        return res.status(400).json({ message: 'Integração Evolution API não configurada.' });
+      }
+      const { url: evoUrl, api_key: evoKey, instancia } = evoRes.rows[0];
+      const base = (evoUrl || '').replace(/\/$/, '');
+
+      const resultados: any[] = [];
+
+      for (const numero of contatos) {
+        try {
+          // 1) Envia mensagem de introdução
+          const introText = intro
+            || `🛒 *${catalogo.nome}*\n${catalogo.descricao || ''}\n\nConfira nossos produtos 👇`;
+
+          await fetch(`${base}/message/sendText/${instancia}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: evoKey },
+            body: JSON.stringify({ number: numero, text: introText }),
+          });
+
+          await new Promise(r => setTimeout(r, 2000));
+
+          // 2) Envia cada produto
+          for (const produto of produtos) {
+            const preco = produto.preco ? `*R$ ${Number(produto.preco).toFixed(2).replace('.', ',')}*` : '';
+            const caption = [
+              `🛍️ *${produto.nome}*`,
+              produto.descricao ? produto.descricao.slice(0, 200) : '',
+              preco,
+            ].filter(Boolean).join('\n');
+
+            if (produto.img_url) {
+              await fetch(`${base}/message/sendMedia/${instancia}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: evoKey },
+                body: JSON.stringify({
+                  number: numero, mediatype: 'image', mimetype: 'image/jpeg',
+                  media: produto.img_url, caption, fileName: `${produto.nome.replace(/\s+/g,'_')}.jpg`,
+                }),
+              });
+            } else {
+              await fetch(`${base}/message/sendText/${instancia}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: evoKey },
+                body: JSON.stringify({ number: numero, text: caption }),
+              });
+            }
+
+            await new Promise(r => setTimeout(r, Math.max(3000, Number(intervalo_ms))));
+          }
+
+          resultados.push({ numero, status: 'enviado', produtos_enviados: produtos.length });
+        } catch (e: any) {
+          resultados.push({ numero, status: 'erro', erro: e.message });
+        }
+
+        // Intervalo entre contatos
+        if (contatos.indexOf(numero) < contatos.length - 1) {
+          await new Promise(r => setTimeout(r, 5000));
+        }
+      }
+
+      return res.json({
+        catalogo: catalogo.nome,
+        contatos: contatos.length,
+        produtos_por_envio: produtos.length,
+        resultados,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // ── IMAGENS ──────────────────────────────────────────────
 
   // POST /api/catalogo/produtos/:produtoId/imagens — upload de imagem
