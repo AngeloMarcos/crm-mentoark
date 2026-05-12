@@ -37,6 +37,7 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
   const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [salvando, setSalvando] = useState(false);
+  const [salvo, setSalvo] = useState(false);
   const [testando, setTestando] = useState(false);
 
   const [data, setData] = useState({
@@ -221,10 +222,14 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
         ativo: true,
         created_by: user.email
       });
-
+      
+      setSalvo(true);
       toast.success("Agente configurado com sucesso!");
-      onConcluir();
-      onClose();
+      
+      setTimeout(() => {
+        onConcluir();
+        onClose();
+      }, 1500);
     } catch (e) {
       toast.error("Erro ao salvar");
     } finally {
@@ -636,7 +641,19 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
           {step < 5 ? (
             <Button onClick={() => setStep(s => s + 1)}>Próximo <ChevronRight className="h-4 w-4 ml-2" /></Button>
           ) : (
-            <Button onClick={salvar} disabled={salvando}>{salvando ? <Loader2 className="animate-spin mr-2 h-4 w-4" /> : <Check className="h-4 w-4 mr-2" />} Finalizar e Salvar</Button>
+            <Button 
+              onClick={salvar} 
+              disabled={salvando || salvo}
+              className={salvo ? "bg-success hover:bg-success text-white" : ""}
+            >
+              {salvando ? (
+                <><Loader2 className="animate-spin mr-2 h-4 w-4" /> Salvando...</>
+              ) : salvo ? (
+                <><Check className="h-4 w-4 mr-2" /> Salvo com Sucesso!</>
+              ) : (
+                <><Check className="h-4 w-4 mr-2" /> Finalizar e Salvar</>
+              )}
+            </Button>
           )}
         </div>
       </DialogContent>
