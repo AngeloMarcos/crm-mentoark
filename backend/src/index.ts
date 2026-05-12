@@ -43,6 +43,10 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+// ── Serve uploads ──────────────────────────────────────────
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
+app.use('/uploads', express.static(UPLOADS_DIR));
+
 // ── Public routes ───────────────────────────────────────────
 app.use('/auth', authRouter);
 
