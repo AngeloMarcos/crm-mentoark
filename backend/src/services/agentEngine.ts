@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { Pool } from 'pg';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'not-configured' });
 
 interface MensagemEntrada {
   instancia: string;
