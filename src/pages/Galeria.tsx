@@ -88,6 +88,29 @@ export default function GaleriaPage() {
     }
   };
 
+  const handleProcessed = async (blob: Blob) => {
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("imagens", blob, "sem-fundo.png");
+    formData.append("tags", JSON.stringify(["sem-fundo"]));
+    try {
+      const r = await fetch(`${API_BASE}/api/galeria/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token()}` },
+        body: formData,
+      });
+      if (r.ok) {
+        toast.success("Imagem processada enviada para galeria");
+        carregar();
+        carregarTags();
+      }
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const deletarImagem = async (id: string) => {
     await fetch(`${API_BASE}/api/galeria/${id}`, {
       method: "DELETE",
