@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Upload, Download, Loader2, Eraser, Trash2 } from "lucide-react";
 import { removeBackground, loadImage } from "@/utils/removeBackground";
 import { toast } from "sonner";
