@@ -165,33 +165,30 @@ export default function CatalogoDetalhePage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {catalogo?.produtos?.map((p: Produto) => {
-            const principal = p.imagens?.find(img => img.principal) || p.imagens?.[0];
-            return (
-              <Card key={p.id}>
-                <div className="aspect-square relative bg-muted flex items-center justify-center">
-                  {principal ? (
-                    <img src={principal.url} className="w-full h-full object-cover" />
-                  ) : <ImageIcon className="h-10 w-10 text-muted-foreground" />}
-                </div>
-                <CardContent className="p-4 space-y-2">
-                  <h3 className="font-semibold">{p.nome}</h3>
-                  <p className="text-xs text-muted-foreground line-clamp-2">{p.descricao}</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-success font-bold">R$ {p.preco}</span>
-                    {p.preco_promocional && <span className="text-xs line-through opacity-50">R$ {p.preco_promocional}</span>}
-                  </div>
-                  <div className="flex gap-1 flex-wrap">
-                    <Button variant="outline" size="sm" className="px-2" title="Enviar via WhatsApp" onClick={() => setModalSend({ open: true, type: "product", id: p.id })}><Send className="h-4 w-4" /></Button>
-                    <Button variant="outline" size="sm" onClick={() => { setActiveProduto(p); setModalGaleria(true); }}>Imagens</Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingProduto(p); setForm({...p, preco: p.preco||0, preco_promocional: p.preco_promocional||0, estoque: p.estoque||0, descricao: p.descricao||"", codigo: p.codigo||""}); setModalProduto(true); }}><Pencil className="h-4 w-4" /></Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={async () => { if(confirm("Remover produto?")) { await api.from(`catalogos/${id}/produtos`).delete().eq("id", p.id); carregar(); } }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+        <div className="grid grid-cols-1">
+          <DndContext 
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext 
+              items={catalogo?.produtos?.map((p: any) => p.id) || []}
+              strategy={rectSortingStrategy}
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {catalogo?.produtos?.map((p: Produto) => (
+                  <ProductCard
+                    key={p.id}
+                    produto={p}
+                    onSend={() => setModalSend({ open: true, type: "product", id: p.id })}
+                    onImages={() => { setActiveProduto(p); setModalGaleria(true); }}
+                    onEdit={() => { setEditingProduto(p); setForm({...p, preco: p.preco||0, preco_promocional: p.preco_promocional||0, estoque: p.estoque||0, descricao: p.descricao||"", codigo: p.codigo||""}); setModalProduto(true); }}
+                    onDelete={async () => { if(confirm("Remover produto?")) { await api.from(`catalogos/${id}/produtos`).delete().eq("id", p.id); carregar(); } }}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         </div>
       </div>
 
