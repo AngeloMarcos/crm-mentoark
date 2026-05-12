@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 
 import { pool } from './db';
 import { authMiddleware } from './middleware';
@@ -18,6 +19,7 @@ import dashboardRouter from './routes/dashboard';
 import usuariosRouter from './routes/usuarios';
 import functionsRouter from './routes/functions';
 import leadsBuscarRouter from './routes/leads-buscar';
+import catalogoRouter from './routes/catalogo';
 
 const app = express();
 
@@ -40,6 +42,10 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
+
+// ── Serve uploads ──────────────────────────────────────────
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ── Public routes ───────────────────────────────────────────
 app.use('/auth', authRouter);
@@ -81,6 +87,7 @@ app.use('/api/n8n_chat_histories', n8nChatRouter(pool));
 app.use('/api/dashboard', dashboardRouter(pool));
 app.use('/api/functions', functionsRouter(pool));
 app.use('/api/leads', leadsBuscarRouter(pool));
+app.use('/api/catalogo', catalogoRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
