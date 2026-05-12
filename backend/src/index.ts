@@ -87,6 +87,7 @@ app.use('/api/n8n_chat_histories', n8nChatRouter(pool));
 app.use('/api/dashboard', dashboardRouter(pool));
 app.use('/api/functions', functionsRouter(pool));
 app.use('/api/leads', leadsBuscarRouter(pool));
+app.use('/api/catalogo', catalogoRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
