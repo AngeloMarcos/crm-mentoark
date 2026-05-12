@@ -58,6 +58,9 @@ const SIMPLE_TABLES = [
   'agentes',
   'conhecimento',
   'integracoes_config',
+  'catalogos',
+  'produtos',
+  'produto_imagens',
 ];
 for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
