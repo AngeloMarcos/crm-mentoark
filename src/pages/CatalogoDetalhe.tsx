@@ -117,6 +117,46 @@ export default function CatalogoDetalhePage() {
     }
   };
 
+  const carregarGaleria = async () => {
+    const r = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/galeria?limit=40&q=${pickerSearch}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+    });
+    const d = await r.json();
+    setGaleriaImagens(d.images || []);
+  };
+
+  useEffect(() => {
+    if (modalPicker) carregarGaleria();
+  }, [modalPicker, pickerSearch]);
+
+  const vincularImagem = async (galeriaId: string) => {
+    if (!activeProduto) return;
+    try {
+      const r = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/galeria/produto/${activeProduto.id}`, {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token")}` 
+        },
+        body: JSON.stringify({ galeria_imagem_id: galeriaId })
+      });
+      if (r.ok) {
+        toast.success("Imagem vinculada");
+        setModalPicker(false);
+        carregar();
+        // Refresh active product images
+        const updatedRes = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+        });
+        const updatedData = await updatedRes.json();
+        const updatedP = updatedData.produtos.find((p: any) => p.id === activeProduto.id);
+        setActiveProduto(updatedP);
+      }
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
   const setPrincipal = async (imgId: string) => {
     // ...
   };
