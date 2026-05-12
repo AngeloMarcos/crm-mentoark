@@ -5,7 +5,7 @@ import { api, uploadImagem } from "@/integrations/database/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, ArrowLeft, Pencil, Trash2, Loader2, ImageOff, Star, Copy, Image as ImageIcon } from "lucide-react";
+import { Plus, ArrowLeft, Pencil, Trash2, Loader2, ImageOff, Star, Copy, Image as ImageIcon, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SendWhatsAppModal } from "@/components/catalogo/SendWhatsAppModal";
 
 interface Produto {
   id: string;
