@@ -11,8 +11,8 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-  filename: (_req, file, cb) => {
+  destination: (_req: any, _file: any, cb: any) => cb(null, UPLOADS_DIR),
+  filename: (_req: any, file: any, cb: any) => {
     const ext = path.extname(file.originalname).toLowerCase();
     cb(null, `${uuidv4()}${ext}`);
   },
@@ -21,7 +21,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-  fileFilter: (_req, file, cb) => {
+  fileFilter: (_req: any, file: any, cb: any) => {
     const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowed.includes(ext)) cb(null, true);
@@ -181,9 +181,10 @@ export default function catalogoRouter(pool: Pool): Router {
   // POST /api/catalogo/produtos/:produtoId/imagens — upload de imagem
   router.post('/produtos/:produtoId/imagens', upload.single('imagem'), async (req: AuthRequest, res: Response) => {
     try {
-      if (!req.file) return res.status(400).json({ message: 'Nenhuma imagem enviada' });
+      const file = (req as any).file;
+      if (!file) return res.status(400).json({ message: 'Nenhuma imagem enviada' });
       const { legenda, principal = false, ordem = 0 } = req.body;
-      const url = `${BASE_URL}/uploads/${req.file.filename}`;
+      const url = `${BASE_URL}/uploads/${file.filename}`;
 
       if (principal === 'true' || principal === true) {
         await pool.query('UPDATE produto_imagens SET principal = false WHERE produto_id = $1', [req.params.produtoId]);
@@ -196,7 +197,8 @@ export default function catalogoRouter(pool: Pool): Router {
       );
       res.status(201).json(r.rows[0]);
     } catch (e: any) {
-      if (req.file) fs.unlinkSync(req.file.path);
+      const file = (req as any).file;
+      if (file) fs.unlinkSync(file.path);
       res.status(500).json({ message: e.message });
     }
   });
