@@ -107,9 +107,14 @@ export default function CatalogoDetalhePage() {
             <Button variant="ghost" size="icon" onClick={() => navigate("/catalogo")}><ArrowLeft /></Button>
             <h1 className="text-2xl font-bold">{catalogo?.nome}</h1>
           </div>
-          <Button onClick={() => { setEditingProduto(null); setForm({ nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true }); setModalProduto(true); }}>
-            <Plus className="h-4 w-4 mr-2" /> Novo Produto
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setModalSend({ open: true, type: "catalog", id: id! })}>
+              <Send className="h-4 w-4 mr-2" /> Enviar Catálogo
+            </Button>
+            <Button onClick={() => { setEditingProduto(null); setForm({ nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true }); setModalProduto(true); }}>
+              <Plus className="h-4 w-4 mr-2" /> Novo Produto
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
