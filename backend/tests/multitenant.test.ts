@@ -81,12 +81,16 @@ describe('Multi-tenant isolation — security', () => {
     expect(last.params).not.toContain('user-A');
   });
 
-  it('DELETE bulk sem nenhum filtro retorna 400 (nunca apaga tudo)', async () => {
+  it('DELETE bulk sem query string ainda escopa por user_id (não vaza entre tenants)', async () => {
+    captured.length = 0;
     const token = sign({ sub: 'user-A', role: 'user' });
     const res = await request(app)
       .delete('/api/contatos')
       .set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(204);
+    const last = captured.at(-1)!;
+    expect(last.sql).toMatch(/DELETE FROM contatos WHERE user_id = \$1/);
+    expect(last.params).toEqual(['user-A']);
   });
 
   it('DELETE bulk com filtro inclui user_id na cláusula WHERE', async () => {
