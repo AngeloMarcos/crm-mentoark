@@ -164,7 +164,7 @@ export default function catalogoRouter(pool: Pool): Router {
   // DELETE /api/catalogo/:catalogoId/produtos/:id
   router.delete('/:catalogoId/produtos/:id', async (req: AuthRequest, res: Response) => {
     try {
-      const imgs = await pool.query('SELECT url FROM produto_imagens WHERE produto_id = $1', [req.params.id]);
+      const imgs = await pool.query('SELECT url FROM produto_imagens WHERE produto_id = $1 AND user_id = $2', [req.params.id, req.userId]);
       for (const img of imgs.rows) {
         const file = path.join(UPLOADS_DIR, path.basename(img.url));
         if (fs.existsSync(file)) fs.unlinkSync(file);
@@ -411,7 +411,7 @@ export default function catalogoRouter(pool: Pool): Router {
       const url = `${BASE_URL}/uploads/${file.filename}`;
 
       if (principal === 'true' || principal === true) {
-        await pool.query('UPDATE produto_imagens SET principal = false WHERE produto_id = $1', [req.params.produtoId]);
+        await pool.query('UPDATE produto_imagens SET principal = false WHERE produto_id = $1 AND user_id = $2', [req.params.produtoId, req.userId]);
       }
 
       const r = await pool.query(

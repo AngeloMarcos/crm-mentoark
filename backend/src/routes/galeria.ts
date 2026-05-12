@@ -157,7 +157,7 @@ export default function galeriaRouter(pool: Pool): Router {
       const filepath = path.join(UPLOADS_DIR, r.rows[0].filename);
       try { if (fs.existsSync(filepath)) fs.unlinkSync(filepath); } catch {}
 
-      await pool.query('DELETE FROM galeria_imagens WHERE id = $1', [req.params.id]);
+      await pool.query('DELETE FROM galeria_imagens WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
       return res.status(204).send();
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
@@ -182,7 +182,7 @@ export default function galeriaRouter(pool: Pool): Router {
       const img = gImg.rows[0];
 
       if (principal) {
-        await pool.query('UPDATE produto_imagens SET principal = false WHERE produto_id = $1', [req.params.produtoId]);
+        await pool.query('UPDATE produto_imagens SET principal = false WHERE produto_id = $1 AND user_id = $2', [req.params.produtoId, req.userId]);
       }
 
       const r = await pool.query(
