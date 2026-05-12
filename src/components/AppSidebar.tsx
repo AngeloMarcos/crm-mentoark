@@ -16,16 +16,14 @@ const items = [
   { title: "Leads",             url: "/leads",       icon: Users           },
   { title: "Contatos",          url: "/contatos",    icon: Contact         },
   { title: "Discagem",          url: "/discagem",    icon: PhoneCall       },
-  { title: "Funil de Vendas",   url: "/funil",       icon: Kanban          },
+  { title: "Funil de Vendas",   icon: Kanban,        url: "/funil"         },
   { title: "WhatsApp",          url: "/whatsapp",    icon: MessageCircle   },
   { title: "Disparos",          url: "/disparos",    icon: Send            },
-  { title: "Workflows",         url: "/workflows",   icon: GitBranch       },
   { title: "Campanhas",         url: "/campanhas",   icon: Megaphone       },
   { title: "Integrações",       url: "/integracoes", icon: Plug            },
   { title: "Agentes",           url: "/agentes",     icon: Bot             },
   { title: "Catálogo",          url: "/catalogo",    icon: LayoutGrid      },
   { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain           },
-  { title: "Documentação",     url: "/docs",        icon: BookOpen        },
 ];
 
 export function AppSidebar() {
