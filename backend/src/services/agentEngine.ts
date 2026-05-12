@@ -138,7 +138,9 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
 
   // 1. Encontrar agente pelo nome da instância
   const agenteRes = await pool.query(
-    `SELECT * FROM agentes WHERE evolution_instancia = $1 AND ativo = true LIMIT 1`,
+    `SELECT * FROM agentes
+     WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
+     ORDER BY created_at DESC LIMIT 1`,
     [entrada.instancia]
   );
   if (!agenteRes.rows.length) {
