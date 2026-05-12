@@ -633,20 +633,26 @@ export type Database = {
         Row: {
           created_at: string
           id: number
+          instancia: string | null
           message: Json
           session_id: string
+          user_id: string | null
         }
         Insert: {
           created_at?: string
           id?: number
+          instancia?: string | null
           message: Json
           session_id: string
+          user_id?: string | null
         }
         Update: {
           created_at?: string
           id?: number
+          instancia?: string | null
           message?: Json
           session_id?: string
+          user_id?: string | null
         }
         Relationships: []
       }
