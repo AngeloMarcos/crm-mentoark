@@ -21,6 +21,7 @@ import functionsRouter from './routes/functions';
 import leadsBuscarRouter from './routes/leads-buscar';
 import catalogoRouter from './routes/catalogo';
 import webhookRouter from './routes/webhook';
+import elevenLabsRouter from './routes/elevenlabs';
 import { initCronJobs } from './cron';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
@@ -133,6 +134,7 @@ app.use('/api/dashboard', dashboardRouter(pool));
 app.use('/api/functions', functionsRouter(pool));
 app.use('/api/leads', leadsBuscarRouter(pool));
 app.use('/api/catalogo', catalogoRouter(pool));
+app.use('/api/elevenlabs', elevenLabsRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
