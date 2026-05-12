@@ -171,7 +171,7 @@ export default function FunilPage() {
   const carregar = async () => {
     if (!user) return;
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("contatos")
       .select("*")
       .eq("user_id", user.id)
@@ -197,7 +197,7 @@ export default function FunilPage() {
     setContatos((prev) =>
       prev.map((c) => (c.id === contatoId ? { ...c, status: novaEtapa } : c)),
     );
-    const { error } = await supabase
+    const { error } = await api
       .from("contatos")
       .update({ status: novaEtapa })
       .eq("id", contatoId);

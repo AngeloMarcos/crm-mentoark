@@ -34,7 +34,7 @@ npm run start  # node dist/index.js (produção)
 
 ### Frontend → Backend
 
-O arquivo `src/integrations/supabase/client.ts` **não usa o Supabase real** — é um cliente HTTP customizado que espelha a interface do `@supabase/supabase-js` e encaminha todas as chamadas para `api.mentoark.com.br`. Todos os componentes e páginas importam `supabase` deste arquivo e usam `.from("tabela").select()` / `.insert()` etc., mas as chamadas vão para o backend Express próprio.
+O arquivo `src/integrations/api/client.ts` **não usa o Database real** — é um cliente HTTP customizado que espelha a interface do `@api/api-js` e encaminha todas as chamadas para `api.mentoark.com.br`. Todos os componentes e páginas importam `api` deste arquivo e usam `.from("tabela").select()` / `.insert()` etc., mas as chamadas vão para o backend Express próprio.
 
 Tokens JWT são armazenados no localStorage com as chaves `crm_access_token`, `crm_refresh_token`, `crm_user`. A variável de ambiente que configura o endpoint é `VITE_API_URL`.
 

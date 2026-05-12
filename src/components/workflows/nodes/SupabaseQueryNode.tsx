@@ -3,7 +3,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { Search } from "lucide-react";
 import { NodeActionBar } from "./NodeActionBar";
 
-export const SupabaseQueryNode = memo(({ data, selected, id }: NodeProps) => {
+export const DatabaseQueryNode = memo(({ data, selected, id }: NodeProps) => {
   const d = data as any;
   const subtitle = d.tableName ? `${d.operation ?? ""} ${d.tableName}`.trim() : "Query DB";
   return (
@@ -27,4 +27,4 @@ export const SupabaseQueryNode = memo(({ data, selected, id }: NodeProps) => {
     </div>
   );
 });
-SupabaseQueryNode.displayName = "SupabaseQueryNode";
+DatabaseQueryNode.displayName = "DatabaseQueryNode";

@@ -69,7 +69,7 @@ export default function ContatoDetalhePage() {
       setLoading(true);
       try {
         // Busca dados do contato
-        const { data: contactData, error: contactError } = await supabase
+        const { data: contactData, error: contactError } = await api
           .from("dados_cliente")
           .select("*")
           .eq("id", id)
@@ -80,7 +80,7 @@ export default function ContatoDetalhePage() {
 
         // Busca histórico de mensagens se tiver telefone
         if (contactData?.telefone) {
-          const { data: msgData, error: msgError } = await supabase
+          const { data: msgData, error: msgError } = await api
             .from("chat_messages")
             .select("*")
             .eq("phone", contactData.telefone)
@@ -103,7 +103,7 @@ export default function ContatoDetalhePage() {
     fetchData();
 
     // Inscrição Realtime para mudanças no contato atual
-    const channel = supabase
+    const channel = api
       .channel(`public:dados_cliente:id=eq.${id}`)
       .on(
         "postgres_changes",
@@ -128,7 +128,7 @@ export default function ContatoDetalhePage() {
     if (!contato) return;
     setUpdatingIa(true);
     try {
-      const { error } = await supabase
+      const { error } = await api
         .from("dados_cliente")
         .update({ atendimento_ia: active })
         .eq("id", contato.id);

@@ -106,7 +106,7 @@ export default function AgentesPage() {
   const carregar = async () => {
     if (!user) return;
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("agentes")
       .select("*")
       .eq("user_id", user.id)
@@ -178,7 +178,7 @@ export default function AgentesPage() {
     };
 
     if (editing) {
-      const { error } = await supabase
+      const { error } = await api
         .from("agentes")
         .update(payload)
         .eq("id", editing.id);
@@ -189,7 +189,7 @@ export default function AgentesPage() {
       }
       toast.success("✅ Agente salvo!");
     } else {
-      const { error } = await supabase
+      const { error } = await api
         .from("agentes")
         .insert([{ ...payload, user_id: user.id }]);
       setSalvando(false);

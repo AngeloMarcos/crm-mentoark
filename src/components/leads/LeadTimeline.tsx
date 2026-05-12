@@ -64,7 +64,7 @@ export function LeadTimeline({ contatoId }: { contatoId: string }) {
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("timeline_eventos")
       .select("id, tipo, titulo, descricao, data_evento")
       .eq("contato_id", contatoId)

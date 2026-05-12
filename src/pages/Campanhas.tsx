@@ -118,7 +118,7 @@ export default function CampanhasPage() {
   const carregar = async () => {
     if (!user) return;
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("campanhas")
       .select("*")
       .eq("user_id", user.id)
@@ -205,7 +205,7 @@ export default function CampanhasPage() {
     };
 
     if (editing) {
-      const { error } = await supabase
+      const { error } = await api
         .from("campanhas")
         .update(payload)
         .eq("id", editing.id);
@@ -216,7 +216,7 @@ export default function CampanhasPage() {
       }
       toast.success("Campanha atualizada!");
     } else {
-      const { error } = await supabase
+      const { error } = await api
         .from("campanhas")
         .insert([{ ...payload, user_id: user.id }]);
       setSalvando(false);

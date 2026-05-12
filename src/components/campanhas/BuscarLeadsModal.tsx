@@ -251,7 +251,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
     setCriandoDisparo(true);
     try {
       // 1. Criar lista
-      const { data: lista, error: errLista } = await supabase
+      const { data: lista, error: errLista } = await api
         .from("listas")
         .insert({ user_id: user.id, nome: nomeDisparo, descricao: `Gerado via busca de leads — ${segSelecionado?.label ?? segmento}` })
         .select("id")
@@ -264,7 +264,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
       if (!total) throw new Error("Nenhum contato importado");
 
       // 3. Criar disparo (rascunho)
-      const { data: disparo, error: errDisparo } = await supabase
+      const { data: disparo, error: errDisparo } = await api
         .from("disparos")
         .insert({
           user_id: user.id,

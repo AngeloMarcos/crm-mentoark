@@ -79,7 +79,7 @@ app.use('/api/dashboard', dashboardRouter(pool));
 app.use('/api/functions', functionsRouter(pool));
 app.use('/api/leads', leadsBuscarRouter(pool));
 
-// Virtual tables for Supabase compatibility
+// Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
 
 // ── Health check ─────────────────────────────────────────────

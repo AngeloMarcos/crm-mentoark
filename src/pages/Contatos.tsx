@@ -55,7 +55,7 @@ export default function ContatosPage() {
   useEffect(() => {
     const fetchContatos = async () => {
       setLoading(true);
-      const { data, error } = await supabase
+      const { data, error } = await api
         .from("dados_cliente")
         .select("*")
         .order("created_at", { ascending: false });
@@ -70,7 +70,7 @@ export default function ContatosPage() {
     fetchContatos();
 
     // Inscrição Realtime
-    const channel = supabase
+    const channel = api
       .channel("public:dados_cliente")
       .on(
         "postgres_changes",

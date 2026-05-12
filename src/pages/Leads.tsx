@@ -137,7 +137,7 @@ export default function LeadsPage() {
 
   const recarregarTarefas = async () => {
     if (!user) return;
-    const { data: tar } = await supabase
+    const { data: tar } = await api
       .from("tarefas")
       .select("contato_id")
       .eq("user_id", user.id)
@@ -416,7 +416,7 @@ export default function LeadsPage() {
       return;
     }
 
-    const { error } = await supabase
+    const { error } = await api
       .from("contatos")
       .insert(novos.map((n) => ({ ...n, user_id: user.id })));
 

@@ -104,11 +104,11 @@ const TEMPLATES: Template[] = [
   },
   {
     tipo: "supabase_vector",
-    nome: "Supabase Vector",
+    nome: "Database Vector",
     descricao: "Banco vetorial (RAG)",
     icone: "Database",
     campos: { url: true, api_key: true },
-    urlLabel: "URL do Supabase",
+    urlLabel: "URL do Database",
   },
   {
     tipo: "meta_ads",
@@ -184,7 +184,7 @@ export default function IntegracoesPage() {
   const carregar = async () => {
     if (!user) return;
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("integracoes_config")
       .select("*")
       .eq("user_id", user.id);
@@ -270,7 +270,7 @@ export default function IntegracoesPage() {
       ultima_sync:
         form.status === "conectado" ? new Date().toISOString() : existing?.ultima_sync ?? null,
     };
-    const { error } = await supabase
+    const { error } = await api
       .from("integracoes_config")
       .upsert(payload);
     setSalvando(false);

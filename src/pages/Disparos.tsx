@@ -152,7 +152,7 @@ function IntervaloEditor({
     setMinStr(String(minClamp));
     setMaxStr(String(maxClamp));
     setSaving(true);
-    const { error } = await supabase
+    const { error } = await api
       .from("disparos")
       .update({ intervalo_min: minClamp, intervalo_max: maxClamp })
       .eq("id", disparoId);
@@ -335,7 +335,7 @@ export default function DisparosPage() {
   useEffect(() => {
     const run = async () => {
       if (!user || !listaId) { setListaContatos([]); return; }
-      const { data } = await supabase
+      const { data } = await api
         .from("contatos")
         .select("id, nome, telefone, empresa")
         .eq("user_id", user.id).eq("lista_id", listaId)
@@ -526,7 +526,7 @@ export default function DisparosPage() {
     if (!evolution) { toast.error("Evolution API não configurada"); return; }
 
     // 🔄 Sempre recarrega configuração mais recente do disparo (intervalos ao vivo)
-    const { data: live } = await supabase
+    const { data: live } = await api
       .from("disparos")
       .select("*")
       .eq("id", dIn.id)
@@ -561,7 +561,7 @@ export default function DisparosPage() {
     }
 
     // Próximo pendente
-    const { data: pendings } = await supabase
+    const { data: pendings } = await api
       .from("disparo_logs").select("*")
       .eq("disparo_id", d.id).eq("status", "pending")
       .order("created_at").limit(1);

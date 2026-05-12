@@ -54,7 +54,7 @@ export function LeadTarefas({
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await api
       .from("tarefas")
       .select("id, titulo, status, prioridade, prazo, concluida_at")
       .eq("contato_id", contatoId)
@@ -94,7 +94,7 @@ export function LeadTarefas({
 
   const toggleConcluida = async (t: Tarefa, checked: boolean) => {
     const novoStatus = checked ? "concluida" : "pendente";
-    const { error } = await supabase
+    const { error } = await api
       .from("tarefas")
       .update({
         status: novoStatus,

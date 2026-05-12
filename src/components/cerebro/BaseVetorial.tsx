@@ -51,7 +51,7 @@ export function BaseVetorial() {
 
   const carregar = async () => {
     setLoading(true);
-    const { data, error } = await (supabase as any)
+    const { data, error } = await (api as any)
       .from("documents")
       .select("id, content, metadata")
       .order("id", { ascending: false });
@@ -87,7 +87,7 @@ export function BaseVetorial() {
   }, [docs]);
 
   const deletar = async (id: number) => {
-    const { error } = await (supabase as any).from("documents").delete().eq("id", id);
+    const { error } = await (api as any).from("documents").delete().eq("id", id);
     if (error) return toast.error(error.message);
     toast.success("Documento removido");
     setDocs((prev) => prev.filter((d) => d.id !== id));
@@ -99,7 +99,7 @@ export function BaseVetorial() {
     setSalvando(true);
     const content = `${novoTipo}: ${novoCampo}\n${novoConteudo}`;
     const metadata = { tipo: novoTipo, categoria: novaCategoria, campo: novoCampo };
-    const { error } = await (supabase as any).from("documents").insert({ user_id: user.id, content, metadata });
+    const { error } = await (api as any).from("documents").insert({ user_id: user.id, content, metadata });
     setSalvando(false);
     if (error) return toast.error(error.message);
     toast.success("Documento adicionado. Lembre-se de reindexar via n8n.");

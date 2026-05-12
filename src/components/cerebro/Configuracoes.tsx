@@ -55,7 +55,7 @@ export function Configuracoes() {
 
   const carregarConfig = async () => {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await api
         .from("agentes")
         .select("*")
         .eq("user_id", user?.id)
@@ -90,7 +90,7 @@ export function Configuracoes() {
     if (!user) return;
     setSalvando(true);
     try {
-      const { error } = await supabase
+      const { error } = await api
         .from("agentes")
         .update({
           webhook_principal: config.webhook_principal,

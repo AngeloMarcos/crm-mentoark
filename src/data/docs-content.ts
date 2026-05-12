@@ -789,8 +789,8 @@ npm run dev   # porta 3000` },
 │   │   └── leads/      # Componentes específicos de Leads
 │   ├── hooks/          # useAuth, useTheme, etc.
 │   ├── integrations/
-│   │   └── supabase/
-│   │       └── client.ts  # ⚠️ NÃO é Supabase real — é HTTP client para o backend
+│   │   └── api/
+│   │       └── client.ts  # ⚠️ NÃO é Database real — é HTTP client para o backend
 │   ├── data/
 │   │   └── docs-content.ts  # Conteúdo desta documentação
 │   └── App.tsx         # Rotas React Router
@@ -812,12 +812,12 @@ npm run dev   # porta 3000` },
             ├── functions.ts
             ├── leads-buscar.ts
             └── usuarios.ts` },
-          { type: 'heading', level: 3, text: 'O cliente "supabase"' },
+          { type: 'heading', level: 3, text: 'O cliente "api"' },
           {
             type: 'callout',
             variant: 'warn',
             title: 'IMPORTANTE para novos desenvolvedores',
-            text: 'O arquivo src/integrations/supabase/client.ts NÃO usa o Supabase real. É um cliente HTTP customizado que espelha a interface do @supabase/supabase-js mas encaminha todas as chamadas para api.mentoark.com.br. Use normalmente: api.from("tabela").select() vai para o backend Express.',
+            text: 'O arquivo src/integrations/api/client.ts NÃO usa o Database real. É um cliente HTTP customizado que espelha a interface do @api/api-js mas encaminha todas as chamadas para api.mentoark.com.br. Use normalmente: api.from("tabela").select() vai para o backend Express.',
           },
         ],
       },
@@ -936,14 +936,14 @@ export default function MinhaPagina() {
         badge: { label: 'Dev', color: 'purple' },
         content: [
           { type: 'list', ordered: true, items: [
-            'Ler esta documentação completa (especialmente "O cliente supabase")',
+            'Ler esta documentação completa (especialmente "O cliente api")',
             'Clonar o repositório: git clone https://github.com/AngeloMarcos/mentoark-vision.git',
             'Instalar dependências do frontend e backend',
             'Criar .env locais apontando para o banco e API remotos',
             'Rodar npm run dev (frontend porta 5173) e npm run dev (backend porta 3000)',
             'Fazer login no CRM local com as credenciais de desenvolvimento',
             'Entender a factory makeCrud() em backend/src/crud.ts',
-            'Entender o cliente HTTP em src/integrations/supabase/client.ts',
+            'Entender o cliente HTTP em src/integrations/api/client.ts',
             'Verificar o CLAUDE.md na raiz do projeto para convenções específicas',
             'Nunca commitar .env — usar .gitignore',
             'Deploy sempre via SCP + rebuild (sem git push para produção)',

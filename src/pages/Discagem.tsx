@@ -73,12 +73,12 @@ export default function DiscagemPage() {
     (async () => {
       setLoading(true);
       const [{ data: l }, { data: c }] = await Promise.all([
-        supabase
+        api
           .from("listas")
           .select("id, nome")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false }),
-        supabase
+        api
           .from("contatos")
           .select("*")
           .eq("user_id", user.id)
@@ -123,7 +123,7 @@ export default function DiscagemPage() {
 
   const desfazerUltimaChamada = async () => {
     if (!ultimaChamada) return;
-    await supabase
+    await api
       .from("contatos")
       .update({
         status: ultimaChamada.statusAnterior,
@@ -131,7 +131,7 @@ export default function DiscagemPage() {
       })
       .eq("id", ultimaChamada.contatoId);
 
-    const { data: chamadas } = await supabase
+    const { data: chamadas } = await api
       .from("chamadas")
       .select("id")
       .eq("contato_id", ultimaChamada.contatoId)
