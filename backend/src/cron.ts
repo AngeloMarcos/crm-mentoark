@@ -2,6 +2,18 @@ import cron from 'node-cron';
 import { pool } from './db';
 
 export function initCronJobs() {
+  // Todo dia às 03:00 — Limpeza de deduplicação webhook
+  cron.schedule('0 3 * * *', async () => {
+    try {
+      const res = await pool.query(
+        "DELETE FROM webhook_mensagens_processadas WHERE processado_at < NOW() - INTERVAL '24 hours'"
+      );
+      console.log(`[CRON] Deduplicação webhook limpa: ${res.rowCount} registros removidos`);
+    } catch (err: any) {
+      console.error('[CRON] Erro na limpeza de deduplicação:', err.message);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Todo domingo às 02:00 — limpeza de retenção LGPD
   cron.schedule('0 2 * * 0', async () => {
     try {
