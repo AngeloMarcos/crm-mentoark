@@ -49,6 +49,22 @@ const auth = {
     return { data: { user: data.user, session }, error: null };
   },
 
+  async signUp({ email, password, options }: { email: string; password: string; options?: any }) {
+    const display_name = options?.data?.display_name || options?.data?.name;
+    const res = await fetch(`${API_BASE}/auth/register`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, display_name }),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); return { data: null, error: { message: e.message || 'Cadastro falhou' } }; }
+    const data = await res.json();
+    localStorage.setItem('access_token', data.access_token);
+    localStorage.setItem('refresh_token', data.refresh_token);
+    _currentUser = data.user;
+    const session = { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user };
+    _notify('SIGNED_IN', session);
+    return { data: { user: data.user, session }, error: null };
+  },
+
   async signOut() {
     const refreshToken = localStorage.getItem('refresh_token');
     const token = _getToken();
@@ -262,7 +278,12 @@ export const supabase = {
   from: (table: string) => new QueryBuilder(table),
   functions,
   // Stubs para compatibilidade (sem Realtime real)
-  channel: (_name: string) => ({ on: () => ({ subscribe: () => {} }) }),
+  channel: (_name: string) => ({ 
+    on: (_type: string, _filter: any, _callback: (p: any) => void) => ({ 
+      subscribe: () => ({ unsubscribe: () => {} }) 
+    }),
+    subscribe: () => ({ unsubscribe: () => {} })
+  }),
   removeChannel: (_ch: any) => {},
   removeAllChannels: () => {},
 };
