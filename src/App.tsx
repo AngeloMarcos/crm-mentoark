@@ -53,9 +53,9 @@ const App = () => (
               <Route path="/agentes" element={<ProtectedRoute><AgentesPage /></ProtectedRoute>} />
               <Route path="/catalogo" element={<ProtectedRoute><CatalogoPage /></ProtectedRoute>} />
               <Route path="/catalogo/:id" element={<ProtectedRoute><CatalogoDetalhePage /></ProtectedRoute>} />
-              <Route path="/workflows" element={<ProtectedRoute><WorkflowsPage /></ProtectedRoute>} />
+              <Route path="/workflows" element={<ProtectedRoute requireAdmin><WorkflowsPage /></ProtectedRoute>} />
               <Route path="/usuarios" element={<ProtectedRoute requireAdmin><UsuariosPage /></ProtectedRoute>} />
-              <Route path="/docs" element={<ProtectedRoute><DocsPage /></ProtectedRoute>} />
+              <Route path="/docs" element={<ProtectedRoute requireAdmin><DocsPage /></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </AuthProvider>
