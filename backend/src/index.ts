@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 
 import { pool } from './db';
 import { authMiddleware } from './middleware';
@@ -18,6 +19,7 @@ import dashboardRouter from './routes/dashboard';
 import usuariosRouter from './routes/usuarios';
 import functionsRouter from './routes/functions';
 import leadsBuscarRouter from './routes/leads-buscar';
+import catalogoRouter from './routes/catalogo';
 
 const app = express();
 
