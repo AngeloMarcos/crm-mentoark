@@ -209,6 +209,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
   // DELETE /:id
   router.delete('/:id', wrap(async (req: AuthRequest, res: Response) => {
     const userId = userIdCol ? req.userId ?? null : null;
+    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
     const params: any[] = [req.params.id];
     let sql = `DELETE FROM ${tableName} WHERE ${idCol} = $1`;
     if (userIdCol && userId) {
