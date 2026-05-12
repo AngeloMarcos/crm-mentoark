@@ -108,6 +108,29 @@ export default function GaleriaPage() {
     carregar();
   };
 
+  const handleSalvarEdicao = async () => {
+    if (!imagemEditando) return;
+    try {
+      const tagsArray = formEdit.tags.split(",").map(t => t.trim()).filter(Boolean);
+      const r = await fetch(`${API_BASE}/api/galeria/${imagemEditando.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token()}`,
+        },
+        body: JSON.stringify({ titulo: formEdit.titulo, tags: tagsArray }),
+      });
+      if (r.ok) {
+        toast.success("Imagem atualizada");
+        setImagemEditando(null);
+        carregar();
+        carregarTags();
+      }
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
   const toggleSelecao = (id: string) => {
     setSelecionadas(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
