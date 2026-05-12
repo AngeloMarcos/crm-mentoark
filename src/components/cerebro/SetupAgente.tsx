@@ -12,7 +12,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, ChevronRight, ChevronLeft, Building2, Bot, Wrench, MessageCircle, Code2, Check, Copy, Wand2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 
 interface Props {
@@ -166,7 +166,7 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
       const json = jsonGerado();
 
       // Salva conhecimento individualmente para aparecer nas abas do Cerebro
-      await supabase.from("conhecimento").delete().eq("user_id", user.id).in("tipo", ["negocio", "personalidade"]);
+      await api.from("conhecimento").delete().eq("user_id", user.id).in("tipo", ["negocio", "personalidade"]);
       
       const conhecimentoRows: any[] = [];
       
@@ -187,11 +187,11 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
       });
 
       if (conhecimentoRows.length > 0) {
-        await supabase.from("conhecimento").insert(conhecimentoRows);
+        await api.from("conhecimento").insert(conhecimentoRows);
       }
 
       // Atualiza agentes
-      const { data: agente } = await supabase.from("agentes").select("id").eq("user_id", user.id).maybeSingle();
+      const { data: agente } = await api.from("agentes").select("id").eq("user_id", user.id).maybeSingle();
       const agenteData = {
         user_id: user.id,
         nome: data.agente_nome,
@@ -209,12 +209,12 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
         ativo: true
       };
 
-      if (agente) await supabase.from("agentes").update(agenteData).eq("id", agente.id);
-      else await supabase.from("agentes").insert(agenteData);
+      if (agente) await api.from("agentes").update(agenteData).eq("id", agente.id);
+      else await api.from("agentes").insert(agenteData);
 
       // Prompt
-      await supabase.from("agent_prompts").update({ ativo: false }).eq("user_id", user.id);
-      await supabase.from("agent_prompts").insert({
+      await api.from("agent_prompts").update({ ativo: false }).eq("user_id", user.id);
+      await api.from("agent_prompts").insert({
         user_id: user.id,
         nome: `Wizard Prompt ${new Date().toLocaleDateString()}`,
         conteudo: JSON.stringify(json, null, 2),

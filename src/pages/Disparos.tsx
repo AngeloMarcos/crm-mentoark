@@ -33,7 +33,7 @@ import {
   Upload, ChevronDown, Plus, X, Settings2, Link2, CheckCircle2, XCircle, Activity, Clock, Users,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Link } from "react-router-dom";
 import * as XLSX from "xlsx";
@@ -319,9 +319,9 @@ export default function DisparosPage() {
     if (!user) return;
     setLoading(true);
     const [{ data: ls }, { data: ds }, { data: ev }] = await Promise.all([
-      supabase.from("listas").select("id, nome").eq("user_id", user.id).order("nome"),
-      supabase.from("disparos").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-      supabase.from("integracoes_config").select("id, instancia, url, api_key, status")
+      api.from("listas").select("id, nome").eq("user_id", user.id).order("nome"),
+      api.from("disparos").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+      api.from("integracoes_config").select("id, instancia, url, api_key, status")
         .eq("user_id", user.id).eq("tipo", "evolution").limit(1).maybeSingle(),
     ]);
     setListas((ls as Lista[]) ?? []);
@@ -410,7 +410,7 @@ export default function DisparosPage() {
 
     // 1) cria disparo
     const primeira = variacoes.find((v) => v.trim()) ?? "";
-    const { data: created, error } = await supabase.from("disparos").insert({
+    const { data: created, error } = await api.from("disparos").insert({
       user_id: user.id,
       nome: nomeCampanha,
       lista_id: origemLeads === "lista" ? listaId : null,
@@ -481,11 +481,11 @@ export default function DisparosPage() {
       });
     }
 
-    if (rows.length) await supabase.from("disparo_logs").insert(rows);
+    if (rows.length) await api.from("disparo_logs").insert(rows);
     // Pré-contabiliza inválidos + duplicados como falhas no agregado
     const preFalhas = invalidos + duplicados;
     if (preFalhas > 0) {
-      await supabase.from("disparos").update({ falhas: preFalhas }).eq("id", created.id);
+      await api.from("disparos").update({ falhas: preFalhas }).eq("id", created.id);
     }
 
     const validos = rows.length - invalidos - duplicados;
@@ -516,7 +516,7 @@ export default function DisparosPage() {
   };
 
   const setStatus = async (id: string, status: DisparoStatus, extras: Record<string, unknown> = {}) => {
-    await supabase.from("disparos").update({ status, ...extras }).eq("id", id);
+    await api.from("disparos").update({ status, ...extras }).eq("id", id);
   };
 
   // Processa o próximo log pendente do disparo (recursivo via setTimeout)
@@ -577,7 +577,7 @@ export default function DisparosPage() {
 
     // Trava + envio
     lockRef.current = true;
-    await supabase.from("disparo_logs").update({ status: "sending", tentativas: log.tentativas + 1 }).eq("id", log.id);
+    await api.from("disparo_logs").update({ status: "sending", tentativas: log.tentativas + 1 }).eq("id", log.id);
     let sucesso = false;
     let erroMsg: string | null = null;
     try {
@@ -588,13 +588,13 @@ export default function DisparosPage() {
     }
 
     if (sucesso) {
-      await supabase.from("disparo_logs").update({ status: "sent", enviado_at: new Date().toISOString() }).eq("id", log.id);
-      const { data: cur } = await supabase.from("disparos").select("enviados").eq("id", d.id).single();
-      await supabase.from("disparos").update({ enviados: ((cur as any)?.enviados ?? 0) + 1 }).eq("id", d.id);
+      await api.from("disparo_logs").update({ status: "sent", enviado_at: new Date().toISOString() }).eq("id", log.id);
+      const { data: cur } = await api.from("disparos").select("enviados").eq("id", d.id).single();
+      await api.from("disparos").update({ enviados: ((cur as any)?.enviados ?? 0) + 1 }).eq("id", d.id);
     } else {
-      await supabase.from("disparo_logs").update({ status: "failed", erro: erroMsg }).eq("id", log.id);
-      const { data: cur } = await supabase.from("disparos").select("falhas").eq("id", d.id).single();
-      await supabase.from("disparos").update({ falhas: ((cur as any)?.falhas ?? 0) + 1 }).eq("id", d.id);
+      await api.from("disparo_logs").update({ status: "failed", erro: erroMsg }).eq("id", log.id);
+      const { data: cur } = await api.from("disparos").select("falhas").eq("id", d.id).single();
+      await api.from("disparos").update({ falhas: ((cur as any)?.falhas ?? 0) + 1 }).eq("id", d.id);
     }
     lockRef.current = false;
 
@@ -633,8 +633,8 @@ export default function DisparosPage() {
 
   const refreshActive = async (id: string) => {
     const [{ data: dsp }, { data: lgs }] = await Promise.all([
-      supabase.from("disparos").select("*").eq("id", id).single(),
-      supabase.from("disparo_logs").select("*").eq("disparo_id", id).order("created_at", { ascending: true }),
+      api.from("disparos").select("*").eq("id", id).single(),
+      api.from("disparo_logs").select("*").eq("disparo_id", id).order("created_at", { ascending: true }),
     ]);
     if (dsp) setDisparos((arr) => arr.map((x) => (x.id === id ? (dsp as Disparo) : x)));
     setActiveLogs((lgs as DisparoLog[]) ?? []);
@@ -670,7 +670,7 @@ export default function DisparosPage() {
   // Limpa timers ao desmontar
   useEffect(() => () => { limparTimers(); }, []);
   const excluir = async (id: string) => {
-    const { error } = await supabase.from("disparos").delete().eq("id", id);
+    const { error } = await api.from("disparos").delete().eq("id", id);
     if (error) { toast.error(error.message); return; }
     toast.success("Campanha excluída");
     setConfirmDeleteId(null);
@@ -679,7 +679,7 @@ export default function DisparosPage() {
   };
   const duplicar = async (d: Disparo) => {
     if (!user) return;
-    const { error } = await supabase.from("disparos").insert({
+    const { error } = await api.from("disparos").insert({
       user_id: user.id, nome: `${d.nome} (cópia)`, lista_id: d.lista_id,
       mensagem_template: d.mensagem_template, intervalo_min: d.intervalo_min, intervalo_max: d.intervalo_max,
       pausa_a_cada: d.pausa_a_cada, pausa_duracao: d.pausa_duracao,
@@ -692,7 +692,7 @@ export default function DisparosPage() {
 
   // -------- Logs dialog --------
   const carregarLogs = async (disparoId: string) => {
-    const { data } = await supabase.from("disparo_logs").select("*").eq("disparo_id", disparoId).order("created_at");
+    const { data } = await api.from("disparo_logs").select("*").eq("disparo_id", disparoId).order("created_at");
     setLogs((data as DisparoLog[]) ?? []);
   };
   const abrirLogs = async (d: Disparo) => {
@@ -702,7 +702,7 @@ export default function DisparosPage() {
   };
   const reenviarFalhas = async () => {
     if (!logsDisparo) return;
-    const { error } = await supabase.from("disparo_logs")
+    const { error } = await api.from("disparo_logs")
       .update({ status: "pending", erro: null }).eq("disparo_id", logsDisparo.id).eq("status", "failed");
     if (error) { toast.error(error.message); return; }
     toast.success("Falhas resetadas para pending");

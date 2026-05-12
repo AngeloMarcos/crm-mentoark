@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -120,9 +120,9 @@ export default function LeadsPage() {
     if (!user) return;
     setLoading(true);
     const [{ data: l }, { data: c }, { data: tar }] = await Promise.all([
-      supabase.from("listas").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-      supabase.from("contatos").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-      supabase.from("tarefas").select("contato_id").eq("user_id", user.id).in("status", ["pendente", "em_andamento"]),
+      api.from("listas").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+      api.from("contatos").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+      api.from("tarefas").select("contato_id").eq("user_id", user.id).in("status", ["pendente", "em_andamento"]),
     ]);
     setListas(l ?? []);
     setContatos(c ?? []);
@@ -155,7 +155,7 @@ export default function LeadsPage() {
   // ============ LISTA ============
   const criarLista = async () => {
     if (!novaLista.nome.trim() || !user) return;
-    const { error } = await supabase.from("listas").insert({
+    const { error } = await api.from("listas").insert({
       user_id: user.id,
       nome: novaLista.nome.trim(),
       descricao: novaLista.descricao.trim() || null,
@@ -172,7 +172,7 @@ export default function LeadsPage() {
 
   const removerLista = async (id: string) => {
     if (!confirm("Remover esta lista? Os contatos ficarão sem lista mas não serão apagados.")) return;
-    const { error } = await supabase.from("listas").delete().eq("id", id);
+    const { error } = await api.from("listas").delete().eq("id", id);
     if (error) {
       toast({ title: "Erro", description: error.message, variant: "destructive" });
       return;
@@ -224,8 +224,8 @@ export default function LeadsPage() {
       lista_id: contatoForm.lista_id || null,
     };
     const { error } = editing
-      ? await supabase.from("contatos").update(payload).eq("id", editing.id)
-      : await supabase.from("contatos").insert({ ...payload, user_id: user.id });
+      ? await api.from("contatos").update(payload).eq("id", editing.id)
+      : await api.from("contatos").insert({ ...payload, user_id: user.id });
     if (error) {
       toast({ title: "Erro ao salvar", description: error.message, variant: "destructive" });
       return;
@@ -237,7 +237,7 @@ export default function LeadsPage() {
 
   const removerContato = async (id: string) => {
     if (!confirm("Remover este contato?")) return;
-    const { error } = await supabase.from("contatos").delete().eq("id", id);
+    const { error } = await api.from("contatos").delete().eq("id", id);
     if (error) {
       toast({ title: "Erro", description: error.message, variant: "destructive" });
       return;
@@ -525,7 +525,7 @@ export default function LeadsPage() {
     if (!confirm(`Validar ${ids.length} contato(s) no WhatsApp?\n\nIsso consulta a Evolution API e marca números inexistentes com a tag "whatsapp_invalido".`)) return;
     setValidandoWa(true);
     try {
-      const { data, error } = await supabase.functions.invoke("validar-numeros-whatsapp", {
+      const { data, error } = await api.functions.invoke("validar-numeros-whatsapp", {
         body: { contato_ids: ids },
       });
       if (error) throw error;

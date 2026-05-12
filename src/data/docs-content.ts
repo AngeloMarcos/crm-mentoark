@@ -817,7 +817,7 @@ npm run dev   # porta 3000` },
             type: 'callout',
             variant: 'warn',
             title: 'IMPORTANTE para novos desenvolvedores',
-            text: 'O arquivo src/integrations/supabase/client.ts NÃO usa o Supabase real. É um cliente HTTP customizado que espelha a interface do @supabase/supabase-js mas encaminha todas as chamadas para api.mentoark.com.br. Use normalmente: supabase.from("tabela").select() vai para o backend Express.',
+            text: 'O arquivo src/integrations/supabase/client.ts NÃO usa o Supabase real. É um cliente HTTP customizado que espelha a interface do @supabase/supabase-js mas encaminha todas as chamadas para api.mentoark.com.br. Use normalmente: api.from("tabela").select() vai para o backend Express.',
           },
         ],
       },
@@ -849,10 +849,10 @@ export default function minhaRota(pool: Pool): Router {
 app.use('/api/minha-rota', minhaRota(pool));` },
           { type: 'heading', level: 3, text: 'Frontend — nova página' },
           { type: 'code', lang: 'typescript', label: 'src/pages/MinhaPagina.tsx', code: `import { CRMLayout } from "@/components/CRMLayout";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 
 export default function MinhaPagina() {
-  // supabase.from("minha_tabela").select() → chama /api/minha_tabela
+  // api.from("minha_tabela").select() → chama /api/minha_tabela
   return (
     <CRMLayout>
       <h1>Minha Página</h1>
@@ -879,7 +879,7 @@ export default function MinhaPagina() {
           { type: 'heading', level: 3, text: 'Frontend' },
           { type: 'list', items: [
             'Todas as páginas envolvem com <CRMLayout>',
-            'Usar supabase.from() para todas as chamadas de dados',
+            'Usar api.from() para todas as chamadas de dados',
             'Componentes UI da pasta components/ui/ (shadcn/ui)',
             'Toast de feedback: import { toast } from "sonner"',
             'Auth: import { useAuth } from "@/hooks/useAuth"',

@@ -273,7 +273,7 @@ export async function uploadImagem(url: string, file: File, fields?: Record<stri
 }
 
 // ── Export ────────────────────────────────────────────────────
-export const supabase = {
+export const api = {
   auth,
   from: (table: string) => new QueryBuilder(table),
   functions,
@@ -290,4 +290,4 @@ export const supabase = {
   removeAllChannels: () => {},
 };
 
-export default supabase;
+export default api;

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 
 export interface AppUser {
   id: string;
@@ -41,14 +41,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, sess: any) => {
+    const { data: { subscription } } = api.auth.onAuthStateChange((_event, sess: any) => {
       const s = sess as AppSession | null;
       setSession(s);
       setUser(s?.user ?? null);
       resolveAdmin(s?.user ?? null);
     });
 
-    supabase.auth.getSession().then(({ data }: any) => {
+    api.auth.getSession().then(({ data }: any) => {
       const s = data?.session as AppSession | null;
       setSession(s);
       setUser(s?.user ?? null);
@@ -60,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await api.auth.signOut();
     setUser(null);
     setSession(null);
     setIsAdmin(false);

@@ -15,7 +15,7 @@ import {
   Pause,
   MessageSquare
 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -120,7 +120,7 @@ export default function ContatoDetalhePage() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      api.removeChannel(channel);
     };
   }, [id, toast]);
 

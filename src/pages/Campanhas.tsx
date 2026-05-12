@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -233,7 +233,7 @@ export default function CampanhasPage() {
   };
 
   const remover = async (id: string) => {
-    const { error } = await supabase.from("campanhas").delete().eq("id", id);
+    const { error } = await api.from("campanhas").delete().eq("id", id);
     if (error) {
       toast.error(`Erro ao remover: ${error.message}`);
       return;

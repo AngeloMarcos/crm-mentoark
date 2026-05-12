@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -93,11 +93,11 @@ export default function DashboardPage() {
         msgHojeRes,
         recentesRes
       ] = await Promise.all([
-        supabase.from("dados_cliente").select("id", { count: "exact", head: true }),
-        supabase.from("dados_cliente").select("id", { count: "exact", head: true }).eq("atendimento_ia", true),
-        supabase.from("dados_cliente").select("id", { count: "exact", head: true }).eq("atendimento_ia", false),
-        supabase.from("chat_messages").select("id", { count: "exact", head: true }).gte("created_at", hojeIso),
-        supabase.from("dados_cliente").select("*").order("created_at", { ascending: false }).limit(5)
+        api.from("dados_cliente").select("id", { count: "exact", head: true }),
+        api.from("dados_cliente").select("id", { count: "exact", head: true }).eq("atendimento_ia", true),
+        api.from("dados_cliente").select("id", { count: "exact", head: true }).eq("atendimento_ia", false),
+        api.from("chat_messages").select("id", { count: "exact", head: true }).gte("created_at", hojeIso),
+        api.from("dados_cliente").select("*").order("created_at", { ascending: false }).limit(5)
       ]);
 
       setStats({

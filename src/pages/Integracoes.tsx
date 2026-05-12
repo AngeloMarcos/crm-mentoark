@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";

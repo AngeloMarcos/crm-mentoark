@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
@@ -226,7 +226,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
       };
     });
 
-    const { error } = await supabase.from("contatos").insert(rows);
+    const { error } = await api.from("contatos").insert(rows);
     setImportando(false);
 
     if (error) { toast.error(`Erro ao importar: ${error.message}`); return; }

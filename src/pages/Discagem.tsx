@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -138,7 +138,7 @@ export default function DiscagemPage() {
       .order("created_at", { ascending: false })
       .limit(1);
     if (chamadas?.[0]) {
-      await supabase.from("chamadas").delete().eq("id", chamadas[0].id);
+      await api.from("chamadas").delete().eq("id", chamadas[0].id);
     }
 
     setContatos((prev) =>
@@ -165,7 +165,7 @@ export default function DiscagemPage() {
     };
 
     // 1) registrar chamada
-    const { error: e1 } = await supabase.from("chamadas").insert({
+    const { error: e1 } = await api.from("chamadas").insert({
       user_id: user.id,
       contato_id: atual.id,
       resultado,
@@ -176,7 +176,7 @@ export default function DiscagemPage() {
     const novasNotas = [atual.notas, notas.trim() ? `[${new Date().toLocaleString("pt-BR")}] ${meta.label}: ${notas.trim()}` : null]
       .filter(Boolean).join("\n");
 
-    const { error: e2 } = await supabase.from("contatos").update({
+    const { error: e2 } = await api.from("contatos").update({
       status: meta.novoStatus,
       notas: novasNotas || atual.notas,
     }).eq("id", atual.id);
