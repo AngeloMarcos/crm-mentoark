@@ -34,6 +34,7 @@ export default function GaleriaPage() {
   const [modoSelecao, setModoSelecao] = useState(false);
   const [imagemEditando, setImagemEditando] = useState<GaleriaImagem | null>(null);
   const [formEdit, setFormEdit] = useState({ titulo: "", tags: "" });
+  const [modalRemover, setModalRemover] = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
