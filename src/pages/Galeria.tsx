@@ -317,6 +317,39 @@ export default function GaleriaPage() {
           </div>
         )}
       </div>
+
+      {/* Modal de Edição */}
+      <Dialog open={!!imagemEditando} onOpenChange={(o) => !o && setImagemEditando(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Editar Imagem</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Título</Label>
+              <Input
+                value={formEdit.titulo}
+                onChange={e => setFormEdit({ ...formEdit, titulo: e.target.value })}
+                placeholder="Ex: Banner Natal"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Tags (separadas por vírgula)</Label>
+              <div className="relative">
+                <Tag className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  className="pl-8"
+                  value={formEdit.tags}
+                  onChange={e => setFormEdit({ ...formEdit, tags: e.target.value })}
+                  placeholder="Ex: produto, natal, azul"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setImagemEditando(null)}>Cancelar</Button>
+            <Button onClick={handleSalvarEdicao}>Salvar Alterações</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </CRMLayout>
   );
 }
