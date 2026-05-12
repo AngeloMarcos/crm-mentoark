@@ -58,6 +58,13 @@ export default function CatalogoDetalhePage() {
     nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true
   });
 
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
   const carregar = async () => {
     setLoading(true);
     const { data, error } = await api.from("catalogos").select("*").eq("id", id).single();
