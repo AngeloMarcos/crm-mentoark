@@ -36,6 +36,9 @@ export default function CatalogoDetalhePage() {
   const [modalGaleria, setModalGaleria] = useState(false);
   const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
   const [activeProduto, setActiveProduto] = useState<Produto | null>(null);
+  const [modalSend, setModalSend] = useState<{ open: boolean; type: "product" | "catalog"; id: string }>({
+    open: false, type: "product", id: ""
+  });
   const [form, setForm] = useState({
     nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true
   });
