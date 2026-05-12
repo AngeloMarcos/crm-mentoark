@@ -197,7 +197,8 @@ export default function catalogoRouter(pool: Pool): Router {
       );
       res.status(201).json(r.rows[0]);
     } catch (e: any) {
-      if (req.file) fs.unlinkSync(req.file.path);
+      const file = (req as any).file;
+      if (file) fs.unlinkSync(file.path);
       res.status(500).json({ message: e.message });
     }
   });
