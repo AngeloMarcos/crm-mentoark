@@ -21,7 +21,7 @@ export const nodeTypes: NodeTypes = {
   delay: DelayNode,
   loop: LoopNode,
   memory: MemoryNode,
-  supabase_query: DatabaseQueryNode,
+  database_query: DatabaseQueryNode,
   lead_capture: LeadCaptureNode,
   sentiment: SentimentNode,
   multi_agent: MultiAgentNode,

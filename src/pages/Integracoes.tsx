@@ -103,7 +103,7 @@ const TEMPLATES: Template[] = [
     urlLabel: "URL da Evolution API",
   },
   {
-    tipo: "supabase_vector",
+    tipo: "database_vector",
     nome: "Database Vector",
     descricao: "Banco vetorial (RAG)",
     icone: "Database",
