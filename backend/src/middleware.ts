@@ -15,7 +15,10 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
   const token = header.slice(7);
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    req.userId = payload.sub;
+    if (!payload.sub) {
+      return res.status(401).json({ message: 'Token inválido: sub ausente' });
+    }
+    req.userId   = String(payload.sub);
     req.userRole = payload.role;
     req.userEmail = payload.email;
     next();
