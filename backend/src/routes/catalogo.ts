@@ -181,9 +181,10 @@ export default function catalogoRouter(pool: Pool): Router {
   // POST /api/catalogo/produtos/:produtoId/imagens — upload de imagem
   router.post('/produtos/:produtoId/imagens', upload.single('imagem'), async (req: AuthRequest, res: Response) => {
     try {
-      if (!req.file) return res.status(400).json({ message: 'Nenhuma imagem enviada' });
+      const file = (req as any).file;
+      if (!file) return res.status(400).json({ message: 'Nenhuma imagem enviada' });
       const { legenda, principal = false, ordem = 0 } = req.body;
-      const url = `${BASE_URL}/uploads/${req.file.filename}`;
+      const url = `${BASE_URL}/uploads/${file.filename}`;
 
       if (principal === 'true' || principal === true) {
         await pool.query('UPDATE produto_imagens SET principal = false WHERE produto_id = $1', [req.params.produtoId]);
