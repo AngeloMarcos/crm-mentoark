@@ -191,6 +191,14 @@ export default function GaleriaPage() {
             >
               {modoSelecao ? <><X className="h-4 w-4 mr-1" />Cancelar</> : "Selecionar"}
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setModalRemover(true)}
+            >
+              <Eraser className="h-4 w-4 mr-2" />
+              Remover Fundo
+            </Button>
             <label>
               <Button asChild disabled={uploading}>
                 <span className="cursor-pointer">
