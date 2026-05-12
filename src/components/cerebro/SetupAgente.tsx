@@ -37,6 +37,7 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
   const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [salvando, setSalvando] = useState(false);
+  const [salvo, setSalvo] = useState(false);
   const [testando, setTestando] = useState(false);
 
   const [data, setData] = useState({
