@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Images, Upload, Trash2, Copy, Loader2, Check, X, Pencil, Tag } from "lucide-react";
+import { Images, Upload, Trash2, Copy, Loader2, Check, X, Pencil, Tag, Eraser } from "lucide-react";
 import { toast } from "sonner";
 import { BackgroundRemoverModal } from "@/components/catalogo/BackgroundRemoverModal";
 
