@@ -272,8 +272,21 @@ export default function GaleriaPage() {
                         <Button
                           size="icon"
                           variant="ghost"
+                          className="h-7 w-7 text-white hover:bg-white/20"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setImagemEditando(img);
+                            setFormEdit({ titulo: img.titulo || "", tags: img.tags?.join(", ") || "" });
+                          }}
+                          title="Editar"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
                           className="h-7 w-7 text-white hover:text-red-400 hover:bg-white/20"
-                          onClick={e => { e.stopPropagation(); deletarImagem(img.id); }}
+                          onClick={e => { e.stopPropagation(); if(confirm("Remover imagem?")) deletarImagem(img.id); }}
                           title="Deletar"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
