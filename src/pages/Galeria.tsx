@@ -383,6 +383,12 @@ export default function GaleriaPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <BackgroundRemoverModal
+        open={modalRemover}
+        onOpenChange={setModalRemover}
+        onProcessed={handleProcessed}
+      />
     </CRMLayout>
   );
 }
