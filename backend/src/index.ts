@@ -51,6 +51,12 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 app.use('/auth', authRouter);
 
 // ── Protected routes (JWT required) ─────────────────────────
+// Rota pública do catálogo para n8n (deve vir antes do middleware de auth)
+app.use('/api/catalogo/n8n', (req, res, next) => {
+  // Passa para o router do catálogo, que deve lidar com a rota /n8n/:userId
+  next();
+});
+
 app.use('/api', authMiddleware);
 
 // Standard CRUD tables (generic factory)
