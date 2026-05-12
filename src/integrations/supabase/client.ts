@@ -278,12 +278,14 @@ export const supabase = {
   from: (table: string) => new QueryBuilder(table),
   functions,
   // Stubs para compatibilidade (sem Realtime real)
-  channel: (_name: string) => ({ 
-    on: (_type: string, _filter: any, _callback: (p: any) => void) => ({ 
-      subscribe: () => ({ unsubscribe: () => {} }) 
-    }),
-    subscribe: () => ({ unsubscribe: () => {} })
-  }),
+  channel: (_name: string) => {
+    const ch: any = {
+      on: (_event: string, _filter: any, _callback: (p: any) => void) => ch,
+      subscribe: () => ch,
+      unsubscribe: () => {},
+    };
+    return ch;
+  },
   removeChannel: (_ch: any) => {},
   removeAllChannels: () => {},
 };
