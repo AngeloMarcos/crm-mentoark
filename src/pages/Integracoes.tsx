@@ -39,6 +39,7 @@ import {
   Plug,
   MapPin,
   Brain,
+  Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -75,6 +76,7 @@ const iconMap = {
   RefreshCw,
   MapPin,
   Brain,
+  Volume2,
 } as const;
 
 const statusConfig: Record<IntegStatus, { label: string; color: string; icon: any }> = {
@@ -150,6 +152,14 @@ const TEMPLATES: Template[] = [
     campos: { api_key: true },
     urlLabel: "",
   },
+  {
+    tipo: "elevenlabs",
+    nome: "ElevenLabs",
+    descricao: "Síntese de voz para respostas de áudio via IA",
+    icone: "Volume2",
+    campos: { api_key: true },
+    urlLabel: "",
+  },
 ];
 
 function formatarData(iso: string | null) {
@@ -217,10 +227,25 @@ export default function IntegracoesPage() {
 
   const testarConexao = async () => {
     if (!template) return;
-    if (!form.url) { toast.error("Informe a URL para testar."); return; }
+    if (!form.url && template.tipo !== "elevenlabs") { toast.error("Informe a URL para testar."); return; }
     setTestando(true);
     try {
-      if (template.tipo === "evolution") {
+      if (template.tipo === "elevenlabs") {
+        const token = localStorage.getItem("access_token");
+        const apiUrl = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+        const res = await fetch(`${apiUrl}/api/elevenlabs/voices`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const count = Array.isArray(data) ? data.length : (data.voices?.length ?? 0);
+          setForm((f) => ({ ...f, status: "conectado" }));
+          toast.success(`ElevenLabs conectado — ${count} vozes disponíveis`);
+        } else {
+          setForm((f) => ({ ...f, status: "erro" }));
+          toast.error("API Key inválida ou sem permissão");
+        }
+      } else if (template.tipo === "evolution") {
         if (!form.api_key) { toast.error("Informe a API Key para testar."); setTestando(false); return; }
         const url = form.url.replace(/\/$/, "") + "/instance/fetchInstances";
         const res = await fetch(url, {
@@ -488,7 +513,7 @@ export default function IntegracoesPage() {
                   </Select>
                 </div>
 
-                {template.campos.url && (
+                {(template.campos.url || template.tipo === "elevenlabs") && (
                   <Button
                     variant="secondary"
                     className="w-full"
