@@ -147,7 +147,7 @@ function IntervaloEditor({
   useEffect(() => { setMaxStr(String(intervaloMax)); }, [intervaloMax]);
 
   const persistir = async (min: number, max: number) => {
-    const minClamp = Math.max(1, Math.min(3600, Math.floor(min) || 1));
+    const minClamp = Math.max(30, Math.min(3600, Math.floor(min) || 30));
     const maxClamp = Math.max(minClamp, Math.min(3600, Math.floor(max) || minClamp));
     setMinStr(String(minClamp));
     setMaxStr(String(maxClamp));
@@ -186,7 +186,7 @@ function IntervaloEditor({
           <Label className="text-[11px] text-muted-foreground">Mín (segundos)</Label>
           <Input
             type="number"
-            min={1}
+            min={30}
             max={3600}
             value={minStr}
             onChange={(e) => setMinStr(e.target.value)}
@@ -199,7 +199,7 @@ function IntervaloEditor({
           <Label className="text-[11px] text-muted-foreground">Máx (segundos)</Label>
           <Input
             type="number"
-            min={1}
+            min={30}
             max={3600}
             value={maxStr}
             onChange={(e) => setMaxStr(e.target.value)}
@@ -339,6 +339,7 @@ export default function DisparosPage() {
         .from("contatos")
         .select("id, nome, telefone, empresa")
         .eq("user_id", user.id).eq("lista_id", listaId)
+        .eq("opt_out", false)
         .not("telefone", "is", null);
       setListaContatos((data as Contato[]) ?? []);
     };
@@ -604,7 +605,7 @@ export default function DisparosPage() {
     if (pauseFlagRef.current.has(d.id)) return;
 
     // Sortear intervalo e agendar próximo (clamp defensivo: min>=1, max>=min)
-    const minS = Math.max(1, Number(d.intervalo_min) || 1);
+    const minS = Math.max(30, Number(d.intervalo_min) || 30);
     const maxS = Math.max(minS, Number(d.intervalo_max) || minS);
     const intervalo = Math.floor(Math.random() * (maxS - minS + 1)) + minS;
     const ms = intervalo * 1000;
@@ -702,10 +703,13 @@ export default function DisparosPage() {
   };
   const reenviarFalhas = async () => {
     if (!logsDisparo) return;
-    const { error } = await api.from("disparo_logs")
-      .update({ status: "pending", erro: null }).eq("disparo_id", logsDisparo.id).eq("status", "failed");
+    const { count, error } = await api.from("disparo_logs")
+      .update({ status: "pending", erro: null })
+      .eq("disparo_id", logsDisparo.id)
+      .eq("status", "failed")
+      .lte("tentativas", 3);
     if (error) { toast.error(error.message); return; }
-    toast.success("Falhas resetadas para pending");
+    toast.success(`${count || 0} falhas resetadas para reenvio (máx 3 tentativas)`);
     await carregarLogs(logsDisparo.id);
   };
   const filteredLogs = useMemo(
