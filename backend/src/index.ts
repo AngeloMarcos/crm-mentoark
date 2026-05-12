@@ -20,6 +20,7 @@ import usuariosRouter from './routes/usuarios';
 import functionsRouter from './routes/functions';
 import leadsBuscarRouter from './routes/leads-buscar';
 import catalogoRouter from './routes/catalogo';
+import webhookRouter from './routes/webhook';
 import { initCronJobs } from './cron';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
@@ -50,6 +51,7 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ── Public routes ───────────────────────────────────────────
 app.use('/auth', authRouter);
+app.use('/webhook', webhookRouter(pool));
 
 // Endpoint público do catálogo para n8n (sem JWT)
 app.get('/api/catalogo/n8n/:userId', async (req, res) => {
