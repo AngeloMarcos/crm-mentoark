@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { api } from "@/integrations/database/client";
 
+const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
+
 export interface AppUser {
   id: string;
   email: string;
@@ -23,21 +25,41 @@ interface AuthContextValue {
   isAdmin: boolean;
   loading: boolean;
   signOut: () => Promise<void>;
+  modulos: string[];
+  hasModulo: (key: string) => boolean;
+  modulosLoading: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AppUser | null>(null);
-  const [session, setSession] = useState<AppSession | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser]           = useState<AppUser | null>(null);
+  const [session, setSession]     = useState<AppSession | null>(null);
+  const [isAdmin, setIsAdmin]     = useState(false);
+  const [loading, setLoading]     = useState(true);
+  const [modulos, setModulos]     = useState<string[]>([]);
+  const [modulosLoading, setModulosLoading] = useState(true);
 
   const resolveAdmin = (u: AppUser | null) => {
     if (!u) { setIsAdmin(false); return; }
-    // Role is embedded in the JWT — no extra network call needed
     const role = u.role ?? u.app_metadata?.role ?? u.user_metadata?.role;
-    setIsAdmin(role === 'admin');
+    setIsAdmin(role === "admin");
+  };
+
+  const carregarModulos = async (token: string) => {
+    try {
+      const r = await fetch(`${API_BASE}/api/modulos`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const data = await r.json();
+        setModulos(Array.isArray(data) ? data : []);
+      }
+    } catch {
+      // fallback silencioso
+    } finally {
+      setModulosLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -46,6 +68,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(s);
       setUser(s?.user ?? null);
       resolveAdmin(s?.user ?? null);
+
+      if (_event === "SIGNED_IN" && s?.access_token) {
+        carregarModulos(s.access_token);
+      }
+      if (_event === "SIGNED_OUT") {
+        setModulos([]);
+        setModulosLoading(false);
+      }
     });
 
     api.auth.getSession().then(({ data }: any) => {
@@ -54,20 +84,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(s?.user ?? null);
       resolveAdmin(s?.user ?? null);
       setLoading(false);
+
+      if (s?.access_token) {
+        carregarModulos(s.access_token);
+      } else {
+        setModulosLoading(false);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  const hasModulo = (key: string): boolean => {
+    if (isAdmin) return true;
+    return modulos.includes(key);
+  };
 
   const signOut = async () => {
     await api.auth.signOut();
     setUser(null);
     setSession(null);
     setIsAdmin(false);
+    setModulos([]);
+    setModulosLoading(false);
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, isAdmin, loading, signOut }}>
+    <AuthContext.Provider value={{
+      user, session, isAdmin, loading, signOut,
+      modulos, hasModulo, modulosLoading,
+    }}>
       {children}
     </AuthContext.Provider>
   );
@@ -82,6 +128,9 @@ export function useAuth() {
       isAdmin: false,
       loading: true,
       signOut: async () => {},
+      modulos: [],
+      hasModulo: () => false,
+      modulosLoading: true,
     };
   }
   return ctx;

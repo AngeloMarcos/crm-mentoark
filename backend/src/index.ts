@@ -23,6 +23,7 @@ import catalogoRouter from './routes/catalogo';
 import webhookRouter from './routes/webhook';
 import elevenLabsRouter from './routes/elevenlabs';
 import galeriaRouter from './routes/galeria';
+import modulosRouter from './routes/modulos';
 import { initCronJobs } from './cron';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
@@ -137,6 +138,7 @@ app.use('/api/leads', leadsBuscarRouter(pool));
 app.use('/api/catalogo', catalogoRouter(pool));
 app.use('/api/elevenlabs', elevenLabsRouter(pool));
 app.use('/api/galeria',    galeriaRouter(pool));
+app.use('/api/modulos',   modulosRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));

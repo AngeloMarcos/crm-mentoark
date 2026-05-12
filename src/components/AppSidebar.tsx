@@ -1,6 +1,7 @@
 import {
   LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug,
-  LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch, Contact, BookOpen, LayoutGrid,
+  LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch,
+  Contact, BookOpen, LayoutGrid, Images,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/mentoark-logo.png";
@@ -12,20 +13,22 @@ import {
 } from "@/components/ui/sidebar";
 
 const items = [
-  { title: "Dashboard",         url: "/dashboard",   icon: LayoutDashboard },
-  { title: "Leads",             url: "/leads",       icon: Users           },
-  { title: "Contatos",          url: "/contatos",    icon: Contact         },
-  { title: "Discagem",          url: "/discagem",    icon: PhoneCall       },
-  { title: "Funil de Vendas",   url: "/funil",       icon: Kanban          },
-  { title: "WhatsApp",          url: "/whatsapp",    icon: MessageCircle   },
-  { title: "Disparos",          url: "/disparos",    icon: Send            },
-  { title: "Workflows",         url: "/workflows",   icon: GitBranch       },
-  { title: "Campanhas",         url: "/campanhas",   icon: Megaphone       },
-  { title: "Integrações",       url: "/integracoes", icon: Plug            },
-  { title: "Agentes",           url: "/agentes",     icon: Bot             },
-  { title: "Catálogo",          url: "/catalogo",    icon: LayoutGrid      },
-  { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain           },
-  { title: "Documentação",     url: "/docs",        icon: BookOpen        },
+  { title: "Dashboard",         url: "/dashboard",   icon: LayoutDashboard, modulo: "dashboard"   },
+  { title: "Leads",             url: "/leads",       icon: Users,           modulo: "leads"       },
+  { title: "Contatos",          url: "/contatos",    icon: Contact,         modulo: "contatos"    },
+  { title: "Discagem",          url: "/discagem",    icon: PhoneCall,       modulo: "discagem"    },
+  { title: "Funil de Vendas",   url: "/funil",       icon: Kanban,          modulo: "funil"       },
+  { title: "WhatsApp",          url: "/whatsapp",    icon: MessageCircle,   modulo: "whatsapp"    },
+  { title: "Disparos",          url: "/disparos",    icon: Send,            modulo: "disparos"    },
+  { title: "Campanhas",         url: "/campanhas",   icon: Megaphone,       modulo: "campanhas"   },
+  { title: "Workflows",         url: "/workflows",   icon: GitBranch,       modulo: "workflows"   },
+  { title: "Integrações",       url: "/integracoes", icon: Plug,            modulo: "integracoes" },
+  { title: "Agentes",           url: "/agentes",     icon: Bot,             modulo: "agentes"     },
+  { title: "Catálogo",          url: "/catalogo",    icon: LayoutGrid,      modulo: "catalogo"    },
+  { title: "Galeria",           url: "/galeria",     icon: Images,          modulo: "galeria"     },
+  { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain,           modulo: "cerebro"     },
+  { title: "Documentação",      url: "/docs",        icon: BookOpen,        modulo: "docs"        },
+  { title: "Usuários",          url: "/usuarios",    icon: ShieldCheck,     modulo: "usuarios"    },
 ];
 
 export function AppSidebar() {
@@ -33,16 +36,14 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const navigate = useNavigate();
-  const { isAdmin, signOut } = useAuth();
+  const { hasModulo, signOut } = useAuth();
 
   const handleLogout = async () => {
     await signOut();
     navigate("/login");
   };
 
-  const menuItems = isAdmin
-    ? [...items, { title: "Usuários", url: "/usuarios", icon: ShieldCheck }]
-    : items;
+  const menuItems = items.filter(item => hasModulo(item.modulo));
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border sidebar-gradient">
@@ -57,7 +58,6 @@ export function AppSidebar() {
             <span className="gradient-text-animated">Ark</span>
           </span>
         )}
-        {/* Linha degradê fina abaixo do logo */}
         <div className="absolute bottom-0 left-3 right-3 h-px gradient-brand opacity-40" />
       </div>
 

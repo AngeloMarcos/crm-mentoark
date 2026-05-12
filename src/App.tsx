@@ -22,6 +22,7 @@ import AgentesPage from "./pages/Agentes";
 import UsuariosPage from "./pages/Usuarios";
 import CatalogoPage from "./pages/Catalogo";
 import CatalogoDetalhePage from "./pages/CatalogoDetalhe";
+import GaleriaPage from "./pages/Galeria";
 import WorkflowsPage from "./pages/Workflows";
 import DocsPage from "./pages/Docs";
 import NotFound from "./pages/NotFound";
@@ -39,23 +40,26 @@ const App = () => (
             <Routes>
               <Route path="/" element={<Navigate to="/login" replace />} />
               <Route path="/login" element={<LoginPage />} />
-              <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-              <Route path="/leads" element={<ProtectedRoute><LeadsPage /></ProtectedRoute>} />
-              <Route path="/contatos" element={<ProtectedRoute><ContatosPage /></ProtectedRoute>} />
-              <Route path="/contatos/:id" element={<ProtectedRoute><ContatoDetalhePage /></ProtectedRoute>} />
-              <Route path="/discagem" element={<ProtectedRoute><DiscagemPage /></ProtectedRoute>} />
-              <Route path="/funil" element={<ProtectedRoute><FunilPage /></ProtectedRoute>} />
-              <Route path="/whatsapp" element={<ProtectedRoute><WhatsAppPage /></ProtectedRoute>} />
-              <Route path="/disparos" element={<ProtectedRoute><DisparosPage /></ProtectedRoute>} />
-              <Route path="/campanhas" element={<ProtectedRoute><CampanhasPage /></ProtectedRoute>} />
-              <Route path="/integracoes" element={<ProtectedRoute><IntegracoesPage /></ProtectedRoute>} />
-              <Route path="/cerebro" element={<ProtectedRoute><CerebroPage /></ProtectedRoute>} />
-              <Route path="/agentes" element={<ProtectedRoute><AgentesPage /></ProtectedRoute>} />
-              <Route path="/catalogo" element={<ProtectedRoute><CatalogoPage /></ProtectedRoute>} />
-              <Route path="/catalogo/:id" element={<ProtectedRoute><CatalogoDetalhePage /></ProtectedRoute>} />
-              <Route path="/workflows" element={<ProtectedRoute><WorkflowsPage /></ProtectedRoute>} />
-              <Route path="/usuarios" element={<ProtectedRoute requireAdmin><UsuariosPage /></ProtectedRoute>} />
-              <Route path="/docs" element={<ProtectedRoute><DocsPage /></ProtectedRoute>} />
+
+              <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
+              <Route path="/leads"        element={<ProtectedRoute requireModulo="leads">       <LeadsPage /></ProtectedRoute>} />
+              <Route path="/contatos"     element={<ProtectedRoute requireModulo="contatos">    <ContatosPage /></ProtectedRoute>} />
+              <Route path="/contatos/:id" element={<ProtectedRoute requireModulo="contatos">    <ContatoDetalhePage /></ProtectedRoute>} />
+              <Route path="/discagem"     element={<ProtectedRoute requireModulo="discagem">    <DiscagemPage /></ProtectedRoute>} />
+              <Route path="/funil"        element={<ProtectedRoute requireModulo="funil">       <FunilPage /></ProtectedRoute>} />
+              <Route path="/whatsapp"     element={<ProtectedRoute requireModulo="whatsapp">    <WhatsAppPage /></ProtectedRoute>} />
+              <Route path="/disparos"     element={<ProtectedRoute requireModulo="disparos">    <DisparosPage /></ProtectedRoute>} />
+              <Route path="/campanhas"    element={<ProtectedRoute requireModulo="campanhas">   <CampanhasPage /></ProtectedRoute>} />
+              <Route path="/integracoes"  element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />
+              <Route path="/cerebro"      element={<ProtectedRoute requireModulo="cerebro">     <CerebroPage /></ProtectedRoute>} />
+              <Route path="/agentes"      element={<ProtectedRoute requireModulo="agentes">     <AgentesPage /></ProtectedRoute>} />
+              <Route path="/catalogo"     element={<ProtectedRoute requireModulo="catalogo">    <CatalogoPage /></ProtectedRoute>} />
+              <Route path="/catalogo/:id" element={<ProtectedRoute requireModulo="catalogo">    <CatalogoDetalhePage /></ProtectedRoute>} />
+              <Route path="/galeria"      element={<ProtectedRoute requireModulo="galeria">     <GaleriaPage /></ProtectedRoute>} />
+              <Route path="/workflows"    element={<ProtectedRoute requireModulo="workflows">   <WorkflowsPage /></ProtectedRoute>} />
+              <Route path="/docs"         element={<ProtectedRoute requireModulo="docs">        <DocsPage /></ProtectedRoute>} />
+              <Route path="/usuarios"     element={<ProtectedRoute requireAdmin>               <UsuariosPage /></ProtectedRoute>} />
+
               <Route path="*" element={<NotFound />} />
             </Routes>
           </AuthProvider>
