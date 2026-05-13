@@ -40,9 +40,10 @@ export function WhatsAppStatus() {
       const res = await fetchConnectionStatus();
       addLog(`CheckStatus (Attempt ${retry + 1})`, res);
       
-      // Se estamos tentando confirmar uma conexão que acabou de ocorrer
-      // mas a Evolution ainda retorna 'close', aplicamos o retry com backoff
-      if (retryCountRef.current > 0 && res.state !== 'open' && retry < maxRetries) {
+      // Ajuste na lógica de divergência: se a Evolution retornar que não encontrou a instância (Instance not found),
+      // mas o estado anterior era de pareamento, não forçamos retry de inconsistência.
+      // O retry só deve ocorrer se esperarmos 'open' e vier 'close' (instância existe mas está fechada).
+      if (retryCountRef.current > 0 && res.state === 'close' && !res.message?.includes('not found') && retry < maxRetries) {
         const backoffDelay = Math.min(1000 * Math.pow(2, retry), 8000);
         addLog("Status Inconsistent", `Retrying in ${backoffDelay}ms...`);
         setTimeout(() => checkStatus(retry + 1), backoffDelay);
@@ -52,11 +53,10 @@ export function WhatsAppStatus() {
       setStatus(res);
       if (res.state === 'open') {
         setQrData(null);
-        retryCountRef.current = 0; // Reset ao conectar com sucesso
+        retryCountRef.current = 0;
       }
     } catch (error: any) {
       addLog("CheckStatus Error", error.message);
-      console.error("Erro ao buscar status:", error);
     } finally {
       if (retry === 0 || retry >= maxRetries || status?.state === 'open') {
         setLoading(false);
