@@ -141,6 +141,7 @@ export function BaseVetorial() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={reindexar}><RefreshCw className="h-4 w-4 mr-1" /> Reindexar tudo</Button>
+          <Button variant="outline" size="sm" onClick={() => setOpenUpload(true)}><FileUp className="h-4 w-4 mr-1" /> Upload Documentos</Button>
           <Dialog open={openAdd} onOpenChange={setOpenAdd}>
             <DialogTrigger asChild>
               <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Adicionar documento</Button>
