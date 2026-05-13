@@ -202,6 +202,28 @@ export function WhatsAppStatus() {
 
   return (
     <div className="space-y-4">
+      {lastError && (
+        <Alert variant="destructive" className="animate-in slide-in-from-top-2 duration-300 border-destructive/50 bg-destructive/5">
+          <AlertTriangle className="h-4 w-4" />
+          <div className="flex items-start justify-between gap-4 w-full">
+            <div className="flex-1">
+              <AlertTitle className="text-sm font-bold">Falha na última operação ({lastError.lastAction})</AlertTitle>
+              <AlertDescription className="text-xs mt-1 font-mono opacity-90">
+                [{lastError.timestamp}] {lastError.message}
+              </AlertDescription>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <Button size="sm" variant="outline" onClick={retryLastAction} disabled={autoRetrying} className="h-8 border-destructive/30 hover:bg-destructive/10">
+                {autoRetrying ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                Tentar novamente
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setLastError(null)} className="h-8 px-2">
+                <XCircle className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        </Alert>
+      )}
       <Card className={`border-l-4 ${isConnected ? "border-l-success" : "border-l-warning"} shadow-md overflow-hidden bg-background/50 backdrop-blur-sm`}>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
