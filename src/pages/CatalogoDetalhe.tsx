@@ -40,6 +40,8 @@ interface Produto {
   codigo: string | null;
   estoque: number | null;
   ativo: boolean;
+  marcador?: string;
+  custom_fields?: any;
   imagens: Array<{ id: string; url: string; legenda: string | null; principal: boolean }>;
 }
 
