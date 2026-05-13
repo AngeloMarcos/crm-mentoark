@@ -115,13 +115,16 @@ const SIMPLE_TABLES = [
   'catalogos',
   'produtos',
   'produto_imagens',
+  'dados_cliente',
+  'chat_messages',
+  'chats',
 ];
 for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
 
-// Tabelas compartilhadas (sem user_id) — banco único com Lovable
-const SHARED_TABLES = ['dados_cliente', 'chat_messages', 'chats'];
+// Tabelas compartilhadas (REALMENTE globais, sem user_id)
+const SHARED_TABLES: string[] = [];
 for (const table of SHARED_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table, { userIdCol: null }));
 }

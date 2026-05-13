@@ -2,8 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Images, Upload, Trash2, Copy, Loader2, Check, X } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Images, Upload, Trash2, Copy, Loader2, Check, X, Pencil, Tag, Eraser } from "lucide-react";
 import { toast } from "sonner";
+import { BackgroundRemoverModal } from "@/components/catalogo/BackgroundRemoverModal";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => localStorage.getItem("access_token") || "";
@@ -29,6 +32,9 @@ export default function GaleriaPage() {
   const [busca, setBusca]             = useState("");
   const [selecionadas, setSelecionadas] = useState<string[]>([]);
   const [modoSelecao, setModoSelecao] = useState(false);
+  const [imagemEditando, setImagemEditando] = useState<GaleriaImagem | null>(null);
+  const [formEdit, setFormEdit] = useState({ titulo: "", tags: "" });
+  const [modalRemover, setModalRemover] = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -82,6 +88,29 @@ export default function GaleriaPage() {
     }
   };
 
+  const handleProcessed = async (blob: Blob) => {
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("imagens", blob, "sem-fundo.png");
+    formData.append("tags", JSON.stringify(["sem-fundo"]));
+    try {
+      const r = await fetch(`${API_BASE}/api/galeria/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token()}` },
+        body: formData,
+      });
+      if (r.ok) {
+        toast.success("Imagem processada enviada para galeria");
+        carregar();
+        carregarTags();
+      }
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const deletarImagem = async (id: string) => {
     await fetch(`${API_BASE}/api/galeria/${id}`, {
       method: "DELETE",
@@ -102,6 +131,29 @@ export default function GaleriaPage() {
     setSelecionadas([]);
     setModoSelecao(false);
     carregar();
+  };
+
+  const handleSalvarEdicao = async () => {
+    if (!imagemEditando) return;
+    try {
+      const tagsArray = formEdit.tags.split(",").map(t => t.trim()).filter(Boolean);
+      const r = await fetch(`${API_BASE}/api/galeria/${imagemEditando.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token()}`,
+        },
+        body: JSON.stringify({ titulo: formEdit.titulo, tags: tagsArray }),
+      });
+      if (r.ok) {
+        toast.success("Imagem atualizada");
+        setImagemEditando(null);
+        carregar();
+        carregarTags();
+      }
+    } catch (err: any) {
+      toast.error(err.message);
+    }
   };
 
   const toggleSelecao = (id: string) => {
@@ -138,6 +190,14 @@ export default function GaleriaPage() {
               onClick={() => { setModoSelecao(v => !v); setSelecionadas([]); }}
             >
               {modoSelecao ? <><X className="h-4 w-4 mr-1" />Cancelar</> : "Selecionar"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setModalRemover(true)}
+            >
+              <Eraser className="h-4 w-4 mr-2" />
+              Remover Fundo
             </Button>
             <label>
               <Button asChild disabled={uploading}>
@@ -245,8 +305,21 @@ export default function GaleriaPage() {
                         <Button
                           size="icon"
                           variant="ghost"
+                          className="h-7 w-7 text-white hover:bg-white/20"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setImagemEditando(img);
+                            setFormEdit({ titulo: img.titulo || "", tags: img.tags?.join(", ") || "" });
+                          }}
+                          title="Editar"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
                           className="h-7 w-7 text-white hover:text-red-400 hover:bg-white/20"
-                          onClick={e => { e.stopPropagation(); deletarImagem(img.id); }}
+                          onClick={e => { e.stopPropagation(); if(confirm("Remover imagem?")) deletarImagem(img.id); }}
                           title="Deletar"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -277,6 +350,45 @@ export default function GaleriaPage() {
           </div>
         )}
       </div>
+
+      {/* Modal de Edição */}
+      <Dialog open={!!imagemEditando} onOpenChange={(o) => !o && setImagemEditando(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Editar Imagem</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Título</Label>
+              <Input
+                value={formEdit.titulo}
+                onChange={e => setFormEdit({ ...formEdit, titulo: e.target.value })}
+                placeholder="Ex: Banner Natal"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Tags (separadas por vírgula)</Label>
+              <div className="relative">
+                <Tag className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  className="pl-8"
+                  value={formEdit.tags}
+                  onChange={e => setFormEdit({ ...formEdit, tags: e.target.value })}
+                  placeholder="Ex: produto, natal, azul"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setImagemEditando(null)}>Cancelar</Button>
+            <Button onClick={handleSalvarEdicao}>Salvar Alterações</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <BackgroundRemoverModal
+        open={modalRemover}
+        onOpenChange={setModalRemover}
+        onProcessed={handleProcessed}
+      />
     </CRMLayout>
   );
 }

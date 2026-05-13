@@ -125,14 +125,14 @@ export default function catalogoRouter(pool: Pool): Router {
   // POST /api/catalogo/:catalogoId/produtos
   router.post('/:catalogoId/produtos', async (req: AuthRequest, res: Response) => {
     try {
-      const { nome, descricao, preco, preco_promocional, codigo, estoque, ativo = true, ordem = 0 } = req.body;
+      const { nome, descricao, preco, preco_promocional, codigo, estoque, ativo = true, ordem = 0, custom_fields = {} } = req.body;
       if (!nome?.trim()) return res.status(400).json({ message: 'Nome é obrigatório' });
       const cat = await pool.query('SELECT id FROM catalogos WHERE id = $1 AND user_id = $2', [req.params.catalogoId, req.userId]);
       if (!cat.rows.length) return res.status(404).json({ message: 'Catálogo não encontrado' });
       const r = await pool.query(
-        `INSERT INTO produtos (user_id, catalogo_id, nome, descricao, preco, preco_promocional, codigo, estoque, ativo, ordem)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [req.userId, req.params.catalogoId, nome.trim(), descricao || null, preco || null, preco_promocional || null, codigo || null, estoque || null, ativo, ordem]
+        `INSERT INTO produtos (user_id, catalogo_id, nome, descricao, preco, preco_promocional, codigo, estoque, ativo, ordem, custom_fields)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        [req.userId, req.params.catalogoId, nome.trim(), descricao || null, preco || null, preco_promocional || null, codigo || null, estoque || null, ativo, ordem, JSON.stringify(custom_fields)]
       );
       res.status(201).json(r.rows[0]);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -141,7 +141,7 @@ export default function catalogoRouter(pool: Pool): Router {
   // PUT /api/catalogo/:catalogoId/produtos/:id
   router.put('/:catalogoId/produtos/:id', async (req: AuthRequest, res: Response) => {
     try {
-      const { nome, descricao, preco, preco_promocional, codigo, estoque, ativo, ordem } = req.body;
+      const { nome, descricao, preco, preco_promocional, codigo, estoque, ativo, ordem, custom_fields } = req.body;
       const r = await pool.query(
         `UPDATE produtos SET
           nome = COALESCE($1, nome),
@@ -152,9 +152,10 @@ export default function catalogoRouter(pool: Pool): Router {
           estoque = COALESCE($6, estoque),
           ativo = COALESCE($7, ativo),
           ordem = COALESCE($8, ordem),
+          custom_fields = COALESCE($9, custom_fields),
           updated_at = now()
-         WHERE id = $9 AND user_id = $10 RETURNING *`,
-        [nome || null, descricao || null, preco ?? null, preco_promocional ?? null, codigo || null, estoque ?? null, ativo ?? null, ordem ?? null, req.params.id, req.userId]
+         WHERE id = $10 AND user_id = $11 RETURNING *`,
+        [nome || null, descricao || null, preco ?? null, preco_promocional ?? null, codigo || null, estoque ?? null, ativo ?? null, ordem ?? null, custom_fields ? JSON.stringify(custom_fields) : null, req.params.id, req.userId]
       );
       if (!r.rows.length) return res.status(404).json({ message: 'Produto não encontrado' });
       res.json(r.rows[0]);
@@ -164,7 +165,7 @@ export default function catalogoRouter(pool: Pool): Router {
   // DELETE /api/catalogo/:catalogoId/produtos/:id
   router.delete('/:catalogoId/produtos/:id', async (req: AuthRequest, res: Response) => {
     try {
-      const imgs = await pool.query('SELECT url FROM produto_imagens WHERE produto_id = $1', [req.params.id]);
+      const imgs = await pool.query('SELECT url FROM produto_imagens WHERE produto_id = $1 AND user_id = $2', [req.params.id, req.userId]);
       for (const img of imgs.rows) {
         const file = path.join(UPLOADS_DIR, path.basename(img.url));
         if (fs.existsSync(file)) fs.unlinkSync(file);
@@ -234,10 +235,11 @@ export default function catalogoRouter(pool: Pool): Router {
       const base = (evoUrl || '').replace(/\/$/, '');
 
       for (const numero of contatos) {
+        let statusLog = 'ENVIADO';
+        let erroMsg = null;
         try {
           let resp: any;
           if (produto.img_url) {
-            // Envia como imagem com legenda
             const r = await fetch(`${base}/message/sendMedia/${instancia}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: evoKey },
@@ -251,21 +253,31 @@ export default function catalogoRouter(pool: Pool): Router {
               }),
             });
             resp = await r.json();
+            if (!r.ok) throw new Error(resp.message || 'Erro Evolution API');
           } else {
-            // Sem imagem — envia como texto
             const r = await fetch(`${base}/message/sendText/${instancia}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: evoKey },
               body: JSON.stringify({ number: numero, text: caption }),
             });
             resp = await r.json();
+            if (!r.ok) throw new Error(resp.message || 'Erro Evolution API');
           }
           resultados.push({ numero, status: 'enviado', resp });
         } catch (e: any) {
+          statusLog = 'ERRO';
+          erroMsg = e.message;
           resultados.push({ numero, status: 'erro', erro: e.message });
         }
 
-        // Intervalo anti-ban entre envios
+        // Registrar no Histórico
+        await pool.query(
+          `INSERT INTO catalogo_mensagens_logs 
+           (user_id, tipo, produto_id, telefone, status, mensagem_texto, midia_url, erro_mensagem)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [req.userId, 'PRODUTO', produto_id, numero, statusLog, caption, produto.img_url, erroMsg]
+        );
+
         if (contatos.indexOf(numero) < contatos.length - 1) {
           await new Promise(r => setTimeout(r, Math.max(2000, Number(intervalo_ms))));
         }
@@ -336,6 +348,8 @@ export default function catalogoRouter(pool: Pool): Router {
       const resultados: any[] = [];
 
       for (const numero of contatos) {
+        let statusLog = 'ENVIADO';
+        let erroMsg = null;
         try {
           // 1) Envia mensagem de introdução
           const introText = intro
@@ -380,8 +394,18 @@ export default function catalogoRouter(pool: Pool): Router {
 
           resultados.push({ numero, status: 'enviado', produtos_enviados: produtos.length });
         } catch (e: any) {
+          statusLog = 'ERRO';
+          erroMsg = e.message;
           resultados.push({ numero, status: 'erro', erro: e.message });
         }
+
+        // Registrar no Histórico
+        await pool.query(
+          `INSERT INTO catalogo_mensagens_logs 
+           (user_id, tipo, catalogo_id, telefone, status, mensagem_texto, erro_mensagem)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [req.userId, 'CATALOGO', catalogo_id, numero, statusLog, `Enviado catálogo: ${catalogo.nome} (${produtos.length} produtos)`, erroMsg]
+        );
 
         // Intervalo entre contatos
         if (contatos.indexOf(numero) < contatos.length - 1) {
@@ -400,6 +424,26 @@ export default function catalogoRouter(pool: Pool): Router {
     }
   });
 
+  // ── HISTÓRICO ───────────────────────────────────────────
+
+  // GET /api/catalogo/history — lista histórico de envios
+  router.get('/history', async (req: AuthRequest, res: Response) => {
+    try {
+      const { limit = '50', offset = '0' } = req.query as any;
+      const r = await pool.query(
+        `SELECT l.*, p.nome as produto_nome, c.nome as catalogo_nome
+         FROM catalogo_mensagens_logs l
+         LEFT JOIN produtos p ON p.id = l.produto_id
+         LEFT JOIN catalogos c ON c.id = l.catalogo_id
+         WHERE l.user_id = $1
+         ORDER BY l.created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [req.userId, Number(limit), Number(offset)]
+      );
+      res.json(r.rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // ── IMAGENS ──────────────────────────────────────────────
 
   // POST /api/catalogo/produtos/:produtoId/imagens — upload de imagem
@@ -411,7 +455,7 @@ export default function catalogoRouter(pool: Pool): Router {
       const url = `${BASE_URL}/uploads/${file.filename}`;
 
       if (principal === 'true' || principal === true) {
-        await pool.query('UPDATE produto_imagens SET principal = false WHERE produto_id = $1', [req.params.produtoId]);
+        await pool.query('UPDATE produto_imagens SET principal = false WHERE produto_id = $1 AND user_id = $2', [req.params.produtoId, req.userId]);
       }
 
       const r = await pool.query(

@@ -19,7 +19,11 @@ export default function usuarios(pool: Pool): Router {
   });
 
   // ----- Virtual table: user_roles -----
+<<<<<<< HEAD
   // GET /api/user_roles — returns role info for users (admin only)
+=======
+  // GET /api/user_roles — returns role info for users
+>>>>>>> 904d36cded8e47b0c079ee780dde5b0d285782c4
   router.get('/user_roles', adminMiddleware, async (req: AuthRequest, res: Response) => {
     try {
       let sql = `SELECT id AS user_id, role FROM users`;

@@ -49,6 +49,7 @@ export type Database = {
           ativo: boolean
           created_at: string
           descricao: string | null
+          elevenlabs_model: string | null
           evolution_api_key: string | null
           evolution_instancia: string | null
           evolution_server_url: string | null
@@ -67,6 +68,9 @@ export type Database = {
           tom: string
           updated_at: string
           user_id: string
+          voice_id: string | null
+          voice_similarity: number | null
+          voice_stability: number | null
           webhook_indexacao: string | null
           webhook_principal: string | null
           webhook_teste: string | null
@@ -75,6 +79,7 @@ export type Database = {
           ativo?: boolean
           created_at?: string
           descricao?: string | null
+          elevenlabs_model?: string | null
           evolution_api_key?: string | null
           evolution_instancia?: string | null
           evolution_server_url?: string | null
@@ -93,6 +98,9 @@ export type Database = {
           tom?: string
           updated_at?: string
           user_id: string
+          voice_id?: string | null
+          voice_similarity?: number | null
+          voice_stability?: number | null
           webhook_indexacao?: string | null
           webhook_principal?: string | null
           webhook_teste?: string | null
@@ -101,6 +109,7 @@ export type Database = {
           ativo?: boolean
           created_at?: string
           descricao?: string | null
+          elevenlabs_model?: string | null
           evolution_api_key?: string | null
           evolution_instancia?: string | null
           evolution_server_url?: string | null
@@ -119,6 +128,9 @@ export type Database = {
           tom?: string
           updated_at?: string
           user_id?: string
+          voice_id?: string | null
+          voice_similarity?: number | null
+          voice_stability?: number | null
           webhook_indexacao?: string | null
           webhook_principal?: string | null
           webhook_teste?: string | null
@@ -179,6 +191,106 @@ export type Database = {
         }
         Relationships: []
       }
+      catalogo_mensagens_logs: {
+        Row: {
+          catalogo_id: string | null
+          contato_id: string | null
+          created_at: string | null
+          erro_mensagem: string | null
+          id: string
+          mensagem_texto: string | null
+          midia_url: string | null
+          produto_id: string | null
+          status: string
+          telefone: string
+          tipo: string
+          user_id: string
+        }
+        Insert: {
+          catalogo_id?: string | null
+          contato_id?: string | null
+          created_at?: string | null
+          erro_mensagem?: string | null
+          id?: string
+          mensagem_texto?: string | null
+          midia_url?: string | null
+          produto_id?: string | null
+          status: string
+          telefone: string
+          tipo: string
+          user_id: string
+        }
+        Update: {
+          catalogo_id?: string | null
+          contato_id?: string | null
+          created_at?: string | null
+          erro_mensagem?: string | null
+          id?: string
+          mensagem_texto?: string | null
+          midia_url?: string | null
+          produto_id?: string | null
+          status?: string
+          telefone?: string
+          tipo?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "catalogo_mensagens_logs_catalogo_id_fkey"
+            columns: ["catalogo_id"]
+            isOneToOne: false
+            referencedRelation: "catalogos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "catalogo_mensagens_logs_contato_id_fkey"
+            columns: ["contato_id"]
+            isOneToOne: false
+            referencedRelation: "contatos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "catalogo_mensagens_logs_produto_id_fkey"
+            columns: ["produto_id"]
+            isOneToOne: false
+            referencedRelation: "produtos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      catalogos: {
+        Row: {
+          ativo: boolean | null
+          created_at: string | null
+          descricao: string | null
+          id: string
+          nome: string
+          ordem: number | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean | null
+          created_at?: string | null
+          descricao?: string | null
+          id?: string
+          nome: string
+          ordem?: number | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean | null
+          created_at?: string | null
+          descricao?: string | null
+          id?: string
+          nome?: string
+          ordem?: number | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       chamadas: {
         Row: {
           contato_id: string
@@ -226,6 +338,7 @@ export type Database = {
           message_type: string | null
           nomewpp: string | null
           phone: string | null
+          user_id: string | null
           user_message: string | null
         }
         Insert: {
@@ -236,6 +349,7 @@ export type Database = {
           message_type?: string | null
           nomewpp?: string | null
           phone?: string | null
+          user_id?: string | null
           user_message?: string | null
         }
         Update: {
@@ -246,6 +360,7 @@ export type Database = {
           message_type?: string | null
           nomewpp?: string | null
           phone?: string | null
+          user_id?: string | null
           user_message?: string | null
         }
         Relationships: []
@@ -256,18 +371,21 @@ export type Database = {
           id: number
           phone: string | null
           updated_at: string
+          user_id: string | null
         }
         Insert: {
           created_at?: string
           id?: number
           phone?: string | null
           updated_at?: string
+          user_id?: string | null
         }
         Update: {
           created_at?: string
           id?: number
           phone?: string | null
           updated_at?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -386,6 +504,7 @@ export type Database = {
           nomewpp: string | null
           Setor: string | null
           telefone: string | null
+          user_id: string | null
         }
         Insert: {
           atendimento_ia?: boolean | null
@@ -394,6 +513,7 @@ export type Database = {
           nomewpp?: string | null
           Setor?: string | null
           telefone?: string | null
+          user_id?: string | null
         }
         Update: {
           atendimento_ia?: boolean | null
@@ -402,6 +522,7 @@ export type Database = {
           nomewpp?: string | null
           Setor?: string | null
           telefone?: string | null
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -554,6 +675,42 @@ export type Database = {
         }
         Relationships: []
       }
+      galeria_imagens: {
+        Row: {
+          created_at: string | null
+          filename: string
+          id: string
+          tags: string[] | null
+          tamanho: number | null
+          tipo: string | null
+          titulo: string | null
+          url: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          filename: string
+          id?: string
+          tags?: string[] | null
+          tamanho?: number | null
+          tipo?: string | null
+          titulo?: string | null
+          url: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          filename?: string
+          id?: string
+          tags?: string[] | null
+          tamanho?: number | null
+          tipo?: string | null
+          titulo?: string | null
+          url?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       integracoes_config: {
         Row: {
           api_key: string | null
@@ -633,22 +790,138 @@ export type Database = {
         Row: {
           created_at: string
           id: number
+          instancia: string | null
           message: Json
           session_id: string
+          user_id: string | null
         }
         Insert: {
           created_at?: string
           id?: number
+          instancia?: string | null
           message: Json
           session_id: string
+          user_id?: string | null
         }
         Update: {
           created_at?: string
           id?: number
+          instancia?: string | null
           message?: Json
           session_id?: string
+          user_id?: string | null
         }
         Relationships: []
+      }
+      produto_imagens: {
+        Row: {
+          created_at: string | null
+          galeria_imagem_id: string | null
+          id: string
+          legenda: string | null
+          ordem: number | null
+          principal: boolean | null
+          produto_id: string
+          url: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          galeria_imagem_id?: string | null
+          id?: string
+          legenda?: string | null
+          ordem?: number | null
+          principal?: boolean | null
+          produto_id: string
+          url: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          galeria_imagem_id?: string | null
+          id?: string
+          legenda?: string | null
+          ordem?: number | null
+          principal?: boolean | null
+          produto_id?: string
+          url?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "produto_imagens_galeria_imagem_id_fkey"
+            columns: ["galeria_imagem_id"]
+            isOneToOne: false
+            referencedRelation: "galeria_imagens"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "produto_imagens_produto_id_fkey"
+            columns: ["produto_id"]
+            isOneToOne: false
+            referencedRelation: "produtos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      produtos: {
+        Row: {
+          ativo: boolean | null
+          catalogo_id: string | null
+          codigo: string | null
+          created_at: string | null
+          custom_fields: Json | null
+          descricao: string | null
+          estoque: number | null
+          id: string
+          nome: string
+          ordem: number | null
+          preco: number | null
+          preco_promocional: number | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean | null
+          catalogo_id?: string | null
+          codigo?: string | null
+          created_at?: string | null
+          custom_fields?: Json | null
+          descricao?: string | null
+          estoque?: number | null
+          id?: string
+          nome: string
+          ordem?: number | null
+          preco?: number | null
+          preco_promocional?: number | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean | null
+          catalogo_id?: string | null
+          codigo?: string | null
+          created_at?: string | null
+          custom_fields?: Json | null
+          descricao?: string | null
+          estoque?: number | null
+          id?: string
+          nome?: string
+          ordem?: number | null
+          preco?: number | null
+          preco_promocional?: number | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "produtos_catalogo_id_fkey"
+            columns: ["catalogo_id"]
+            isOneToOne: false
+            referencedRelation: "catalogos"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {

@@ -22,6 +22,7 @@ import AgentesPage from "./pages/Agentes";
 import UsuariosPage from "./pages/Usuarios";
 import CatalogoPage from "./pages/Catalogo";
 import CatalogoDetalhePage from "./pages/CatalogoDetalhe";
+import CatalogoEnviosPage from "./pages/CatalogoEnvios";
 import GaleriaPage from "./pages/Galeria";
 import WorkflowsPage from "./pages/Workflows";
 import DocsPage from "./pages/Docs";
@@ -55,6 +56,7 @@ const App = () => (
               <Route path="/agentes"      element={<ProtectedRoute requireModulo="agentes">     <AgentesPage /></ProtectedRoute>} />
               <Route path="/catalogo"     element={<ProtectedRoute requireModulo="catalogo">    <CatalogoPage /></ProtectedRoute>} />
               <Route path="/catalogo/:id" element={<ProtectedRoute requireModulo="catalogo">    <CatalogoDetalhePage /></ProtectedRoute>} />
+              <Route path="/catalogo/envios" element={<ProtectedRoute requireModulo="catalogo"> <CatalogoEnviosPage /></ProtectedRoute>} />
               <Route path="/galeria"      element={<ProtectedRoute requireModulo="galeria">     <GaleriaPage /></ProtectedRoute>} />
               <Route path="/workflows"    element={<ProtectedRoute requireModulo="workflows">   <WorkflowsPage /></ProtectedRoute>} />
               <Route path="/docs"         element={<ProtectedRoute requireModulo="docs">        <DocsPage /></ProtectedRoute>} />
