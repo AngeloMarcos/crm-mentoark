@@ -508,6 +508,7 @@ export default function WhatsAppPage() {
                 Nenhuma mensagem corresponde à busca
               </p>
             )}
+            </div>
           </div>
         </SheetContent>
       </Sheet>
