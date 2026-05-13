@@ -363,9 +363,10 @@ export default function AgentesPage() {
           </DialogHeader>
 
           <Tabs defaultValue="identidade">
-            <TabsList className="grid grid-cols-2 sm:grid-cols-4 w-full">
+            <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full">
               <TabsTrigger value="identidade">Identidade</TabsTrigger>
               <TabsTrigger value="comportamento">Comportamento</TabsTrigger>
+              <TabsTrigger value="conhecimento">Conhecimento</TabsTrigger>
               <TabsTrigger value="whatsapp">WhatsApp</TabsTrigger>
               <TabsTrigger value="status">Status</TabsTrigger>
             </TabsList>
