@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
-import { Search, Bot, User, Phone, MessageCircle, RefreshCw, Loader2, Copy, ExternalLink, FileDown, UserCheck, Save } from "lucide-react";
+import { Search, Bot, User, Phone, MessageCircle, RefreshCw, Loader2, Copy, ExternalLink, FileDown, UserCheck, Save, Settings } from "lucide-react";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
+import { WhatsAppStatus } from "@/components/WhatsAppStatus";
 
 interface ChatRow {
   id: number;
