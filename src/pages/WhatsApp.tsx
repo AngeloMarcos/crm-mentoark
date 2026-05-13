@@ -112,7 +112,7 @@ export default function WhatsAppPage() {
         const phone = selecionada.session_id;
         const currentMsgs = newRows
           .filter(r => r.phone === phone)
-          .reverse() // Para ficar em ordem cronológica
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) // Para ficar em ordem cronológica correta
           .flatMap(r => {
             const m = [];
             if (r.user_message) m.push({ id: r.id, type: 'human' as const, content: r.user_message, created_at: r.created_at });
