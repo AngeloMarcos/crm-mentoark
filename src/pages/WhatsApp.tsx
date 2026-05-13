@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Search, Bot, User, Phone, MessageCircle, RefreshCw, Loader2, Copy, ExternalLink, FileDown, UserCheck, Save } from "lucide-react";
-import { api } from "@/integrations/database/client";
+import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 
@@ -31,7 +31,7 @@ interface Conversa {
 }
 
 interface LeadInfo {
-  id: string;
+  id: number;
   nome: string;
   status: string;
 }
@@ -94,7 +94,7 @@ export default function WhatsAppPage() {
     // Se o loading inicial já passou, não mostramos spinner global para evitar flickering no polling
     if (rows.length === 0) setLoading(true);
     
-    const { data, error } = await api
+    const { data, error } = await supabase
       .from("chat_messages")
       .select("*")
       .order("created_at", { ascending: false })
@@ -112,7 +112,7 @@ export default function WhatsAppPage() {
         const phone = selecionada.session_id;
         const currentMsgs = newRows
           .filter(r => r.phone === phone)
-          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) // Para ficar em ordem cronológica correta
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
           .flatMap(r => {
             const m = [];
             if (r.user_message) m.push({ id: r.id, type: 'human' as const, content: r.user_message, created_at: r.created_at });
@@ -120,7 +120,6 @@ export default function WhatsAppPage() {
             return m;
           });
         
-        // Só atualiza se o número de mensagens mudou
         if (currentMsgs.length !== selecionada.mensagens.length) {
           setSelecionada(prev => prev ? { ...prev, mensagens: currentMsgs } : null);
         }
@@ -131,28 +130,24 @@ export default function WhatsAppPage() {
 
   useEffect(() => {
     carregar();
-    const i = setInterval(carregar, 5000); // 5s update para tempo real aproximado
-    return () => clearInterval(i);
-  }, [selecionada?.session_id]); // Re-executa se a conversa selecionada mudar para garantir sincronia
+    const channel = supabase.channel('chat_messages_changes').on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => carregar()).subscribe();
+    const i = setInterval(carregar, 10000);
+    return () => {
+      clearInterval(i);
+      supabase.removeChannel(channel);
+    };
+  }, [selecionada?.session_id]);
 
   const filtradas = useMemo(() => {
     const since = PERIODOS[periodo]();
     const filteredRows = since ? rows.filter((r) => r.created_at >= since) : rows;
-    
     const map = new Map<string, Conversa>();
-    
     for (const r of filteredRows) {
       const phone = r.phone || "unknown";
       let cur = map.get(phone);
-      
       const newMessages: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[] = [];
-      if (r.user_message) {
-        newMessages.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
-      }
-      if (r.bot_message) {
-        newMessages.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
-      }
-
+      if (r.user_message) newMessages.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
+      if (r.bot_message) newMessages.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
       if (!cur) {
         map.set(phone, {
           session_id: phone,
@@ -171,7 +166,6 @@ export default function WhatsAppPage() {
         }
       }
     }
-    
     let list = Array.from(map.values());
     const q = search.trim().toLowerCase();
     if (q) {
@@ -188,13 +182,11 @@ export default function WhatsAppPage() {
     const hojeIso = PERIODOS.hoje();
     const hojeRows = rows.filter((r) => r.created_at >= hojeIso);
     const sessoesHoje = new Set(hojeRows.map((r) => r.phone));
-    
     const allSessoes = new Map<string, number>();
     rows.forEach((r) => {
       const p = r.phone || "unknown";
       allSessoes.set(p, (allSessoes.get(p) ?? 0) + 1);
     });
-    
     const maior = allSessoes.size ? Math.max(...allSessoes.values()) : 0;
     const media = allSessoes.size ? Math.round(rows.length / allSessoes.size) : 0;
     return { conversasHoje: sessoesHoje.size, mensagensHoje: hojeRows.length, media, maior };
@@ -205,16 +197,9 @@ export default function WhatsAppPage() {
     const digits = phone.replace(/\D/g, "");
     if (digits.length < 8) return;
     setLeadLoading(true);
-    // Buscamos em dados_cliente que parece ser o padrão aqui
-    const { data } = await api
-      .from("dados_cliente")
-      .select("id, nomewpp, Setor")
-      .ilike("telefone", `%${digits.slice(-9)}%`)
-      .limit(1)
-      .maybeSingle();
-    
+    const { data } = await supabase.from("dados_cliente").select("id, nomewpp, Setor").ilike("telefone", `%${digits.slice(-9)}%`).maybeSingle();
     if (data) {
-      setLead({ id: String(data.id), nome: data.nomewpp || "Sem nome", status: data.Setor || "novo" });
+      setLead({ id: data.id, nome: data.nomewpp || "Sem nome", status: data.Setor || "novo" });
       setLeadStatus(data.Setor || "novo");
     } else {
       setLead(null);
@@ -225,10 +210,7 @@ export default function WhatsAppPage() {
   const salvarStatusLead = async () => {
     if (!lead) return;
     setLeadSaving(true);
-    const { error } = await api
-      .from("dados_cliente")
-      .update({ Setor: leadStatus })
-      .eq("id", lead.id);
+    const { error } = await supabase.from("dados_cliente").update({ Setor: leadStatus }).eq("id", lead.id);
     setLeadSaving(false);
     if (error) {
       toast.error("Erro ao salvar setor");
@@ -239,26 +221,18 @@ export default function WhatsAppPage() {
   };
 
   const abrirConversa = async (c: Conversa) => {
-    setSelecionada(c); // Seta imediatamente para abrir o painel
+    setSelecionada(c);
     setChatSearch("");
     setLead(null);
     setLeadStatus("novo");
     buscarLead(c.session_id);
-
-    const { data, error } = await api
-      .from("chat_messages")
-      .select("*")
-      .eq("phone", c.session_id)
-      .order("created_at", { ascending: true });
-    
+    const { data, error } = await supabase.from("chat_messages").select("*").eq("phone", c.session_id).order("created_at", { ascending: true });
     if (error) return toast.error(error.message);
-    
     const msgs: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[] = [];
     (data || []).forEach(r => {
       if (r.user_message) msgs.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
       if (r.bot_message) msgs.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
     });
-
     setSelecionada({ ...c, mensagens: msgs });
   };
 
@@ -297,9 +271,7 @@ export default function WhatsAppPage() {
     if (!selecionada) return [];
     const q = chatSearch.trim().toLowerCase();
     if (!q) return selecionada.mensagens;
-    return selecionada.mensagens.filter((m) =>
-      m.content.toLowerCase().includes(q),
-    );
+    return selecionada.mensagens.filter((m) => m.content.toLowerCase().includes(q));
   }, [selecionada, chatSearch]);
 
   return (
@@ -315,7 +287,6 @@ export default function WhatsAppPage() {
           </Button>
         </div>
 
-        {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.conversasHoje}</p><p className="text-xs text-muted-foreground">Conversas hoje</p></CardContent></Card>
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.mensagensHoje}</p><p className="text-xs text-muted-foreground">Mensagens hoje</p></CardContent></Card>
@@ -323,7 +294,6 @@ export default function WhatsAppPage() {
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.maior}</p><p className="text-xs text-muted-foreground">Maior conversa</p></CardContent></Card>
         </div>
 
-        {/* Filtros */}
         <div className="flex gap-3 flex-wrap">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -340,7 +310,6 @@ export default function WhatsAppPage() {
           </Select>
         </div>
 
-        {/* Lista */}
         {loading && rows.length === 0 ? (
           <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
         ) : filtradas.length === 0 ? (
@@ -354,11 +323,7 @@ export default function WhatsAppPage() {
             {filtradas.map((c) => {
               const ativa = Date.now() - new Date(c.ultima_atividade).getTime() < 30 * 60 * 1000;
               return (
-                <Card 
-                  key={c.session_id} 
-                  className={`hover:border-primary/30 transition-all cursor-pointer border-l-4 ${ativa ? "border-l-success" : "border-l-transparent"} ${selecionada?.session_id === c.session_id ? "ring-2 ring-primary/20 border-primary/50" : ""}`} 
-                  onClick={() => abrirConversa(c)}
-                >
+                <Card key={c.session_id} className={`hover:border-primary/30 transition-all cursor-pointer border-l-4 ${ativa ? "border-l-success" : "border-l-transparent"} ${selecionada?.session_id === c.session_id ? "ring-2 ring-primary/20 border-primary/50" : ""}`} onClick={() => abrirConversa(c)}>
                   <CardContent className="p-4 flex flex-col h-full">
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-3">
@@ -367,29 +332,17 @@ export default function WhatsAppPage() {
                         </div>
                         <div className="min-w-0">
                           <p className="font-bold text-sm truncate">{c.nome || formatPhone(c.session_id)}</p>
-                          <p className="text-[10px] text-muted-foreground flex items-center gap-1">
-                            <Phone className="h-2.5 w-2.5" /> {c.session_id}
-                          </p>
+                          <p className="text-[10px] text-muted-foreground flex items-center gap-1"><Phone className="h-2.5 w-2.5" /> {c.session_id}</p>
                         </div>
                       </div>
-                      <Badge variant={ativa ? "default" : "secondary"} className="text-[9px] h-4 px-1 animate-pulse-slow">
-                        {ativa ? "Online" : "Offline"}
-                      </Badge>
+                      <Badge variant={ativa ? "default" : "secondary"} className="text-[9px] h-4 px-1 animate-pulse-slow">{ativa ? "Online" : "Offline"}</Badge>
                     </div>
-                    
                     <div className="flex-1 bg-muted/30 rounded p-2 mb-3">
-                      <p className="text-xs text-muted-foreground line-clamp-2 italic">
-                        "{c.ultima_mensagem}"
-                      </p>
+                      <p className="text-xs text-muted-foreground line-clamp-2 italic">"{c.ultima_mensagem}"</p>
                     </div>
-
                     <div className="flex items-center justify-between mt-auto pt-2 border-t border-border/50">
-                      <div className="flex gap-2">
-                        <Badge variant="outline" className="text-[9px] h-4 px-1">{c.total} msg</Badge>
-                      </div>
-                      <span className="text-[10px] text-muted-foreground font-medium">
-                        {relativeTime(c.ultima_atividade)}
-                      </span>
+                      <Badge variant="outline" className="text-[9px] h-4 px-1">{c.total} msg</Badge>
+                      <span className="text-[10px] text-muted-foreground font-medium">{relativeTime(c.ultima_atividade)}</span>
                     </div>
                   </CardContent>
                 </Card>
@@ -399,53 +352,34 @@ export default function WhatsAppPage() {
         )}
       </div>
 
-      {/* Painel de histórico */}
       <Sheet open={!!selecionada} onOpenChange={(o) => !o && setSelecionada(null)}>
         <SheetContent className="w-full sm:max-w-2xl flex flex-col p-0 border-none bg-background shadow-2xl">
           <div className="p-6 border-b bg-muted/20">
             <SheetHeader>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                    <User className="h-6 w-6 text-primary" />
-                  </div>
+                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center"><User className="h-6 w-6 text-primary" /></div>
                   <div>
                     <SheetTitle className="text-xl">{selecionada && (selecionada.nome || formatPhone(selecionada.session_id))}</SheetTitle>
-                    <SheetDescription className="flex items-center gap-1">
-                      <Phone className="h-3 w-3" /> {selecionada?.session_id} • {selecionada?.mensagens.length} mensagens
-                    </SheetDescription>
+                    <SheetDescription className="flex items-center gap-1"><Phone className="h-3 w-3" /> {selecionada?.session_id} • {selecionada?.mensagens.length} mensagens</SheetDescription>
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="icon" variant="outline" onClick={() => selecionada && copiarTelefone(selecionada.session_id)} title="Copiar Telefone">
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                  <Button size="icon" variant="outline" onClick={exportarTxt} title="Exportar Histórico">
-                    <FileDown className="h-4 w-4" />
-                  </Button>
+                  <Button size="icon" variant="outline" onClick={() => selecionada && copiarTelefone(selecionada.session_id)} title="Copiar Telefone"><Copy className="h-4 w-4" /></Button>
+                  <Button size="icon" variant="outline" onClick={exportarTxt} title="Exportar Histórico"><FileDown className="h-4 w-4" /></Button>
                   <Button size="icon" asChild className="bg-whatsapp hover:bg-whatsapp/90 text-white">
-                    <a href={`https://wa.me/${selecionada?.session_id?.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="h-4 w-4" />
-                    </a>
+                    <a href={`https://wa.me/${selecionada?.session_id?.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4" /></a>
                   </Button>
                 </div>
               </div>
             </SheetHeader>
           </div>
-
           <div className="px-6 py-4 flex flex-col flex-1 overflow-hidden">
-            {/* Card do lead vinculado */}
             <div className="rounded-xl border border-border p-4 bg-muted/30 mb-4">
-              {leadLoading ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Buscando lead...
-                </div>
-              ) : lead ? (
+              {leadLoading ? (<div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Buscando lead...</div>) : lead ? (
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center">
-                      <UserCheck className="h-5 w-5 text-success" />
-                    </div>
+                    <div className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center"><UserCheck className="h-5 w-5 text-success" /></div>
                     <div>
                       <p className="text-sm font-bold">{lead.nome}</p>
                       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Lead Identificado</p>
@@ -453,63 +387,33 @@ export default function WhatsAppPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Select value={leadStatus} onValueChange={setLeadStatus}>
-                      <SelectTrigger className="h-9 w-32 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {statusOptions.map((s) => (
-                          <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                        ))}
-                      </SelectContent>
+                      <SelectTrigger className="h-9 w-32 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>{statusOptions.map((s) => (<SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>))}</SelectContent>
                     </Select>
-                    <Button
-                      size="sm"
-                      className="h-9"
-                      onClick={salvarStatusLead}
-                      disabled={leadSaving || leadStatus === lead.status}
-                    >
-                      {leadSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-4 w-4" />}
-                    </Button>
+                    <Button size="sm" className="h-9" onClick={salvarStatusLead} disabled={leadSaving || leadStatus === lead.status}>{leadSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-4 w-4" />}</Button>
                   </div>
                 </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-muted-foreground italic">Lead não encontrado nos contatos</p>
-                  <Button variant="ghost" size="sm" className="h-7 text-[10px]" onClick={() => navigate("/leads")}>Ver todos</Button>
-                </div>
-              )}
+              ) : (<div className="flex items-center justify-between"><p className="text-xs text-muted-foreground italic">Lead não encontrado nos contatos</p><Button variant="ghost" size="sm" className="h-7 text-[10px]" onClick={() => navigate("/leads")}>Ver todos</Button></div>)}
             </div>
-
-            {/* Busca no chat */}
             <div className="relative mb-4">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Buscar palavra-chave nesta conversa..."
-                value={chatSearch}
-                onChange={(e) => setChatSearch(e.target.value)}
-                className="pl-9 h-10 text-sm bg-muted/20 border-none"
-              />
+              <Input placeholder="Buscar palavra-chave nesta conversa..." value={chatSearch} onChange={(e) => setChatSearch(e.target.value)} className="pl-9 h-10 text-sm bg-muted/20 border-none" />
             </div>
-
-          <div className="flex-1 overflow-y-auto mt-3 space-y-3 pr-2">
-            {mensagensFiltradas.map((m, idx) => {
-              const isHuman = m.type === "human";
-              return (
-                <div key={m.id ?? idx} className={`flex ${isHuman ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[80%] rounded-lg px-3 py-2 ${isHuman ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                    {!isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1"><Bot className="h-3 w-3" /> Agente</div>}
-                    {isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1 justify-end"><User className="h-3 w-3" /> Lead</div>}
-                    <p className="text-sm whitespace-pre-wrap break-words">{m.content}</p>
-                    <p className="text-[10px] opacity-60 mt-1 text-right">{new Date(m.created_at).toLocaleString("pt-BR")}</p>
+            <div className="flex-1 overflow-y-auto mt-3 space-y-3 pr-2">
+              {mensagensFiltradas.map((m, idx) => {
+                const isHuman = m.type === "human";
+                return (
+                  <div key={m.id ?? idx} className={`flex ${isHuman ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[80%] rounded-lg px-3 py-2 ${isHuman ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                      {!isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1"><Bot className="h-3 w-3" /> Agente</div>}
+                      {isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1 justify-end"><User className="h-3 w-3" /> Lead</div>}
+                      <p className="text-sm whitespace-pre-wrap break-words">{m.content}</p>
+                      <p className="text-[10px] opacity-60 mt-1 text-right">{new Date(m.created_at).toLocaleString("pt-BR")}</p>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-            {chatSearch && mensagensFiltradas.length === 0 && (
-              <p className="text-center text-sm text-muted-foreground py-8">
-                Nenhuma mensagem corresponde à busca
-              </p>
-            )}
+                );
+              })}
+              {chatSearch && mensagensFiltradas.length === 0 && (<p className="text-center text-sm text-muted-foreground py-8">Nenhuma mensagem corresponde à busca</p>)}
             </div>
           </div>
         </SheetContent>
