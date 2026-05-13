@@ -30,6 +30,7 @@ import {
   rectSortingStrategy 
 } from "@dnd-kit/sortable";
 import { ProductCard } from "@/components/catalogo/ProductCard";
+import { ImportExcelModal } from "@/components/catalogo/ImportExcelModal";
 
 interface Produto {
   id: string;
