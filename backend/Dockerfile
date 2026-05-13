@@ -5,7 +5,7 @@ COPY package*.json ./
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
-RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
+RUN NODE_OPTIONS=--max-old-space-size=1024 npm run build
 
 FROM node:20-alpine AS runner
 
