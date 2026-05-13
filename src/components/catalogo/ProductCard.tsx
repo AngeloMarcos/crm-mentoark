@@ -71,12 +71,22 @@ export function ProductCard({ produto, onSend, onImages, onEdit, onDelete }: Pro
         </div>
         <CardContent className="p-4 flex-1 flex flex-col">
           <div className="flex-1 space-y-2">
-            <h3 className="font-semibold text-sm line-clamp-1">{produto.nome}</h3>
+            <div className="flex items-center justify-between gap-1">
+              <h3 className="font-semibold text-sm line-clamp-1">{produto.nome}</h3>
+              {produto.marcador && (
+                <Badge variant="outline" className="text-[8px] h-4 px-1 uppercase">{produto.marcador}</Badge>
+              )}
+            </div>
             <p className="text-[10px] text-muted-foreground line-clamp-2 min-h-[2.5rem]">{produto.descricao}</p>
-            <div className="flex items-baseline gap-2">
-              <span className="text-sm font-bold text-primary">R$ {Number(produto.preco || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-              {produto.preco_promocional && (
-                <span className="text-[10px] line-through opacity-50">R$ {Number(produto.preco_promocional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-bold text-primary">R$ {Number(produto.preco || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                {produto.preco_promocional && (
+                  <span className="text-[10px] line-through opacity-50">R$ {Number(produto.preco_promocional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                )}
+              </div>
+              {produto.custom_fields?.linha_produto && (
+                <span className="text-[9px] font-medium opacity-70 bg-secondary px-1 rounded">{produto.custom_fields.linha_produto}</span>
               )}
             </div>
           </div>
