@@ -78,9 +78,14 @@ export default function CatalogoPage() {
               <h1 className="text-2xl font-bold">Catálogo de Produtos</h1>
             </div>
           </div>
-          <Button onClick={() => { setEditing(null); setForm({ nome: "", descricao: "", ativo: true }); setModal(true); }}>
-            <Plus className="h-4 w-4 mr-2" /> Novo Catálogo
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => navigate("/catalogo/envios")}>
+              <History className="h-4 w-4 mr-2" /> Histórico
+            </Button>
+            <Button onClick={() => { setEditing(null); setForm({ nome: "", descricao: "", ativo: true }); setModal(true); }}>
+              <Plus className="h-4 w-4 mr-2" /> Novo Catálogo
+            </Button>
+          </div>
         </div>
 
         {loading ? (
