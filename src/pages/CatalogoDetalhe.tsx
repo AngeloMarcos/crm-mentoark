@@ -319,15 +319,69 @@ export default function CatalogoDetalhePage() {
       <Dialog open={modalProduto} onOpenChange={setModalProduto}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{editingProduto ? "Editar" : "Novo"} Produto</DialogTitle></DialogHeader>
-          <div className="space-y-3 pt-4">
-            <Input placeholder="Nome" value={form.nome} onChange={(e) => setForm({...form, nome: e.target.value})} />
-            <Textarea placeholder="Descrição" value={form.descricao} onChange={(e) => setForm({...form, descricao: e.target.value})} />
-            <div className="grid grid-cols-2 gap-2">
-              <Input type="number" placeholder="Preço" value={form.preco} onChange={(e) => setForm({...form, preco: Number(e.target.value)})} />
-              <Input type="number" placeholder="Promocional" value={form.preco_promocional} onChange={(e) => setForm({...form, preco_promocional: Number(e.target.value)})} />
+          <div className="space-y-4 pt-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Nome do Produto</label>
+                <Input placeholder="Ex: Capa Automotiva" value={form.nome} onChange={(e) => setForm({...form, nome: e.target.value})} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Marcador (n8n)</label>
+                <Input placeholder="Ex: GERAL, PROMO" value={form.marcador} onChange={(e) => setForm({...form, marcador: e.target.value})} />
+              </div>
             </div>
-            <Input placeholder="Código" value={form.codigo} onChange={(e) => setForm({...form, codigo: e.target.value})} />
-            <div className="flex items-center gap-2"><Switch checked={form.ativo} onCheckedChange={(v) => setForm({...form, ativo: v})} /> Ativo</div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Descrição (WhatsApp)</label>
+              <Textarea placeholder="Texto que será enviado como legenda no WhatsApp" value={form.descricao} onChange={(e) => setForm({...form, descricao: e.target.value})} />
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Linha</label>
+                <select 
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  value={form.linha_produto} 
+                  onChange={(e) => setForm({...form, linha_produto: e.target.value})}
+                >
+                  <option value="CONVENCIONAL">CONVENCIONAL</option>
+                  <option value="INTERMEDIARIA">INTERMEDIARIA</option>
+                  <option value="PREMIUM">PREMIUM</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Variação</label>
+                <Input placeholder="Ex: Cor Única" value={form.variacao} onChange={(e) => setForm({...form, variacao: e.target.value})} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Costura</label>
+                <Input placeholder="Ex: Dupla" value={form.costura} onChange={(e) => setForm({...form, costura: e.target.value})} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Código/SKU</label>
+                <Input placeholder="Ex: CP-01" value={form.codigo} onChange={(e) => setForm({...form, codigo: e.target.value})} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Preço (R$)</label>
+                <Input type="number" placeholder="0.00" value={form.preco} onChange={(e) => setForm({...form, preco: Number(e.target.value)})} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Preço Promo (R$)</label>
+                <Input type="number" placeholder="0.00" value={form.preco_promocional} onChange={(e) => setForm({...form, preco_promocional: Number(e.target.value)})} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Estoque</label>
+                <Input type="number" placeholder="0" value={form.estoque} onChange={(e) => setForm({...form, estoque: Number(e.target.value)})} />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <Switch checked={form.ativo} onCheckedChange={(v) => setForm({...form, ativo: v})} /> 
+              <span className="text-sm font-medium">Produto Ativo no Catálogo</span>
+            </div>
           </div>
           <DialogFooter><Button onClick={salvarProduto}>Salvar</Button></DialogFooter>
         </DialogContent>
