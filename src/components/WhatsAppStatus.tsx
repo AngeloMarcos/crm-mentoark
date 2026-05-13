@@ -2,15 +2,33 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, RefreshCw, QrCode, CheckCircle2, XCircle, LogOut } from "lucide-react";
+import { Loader2, RefreshCw, QrCode, CheckCircle2, XCircle, LogOut, Terminal, History, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
+import { ScrollArea } from "@/components/ui/scroll-area";
+
+interface DebugLog {
+  timestamp: string;
+  event: string;
+  data: any;
+}
 
 export function WhatsAppStatus() {
   const [status, setStatus] = useState<StatusResult | null>(null);
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
+  const [showDebug, setShowDebug] = useState(false);
+
+  const addLog = (event: string, data: any) => {
+    const log: DebugLog = {
+      timestamp: new Date().toLocaleTimeString(),
+      event,
+      data
+    };
+    setDebugLogs(prev => [log, ...prev].slice(0, 20));
+  };
 
   const checkStatus = async () => {
     try {
