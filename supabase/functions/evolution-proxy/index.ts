@@ -85,14 +85,26 @@ Deno.serve(async (req) => {
 
         // 2. Se não criou agora ou não veio QR, solicita conexão para obter o código
         if (!qrCode) {
-          console.log(`[evolution-proxy] Buscando QR code de conexão para ${instanceName}`)
+          console.log(`[evolution-proxy] Buscando QR code de conexão para ${instanceName}`);
+          
+          // Forçar a geração de um novo par de chaves/QR se necessário, ou apenas buscar o atual
+          // Em algumas versões da Evolution, chamar /connect gera o QR se a instância estiver 'close'
           const connectRes = await fetch(`${EVO_BASE_URL}/instance/connect/${instanceName}`, {
             headers: { 'apikey': EVO_API_KEY }
-          })
-          const connectData = await connectRes.json()
+          });
+          const connectData = await connectRes.json();
           
-          // O QR pode vir em diferentes campos dependendo da versão/estado
-          qrCode = connectData.base64 || connectData.code || connectData.qrcode?.base64
+          console.log(`[evolution-proxy] Connect response data:`, connectData);
+          
+          // Tenta extrair o QR de todas as propriedades possíveis retornadas pela Evolution
+          qrCode = connectData.base64 || 
+                   connectData.code || 
+                   connectData.qrcode?.base64 || 
+                   connectData.instance?.qrcode?.base64;
+        }
+
+        if (!qrCode) {
+          console.log(`[evolution-proxy] QR Code não encontrado nos retornos. Tentando buscar status final.`);
         }
 
         return jsonResponse({
