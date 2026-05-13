@@ -147,6 +147,7 @@ export function WhatsAppStatus() {
       }
     } catch (error: any) {
       addLog("Connection Error", error.message);
+      setLastError({ message: error.message || "Falha na comunicação com a Evolution", timestamp: new Date().toLocaleTimeString(), lastAction: 'create' });
       toast.error(error.message || "Falha na comunicação com a Evolution");
     } finally {
       setActionLoading(false);
