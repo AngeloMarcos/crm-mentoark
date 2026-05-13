@@ -136,9 +136,11 @@ async function upsertContato(pool: Pool, userId: string, telefone: string, nome:
 export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<void> {
   console.log(`[AGT] Processando: instancia=${entrada.instancia} tel=${entrada.telefone}`);
 
-  // 1. Encontrar agente pelo nome da instância
+  // 1. Encontrar agente pelo nome da instância (cada instância pertence a um único user)
   const agenteRes = await pool.query(
-    `SELECT * FROM agentes WHERE evolution_instancia = $1 AND ativo = true LIMIT 1`,
+    `SELECT * FROM agentes
+     WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
+     ORDER BY created_at DESC LIMIT 1`,
     [entrada.instancia]
   );
   if (!agenteRes.rows.length) {
