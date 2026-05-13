@@ -21,7 +21,9 @@ export function WhatsAppStatus() {
   const [actionLoading, setActionLoading] = useState(false);
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   const [showDebug, setShowDebug] = useState(false);
-  
+  const [lastError, setLastError] = useState<{ message: string; timestamp: string; lastAction: 'create' | 'status' | 'logout' } | null>(null);
+  const [autoRetrying, setAutoRetrying] = useState(false);
+
   const retryCountRef = useRef(0);
   const maxRetries = 5;
 
