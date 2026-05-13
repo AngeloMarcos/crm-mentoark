@@ -48,6 +48,7 @@ export function BaseVetorial() {
   const [salvando, setSalvando] = useState(false);
 
   const [openWebhook, setOpenWebhook] = useState(false);
+  const [openUpload, setOpenUpload] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState(() => localStorage.getItem("n8n_webhook_indexar") ?? "");
 
   const carregar = async () => {
