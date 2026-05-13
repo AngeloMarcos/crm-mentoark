@@ -24,6 +24,7 @@ import webhookRouter from './routes/webhook';
 import elevenLabsRouter from './routes/elevenlabs';
 import galeriaRouter from './routes/galeria';
 import modulosRouter from './routes/modulos';
+import whatsappRouter from './routes/whatsapp';
 import { mcpRouter } from './routes/mcp';
 import { initCronJobs } from './cron';
 
@@ -58,8 +59,12 @@ app.use('/auth', authRouter);
 app.use('/webhook', webhookRouter(pool));
 app.use('/mcp', mcpRouter(pool));
 
-// Endpoint público do catálogo para n8n (sem JWT)
+// Endpoint do catálogo para n8n — protegido por segredo compartilhado
 app.get('/api/catalogo/n8n/:userId', async (req, res) => {
+  const secret = (req.headers['x-n8n-secret'] as string) || (req.query.secret as string);
+  if (process.env.N8N_CATALOG_SECRET && secret !== process.env.N8N_CATALOG_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
   try {
     const r = await pool.query(
       `SELECT c.id AS catalogo_id, c.nome AS catalogo, c.descricao AS catalogo_descricao,
@@ -144,6 +149,7 @@ app.use('/api/catalogo', catalogoRouter(pool));
 app.use('/api/elevenlabs', elevenLabsRouter(pool));
 app.use('/api/galeria',    galeriaRouter(pool));
 app.use('/api/modulos',   modulosRouter(pool));
+app.use('/api/whatsapp', whatsappRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));

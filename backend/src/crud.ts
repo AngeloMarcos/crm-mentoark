@@ -119,6 +119,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
   // GET by id
   router.get('/:id', wrap(async (req: AuthRequest, res: Response) => {
     const userId = userIdCol ? req.userId ?? null : null;
+    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
     const params: any[] = [req.params.id];
     let sql = `SELECT * FROM ${tableName} WHERE ${idCol} = $1`;
     if (userIdCol && userId) {
@@ -184,6 +185,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
   // PUT / (bulk update with query filters)
   router.put('/', wrap(async (req: AuthRequest, res: Response) => {
     const userId = userIdCol ? req.userId ?? null : null;
+    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
     const { conditions, params: whereParams, nextIdx } = buildWhere(req.query as any, userIdCol, userId);
 
     if (!conditions.length) {

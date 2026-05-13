@@ -8,7 +8,11 @@ const sessions = new Map<string, SSEServerTransport>();
 
 function checkAuth(req: Request, res: Response): boolean {
   const secret = process.env.MCP_SECRET;
-  if (!secret) return true;
+  if (!secret) {
+    // MCP_SECRET obrigatório — sem ele o endpoint fica indisponível (não aberto)
+    res.status(503).json({ error: 'MCP não disponível: MCP_SECRET não configurado no servidor' });
+    return false;
+  }
   const key =
     (req.headers['x-mcp-key'] as string) ||
     (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
@@ -48,19 +52,20 @@ function buildServer(pool: Pool): McpServer {
   // ── obter_historico_conversa ───────────────────────────────
   server.tool(
     'obter_historico_conversa',
-    'Retorna o histórico de mensagens de uma conversa identificada pelo telefone (session_id)',
+    'Retorna o histórico de mensagens de uma conversa identificada pelo telefone (session_id), filtrado por user_id para isolamento multi-tenant',
     {
+      user_id: z.string().describe('UUID do usuário dono da conversa (obrigatório para isolamento)'),
       session_id: z.string().describe('Telefone no formato 5511999999999 ou session_id'),
       limit: z.number().int().min(1).max(100).optional().default(20),
     },
-    async ({ session_id, limit }) => {
+    async ({ user_id, session_id, limit }) => {
       const r = await pool.query(
         `SELECT session_id, message, created_at
          FROM n8n_chat_histories
-         WHERE session_id = $1
+         WHERE session_id = $1 AND user_id = $2
          ORDER BY created_at DESC
-         LIMIT $2`,
-        [session_id, limit ?? 20],
+         LIMIT $3`,
+        [session_id, user_id, limit ?? 20],
       );
       const linhas = r.rows.reverse().map(row => {
         const msg = typeof row.message === 'string' ? JSON.parse(row.message) : row.message;

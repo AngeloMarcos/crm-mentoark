@@ -7,25 +7,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
-import { Search, Bot, User, Phone, MessageCircle, RefreshCw, Loader2, Copy, ExternalLink, FileDown, UserCheck, Save, Settings } from "lucide-react";
+import { Search, Bot, User, Phone, MessageCircle, RefreshCw, Loader2, Copy, ExternalLink, FileDown, UserCheck, Save } from "lucide-react";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { WhatsAppStatus } from "@/components/WhatsAppStatus";
 
-interface ChatRow {
-  id: number;
-  phone: string;
-  nomewpp: string | null;
-  user_message: string | null;
-  bot_message: string | null;
-  created_at: string;
-}
+const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 
 interface Conversa {
-  session_id: string; // We'll use phone as session_id
+  session_id: string;
   nome: string | null;
-  mensagens: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[];
+  instancia: string | null;
+  mensagens: { role: 'user' | 'assistant'; content: string; created_at: string }[];
   ultima_atividade: string;
   ultima_mensagem: string;
   total: number;
@@ -76,144 +70,82 @@ const PERIODOS = {
 export default function WhatsAppPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [rows, setRows] = useState<ChatRow[]>([]);
+  const [conversas, setConversas] = useState<Conversa[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [periodo, setPeriodo] = useState<keyof typeof PERIODOS>("todos");
   const [selecionada, setSelecionada] = useState<Conversa | null>(null);
 
-  // Lead vinculado à conversa aberta
   const [lead, setLead] = useState<LeadInfo | null>(null);
   const [leadStatus, setLeadStatus] = useState<string>("novo");
   const [leadLoading, setLeadLoading] = useState(false);
   const [leadSaving, setLeadSaving] = useState(false);
 
-  // Busca dentro do chat
   const [chatSearch, setChatSearch] = useState("");
 
-  const carregar = async () => {
-    // Se o loading inicial já passou, não mostramos spinner global para evitar flickering no polling
-    if (rows.length === 0) setLoading(true);
-    
-    const { data, error } = await api
-      .from("chat_messages")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(2000);
-    
-    if (error) {
-      toast.error("Erro ao carregar conversas: " + error.message);
-      setRows([]);
-    } else {
-      const newRows = (data ?? []) as ChatRow[];
-      setRows(newRows);
+  const getToken = () =>
+    localStorage.getItem('access_token') || localStorage.getItem('crm_access_token') || '';
 
-      // Se houver uma conversa aberta, atualiza as mensagens dela em tempo real
-      if (selecionada) {
-        const phone = selecionada.session_id;
-        const currentMsgs = newRows
-          .filter(r => r.phone === phone)
-          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) // Para ficar em ordem cronológica correta
-          .flatMap(r => {
-            const m = [];
-            if (r.user_message) m.push({ id: r.id, type: 'human' as const, content: r.user_message, created_at: r.created_at });
-            if (r.bot_message) m.push({ id: r.id, type: 'ai' as const, content: r.bot_message, created_at: r.created_at });
-            return m;
-          });
-        
-        // Só atualiza se o número de mensagens mudou
-        if (currentMsgs.length !== selecionada.mensagens.length) {
-          setSelecionada(prev => prev ? { ...prev, mensagens: currentMsgs } : null);
-        }
-      }
+  const carregar = async () => {
+    if (conversas.length === 0) setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error('Erro ao carregar conversas');
+      const data: Conversa[] = await res.json();
+      setConversas(data);
+    } catch (err: any) {
+      toast.error(err.message);
     }
     setLoading(false);
   };
 
   useEffect(() => {
     carregar();
-    const i = setInterval(carregar, 5000); // 5s update para tempo real aproximado
+    const i = setInterval(carregar, 5000);
     return () => clearInterval(i);
-  }, [selecionada?.session_id]); // Re-executa se a conversa selecionada mudar para garantir sincronia
+  }, []);
 
   const filtradas = useMemo(() => {
     const since = PERIODOS[periodo]();
-    const filteredRows = since ? rows.filter((r) => r.created_at >= since) : rows;
-    
-    const map = new Map<string, Conversa>();
-    
-    for (const r of filteredRows) {
-      const phone = r.phone || "unknown";
-      let cur = map.get(phone);
-      
-      const newMessages: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[] = [];
-      if (r.user_message) {
-        newMessages.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
-      }
-      if (r.bot_message) {
-        newMessages.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
-      }
+    let list = since
+      ? conversas.filter((c) => c.ultima_atividade >= since)
+      : conversas;
 
-      if (!cur) {
-        map.set(phone, {
-          session_id: phone,
-          nome: r.nomewpp,
-          mensagens: newMessages,
-          ultima_atividade: r.created_at,
-          ultima_mensagem: r.user_message || r.bot_message || "",
-          total: newMessages.length,
-        });
-      } else {
-        cur.mensagens.push(...newMessages);
-        cur.total += newMessages.length;
-        if (new Date(r.created_at) > new Date(cur.ultima_atividade)) {
-          cur.ultima_atividade = r.created_at;
-          cur.ultima_mensagem = r.user_message || r.bot_message || cur.ultima_mensagem;
-        }
-      }
-    }
-    
-    let list = Array.from(map.values());
     const q = search.trim().toLowerCase();
     if (q) {
-      list = list.filter((c) => 
-        c.session_id.toLowerCase().includes(q.replace(/\D/g, "")) || 
+      list = list.filter((c) =>
+        c.session_id.toLowerCase().includes(q.replace(/\D/g, "")) ||
         c.ultima_mensagem.toLowerCase().includes(q) ||
         (c.nome && c.nome.toLowerCase().includes(q))
       );
     }
-    return list.sort((a, b) => (a.ultima_atividade < b.ultima_atividade ? 1 : -1));
-  }, [rows, search, periodo]);
+    return list;
+  }, [conversas, search, periodo]);
 
   const kpis = useMemo(() => {
     const hojeIso = PERIODOS.hoje();
-    const hojeRows = rows.filter((r) => r.created_at >= hojeIso);
-    const sessoesHoje = new Set(hojeRows.map((r) => r.phone));
-    
-    const allSessoes = new Map<string, number>();
-    rows.forEach((r) => {
-      const p = r.phone || "unknown";
-      allSessoes.set(p, (allSessoes.get(p) ?? 0) + 1);
-    });
-    
-    const maior = allSessoes.size ? Math.max(...allSessoes.values()) : 0;
-    const media = allSessoes.size ? Math.round(rows.length / allSessoes.size) : 0;
-    return { conversasHoje: sessoesHoje.size, mensagensHoje: hojeRows.length, media, maior };
-  }, [rows]);
+    const conversasHoje = conversas.filter((c) => c.ultima_atividade >= hojeIso);
+    const mensagensHoje = conversasHoje.reduce((acc, c) => acc + c.total, 0);
+    const totalMsgs = conversas.reduce((acc, c) => acc + c.total, 0);
+    const media = conversas.length ? Math.round(totalMsgs / conversas.length) : 0;
+    const maior = conversas.length ? Math.max(...conversas.map((c) => c.total)) : 0;
+    return { conversasHoje: conversasHoje.length, mensagensHoje, media, maior };
+  }, [conversas]);
 
   const buscarLead = async (phone: string) => {
     if (!user) return;
     const digits = phone.replace(/\D/g, "");
     if (digits.length < 8) return;
     setLeadLoading(true);
-    // Buscamos em dados_cliente que parece ser o padrão aqui
     const { data } = await api
       .from("dados_cliente")
       .select("id, nomewpp, Setor")
       .ilike("telefone", `%${digits.slice(-9)}%`)
       .limit(1)
       .maybeSingle();
-    
+
     if (data) {
       setLead({ id: String(data.id), nome: data.nomewpp || "Sem nome", status: data.Setor || "novo" });
       setLeadStatus(data.Setor || "novo");
@@ -240,27 +172,23 @@ export default function WhatsAppPage() {
   };
 
   const abrirConversa = async (c: Conversa) => {
-    setSelecionada(c); // Seta imediatamente para abrir o painel
-    setChatSearch("");
+    setSelecionada(c);
+    setChatSearch('');
     setLead(null);
-    setLeadStatus("novo");
+    setLeadStatus('novo');
     buscarLead(c.session_id);
 
-    const { data, error } = await api
-      .from("chat_messages")
-      .select("*")
-      .eq("phone", c.session_id)
-      .order("created_at", { ascending: true });
-    
-    if (error) return toast.error(error.message);
-    
-    const msgs: { id: number; type: 'human' | 'ai'; content: string; created_at: string }[] = [];
-    (data || []).forEach(r => {
-      if (r.user_message) msgs.push({ id: r.id, type: 'human', content: r.user_message, created_at: r.created_at });
-      if (r.bot_message) msgs.push({ id: r.id, type: 'ai', content: r.bot_message, created_at: r.created_at });
-    });
-
-    setSelecionada({ ...c, mensagens: msgs });
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(c.session_id)}`,
+        { headers: { Authorization: `Bearer ${getToken()}` } }
+      );
+      if (!res.ok) throw new Error('Erro ao carregar mensagens');
+      const msgs = await res.json();
+      setSelecionada({ ...c, mensagens: msgs });
+    } catch (err: any) {
+      toast.error(err.message);
+    }
   };
 
   const copiarTelefone = (tel: string) => {
@@ -271,7 +199,7 @@ export default function WhatsAppPage() {
   const exportarTxt = () => {
     if (!selecionada) return;
     const linhas = selecionada.mensagens.map((m) => {
-      const isHuman = m.type === "human";
+      const isHuman = m.role === "user";
       const autor = isHuman ? "Lead" : "Agente";
       const data = new Date(m.created_at).toLocaleString("pt-BR");
       return `[${data}] ${autor}: ${m.content}`;
@@ -324,7 +252,7 @@ export default function WhatsAppPage() {
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.conversasHoje}</p><p className="text-xs text-muted-foreground">Conversas hoje</p></CardContent></Card>
-          <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.conversasHoje}</p><p className="text-xs text-muted-foreground">Conversas hoje</p></CardContent></Card>
+          <Card><CardContent className="p-4"><p className="text-2xl font-bold">{conversas.length}</p><p className="text-xs text-muted-foreground">Total conversas</p></CardContent></Card>
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.mensagensHoje}</p><p className="text-xs text-muted-foreground">Mensagens hoje</p></CardContent></Card>
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.media}</p><p className="text-xs text-muted-foreground">Média msg/conversa</p></CardContent></Card>
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.maior}</p><p className="text-xs text-muted-foreground">Maior conversa</p></CardContent></Card>
@@ -348,7 +276,7 @@ export default function WhatsAppPage() {
         </div>
 
         {/* Lista */}
-        {loading && rows.length === 0 ? (
+        {loading && conversas.length === 0 ? (
           <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
         ) : filtradas.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -361,9 +289,9 @@ export default function WhatsAppPage() {
             {filtradas.map((c) => {
               const ativa = Date.now() - new Date(c.ultima_atividade).getTime() < 30 * 60 * 1000;
               return (
-                <Card 
-                  key={c.session_id} 
-                  className={`hover:border-primary/30 transition-all cursor-pointer border-l-4 ${ativa ? "border-l-success" : "border-l-transparent"} ${selecionada?.session_id === c.session_id ? "ring-2 ring-primary/20 border-primary/50" : ""}`} 
+                <Card
+                  key={c.session_id}
+                  className={`hover:border-primary/30 transition-all cursor-pointer border-l-4 ${ativa ? "border-l-success" : "border-l-transparent"} ${selecionada?.session_id === c.session_id ? "ring-2 ring-primary/20 border-primary/50" : ""}`}
                   onClick={() => abrirConversa(c)}
                 >
                   <CardContent className="p-4 flex flex-col h-full">
@@ -383,7 +311,7 @@ export default function WhatsAppPage() {
                         {ativa ? "Online" : "Offline"}
                       </Badge>
                     </div>
-                    
+
                     <div className="flex-1 bg-muted/30 rounded p-2 mb-3">
                       <p className="text-xs text-muted-foreground line-clamp-2 italic">
                         "{c.ultima_mensagem}"
@@ -498,25 +426,25 @@ export default function WhatsAppPage() {
               />
             </div>
 
-          <div className="flex-1 overflow-y-auto mt-3 space-y-3 pr-2">
-            {mensagensFiltradas.map((m, idx) => {
-              const isHuman = m.type === "human";
-              return (
-                <div key={m.id ?? idx} className={`flex ${isHuman ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[80%] rounded-lg px-3 py-2 ${isHuman ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                    {!isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1"><Bot className="h-3 w-3" /> Agente</div>}
-                    {isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1 justify-end"><User className="h-3 w-3" /> Lead</div>}
-                    <p className="text-sm whitespace-pre-wrap break-words">{m.content}</p>
-                    <p className="text-[10px] opacity-60 mt-1 text-right">{new Date(m.created_at).toLocaleString("pt-BR")}</p>
+            <div className="flex-1 overflow-y-auto mt-3 space-y-3 pr-2">
+              {mensagensFiltradas.map((m, idx) => {
+                const isHuman = m.role === "user";
+                return (
+                  <div key={idx} className={`flex ${isHuman ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[80%] rounded-lg px-3 py-2 ${isHuman ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                      {!isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1"><Bot className="h-3 w-3" /> Agente</div>}
+                      {isHuman && <div className="flex items-center gap-1 text-xs opacity-70 mb-1 justify-end"><User className="h-3 w-3" /> Lead</div>}
+                      <p className="text-sm whitespace-pre-wrap break-words">{m.content}</p>
+                      <p className="text-[10px] opacity-60 mt-1 text-right">{new Date(m.created_at).toLocaleString("pt-BR")}</p>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-            {chatSearch && mensagensFiltradas.length === 0 && (
-              <p className="text-center text-sm text-muted-foreground py-8">
-                Nenhuma mensagem corresponde à busca
-              </p>
-            )}
+                );
+              })}
+              {chatSearch && mensagensFiltradas.length === 0 && (
+                <p className="text-center text-sm text-muted-foreground py-8">
+                  Nenhuma mensagem corresponde à busca
+                </p>
+              )}
             </div>
           </div>
         </SheetContent>
