@@ -52,35 +52,33 @@ Deno.serve(async (req) => {
       }
 
       case 'create': {
-        // Tenta criar ou pegar QR
+        console.log(`[evolution-proxy] Creating/fetching QR for ${instanceName}`)
+        // Tenta criar primeiro
         const createRes = await fetch(`${EVO_BASE_URL}/instance/create`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'apikey': EVO_API_KEY },
           body: JSON.stringify({
             instanceName,
             token: EVO_API_KEY,
-            qrcode: true,
-            number: ""
+            qrcode: true
           })
         })
         
         const createData = await createRes.json()
+        let qrCode = createData.qrcode?.base64 || createData.instance?.qrcode?.base64
         
-        // Se já existe, pega o QR code da instância existente
-        if (createRes.status === 400 && createData.message?.includes('already exists')) {
+        // Se não veio no create (ou já existe), busca explicitamente
+        if (!qrCode) {
+          console.log(`[evolution-proxy] QR not in create response, fetching via /connect`)
           const qrRes = await fetch(`${EVO_BASE_URL}/instance/connect/${instanceName}`, {
             headers: { 'apikey': EVO_API_KEY }
           })
           const qrData = await qrRes.json()
-          return jsonResponse({
-            qrCode: qrData.base64 || qrData.code,
-            instanceName,
-            state: 'connecting'
-          })
+          qrCode = qrData.base64 || qrData.code
         }
 
         return jsonResponse({
-          qrCode: createData.qrcode?.base64,
+          qrCode,
           instanceName,
           state: 'connecting'
         })
