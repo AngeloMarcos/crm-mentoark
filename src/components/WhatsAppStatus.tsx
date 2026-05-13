@@ -17,12 +17,12 @@ export function WhatsAppStatus() {
       setLoading(true);
       const res = await fetchConnectionStatus();
       setStatus(res);
-      if (res.state === 'close') {
-        // If closed, maybe try to get a QR code automatically or wait for user
+      // Se conectar enquanto estamos com o QR aberto, limpa o QR
+      if (res.state === 'open') {
+        setQrData(null);
       }
     } catch (error: any) {
       console.error("Erro ao buscar status:", error);
-      toast.error("Erro ao verificar status do WhatsApp");
     } finally {
       setLoading(false);
     }
@@ -47,6 +47,10 @@ export function WhatsAppStatus() {
         try {
           const res = await createInstance();
           setQrData(res);
+          
+          if (res.state === 'open') {
+            checkStatus();
+          }
         } catch (error) {
           console.error("Falha ao regenerar QR:", error);
         }
@@ -61,14 +65,28 @@ export function WhatsAppStatus() {
   const handleConnect = async () => {
     try {
       setActionLoading(true);
-      setQrData(null); // Limpa QR anterior para garantir que o novo seja percebido
+      setQrData(null);
       const res = await createInstance();
       
+      if (res.state === 'open') {
+        toast.success("WhatsApp já está conectado!");
+        setStatus({ state: 'open', phoneNumber: res.phoneNumber });
+        setQrData(null);
+        checkStatus();
+        return;
+      }
+
       if (!res.qrCode && res.state !== 'open') {
-        // Se não veio QR de primeira, tenta uma segunda vez após um pequeno delay
         setTimeout(async () => {
           const retryRes = await createInstance();
-          setQrData(retryRes);
+          if (retryRes.state === 'open') {
+            toast.success("WhatsApp conectado!");
+            setStatus({ state: 'open', phoneNumber: retryRes.phoneNumber });
+            setQrData(null);
+            checkStatus();
+          } else {
+            setQrData(retryRes);
+          }
         }, 2000);
       } else {
         setQrData(res);
@@ -76,9 +94,6 @@ export function WhatsAppStatus() {
 
       if (res.qrCode) {
         toast.info("QR Code gerado. Escaneie no seu WhatsApp.");
-      } else if (res.state === 'open') {
-        toast.success("WhatsApp já está conectado!");
-        checkStatus();
       }
     } catch (error: any) {
       toast.error(error.message || "Erro ao conectar");
