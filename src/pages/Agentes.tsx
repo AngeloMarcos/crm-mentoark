@@ -85,6 +85,9 @@ const formInicial = {
   evolution_server_url: "",
   evolution_api_key: "",
   evolution_instancia: "",
+  rag_ativo: true,
+  rag_threshold: 0.7,
+  rag_resultados: 5,
   ativo: true,
 };
 
