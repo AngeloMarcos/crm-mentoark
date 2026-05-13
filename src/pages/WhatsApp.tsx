@@ -89,7 +89,9 @@ export default function WhatsAppPage() {
   const [chatSearch, setChatSearch] = useState("");
 
   const carregar = async () => {
-    setLoading(true);
+    // Se o loading inicial já passou, não mostramos spinner global para evitar flickering no polling
+    if (rows.length === 0) setLoading(true);
+    
     const { data, error } = await api
       .from("chat_messages")
       .select("*")
@@ -100,7 +102,27 @@ export default function WhatsAppPage() {
       toast.error("Erro ao carregar conversas: " + error.message);
       setRows([]);
     } else {
-      setRows((data ?? []) as ChatRow[]);
+      const newRows = (data ?? []) as ChatRow[];
+      setRows(newRows);
+
+      // Se houver uma conversa aberta, atualiza as mensagens dela em tempo real
+      if (selecionada) {
+        const phone = selecionada.session_id;
+        const currentMsgs = newRows
+          .filter(r => r.phone === phone)
+          .reverse() // Para ficar em ordem cronológica
+          .flatMap(r => {
+            const m = [];
+            if (r.user_message) m.push({ id: r.id, type: 'human' as const, content: r.user_message, created_at: r.created_at });
+            if (r.bot_message) m.push({ id: r.id, type: 'ai' as const, content: r.bot_message, created_at: r.created_at });
+            return m;
+          });
+        
+        // Só atualiza se o número de mensagens mudou
+        if (currentMsgs.length !== selecionada.mensagens.length) {
+          setSelecionada(prev => prev ? { ...prev, mensagens: currentMsgs } : null);
+        }
+      }
     }
     setLoading(false);
   };
