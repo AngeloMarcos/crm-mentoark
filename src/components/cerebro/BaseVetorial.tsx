@@ -8,10 +8,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Brain, Database, Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Brain, Database, Loader2, Plus, RefreshCw, Search, Trash2, FileUp } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
+import { UploadDocumentos } from "./UploadDocumentos";
 
 interface DocumentoRAG {
   id: number;
@@ -47,6 +48,7 @@ export function BaseVetorial() {
   const [salvando, setSalvando] = useState(false);
 
   const [openWebhook, setOpenWebhook] = useState(false);
+  const [openUpload, setOpenUpload] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState(() => localStorage.getItem("n8n_webhook_indexar") ?? "");
 
   const carregar = async () => {
@@ -139,6 +141,7 @@ export function BaseVetorial() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={reindexar}><RefreshCw className="h-4 w-4 mr-1" /> Reindexar tudo</Button>
+          <Button variant="outline" size="sm" onClick={() => setOpenUpload(true)}><FileUp className="h-4 w-4 mr-1" /> Upload Documentos</Button>
           <Dialog open={openAdd} onOpenChange={setOpenAdd}>
             <DialogTrigger asChild>
               <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Adicionar documento</Button>
@@ -272,6 +275,9 @@ export function BaseVetorial() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Upload de Documentos */}
+      <UploadDocumentos open={openUpload} onOpenChange={setOpenUpload} onUploaded={carregar} />
     </div>
   );
 }
