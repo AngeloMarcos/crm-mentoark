@@ -62,7 +62,7 @@ interface Agente {
 }
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
-const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
+const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "claude-3-5-sonnet", "gemini-1.5-pro"];
 
 const formInicial = {
   nome: "",
