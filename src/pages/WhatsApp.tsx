@@ -305,19 +305,25 @@ export default function WhatsAppPage() {
 
   return (
     <CRMLayout>
-      <div className="space-y-4">
+      <div className="space-y-6">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">WhatsApp</h1>
-            <p className="text-muted-foreground text-sm">Histórico real de conversas do agente IA</p>
+            <p className="text-muted-foreground text-sm">Gerencie sua conexão e acompanhe as interações do agente</p>
           </div>
-          <Button variant="outline" size="sm" onClick={carregar} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} /> Atualizar
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={carregar} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} /> Atualizar
+            </Button>
+          </div>
         </div>
+
+        {/* Status da Conexão Evolution */}
+        <WhatsAppStatus />
 
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.conversasHoje}</p><p className="text-xs text-muted-foreground">Conversas hoje</p></CardContent></Card>
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.conversasHoje}</p><p className="text-xs text-muted-foreground">Conversas hoje</p></CardContent></Card>
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.mensagensHoje}</p><p className="text-xs text-muted-foreground">Mensagens hoje</p></CardContent></Card>
           <Card><CardContent className="p-4"><p className="text-2xl font-bold">{kpis.media}</p><p className="text-xs text-muted-foreground">Média msg/conversa</p></CardContent></Card>
