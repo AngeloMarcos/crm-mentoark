@@ -275,6 +275,9 @@ export function BaseVetorial() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Upload de Documentos */}
+      <UploadDocumentos open={openUpload} onOpenChange={setOpenUpload} onUploaded={carregar} />
     </div>
   );
 }
