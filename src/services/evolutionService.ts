@@ -32,7 +32,7 @@ async function getAuthData(): Promise<{ user_id: string; instance_name?: string 
 
     return { 
       user_id: userId, 
-      instance_name: config?.instancia || undefined 
+      instance_name: GLOBAL_INSTANCE_NAME 
     };
   } catch (e) {
     throw new Error('Não autenticado');
