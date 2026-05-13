@@ -113,13 +113,24 @@ export default function CatalogoDetalhePage() {
       : `/api/catalogo/${id}/produtos`;
     
     try {
+      const payload = {
+        ...form,
+        custom_fields: {
+          ...(editingProduto?.custom_fields || {}),
+          linha_produto: form.linha_produto,
+          variacao: form.variacao,
+          costura: form.costura,
+          descricao: form.descricao // Sincroniza descrição com custom_fields para o n8n
+        }
+      };
+
       const r = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}${url}`, {
         method: editingProduto ? "PUT" : "POST",
         headers: { 
           "Content-Type": "application/json",
           Authorization: `Bearer ${localStorage.getItem("access_token")}` 
         },
-        body: JSON.stringify(form)
+        body: JSON.stringify(payload)
       });
       if (r.ok) {
         toast.success(editingProduto ? "Produto atualizado" : "Produto criado");
