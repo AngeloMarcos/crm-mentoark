@@ -59,6 +59,7 @@ export function WhatsAppStatus() {
       }
     } catch (error: any) {
       addLog("CheckStatus Error", error.message);
+      setLastError({ message: error.message || "Falha ao consultar status", timestamp: new Date().toLocaleTimeString(), lastAction: 'status' });
       console.error("Erro ao buscar status:", error);
     } finally {
       if (retry === 0 || retry >= maxRetries || status?.state === 'open') {
