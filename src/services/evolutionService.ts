@@ -13,13 +13,12 @@ export interface StatusResult {
   phoneNumber?: string;
 }
 
-function getUserId(): string {
+async function getUserId(): Promise<string> {
   try {
-    const raw = localStorage.getItem('crm_user');
-    if (!raw) throw new Error('Não autenticado');
-    const u = JSON.parse(raw);
-    const id = u?.id || u?.user_id;
-    if (!id) throw new Error('Usuário sem id');
+    const { api } = await import('@/integrations/database/client');
+    const { data } = await api.auth.getUser();
+    const id = data?.user?.id;
+    if (!id) throw new Error('Não autenticado');
     return id;
   } catch (e) {
     throw new Error('Não autenticado');
@@ -27,7 +26,7 @@ function getUserId(): string {
 }
 
 async function call(action: string) {
-  const user_id = getUserId();
+  const user_id = await getUserId();
   const res = await callEdgeFunction<any>('evolution-proxy', {
     method: 'POST',
     body: { action, user_id },
