@@ -70,6 +70,7 @@ const formInicial = {
   descricao: "",
   persona: "",
   tom: "profissional",
+  idioma: "Português BR",
   objetivo: "",
   mensagem_boas_vindas: "",
   regras: "",
