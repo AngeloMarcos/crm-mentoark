@@ -324,7 +324,7 @@ export default function WhatsAppPage() {
             <p className="text-sm text-muted-foreground mt-1">Quando o agente IA conversar via WhatsApp, o histórico aparecerá aqui.</p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {filtradas.map((c) => {
               const ativa = Date.now() - new Date(c.ultima_atividade).getTime() < 30 * 60 * 1000;
               return (
