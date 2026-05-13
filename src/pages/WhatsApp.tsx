@@ -431,59 +431,63 @@ export default function WhatsAppPage() {
             </SheetHeader>
           </div>
 
-          {/* Card do lead vinculado */}
-          <div className="mt-3 rounded-lg border border-border p-3 bg-muted/30">
-            {leadLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Buscando lead...
-              </div>
-            ) : lead ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <UserCheck className="h-4 w-4 text-success" />
-                  <p className="text-sm font-medium">{lead.nome}</p>
-                  <Badge variant="outline" className="text-xs">{lead.status}</Badge>
+          <div className="px-6 py-4 flex flex-col flex-1 overflow-hidden">
+            {/* Card do lead vinculado */}
+            <div className="rounded-xl border border-border p-4 bg-muted/30 mb-4">
+              {leadLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Buscando lead...
                 </div>
-                <div className="flex items-center gap-2">
-                  <Select value={leadStatus} onValueChange={setLeadStatus}>
-                    <SelectTrigger className="h-8 text-xs flex-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {statusOptions.map((s) => (
-                        <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    size="sm"
-                    onClick={salvarStatusLead}
-                    disabled={leadSaving || leadStatus === lead.status}
-                  >
-                    {leadSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                  </Button>
+              ) : lead ? (
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center">
+                      <UserCheck className="h-5 w-5 text-success" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold">{lead.nome}</p>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Lead Identificado</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Select value={leadStatus} onValueChange={setLeadStatus}>
+                      <SelectTrigger className="h-9 w-32 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {statusOptions.map((s) => (
+                          <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="sm"
+                      className="h-9"
+                      onClick={salvarStatusLead}
+                      disabled={leadSaving || leadStatus === lead.status}
+                    >
+                      {leadSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-4 w-4" />}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">Lead não encontrado nos contatos</p>
-            )}
-          </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground italic">Lead não encontrado nos contatos</p>
+                  <Button variant="ghost" size="sm" className="h-7 text-[10px]" onClick={() => navigate("/leads")}>Ver todos</Button>
+                </div>
+              )}
+            </div>
 
-          {/* Busca no chat */}
-          <div className="relative mt-3">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Buscar nesta conversa..."
-              value={chatSearch}
-              onChange={(e) => setChatSearch(e.target.value)}
-              className="pl-9 h-9 text-sm"
-            />
-            {chatSearch && (
-              <p className="text-xs text-muted-foreground mt-1">
-                {mensagensFiltradas.length} de {selecionada?.mensagens.length} mensagens
-              </p>
-            )}
-          </div>
+            {/* Busca no chat */}
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar palavra-chave nesta conversa..."
+                value={chatSearch}
+                onChange={(e) => setChatSearch(e.target.value)}
+                className="pl-9 h-10 text-sm bg-muted/20 border-none"
+              />
+            </div>
 
           <div className="flex-1 overflow-y-auto mt-3 space-y-3 pr-2">
             {mensagensFiltradas.map((m, idx) => {
