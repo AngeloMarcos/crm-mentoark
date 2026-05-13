@@ -32,6 +32,7 @@ Deno.serve(async (req) => {
     if (!userId) return jsonResponse({ error: 'Missing user_id' }, 400)
 
     const instanceName = body.instance_name || `user_${userId.slice(0, 8)}`
+    console.log(`[evolution-proxy] User: ${userId}, Instance: ${instanceName}, Action: ${action}`)
 
     switch (action) {
       case 'status': {
