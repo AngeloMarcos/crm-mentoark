@@ -31,7 +31,7 @@ interface Conversa {
 }
 
 interface LeadInfo {
-  id: string;
+  id: number;
   nome: string;
   status: string;
 }
@@ -213,7 +213,7 @@ export default function WhatsAppPage() {
       .maybeSingle();
     
     if (data) {
-      setLead({ id: String(data.id), nome: data.nomewpp || "Sem nome", status: data.Setor || "novo" });
+      setLead({ id: data.id, nome: data.nomewpp || "Sem nome", status: data.Setor || "novo" });
       setLeadStatus(data.Setor || "novo");
     } else {
       setLead(null);
