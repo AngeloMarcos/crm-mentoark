@@ -125,14 +125,14 @@ export default function catalogoRouter(pool: Pool): Router {
   // POST /api/catalogo/:catalogoId/produtos
   router.post('/:catalogoId/produtos', async (req: AuthRequest, res: Response) => {
     try {
-      const { nome, descricao, preco, preco_promocional, codigo, estoque, ativo = true, ordem = 0 } = req.body;
+      const { nome, descricao, preco, preco_promocional, codigo, estoque, ativo = true, ordem = 0, custom_fields = {} } = req.body;
       if (!nome?.trim()) return res.status(400).json({ message: 'Nome é obrigatório' });
       const cat = await pool.query('SELECT id FROM catalogos WHERE id = $1 AND user_id = $2', [req.params.catalogoId, req.userId]);
       if (!cat.rows.length) return res.status(404).json({ message: 'Catálogo não encontrado' });
       const r = await pool.query(
-        `INSERT INTO produtos (user_id, catalogo_id, nome, descricao, preco, preco_promocional, codigo, estoque, ativo, ordem)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [req.userId, req.params.catalogoId, nome.trim(), descricao || null, preco || null, preco_promocional || null, codigo || null, estoque || null, ativo, ordem]
+        `INSERT INTO produtos (user_id, catalogo_id, nome, descricao, preco, preco_promocional, codigo, estoque, ativo, ordem, custom_fields)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        [req.userId, req.params.catalogoId, nome.trim(), descricao || null, preco || null, preco_promocional || null, codigo || null, estoque || null, ativo, ordem, JSON.stringify(custom_fields)]
       );
       res.status(201).json(r.rows[0]);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
