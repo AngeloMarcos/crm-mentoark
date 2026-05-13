@@ -37,6 +37,8 @@ import {
   EyeOff,
   Plug,
   MessageCircle,
+  Brain,
+  Database,
 } from "lucide-react";
 import { toast } from "sonner";
 
