@@ -61,12 +61,23 @@ export function WhatsAppStatus() {
   const handleConnect = async () => {
     try {
       setActionLoading(true);
+      setQrData(null); // Limpa QR anterior para garantir que o novo seja percebido
       const res = await createInstance();
-      setQrData(res);
+      
+      if (!res.qrCode && res.state !== 'open') {
+        // Se não veio QR de primeira, tenta uma segunda vez após um pequeno delay
+        setTimeout(async () => {
+          const retryRes = await createInstance();
+          setQrData(retryRes);
+        }, 2000);
+      } else {
+        setQrData(res);
+      }
+
       if (res.qrCode) {
         toast.info("QR Code gerado. Escaneie no seu WhatsApp.");
       } else if (res.state === 'open') {
-        toast.success("WhatsApp conectado!");
+        toast.success("WhatsApp já está conectado!");
         checkStatus();
       }
     } catch (error: any) {
