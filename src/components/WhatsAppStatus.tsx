@@ -174,6 +174,19 @@ export function WhatsAppStatus() {
     }
   };
 
+  const retryLastAction = async () => {
+    if (!lastError) return;
+    setAutoRetrying(true);
+    try {
+      if (lastError.lastAction === 'create') await handleConnect();
+      else if (lastError.lastAction === 'logout') await handleDisconnect();
+      else await checkStatus();
+      setLastError(null);
+    } finally {
+      setAutoRetrying(false);
+    }
+  };
+
   if (loading && !status) {
     return (
       <Card className="border-primary/20 bg-primary/5">
