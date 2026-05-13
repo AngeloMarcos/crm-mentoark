@@ -347,6 +347,8 @@ export default function catalogoRouter(pool: Pool): Router {
       const resultados: any[] = [];
 
       for (const numero of contatos) {
+        let statusLog = 'ENVIADO';
+        let erroMsg = null;
         try {
           // 1) Envia mensagem de introdução
           const introText = intro
@@ -391,8 +393,18 @@ export default function catalogoRouter(pool: Pool): Router {
 
           resultados.push({ numero, status: 'enviado', produtos_enviados: produtos.length });
         } catch (e: any) {
+          statusLog = 'ERRO';
+          erroMsg = e.message;
           resultados.push({ numero, status: 'erro', erro: e.message });
         }
+
+        // Registrar no Histórico
+        await pool.query(
+          `INSERT INTO catalogo_mensagens_logs 
+           (user_id, tipo, catalogo_id, telefone, status, mensagem_texto, erro_mensagem)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [req.userId, 'CATALOGO', catalogo_id, numero, statusLog, `Enviado catálogo: ${catalogo.nome} (${produtos.length} produtos)`, erroMsg]
+        );
 
         // Intervalo entre contatos
         if (contatos.indexOf(numero) < contatos.length - 1) {
