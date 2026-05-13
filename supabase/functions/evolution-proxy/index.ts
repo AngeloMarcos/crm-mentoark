@@ -36,39 +36,50 @@ Deno.serve(async (req) => {
 
     switch (action) {
       case 'status': {
-        const res = await fetch(`${EVO_BASE_URL}/instance/connectionStatus/${instanceName}`, {
-          headers: { 'apikey': EVO_API_KEY }
-        })
-        const data = await res.json()
-        
-        if (res.status === 404) {
-           return jsonResponse({ state: 'close' })
-        }
+        try {
+          const res = await fetch(`${EVO_BASE_URL}/instance/connectionStatus/${instanceName}`, {
+            headers: { 'apikey': EVO_API_KEY }
+          })
+          
+          if (res.status === 404) {
+             return jsonResponse({ state: 'close', message: 'Instance not found' })
+          }
 
-        return jsonResponse({
-          state: data.instance?.state || 'close',
-          phoneNumber: data.instance?.ownerJid?.split(':')[0]
-        })
+          const data = await res.json()
+          console.log(`[evolution-proxy] Status raw for ${instanceName}:`, data)
+          
+          return jsonResponse({
+            state: data.instance?.state || 'close',
+            phoneNumber: data.instance?.ownerJid?.split(':')[0],
+            raw: data
+          })
+        } catch (e) {
+          console.error(`[evolution-proxy] Status error:`, e)
+          return jsonResponse({ state: 'close', error: e.message })
+        }
       }
 
       case 'create': {
         console.log(`[evolution-proxy] Inciando criação/conexão para ${instanceName}`)
         
-        // 1. Verifica status atual para saber se já está open
+        // 1. Verifica status atual
         const statusRes = await fetch(`${EVO_BASE_URL}/instance/connectionStatus/${instanceName}`, {
           headers: { 'apikey': EVO_API_KEY }
         })
-        const statusData = await statusRes.json()
-
-        if (statusData.instance?.state === 'open') {
-          return jsonResponse({
-            state: 'open',
-            phoneNumber: statusData.instance?.ownerJid?.split(':')[0],
-            instanceName
-          })
+        
+        if (statusRes.ok) {
+          const statusData = await statusRes.json()
+          if (statusData.instance?.state === 'open') {
+            return jsonResponse({
+              state: 'open',
+              phoneNumber: statusData.instance?.ownerJid?.split(':')[0],
+              instanceName
+            })
+          }
         }
 
-        // 2. Tenta criar se não existir (ou garantir que existe)
+        // 2. Tenta criar se não existir (ou forçar reset se estiver em loop)
+        console.log(`[evolution-proxy] Chamando create para ${instanceName}`)
         const createRes = await fetch(`${EVO_BASE_URL}/instance/create`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'apikey': EVO_API_KEY },
@@ -80,14 +91,18 @@ Deno.serve(async (req) => {
         })
         
         const createData = await createRes.json()
+        console.log(`[evolution-proxy] Create response:`, createData)
+        
         let qrCode = createData.qrcode?.base64 || createData.instance?.qrcode?.base64
 
-        // 3. Se não veio QR, força conexão
+        // 3. Busca QR via connect se não veio no create
         if (!qrCode) {
+          console.log(`[evolution-proxy] Buscando QR via connect para ${instanceName}`)
           const connectRes = await fetch(`${EVO_BASE_URL}/instance/connect/${instanceName}`, {
             headers: { 'apikey': EVO_API_KEY }
           })
           const connectData = await connectRes.json()
+          console.log(`[evolution-proxy] Connect response:`, connectData)
           
           if (connectData.instance?.state === 'open') {
              return jsonResponse({
@@ -106,20 +121,26 @@ Deno.serve(async (req) => {
         return jsonResponse({
           qrCode,
           instanceName,
-          state: 'connecting'
+          state: qrCode ? 'connecting' : 'close',
+          raw: createData
         })
       }
 
       case 'logout': {
-        // Usa logout primeiro, depois delete para garantir
-        await fetch(`${EVO_BASE_URL}/instance/logout/${instanceName}`, {
-          method: 'DELETE',
-          headers: { 'apikey': EVO_API_KEY }
-        })
-        await fetch(`${EVO_BASE_URL}/instance/delete/${instanceName}`, {
-          method: 'DELETE',
-          headers: { 'apikey': EVO_API_KEY }
-        })
+        console.log(`[evolution-proxy] Full reset para ${instanceName}`)
+        try {
+          await fetch(`${EVO_BASE_URL}/instance/logout/${instanceName}`, {
+            method: 'DELETE',
+            headers: { 'apikey': EVO_API_KEY }
+          }).catch(() => {})
+          
+          await fetch(`${EVO_BASE_URL}/instance/delete/${instanceName}`, {
+            method: 'DELETE',
+            headers: { 'apikey': EVO_API_KEY }
+          }).catch(() => {})
+        } catch (e) {
+          console.warn(`[evolution-proxy] Delete error (safe to ignore):`, e)
+        }
         return jsonResponse({ success: true })
       }
 
@@ -127,8 +148,9 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: 'Action not supported' }, 400)
     }
   } catch (error: any) {
-    console.error(`[evolution-proxy] Erro:`, error)
+    console.error(`[evolution-proxy] Erro fatal:`, error)
     return jsonResponse({ error: error.message }, 500)
   }
 })
+
 

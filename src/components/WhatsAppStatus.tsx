@@ -114,9 +114,11 @@ export function WhatsAppStatus() {
       addLog("Initial Connect Response", res);
       
       if (res.state === 'open') {
-        toast.success("Conexão detectada! Sincronizando...");
+        toast.success("WhatsApp conectado!");
+        setStatus({ state: 'open', phoneNumber: res.phoneNumber });
+        setQrData(null);
         retryCountRef.current = 1;
-        await checkStatus();
+        setTimeout(() => checkStatus(), 1000);
         return;
       }
 
