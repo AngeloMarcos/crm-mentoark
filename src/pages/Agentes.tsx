@@ -47,6 +47,7 @@ interface Agente {
   descricao: string | null;
   persona: string | null;
   tom: string;
+  idioma?: string;
   objetivo: string | null;
   mensagem_boas_vindas: string | null;
   regras: string | null;
