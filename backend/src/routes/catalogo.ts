@@ -141,7 +141,7 @@ export default function catalogoRouter(pool: Pool): Router {
   // PUT /api/catalogo/:catalogoId/produtos/:id
   router.put('/:catalogoId/produtos/:id', async (req: AuthRequest, res: Response) => {
     try {
-      const { nome, descricao, preco, preco_promocional, codigo, estoque, ativo, ordem } = req.body;
+      const { nome, descricao, preco, preco_promocional, codigo, estoque, ativo, ordem, custom_fields } = req.body;
       const r = await pool.query(
         `UPDATE produtos SET
           nome = COALESCE($1, nome),
@@ -152,9 +152,10 @@ export default function catalogoRouter(pool: Pool): Router {
           estoque = COALESCE($6, estoque),
           ativo = COALESCE($7, ativo),
           ordem = COALESCE($8, ordem),
+          custom_fields = COALESCE($9, custom_fields),
           updated_at = now()
-         WHERE id = $9 AND user_id = $10 RETURNING *`,
-        [nome || null, descricao || null, preco ?? null, preco_promocional ?? null, codigo || null, estoque ?? null, ativo ?? null, ordem ?? null, req.params.id, req.userId]
+         WHERE id = $10 AND user_id = $11 RETURNING *`,
+        [nome || null, descricao || null, preco ?? null, preco_promocional ?? null, codigo || null, estoque ?? null, ativo ?? null, ordem ?? null, custom_fields ? JSON.stringify(custom_fields) : null, req.params.id, req.userId]
       );
       if (!r.rows.length) return res.status(404).json({ message: 'Produto não encontrado' });
       res.json(r.rows[0]);
