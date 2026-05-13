@@ -62,7 +62,8 @@ export default function CatalogoDetalhePage() {
     open: false, type: "product", id: ""
   });
   const [form, setForm] = useState({
-    nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true
+    nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true,
+    marcador: "GERAL", linha_produto: "CONVENCIONAL", variacao: "", costura: ""
   });
 
   const sensors = useSensors(
