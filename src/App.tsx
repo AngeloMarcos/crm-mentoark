@@ -22,6 +22,7 @@ import AgentesPage from "./pages/Agentes";
 import UsuariosPage from "./pages/Usuarios";
 import CatalogoPage from "./pages/Catalogo";
 import CatalogoDetalhePage from "./pages/CatalogoDetalhe";
+import CatalogoEnviosPage from "./pages/CatalogoEnvios";
 import GaleriaPage from "./pages/Galeria";
 import WorkflowsPage from "./pages/Workflows";
 import DocsPage from "./pages/Docs";
