@@ -72,6 +72,7 @@ const PERIODOS = {
 } as const;
 
 export default function WhatsAppPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [rows, setRows] = useState<ChatRow[]>([]);
   const [loading, setLoading] = useState(true);
