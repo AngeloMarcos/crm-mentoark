@@ -60,26 +60,31 @@ Deno.serve(async (req) => {
       }
 
       case 'create': {
-        // Tenta criar primeiro
+        console.log(`[evolution-proxy] Creating/fetching QR for ${instanceName}`)
+        // Tenta criar primeiro com a integração correta
         const createRes = await fetch(`${EVO_BASE_URL}/instance/create`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'apikey': EVO_API_KEY },
           body: JSON.stringify({
             instanceName,
+            integration: "WHATSAPP-BAILEYS",
             qrcode: true
           })
         })
         
         const createData = await createRes.json()
+        console.log(`[evolution-proxy] Create response status ${createRes.status}:`, createData)
 
         let qrCode = createData.qrcode?.base64 || createData.instance?.qrcode?.base64
         
         if (!qrCode) {
+          console.log(`[evolution-proxy] QR not in create response, fetching via /instance/connect/${instanceName}`)
           const qrRes = await fetch(`${EVO_BASE_URL}/instance/connect/${instanceName}`, {
             headers: { 'apikey': EVO_API_KEY }
           })
           const qrData = await qrRes.json()
-          qrCode = qrData.base64 || qrData.code || qrData.qrcode?.base64
+          console.log(`[evolution-proxy] Connect response:`, qrData)
+          qrCode = qrData.base64 || qrData.code || qrData.qrcode?.base64 || qrData.instance?.qrcode?.base64
         }
 
         return jsonResponse({
