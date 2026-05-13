@@ -13,6 +13,7 @@ export interface CreateInstanceResult {
 export interface StatusResult {
   state: 'open' | 'close' | 'connecting';
   phoneNumber?: string;
+  message?: string;
 }
 
 async function getAuthData(): Promise<{ user_id: string; instance_name?: string }> {
