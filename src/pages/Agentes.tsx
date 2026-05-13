@@ -37,6 +37,8 @@ import {
   EyeOff,
   Plug,
   MessageCircle,
+  Brain,
+  Database,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -47,6 +49,7 @@ interface Agente {
   descricao: string | null;
   persona: string | null;
   tom: string;
+  idioma?: string;
   objetivo: string | null;
   mensagem_boas_vindas: string | null;
   regras: string | null;
@@ -56,19 +59,23 @@ interface Agente {
   evolution_instancia: string | null;
   evolution_api_key: string | null;
   evolution_server_url: string | null;
+  rag_ativo: boolean | null;
+  rag_threshold: number | null;
+  rag_resultados: number | null;
   ativo: boolean;
   created_at: string;
   updated_at: string;
 }
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
-const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
+const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "claude-3-5-sonnet", "gemini-1.5-pro"];
 
 const formInicial = {
   nome: "",
   descricao: "",
   persona: "",
   tom: "profissional",
+  idioma: "Português BR",
   objetivo: "",
   mensagem_boas_vindas: "",
   regras: "",
@@ -78,6 +85,9 @@ const formInicial = {
   evolution_server_url: "",
   evolution_api_key: "",
   evolution_instancia: "",
+  rag_ativo: true,
+  rag_threshold: 0.7,
+  rag_resultados: 5,
   ativo: true,
 };
 
@@ -138,6 +148,7 @@ export default function AgentesPage() {
       descricao: a.descricao ?? "",
       persona: a.persona ?? "",
       tom: a.tom,
+      idioma: a.idioma ?? "Português BR",
       objetivo: a.objetivo ?? "",
       mensagem_boas_vindas: a.mensagem_boas_vindas ?? "",
       regras: a.regras ?? "",
@@ -147,6 +158,9 @@ export default function AgentesPage() {
       evolution_server_url: a.evolution_server_url ?? "",
       evolution_api_key: a.evolution_api_key ?? "",
       evolution_instancia: a.evolution_instancia ?? "",
+      rag_ativo: a.rag_ativo ?? true,
+      rag_threshold: a.rag_threshold ?? 0.7,
+      rag_resultados: a.rag_resultados ?? 5,
       ativo: a.ativo,
     });
     setShowKey(false);
@@ -165,6 +179,7 @@ export default function AgentesPage() {
       descricao: form.descricao.trim() || null,
       persona: form.persona.trim() || null,
       tom: form.tom,
+      idioma: form.idioma,
       objetivo: form.objetivo.trim() || null,
       mensagem_boas_vindas: form.mensagem_boas_vindas.trim() || null,
       regras: form.regras.trim() || null,
@@ -174,6 +189,9 @@ export default function AgentesPage() {
       evolution_server_url: form.evolution_server_url.trim() || null,
       evolution_api_key: form.evolution_api_key.trim() || null,
       evolution_instancia: form.evolution_instancia.trim() || null,
+      rag_ativo: form.rag_ativo,
+      rag_threshold: form.rag_threshold,
+      rag_resultados: form.rag_resultados,
       ativo: form.ativo,
     };
 
@@ -359,9 +377,10 @@ export default function AgentesPage() {
           </DialogHeader>
 
           <Tabs defaultValue="identidade">
-            <TabsList className="grid grid-cols-2 sm:grid-cols-4 w-full">
+            <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full">
               <TabsTrigger value="identidade">Identidade</TabsTrigger>
               <TabsTrigger value="comportamento">Comportamento</TabsTrigger>
+              <TabsTrigger value="conhecimento">Conhecimento</TabsTrigger>
               <TabsTrigger value="whatsapp">WhatsApp</TabsTrigger>
               <TabsTrigger value="status">Status</TabsTrigger>
             </TabsList>
@@ -395,23 +414,42 @@ export default function AgentesPage() {
                   rows={4}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Tom de Voz</Label>
-                <Select
-                  value={form.tom}
-                  onValueChange={(v) => setForm({ ...form, tom: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TONS.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {t}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Tom de Voz</Label>
+                  <Select
+                    value={form.tom}
+                    onValueChange={(v) => setForm({ ...form, tom: v })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TONS.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Idioma</Label>
+                  <Select
+                    value={form.idioma || "Português BR"}
+                    onValueChange={(v) => setForm({ ...form, idioma: v })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Português BR">Português BR</SelectItem>
+                      <SelectItem value="Português PT">Português PT</SelectItem>
+                      <SelectItem value="Espanhol">Espanhol</SelectItem>
+                      <SelectItem value="Inglês">Inglês</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label>Objetivo Principal</Label>
@@ -491,6 +529,58 @@ export default function AgentesPage() {
                     setForm({ ...form, max_tokens: Number(e.target.value) })
                   }
                 />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="conhecimento" className="space-y-4 pt-4">
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
+                <div className="flex items-center gap-2 text-primary">
+                  <Brain className="h-5 w-5" />
+                  <h3 className="font-semibold">Cérebro do Agente (RAG)</h3>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  O Cérebro permite que o agente consulte informações específicas sobre seu negócio, FAQ e scripts em tempo real.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>RAG Ativo</Label>
+                    <div className="flex items-center gap-2">
+                      <Switch 
+                        checked={form.rag_ativo ?? true} 
+                        onCheckedChange={(v) => setForm({ ...form, rag_ativo: v })} 
+                      />
+                      <span className="text-xs text-muted-foreground">{form.rag_ativo ? "Ligado" : "Desligado"}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Resultados RAG</Label>
+                    <Input 
+                      type="number" 
+                      value={form.rag_resultados ?? 5} 
+                      onChange={(e) => setForm({ ...form, rag_resultados: Number(e.target.value) })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label>Confiança Mínima (Threshold)</Label>
+                    <span className="text-xs font-medium">{(form.rag_threshold ?? 0.7).toFixed(2)}</span>
+                  </div>
+                  <Slider
+                    value={[form.rag_threshold ?? 0.7]}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    onValueChange={(v) => setForm({ ...form, rag_threshold: v[0] })}
+                  />
+                </div>
+                <Button 
+                  variant="outline" 
+                  className="w-full gap-2"
+                  onClick={() => navigate("/cerebro")}
+                >
+                  <Database className="h-4 w-4" /> Gerenciar Base de Conhecimento
+                </Button>
               </div>
             </TabsContent>
 
