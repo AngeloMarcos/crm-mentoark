@@ -52,6 +52,7 @@ export default function CatalogoDetalhePage() {
   const [modalProduto, setModalProduto] = useState(false);
   const [modalGaleria, setModalGaleria] = useState(false);
   const [modalPicker, setModalPicker] = useState(false);
+  const [modalImport, setModalImport] = useState(false);
   const [galeriaImagens, setGaleriaImagens] = useState<any[]>([]);
   const [pickerSearch, setPickerSearch] = useState("");
   const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
