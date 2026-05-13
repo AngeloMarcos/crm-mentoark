@@ -1,5 +1,7 @@
 import { callEdgeFunction } from '@/lib/api';
 
+export const GLOBAL_INSTANCE_NAME = "Cris"; // Instância única conforme logs
+
 export interface CreateInstanceResult {
   qrCode?: string;
   pairingCode?: string;
