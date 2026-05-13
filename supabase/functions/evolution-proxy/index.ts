@@ -34,28 +34,19 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const authHeader = req.headers.get('Authorization')
-    if (!authHeader?.startsWith('Bearer ')) {
-      return jsonResponse({ error: 'Unauthorized' }, 401)
-    }
-
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-      { global: { headers: { Authorization: authHeader } } }
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY')!,
     )
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
-    if (userError || !user) {
-      return jsonResponse({ error: 'Unauthorized' }, 401)
-    }
-
-    const userId = user.id
-    const body = await req.json()
-    const { action } = body
+    const body = await req.json().catch(() => ({}))
+    const { action, user_id: userId } = body
 
     if (!action) {
       return jsonResponse({ error: 'Missing action' }, 400)
+    }
+    if (!userId) {
+      return jsonResponse({ error: 'Missing user_id' }, 400)
     }
 
     // Use user-specific instance name
