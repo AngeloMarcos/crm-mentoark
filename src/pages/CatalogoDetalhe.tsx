@@ -291,7 +291,22 @@ export default function CatalogoDetalhePage() {
                     produto={p}
                     onSend={() => setModalSend({ open: true, type: "product", id: p.id })}
                     onImages={() => { setActiveProduto(p); setModalGaleria(true); }}
-                    onEdit={() => { setEditingProduto(p); setForm({...p, preco: p.preco||0, preco_promocional: p.preco_promocional||0, estoque: p.estoque||0, descricao: p.descricao||"", codigo: p.codigo||""}); setModalProduto(true); }}
+                    onEdit={() => { 
+                      setEditingProduto(p); 
+                      setForm({
+                        ...p, 
+                        preco: p.preco||0, 
+                        preco_promocional: p.preco_promocional||0, 
+                        estoque: p.estoque||0, 
+                        descricao: p.descricao||"", 
+                        codigo: p.codigo||"",
+                        marcador: p.marcador || "GERAL",
+                        linha_produto: p.custom_fields?.linha_produto || "CONVENCIONAL",
+                        variacao: p.custom_fields?.variacao || "",
+                        costura: p.custom_fields?.costura || ""
+                      }); 
+                      setModalProduto(true); 
+                    }}
                     onDelete={async () => { if(confirm("Remover produto?")) { await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}/produtos/${p.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` } }); carregar(); } }}
                   />
                 ))}
