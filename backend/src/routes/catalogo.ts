@@ -234,10 +234,11 @@ export default function catalogoRouter(pool: Pool): Router {
       const base = (evoUrl || '').replace(/\/$/, '');
 
       for (const numero of contatos) {
+        let statusLog = 'ENVIADO';
+        let erroMsg = null;
         try {
           let resp: any;
           if (produto.img_url) {
-            // Envia como imagem com legenda
             const r = await fetch(`${base}/message/sendMedia/${instancia}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: evoKey },
@@ -251,21 +252,31 @@ export default function catalogoRouter(pool: Pool): Router {
               }),
             });
             resp = await r.json();
+            if (!r.ok) throw new Error(resp.message || 'Erro Evolution API');
           } else {
-            // Sem imagem — envia como texto
             const r = await fetch(`${base}/message/sendText/${instancia}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: evoKey },
               body: JSON.stringify({ number: numero, text: caption }),
             });
             resp = await r.json();
+            if (!r.ok) throw new Error(resp.message || 'Erro Evolution API');
           }
           resultados.push({ numero, status: 'enviado', resp });
         } catch (e: any) {
+          statusLog = 'ERRO';
+          erroMsg = e.message;
           resultados.push({ numero, status: 'erro', erro: e.message });
         }
 
-        // Intervalo anti-ban entre envios
+        // Registrar no Histórico
+        await pool.query(
+          `INSERT INTO catalogo_mensagens_logs 
+           (user_id, tipo, produto_id, telefone, status, mensagem_texto, midia_url, erro_mensagem)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [req.userId, 'PRODUTO', produto_id, numero, statusLog, caption, produto.img_url, erroMsg]
+        );
+
         if (contatos.indexOf(numero) < contatos.length - 1) {
           await new Promise(r => setTimeout(r, Math.max(2000, Number(intervalo_ms))));
         }
