@@ -1,5 +1,7 @@
+import { supabase } from "@/integrations/supabase/client";
+
 const BASE = import.meta.env.VITE_SUPABASE_URL + '/functions/v1';
-const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export interface CallOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
@@ -38,7 +40,7 @@ export async function callEdgeFunction<T = unknown>(
   }
 
   const headers: Record<string, string> = {
-    'apikey': KEY,
+    'apikey': KEY || '',
     'Content-Type': 'application/json',
   };
 
@@ -68,7 +70,6 @@ export async function callEdgeFunction<T = unknown>(
 
 export async function getAuthToken(): Promise<string | null> {
   try {
-    const { supabase } = await import('@/integrations/supabase/client');
     const { data } = await supabase.auth.getSession();
     return data.session?.access_token || null;
   } catch {
