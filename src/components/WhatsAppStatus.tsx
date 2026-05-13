@@ -94,7 +94,8 @@ export function WhatsAppStatus() {
         toast.success("WhatsApp já está conectado!");
         setStatus({ state: 'open', phoneNumber: res.phoneNumber });
         setQrData(null);
-        checkStatus();
+        // Pequeno delay antes do checkStatus para garantir que o backend da Evolution propagou
+        setTimeout(checkStatus, 1000);
         return;
       }
 
