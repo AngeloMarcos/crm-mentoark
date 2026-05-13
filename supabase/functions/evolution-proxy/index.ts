@@ -40,6 +40,13 @@ Deno.serve(async (req) => {
     console.log(`[evolution-proxy] Action: ${action}, Instance: ${instanceName}, User: ${userId}`)
 
     switch (action) {
+      case 'test_list': {
+        const res = await fetch(`${EVO_BASE_URL}/instance/fetchInstances`, {
+          headers: { 'apikey': EVO_API_KEY }
+        })
+        const data = await res.json()
+        return jsonResponse(data)
+      }
       case 'status': {
         const res = await fetch(`${EVO_BASE_URL}/instance/connectionStatus/${instanceName}`, {
           headers: { 'apikey': EVO_API_KEY }
