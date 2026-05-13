@@ -167,6 +167,7 @@ export function WhatsAppStatus() {
       toast.success("WhatsApp desconectado e instância removida");
     } catch (error: any) {
       addLog("Disconnect Error", error.message);
+      setLastError({ message: error.message || "Erro ao desconectar", timestamp: new Date().toLocaleTimeString(), lastAction: 'logout' });
       toast.error(error.message || "Erro ao desconectar");
     } finally {
       setActionLoading(false);
