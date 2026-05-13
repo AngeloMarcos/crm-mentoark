@@ -399,7 +399,7 @@ export default function WhatsAppPage() {
 
       {/* Painel de histórico */}
       <Sheet open={!!selecionada} onOpenChange={(o) => !o && setSelecionada(null)}>
-        <SheetContent className="w-full sm:max-w-xl flex flex-col">
+        <SheetContent className="w-full sm:max-w-2xl flex flex-col p-0 border-none bg-background shadow-2xl">
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2"><Phone className="h-4 w-4" /> {selecionada && formatPhone(selecionada.session_id)}</SheetTitle>
             <SheetDescription>{selecionada?.mensagens.length} mensagens nesta conversa</SheetDescription>
