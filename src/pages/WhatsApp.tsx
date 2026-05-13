@@ -215,6 +215,12 @@ export default function WhatsAppPage() {
   };
 
   const abrirConversa = async (c: Conversa) => {
+    setSelecionada(c); // Seta imediatamente para abrir o painel
+    setChatSearch("");
+    setLead(null);
+    setLeadStatus("novo");
+    buscarLead(c.session_id);
+
     const { data, error } = await api
       .from("chat_messages")
       .select("*")
@@ -230,10 +236,6 @@ export default function WhatsAppPage() {
     });
 
     setSelecionada({ ...c, mensagens: msgs });
-    setChatSearch("");
-    setLead(null);
-    setLeadStatus("novo");
-    buscarLead(c.session_id);
   };
 
   const copiarTelefone = (tel: string) => {
