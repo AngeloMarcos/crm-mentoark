@@ -5,16 +5,16 @@ import { api, uploadImagem } from "@/integrations/database/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, ArrowLeft, Pencil, Trash2, Loader2, ImageOff, Star, Copy, Image as ImageIcon, Send, Search } from "lucide-react";
+import { Plus, ArrowLeft, Pencil, Trash2, Loader2, Star, Copy, Image as ImageIcon, Send, Search, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SendWhatsAppModal } from "@/components/catalogo/SendWhatsAppModal";
+import { ImportExcelModal } from "@/components/catalogo/ImportExcelModal";
 import { 
   DndContext, 
   closestCenter, 
@@ -51,6 +51,7 @@ export default function CatalogoDetalhePage() {
   const [modalProduto, setModalProduto] = useState(false);
   const [modalGaleria, setModalGaleria] = useState(false);
   const [modalPicker, setModalPicker] = useState(false);
+  const [modalImport, setModalImport] = useState(false);
   const [galeriaImagens, setGaleriaImagens] = useState<any[]>([]);
   const [pickerSearch, setPickerSearch] = useState("");
   const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
@@ -135,7 +136,6 @@ export default function CatalogoDetalhePage() {
       }
       toast.success("Upload concluído");
       carregar();
-      // Refresh active product images
       const updatedRes = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
       });
@@ -162,7 +162,6 @@ export default function CatalogoDetalhePage() {
         toast.success("Imagem vinculada");
         setModalPicker(false);
         carregar();
-        // Refresh active product images
         const updatedRes = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}`, {
           headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
         });
@@ -199,19 +198,54 @@ export default function CatalogoDetalhePage() {
     }
   };
 
-  if (loading) return <CRMLayout><div className="flex justify-center py-20"><Loader2 className="animate-spin" /></div></CRMLayout>;
+  const handleImportExcel = async (data: any[]) => {
+    setLoading(true);
+    try {
+      for (const row of data) {
+        if (!row.nome) continue;
+        const payload = {
+          nome: String(row.nome),
+          descricao: row.descricao ? String(row.descricao) : null,
+          preco: row.preco ? Number(row.preco) : null,
+          codigo: row.codigo ? String(row.codigo) : null,
+          estoque: row.estoque ? Number(row.estoque) : null,
+          ativo: true,
+          custom_fields: row
+        };
+        await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}/produtos`, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("access_token")}` 
+          },
+          body: JSON.stringify(payload)
+        });
+      }
+      toast.success(`${data.length} produtos importados`);
+      carregar();
+    } catch (err: any) {
+      toast.error("Erro na importação: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading && !catalogo) return <CRMLayout><div className="flex justify-center py-20"><Loader2 className="animate-spin" /></div></CRMLayout>;
 
   return (
     <CRMLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" onClick={() => navigate("/catalogo")}><ArrowLeft /></Button>
             <h1 className="text-2xl font-bold">{catalogo?.nome}</h1>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button variant="outline" onClick={() => setModalSend({ open: true, type: "catalog", id: id! })}>
               <Send className="h-4 w-4 mr-2" /> Enviar Catálogo
+            </Button>
+            <Button variant="outline" onClick={() => setModalImport(true)}>
+              <FileSpreadsheet className="h-4 w-4 mr-2" /> Importar Excel
             </Button>
             <Button onClick={() => { setEditingProduto(null); setForm({ nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true }); setModalProduto(true); }}>
               <Plus className="h-4 w-4 mr-2" /> Novo Produto
@@ -249,19 +283,16 @@ export default function CatalogoDetalhePage() {
       <Dialog open={modalProduto} onOpenChange={setModalProduto}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{editingProduto ? "Editar" : "Novo"} Produto</DialogTitle></DialogHeader>
-          <Tabs defaultValue="dados">
-            <TabsList><TabsTrigger value="dados">Dados</TabsTrigger></TabsList>
-            <TabsContent value="dados" className="space-y-3 pt-4">
-              <Input placeholder="Nome" value={form.nome} onChange={(e) => setForm({...form, nome: e.target.value})} />
-              <Textarea placeholder="Descrição" value={form.descricao} onChange={(e) => setForm({...form, descricao: e.target.value})} />
-              <div className="grid grid-cols-2 gap-2">
-                <Input type="number" placeholder="Preço" value={form.preco} onChange={(e) => setForm({...form, preco: Number(e.target.value)})} />
-                <Input type="number" placeholder="Promocional" value={form.preco_promocional} onChange={(e) => setForm({...form, preco_promocional: Number(e.target.value)})} />
-              </div>
-              <Input placeholder="Código" value={form.codigo} onChange={(e) => setForm({...form, codigo: e.target.value})} />
-              <div className="flex items-center gap-2"><Switch checked={form.ativo} onCheckedChange={(v) => setForm({...form, ativo: v})} /> Ativo</div>
-            </TabsContent>
-          </Tabs>
+          <div className="space-y-3 pt-4">
+            <Input placeholder="Nome" value={form.nome} onChange={(e) => setForm({...form, nome: e.target.value})} />
+            <Textarea placeholder="Descrição" value={form.descricao} onChange={(e) => setForm({...form, descricao: e.target.value})} />
+            <div className="grid grid-cols-2 gap-2">
+              <Input type="number" placeholder="Preço" value={form.preco} onChange={(e) => setForm({...form, preco: Number(e.target.value)})} />
+              <Input type="number" placeholder="Promocional" value={form.preco_promocional} onChange={(e) => setForm({...form, preco_promocional: Number(e.target.value)})} />
+            </div>
+            <Input placeholder="Código" value={form.codigo} onChange={(e) => setForm({...form, codigo: e.target.value})} />
+            <div className="flex items-center gap-2"><Switch checked={form.ativo} onCheckedChange={(v) => setForm({...form, ativo: v})} /> Ativo</div>
+          </div>
           <DialogFooter><Button onClick={salvarProduto}>Salvar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
@@ -275,12 +306,12 @@ export default function CatalogoDetalhePage() {
                 <img src={img.url} className="w-full aspect-square object-cover rounded" />
                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition-opacity">
                   <Button size="icon" variant="ghost" className="text-white hover:text-white hover:bg-white/20" onClick={() => { navigator.clipboard.writeText(img.url); toast.success("URL copiada"); }}><Copy className="h-4 w-4" /></Button>
-                  <Button size="icon" variant="ghost" className="text-white hover:text-red-400 hover:bg-white/20" onClick={async () => { if(confirm("Remover imagem?")) { await api.from("catalogo/imagens").delete().eq("id", img.id); carregar(); } }}><Trash2 className="h-4 w-4" /></Button>
+                  <Button size="icon" variant="ghost" className="text-white hover:text-red-400 hover:bg-white/20" onClick={async () => { if(confirm("Remover imagem?")) { await api.from("produto_imagens").delete().eq("id", img.id); carregar(); } }}><Trash2 className="h-4 w-4" /></Button>
                 </div>
                 {img.principal && <Star className="absolute top-1 left-1 h-4 w-4 fill-yellow-400 text-yellow-400" />}
               </div>
             ))}
-            <label className="border-2 border-dashed rounded flex flex-col items-center justify-center aspect-square cursor-pointer hover:bg-muted text-muted-foreground transition-colors">
+            <label className="border-2 border-dashed rounded flex flex-col items-center justify-center aspect-square cursor-pointer hover:bg-muted text-muted-foreground transition-colors text-center">
               <Plus className="h-6 w-6 mb-1" /> <span className="text-[10px]">Upload</span>
               <input type="file" hidden multiple accept="image/*" onChange={handleUpload} />
             </label>
@@ -334,6 +365,12 @@ export default function CatalogoDetalhePage() {
         onOpenChange={(open) => setModalSend(prev => ({ ...prev, open }))}
         type={modalSend.type}
         id={modalSend.id}
+      />
+
+      <ImportExcelModal
+        open={modalImport}
+        onOpenChange={setModalImport}
+        onImported={handleImportExcel}
       />
     </CRMLayout>
   );
