@@ -400,17 +400,36 @@ export default function WhatsAppPage() {
       {/* Painel de histórico */}
       <Sheet open={!!selecionada} onOpenChange={(o) => !o && setSelecionada(null)}>
         <SheetContent className="w-full sm:max-w-2xl flex flex-col p-0 border-none bg-background shadow-2xl">
-          <SheetHeader>
-            <SheetTitle className="flex items-center gap-2"><Phone className="h-4 w-4" /> {selecionada && formatPhone(selecionada.session_id)}</SheetTitle>
-            <SheetDescription>{selecionada?.mensagens.length} mensagens nesta conversa</SheetDescription>
-            <div className="flex gap-2 pt-2 flex-wrap">
-              <Button size="sm" variant="outline" onClick={() => selecionada && copiarTelefone(selecionada.session_id)}><Copy className="h-4 w-4 mr-1" /> Copiar</Button>
-              <Button size="sm" variant="outline" onClick={exportarTxt}><FileDown className="h-4 w-4 mr-1" /> Exportar .txt</Button>
-              <Button size="sm" asChild className="bg-whatsapp hover:bg-whatsapp/90 text-white">
-                <a href={`https://wa.me/${selecionada?.session_id?.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4 mr-1" /> WhatsApp</a>
-              </Button>
-            </div>
-          </SheetHeader>
+          <div className="p-6 border-b bg-muted/20">
+            <SheetHeader>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                    <User className="h-6 w-6 text-primary" />
+                  </div>
+                  <div>
+                    <SheetTitle className="text-xl">{selecionada && (selecionada.nome || formatPhone(selecionada.session_id))}</SheetTitle>
+                    <SheetDescription className="flex items-center gap-1">
+                      <Phone className="h-3 w-3" /> {selecionada?.session_id} • {selecionada?.mensagens.length} mensagens
+                    </SheetDescription>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="icon" variant="outline" onClick={() => selecionada && copiarTelefone(selecionada.session_id)} title="Copiar Telefone">
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                  <Button size="icon" variant="outline" onClick={exportarTxt} title="Exportar Histórico">
+                    <FileDown className="h-4 w-4" />
+                  </Button>
+                  <Button size="icon" asChild className="bg-whatsapp hover:bg-whatsapp/90 text-white">
+                    <a href={`https://wa.me/${selecionada?.session_id?.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                  </Button>
+                </div>
+              </div>
+            </SheetHeader>
+          </div>
 
           {/* Card do lead vinculado */}
           <div className="mt-3 rounded-lg border border-border p-3 bg-muted/30">
