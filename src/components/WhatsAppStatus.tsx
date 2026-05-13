@@ -30,9 +30,33 @@ export function WhatsAppStatus() {
 
   useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, 30000); // Check every 30s
+    const interval = setInterval(() => {
+      checkStatus();
+    }, 15000); // Check status every 15s
+
     return () => clearInterval(interval);
   }, []);
+
+  // Effect to regenerate QR code while connecting
+  useEffect(() => {
+    let qrInterval: number | undefined;
+
+    if (qrData?.qrCode && status?.state !== 'open') {
+      qrInterval = window.setInterval(async () => {
+        console.log("Regenerando QR Code...");
+        try {
+          const res = await createInstance();
+          setQrData(res);
+        } catch (error) {
+          console.error("Falha ao regenerar QR:", error);
+        }
+      }, 20000); // Regenerate every 20s
+    }
+
+    return () => {
+      if (qrInterval) clearInterval(qrInterval);
+    };
+  }, [qrData?.qrCode, status?.state]);
 
   const handleConnect = async () => {
     try {
