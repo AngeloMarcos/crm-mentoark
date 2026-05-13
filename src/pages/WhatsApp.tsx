@@ -109,7 +109,7 @@ export default function WhatsAppPage() {
     carregar();
     const i = setInterval(carregar, 5000); // 5s update para tempo real aproximado
     return () => clearInterval(i);
-  }, []);
+  }, [selecionada?.session_id]); // Re-executa se a conversa selecionada mudar para garantir sincronia
 
   const filtradas = useMemo(() => {
     const since = PERIODOS[periodo]();
