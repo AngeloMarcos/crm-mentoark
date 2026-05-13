@@ -35,14 +35,6 @@ Deno.serve(async (req) => {
 
     if (!action) return jsonResponse({ error: 'Missing action' }, 400)
     
-    // For test actions, we don't need userId
-    if (action === 'test_list') {
-      const res = await fetch(`${EVO_BASE_URL}/instance/fetchInstances`, {
-        headers: { 'apikey': EVO_API_KEY }
-      })
-      return jsonResponse(await res.json())
-    }
-
     if (!userId) return jsonResponse({ error: 'Missing user_id' }, 400)
 
     const instanceName = body.instance_name || `user_${userId.slice(0, 8)}`
