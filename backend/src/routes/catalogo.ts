@@ -423,6 +423,26 @@ export default function catalogoRouter(pool: Pool): Router {
     }
   });
 
+  // ── HISTÓRICO ───────────────────────────────────────────
+
+  // GET /api/catalogo/history — lista histórico de envios
+  router.get('/history', async (req: AuthRequest, res: Response) => {
+    try {
+      const { limit = '50', offset = '0' } = req.query as any;
+      const r = await pool.query(
+        `SELECT l.*, p.nome as produto_nome, c.nome as catalogo_nome
+         FROM catalogo_mensagens_logs l
+         LEFT JOIN produtos p ON p.id = l.produto_id
+         LEFT JOIN catalogos c ON c.id = l.catalogo_id
+         WHERE l.user_id = $1
+         ORDER BY l.created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [req.userId, Number(limit), Number(offset)]
+      );
+      res.json(r.rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // ── IMAGENS ──────────────────────────────────────────────
 
   // POST /api/catalogo/produtos/:produtoId/imagens — upload de imagem
