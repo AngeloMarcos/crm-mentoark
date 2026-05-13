@@ -518,6 +518,58 @@ export default function AgentesPage() {
               </div>
             </TabsContent>
 
+            <TabsContent value="conhecimento" className="space-y-4 pt-4">
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
+                <div className="flex items-center gap-2 text-primary">
+                  <Brain className="h-5 w-5" />
+                  <h3 className="font-semibold">Cérebro do Agente (RAG)</h3>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  O Cérebro permite que o agente consulte informações específicas sobre seu negócio, FAQ e scripts em tempo real.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>RAG Ativo</Label>
+                    <div className="flex items-center gap-2">
+                      <Switch 
+                        checked={form.rag_ativo ?? true} 
+                        onCheckedChange={(v) => setForm({ ...form, rag_ativo: v })} 
+                      />
+                      <span className="text-xs text-muted-foreground">{form.rag_ativo ? "Ligado" : "Desligado"}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Resultados RAG</Label>
+                    <Input 
+                      type="number" 
+                      value={form.rag_resultados ?? 5} 
+                      onChange={(e) => setForm({ ...form, rag_resultados: Number(e.target.value) })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label>Confiança Mínima (Threshold)</Label>
+                    <span className="text-xs font-medium">{(form.rag_threshold ?? 0.7).toFixed(2)}</span>
+                  </div>
+                  <Slider
+                    value={[form.rag_threshold ?? 0.7]}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    onValueChange={(v) => setForm({ ...form, rag_threshold: v[0] })}
+                  />
+                </div>
+                <Button 
+                  variant="outline" 
+                  className="w-full gap-2"
+                  onClick={() => navigate("/cerebro")}
+                >
+                  <Database className="h-4 w-4" /> Gerenciar Base de Conhecimento
+                </Button>
+              </div>
+            </TabsContent>
+
             <TabsContent value="whatsapp" className="space-y-4 pt-4">
               <div className="space-y-1.5">
                 <Label>URL do Servidor Evolution</Label>
