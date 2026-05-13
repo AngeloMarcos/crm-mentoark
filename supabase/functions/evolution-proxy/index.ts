@@ -31,7 +31,8 @@ Deno.serve(async (req) => {
     if (!action) return jsonResponse({ error: 'Missing action' }, 400)
     if (!userId) return jsonResponse({ error: 'Missing user_id' }, 400)
 
-    const instanceName = body.instance_name || `user_${userId.slice(0, 8)}`
+    // Prioriza o nome da instância vindo no body, fallback para 'Cris'
+    const instanceName = body.instance_name || "Cris"
     console.log(`[evolution-proxy] User: ${userId}, Instance: ${instanceName}, Action: ${action}`)
 
     switch (action) {
