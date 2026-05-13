@@ -34,19 +34,20 @@ Deno.serve(async (req) => {
     const { action, user_id: userId } = body
 
     if (!action) return jsonResponse({ error: 'Missing action' }, 400)
+    
+    // For test actions, we don't need userId
+    if (action === 'test_list') {
+      const res = await fetch(`${EVO_BASE_URL}/instance/fetchInstances`, {
+        headers: { 'apikey': EVO_API_KEY }
+      })
+      return jsonResponse(await res.json())
+    }
+
     if (!userId) return jsonResponse({ error: 'Missing user_id' }, 400)
 
     const instanceName = `user_${userId.slice(0, 8)}`
-    console.log(`[evolution-proxy] Action: ${action}, Instance: ${instanceName}, User: ${userId}`)
 
     switch (action) {
-      case 'test_list': {
-        const res = await fetch(`${EVO_BASE_URL}/instance/fetchInstances`, {
-          headers: { 'apikey': EVO_API_KEY }
-        })
-        const data = await res.json()
-        return jsonResponse(data)
-      }
       case 'status': {
         const res = await fetch(`${EVO_BASE_URL}/instance/connectionStatus/${instanceName}`, {
           headers: { 'apikey': EVO_API_KEY }
@@ -59,8 +60,7 @@ Deno.serve(async (req) => {
       }
 
       case 'create': {
-        console.log(`[evolution-proxy] Creating/fetching QR for ${instanceName}`)
-        // Tenta criar primeiro - simplificado
+        // Tenta criar primeiro
         const createRes = await fetch(`${EVO_BASE_URL}/instance/create`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'apikey': EVO_API_KEY },
@@ -71,18 +71,14 @@ Deno.serve(async (req) => {
         })
         
         const createData = await createRes.json()
-        console.log(`[evolution-proxy] Create response status ${createRes.status}:`, createData)
 
         let qrCode = createData.qrcode?.base64 || createData.instance?.qrcode?.base64
         
-        // Se não veio no create, busca via connect
         if (!qrCode) {
-          console.log(`[evolution-proxy] QR not in create response, fetching via /instance/connect/${instanceName}`)
           const qrRes = await fetch(`${EVO_BASE_URL}/instance/connect/${instanceName}`, {
             headers: { 'apikey': EVO_API_KEY }
           })
           const qrData = await qrRes.json()
-          console.log(`[evolution-proxy] Connect response:`, qrData)
           qrCode = qrData.base64 || qrData.code || qrData.qrcode?.base64
         }
 
@@ -105,7 +101,6 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: 'Action not supported' }, 400)
     }
   } catch (error: any) {
-    console.error(`[evolution-proxy] Error:`, error)
     return jsonResponse({ error: error.message }, 500)
   }
 })
