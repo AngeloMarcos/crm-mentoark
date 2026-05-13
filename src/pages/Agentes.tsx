@@ -158,6 +158,9 @@ export default function AgentesPage() {
       evolution_server_url: a.evolution_server_url ?? "",
       evolution_api_key: a.evolution_api_key ?? "",
       evolution_instancia: a.evolution_instancia ?? "",
+      rag_ativo: a.rag_ativo ?? true,
+      rag_threshold: a.rag_threshold ?? 0.7,
+      rag_resultados: a.rag_resultados ?? 5,
       ativo: a.ativo,
     });
     setShowKey(false);
@@ -186,6 +189,9 @@ export default function AgentesPage() {
       evolution_server_url: form.evolution_server_url.trim() || null,
       evolution_api_key: form.evolution_api_key.trim() || null,
       evolution_instancia: form.evolution_instancia.trim() || null,
+      rag_ativo: form.rag_ativo,
+      rag_threshold: form.rag_threshold,
+      rag_resultados: form.rag_resultados,
       ativo: form.ativo,
     };
 
