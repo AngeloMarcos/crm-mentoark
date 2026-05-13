@@ -1,7 +1,5 @@
 import { callEdgeFunction } from '@/lib/api';
 
-export const GLOBAL_INSTANCE_NAME = "Cris"; // Instância única conforme logs
-
 export interface CreateInstanceResult {
   qrCode?: string;
   pairingCode?: string;
@@ -13,7 +11,6 @@ export interface CreateInstanceResult {
 export interface StatusResult {
   state: 'open' | 'close' | 'connecting';
   phoneNumber?: string;
-  message?: string;
 }
 
 async function getAuthData(): Promise<{ user_id: string; instance_name?: string }> {
@@ -33,7 +30,7 @@ async function getAuthData(): Promise<{ user_id: string; instance_name?: string 
 
     return { 
       user_id: userId, 
-      instance_name: GLOBAL_INSTANCE_NAME 
+      instance_name: config?.instancia || undefined 
     };
   } catch (e) {
     throw new Error('Não autenticado');

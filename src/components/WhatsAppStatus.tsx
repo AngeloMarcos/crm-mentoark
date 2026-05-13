@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, RefreshCw, QrCode, CheckCircle2, XCircle, LogOut, Terminal, History } from "lucide-react";
+import { Loader2, RefreshCw, QrCode, CheckCircle2, XCircle, LogOut, Terminal, History, AlertTriangle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -20,7 +21,9 @@ export function WhatsAppStatus() {
   const [actionLoading, setActionLoading] = useState(false);
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   const [showDebug, setShowDebug] = useState(false);
-  
+  const [lastError, setLastError] = useState<{ message: string; timestamp: string; lastAction: 'create' | 'status' | 'logout' } | null>(null);
+  const [autoRetrying, setAutoRetrying] = useState(false);
+
   const retryCountRef = useRef(0);
   const maxRetries = 5;
 
@@ -40,10 +43,9 @@ export function WhatsAppStatus() {
       const res = await fetchConnectionStatus();
       addLog(`CheckStatus (Attempt ${retry + 1})`, res);
       
-      // Ajuste na lógica de divergência: se a Evolution retornar que não encontrou a instância (Instance not found),
-      // mas o estado anterior era de pareamento, não forçamos retry de inconsistência.
-      // O retry só deve ocorrer se esperarmos 'open' e vier 'close' (instância existe mas está fechada).
-      if (retryCountRef.current > 0 && res.state === 'close' && !res.message?.includes('not found') && retry < maxRetries) {
+      // Se estamos tentando confirmar uma conexão que acabou de ocorrer
+      // mas a Evolution ainda retorna 'close', aplicamos o retry com backoff
+      if (retryCountRef.current > 0 && res.state !== 'open' && retry < maxRetries) {
         const backoffDelay = Math.min(1000 * Math.pow(2, retry), 8000);
         addLog("Status Inconsistent", `Retrying in ${backoffDelay}ms...`);
         setTimeout(() => checkStatus(retry + 1), backoffDelay);
@@ -53,10 +55,12 @@ export function WhatsAppStatus() {
       setStatus(res);
       if (res.state === 'open') {
         setQrData(null);
-        retryCountRef.current = 0;
+        retryCountRef.current = 0; // Reset ao conectar com sucesso
       }
     } catch (error: any) {
       addLog("CheckStatus Error", error.message);
+      setLastError({ message: error.message || "Falha ao consultar status", timestamp: new Date().toLocaleTimeString(), lastAction: 'status' });
+      console.error("Erro ao buscar status:", error);
     } finally {
       if (retry === 0 || retry >= maxRetries || status?.state === 'open') {
         setLoading(false);
@@ -143,6 +147,7 @@ export function WhatsAppStatus() {
       }
     } catch (error: any) {
       addLog("Connection Error", error.message);
+      setLastError({ message: error.message || "Falha na comunicação com a Evolution", timestamp: new Date().toLocaleTimeString(), lastAction: 'create' });
       toast.error(error.message || "Falha na comunicação com a Evolution");
     } finally {
       setActionLoading(false);
@@ -162,9 +167,23 @@ export function WhatsAppStatus() {
       toast.success("WhatsApp desconectado e instância removida");
     } catch (error: any) {
       addLog("Disconnect Error", error.message);
+      setLastError({ message: error.message || "Erro ao desconectar", timestamp: new Date().toLocaleTimeString(), lastAction: 'logout' });
       toast.error(error.message || "Erro ao desconectar");
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const retryLastAction = async () => {
+    if (!lastError) return;
+    setAutoRetrying(true);
+    try {
+      if (lastError.lastAction === 'create') await handleConnect();
+      else if (lastError.lastAction === 'logout') await handleDisconnect();
+      else await checkStatus();
+      setLastError(null);
+    } finally {
+      setAutoRetrying(false);
     }
   };
 
@@ -183,6 +202,28 @@ export function WhatsAppStatus() {
 
   return (
     <div className="space-y-4">
+      {lastError && (
+        <Alert variant="destructive" className="animate-in slide-in-from-top-2 duration-300 border-destructive/50 bg-destructive/5">
+          <AlertTriangle className="h-4 w-4" />
+          <div className="flex items-start justify-between gap-4 w-full">
+            <div className="flex-1">
+              <AlertTitle className="text-sm font-bold">Falha na última operação ({lastError.lastAction})</AlertTitle>
+              <AlertDescription className="text-xs mt-1 font-mono opacity-90">
+                [{lastError.timestamp}] {lastError.message}
+              </AlertDescription>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <Button size="sm" variant="outline" onClick={retryLastAction} disabled={autoRetrying} className="h-8 border-destructive/30 hover:bg-destructive/10">
+                {autoRetrying ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                Tentar novamente
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setLastError(null)} className="h-8 px-2">
+                <XCircle className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        </Alert>
+      )}
       <Card className={`border-l-4 ${isConnected ? "border-l-success" : "border-l-warning"} shadow-md overflow-hidden bg-background/50 backdrop-blur-sm`}>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
