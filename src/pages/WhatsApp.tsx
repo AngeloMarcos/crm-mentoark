@@ -107,7 +107,7 @@ export default function WhatsAppPage() {
 
   useEffect(() => {
     carregar();
-    const i = setInterval(carregar, 30000); // 30s update
+    const i = setInterval(carregar, 5000); // 5s update para tempo real aproximado
     return () => clearInterval(i);
   }, []);
 
