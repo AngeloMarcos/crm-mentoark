@@ -395,23 +395,42 @@ export default function AgentesPage() {
                   rows={4}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Tom de Voz</Label>
-                <Select
-                  value={form.tom}
-                  onValueChange={(v) => setForm({ ...form, tom: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TONS.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {t}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Tom de Voz</Label>
+                  <Select
+                    value={form.tom}
+                    onValueChange={(v) => setForm({ ...form, tom: v })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TONS.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Idioma</Label>
+                  <Select
+                    value={form.idioma || "Português BR"}
+                    onValueChange={(v) => setForm({ ...form, idioma: v })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Português BR">Português BR</SelectItem>
+                      <SelectItem value="Português PT">Português PT</SelectItem>
+                      <SelectItem value="Espanhol">Espanhol</SelectItem>
+                      <SelectItem value="Inglês">Inglês</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label>Objetivo Principal</Label>
