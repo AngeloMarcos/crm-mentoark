@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
 
     if (!userId) return jsonResponse({ error: 'Missing user_id' }, 400)
 
-    const instanceName = `user_${userId.slice(0, 8)}`
+    const instanceName = body.instance_name || `user_${userId.slice(0, 8)}`
 
     switch (action) {
       case 'status': {
