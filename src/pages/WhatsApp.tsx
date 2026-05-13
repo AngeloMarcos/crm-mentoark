@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -72,6 +73,7 @@ const PERIODOS = {
 } as const;
 
 export default function WhatsAppPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [rows, setRows] = useState<ChatRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,7 +91,9 @@ export default function WhatsAppPage() {
   const [chatSearch, setChatSearch] = useState("");
 
   const carregar = async () => {
-    setLoading(true);
+    // Se o loading inicial já passou, não mostramos spinner global para evitar flickering no polling
+    if (rows.length === 0) setLoading(true);
+    
     const { data, error } = await api
       .from("chat_messages")
       .select("*")
@@ -100,16 +104,36 @@ export default function WhatsAppPage() {
       toast.error("Erro ao carregar conversas: " + error.message);
       setRows([]);
     } else {
-      setRows((data ?? []) as ChatRow[]);
+      const newRows = (data ?? []) as ChatRow[];
+      setRows(newRows);
+
+      // Se houver uma conversa aberta, atualiza as mensagens dela em tempo real
+      if (selecionada) {
+        const phone = selecionada.session_id;
+        const currentMsgs = newRows
+          .filter(r => r.phone === phone)
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) // Para ficar em ordem cronológica correta
+          .flatMap(r => {
+            const m = [];
+            if (r.user_message) m.push({ id: r.id, type: 'human' as const, content: r.user_message, created_at: r.created_at });
+            if (r.bot_message) m.push({ id: r.id, type: 'ai' as const, content: r.bot_message, created_at: r.created_at });
+            return m;
+          });
+        
+        // Só atualiza se o número de mensagens mudou
+        if (currentMsgs.length !== selecionada.mensagens.length) {
+          setSelecionada(prev => prev ? { ...prev, mensagens: currentMsgs } : null);
+        }
+      }
     }
     setLoading(false);
   };
 
   useEffect(() => {
     carregar();
-    const i = setInterval(carregar, 30000); // 30s update
+    const i = setInterval(carregar, 5000); // 5s update para tempo real aproximado
     return () => clearInterval(i);
-  }, []);
+  }, [selecionada?.session_id]); // Re-executa se a conversa selecionada mudar para garantir sincronia
 
   const filtradas = useMemo(() => {
     const since = PERIODOS[periodo]();
@@ -215,6 +239,12 @@ export default function WhatsAppPage() {
   };
 
   const abrirConversa = async (c: Conversa) => {
+    setSelecionada(c); // Seta imediatamente para abrir o painel
+    setChatSearch("");
+    setLead(null);
+    setLeadStatus("novo");
+    buscarLead(c.session_id);
+
     const { data, error } = await api
       .from("chat_messages")
       .select("*")
@@ -230,10 +260,6 @@ export default function WhatsAppPage() {
     });
 
     setSelecionada({ ...c, mensagens: msgs });
-    setChatSearch("");
-    setLead(null);
-    setLeadStatus("novo");
-    buscarLead(c.session_id);
   };
 
   const copiarTelefone = (tel: string) => {
@@ -324,25 +350,46 @@ export default function WhatsAppPage() {
             <p className="text-sm text-muted-foreground mt-1">Quando o agente IA conversar via WhatsApp, o histórico aparecerá aqui.</p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {filtradas.map((c) => {
               const ativa = Date.now() - new Date(c.ultima_atividade).getTime() < 30 * 60 * 1000;
               return (
-                <Card key={c.session_id} className="hover:border-primary/30 transition-colors cursor-pointer" onClick={() => abrirConversa(c)}>
-                  <CardContent className="p-4 flex items-center gap-4">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${ativa ? "bg-success/15" : "bg-muted"}`}>
-                      <MessageCircle className={`h-5 w-5 ${ativa ? "text-success" : "text-muted-foreground"}`} />
+                <Card 
+                  key={c.session_id} 
+                  className={`hover:border-primary/30 transition-all cursor-pointer border-l-4 ${ativa ? "border-l-success" : "border-l-transparent"} ${selecionada?.session_id === c.session_id ? "ring-2 ring-primary/20 border-primary/50" : ""}`} 
+                  onClick={() => abrirConversa(c)}
+                >
+                  <CardContent className="p-4 flex flex-col h-full">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${ativa ? "bg-success/15" : "bg-muted"}`}>
+                          <User className={`h-5 w-5 ${ativa ? "text-success" : "text-muted-foreground"}`} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-sm truncate">{c.nome || formatPhone(c.session_id)}</p>
+                          <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <Phone className="h-2.5 w-2.5" /> {c.session_id}
+                          </p>
+                        </div>
+                      </div>
+                      <Badge variant={ativa ? "default" : "secondary"} className="text-[9px] h-4 px-1 animate-pulse-slow">
+                        {ativa ? "Online" : "Offline"}
+                      </Badge>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-medium text-sm">{formatPhone(c.session_id)}</p>
-                        <Badge variant="outline" className="text-xs">{c.total} msg</Badge>
+                    
+                    <div className="flex-1 bg-muted/30 rounded p-2 mb-3">
+                      <p className="text-xs text-muted-foreground line-clamp-2 italic">
+                        "{c.ultima_mensagem}"
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-auto pt-2 border-t border-border/50">
+                      <div className="flex gap-2">
+                        <Badge variant="outline" className="text-[9px] h-4 px-1">{c.total} msg</Badge>
                       </div>
-                      <p className="text-sm text-muted-foreground truncate mt-0.5">{c.ultima_mensagem.slice(0, 80)}</p>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{c.session_id}</span>
-                        <span>{relativeTime(c.ultima_atividade)}</span>
-                      </div>
+                      <span className="text-[10px] text-muted-foreground font-medium">
+                        {relativeTime(c.ultima_atividade)}
+                      </span>
                     </div>
                   </CardContent>
                 </Card>
@@ -354,72 +401,95 @@ export default function WhatsAppPage() {
 
       {/* Painel de histórico */}
       <Sheet open={!!selecionada} onOpenChange={(o) => !o && setSelecionada(null)}>
-        <SheetContent className="w-full sm:max-w-xl flex flex-col">
-          <SheetHeader>
-            <SheetTitle className="flex items-center gap-2"><Phone className="h-4 w-4" /> {selecionada && formatPhone(selecionada.session_id)}</SheetTitle>
-            <SheetDescription>{selecionada?.mensagens.length} mensagens nesta conversa</SheetDescription>
-            <div className="flex gap-2 pt-2 flex-wrap">
-              <Button size="sm" variant="outline" onClick={() => selecionada && copiarTelefone(selecionada.session_id)}><Copy className="h-4 w-4 mr-1" /> Copiar</Button>
-              <Button size="sm" variant="outline" onClick={exportarTxt}><FileDown className="h-4 w-4 mr-1" /> Exportar .txt</Button>
-              <Button size="sm" asChild className="bg-whatsapp hover:bg-whatsapp/90 text-white">
-                <a href={`https://wa.me/${selecionada?.session_id?.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4 mr-1" /> WhatsApp</a>
-              </Button>
-            </div>
-          </SheetHeader>
-
-          {/* Card do lead vinculado */}
-          <div className="mt-3 rounded-lg border border-border p-3 bg-muted/30">
-            {leadLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Buscando lead...
-              </div>
-            ) : lead ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <UserCheck className="h-4 w-4 text-success" />
-                  <p className="text-sm font-medium">{lead.nome}</p>
-                  <Badge variant="outline" className="text-xs">{lead.status}</Badge>
+        <SheetContent className="w-full sm:max-w-2xl flex flex-col p-0 border-none bg-background shadow-2xl">
+          <div className="p-6 border-b bg-muted/20">
+            <SheetHeader>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                    <User className="h-6 w-6 text-primary" />
+                  </div>
+                  <div>
+                    <SheetTitle className="text-xl">{selecionada && (selecionada.nome || formatPhone(selecionada.session_id))}</SheetTitle>
+                    <SheetDescription className="flex items-center gap-1">
+                      <Phone className="h-3 w-3" /> {selecionada?.session_id} • {selecionada?.mensagens.length} mensagens
+                    </SheetDescription>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Select value={leadStatus} onValueChange={setLeadStatus}>
-                    <SelectTrigger className="h-8 text-xs flex-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {statusOptions.map((s) => (
-                        <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    size="sm"
-                    onClick={salvarStatusLead}
-                    disabled={leadSaving || leadStatus === lead.status}
-                  >
-                    {leadSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                <div className="flex gap-2">
+                  <Button size="icon" variant="outline" onClick={() => selecionada && copiarTelefone(selecionada.session_id)} title="Copiar Telefone">
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                  <Button size="icon" variant="outline" onClick={exportarTxt} title="Exportar Histórico">
+                    <FileDown className="h-4 w-4" />
+                  </Button>
+                  <Button size="icon" asChild className="bg-whatsapp hover:bg-whatsapp/90 text-white">
+                    <a href={`https://wa.me/${selecionada?.session_id?.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
                   </Button>
                 </div>
               </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">Lead não encontrado nos contatos</p>
-            )}
+            </SheetHeader>
           </div>
 
-          {/* Busca no chat */}
-          <div className="relative mt-3">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Buscar nesta conversa..."
-              value={chatSearch}
-              onChange={(e) => setChatSearch(e.target.value)}
-              className="pl-9 h-9 text-sm"
-            />
-            {chatSearch && (
-              <p className="text-xs text-muted-foreground mt-1">
-                {mensagensFiltradas.length} de {selecionada?.mensagens.length} mensagens
-              </p>
-            )}
-          </div>
+          <div className="px-6 py-4 flex flex-col flex-1 overflow-hidden">
+            {/* Card do lead vinculado */}
+            <div className="rounded-xl border border-border p-4 bg-muted/30 mb-4">
+              {leadLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Buscando lead...
+                </div>
+              ) : lead ? (
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center">
+                      <UserCheck className="h-5 w-5 text-success" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold">{lead.nome}</p>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Lead Identificado</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Select value={leadStatus} onValueChange={setLeadStatus}>
+                      <SelectTrigger className="h-9 w-32 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {statusOptions.map((s) => (
+                          <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="sm"
+                      className="h-9"
+                      onClick={salvarStatusLead}
+                      disabled={leadSaving || leadStatus === lead.status}
+                    >
+                      {leadSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground italic">Lead não encontrado nos contatos</p>
+                  <Button variant="ghost" size="sm" className="h-7 text-[10px]" onClick={() => navigate("/leads")}>Ver todos</Button>
+                </div>
+              )}
+            </div>
+
+            {/* Busca no chat */}
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar palavra-chave nesta conversa..."
+                value={chatSearch}
+                onChange={(e) => setChatSearch(e.target.value)}
+                className="pl-9 h-10 text-sm bg-muted/20 border-none"
+              />
+            </div>
 
           <div className="flex-1 overflow-y-auto mt-3 space-y-3 pr-2">
             {mensagensFiltradas.map((m, idx) => {
@@ -440,6 +510,7 @@ export default function WhatsAppPage() {
                 Nenhuma mensagem corresponde à busca
               </p>
             )}
+            </div>
           </div>
         </SheetContent>
       </Sheet>
