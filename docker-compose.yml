@@ -1,0 +1,23 @@
+services:
+  crm:
+    build:
+      context: .
+      args:
+        VITE_API_URL: https://api.mentoark.com.br
+    container_name: crm
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "proxy"
+      traefik.http.routers.crm.rule: "Host(`crm.mentoark.com.br`)"
+      traefik.http.routers.crm.entrypoints: "websecure"
+      traefik.http.routers.crm.tls.certresolver: "letsencrypt"
+      traefik.http.services.crm.loadbalancer.server.port: "80"
+
+networks:
+  proxy:
+    external: true
