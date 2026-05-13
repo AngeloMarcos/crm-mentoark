@@ -675,6 +675,60 @@ export type Database = {
         }
         Relationships: []
       }
+      evolution_instances: {
+        Row: {
+          api_response: Json | null
+          connected_at: string | null
+          created_at: string
+          customer_id: string | null
+          id: string
+          instance_id: string | null
+          instance_name: string
+          integration: string | null
+          owner_jid: string | null
+          phone_number: string | null
+          profile_name: string | null
+          project_id: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          api_response?: Json | null
+          connected_at?: string | null
+          created_at?: string
+          customer_id?: string | null
+          id?: string
+          instance_id?: string | null
+          instance_name: string
+          integration?: string | null
+          owner_jid?: string | null
+          phone_number?: string | null
+          profile_name?: string | null
+          project_id?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          api_response?: Json | null
+          connected_at?: string | null
+          created_at?: string
+          customer_id?: string | null
+          id?: string
+          instance_id?: string | null
+          instance_name?: string
+          integration?: string | null
+          owner_jid?: string | null
+          phone_number?: string | null
+          profile_name?: string | null
+          project_id?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       galeria_imagens: {
         Row: {
           created_at: string | null
@@ -999,6 +1053,51 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      tenant_whatsapp: {
+        Row: {
+          connected_at: string | null
+          created_at: string
+          error_message: string | null
+          id: string
+          instance_name: string
+          last_disconnect_at: string | null
+          phone_number: string | null
+          qr_code: string | null
+          qr_expires_at: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          connected_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          instance_name: string
+          last_disconnect_at?: string | null
+          phone_number?: string | null
+          qr_code?: string | null
+          qr_expires_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          connected_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          instance_name?: string
+          last_disconnect_at?: string | null
+          phone_number?: string | null
+          qr_code?: string | null
+          qr_expires_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       timeline_eventos: {
         Row: {
