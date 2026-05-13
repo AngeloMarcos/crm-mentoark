@@ -328,21 +328,42 @@ export default function WhatsAppPage() {
             {filtradas.map((c) => {
               const ativa = Date.now() - new Date(c.ultima_atividade).getTime() < 30 * 60 * 1000;
               return (
-                <Card key={c.session_id} className="hover:border-primary/30 transition-colors cursor-pointer" onClick={() => abrirConversa(c)}>
-                  <CardContent className="p-4 flex items-center gap-4">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${ativa ? "bg-success/15" : "bg-muted"}`}>
-                      <MessageCircle className={`h-5 w-5 ${ativa ? "text-success" : "text-muted-foreground"}`} />
+                <Card 
+                  key={c.session_id} 
+                  className={`hover:border-primary/30 transition-all cursor-pointer border-l-4 ${ativa ? "border-l-success" : "border-l-transparent"} ${selecionada?.session_id === c.session_id ? "ring-2 ring-primary/20 border-primary/50" : ""}`} 
+                  onClick={() => abrirConversa(c)}
+                >
+                  <CardContent className="p-4 flex flex-col h-full">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${ativa ? "bg-success/15" : "bg-muted"}`}>
+                          <User className={`h-5 w-5 ${ativa ? "text-success" : "text-muted-foreground"}`} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-sm truncate">{c.nome || formatPhone(c.session_id)}</p>
+                          <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <Phone className="h-2.5 w-2.5" /> {c.session_id}
+                          </p>
+                        </div>
+                      </div>
+                      <Badge variant={ativa ? "default" : "secondary"} className="text-[9px] h-4 px-1 animate-pulse-slow">
+                        {ativa ? "Online" : "Offline"}
+                      </Badge>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-medium text-sm">{formatPhone(c.session_id)}</p>
-                        <Badge variant="outline" className="text-xs">{c.total} msg</Badge>
+                    
+                    <div className="flex-1 bg-muted/30 rounded p-2 mb-3">
+                      <p className="text-xs text-muted-foreground line-clamp-2 italic">
+                        "{c.ultima_mensagem}"
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-auto pt-2 border-t border-border/50">
+                      <div className="flex gap-2">
+                        <Badge variant="outline" className="text-[9px] h-4 px-1">{c.total} msg</Badge>
                       </div>
-                      <p className="text-sm text-muted-foreground truncate mt-0.5">{c.ultima_mensagem.slice(0, 80)}</p>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{c.session_id}</span>
-                        <span>{relativeTime(c.ultima_atividade)}</span>
-                      </div>
+                      <span className="text-[10px] text-muted-foreground font-medium">
+                        {relativeTime(c.ultima_atividade)}
+                      </span>
                     </div>
                   </CardContent>
                 </Card>
