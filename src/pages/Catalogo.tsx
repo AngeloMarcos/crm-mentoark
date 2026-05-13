@@ -3,10 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, LayoutGrid, Pencil, Trash2, Loader2, ImageOff } from "lucide-react";
+import { Plus, LayoutGrid, Pencil, Trash2, Loader2, ImageOff, History, CheckCircle, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
