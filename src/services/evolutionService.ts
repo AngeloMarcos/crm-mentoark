@@ -13,37 +13,42 @@ export interface StatusResult {
   phoneNumber?: string;
 }
 
-export async function createInstance(): Promise<CreateInstanceResult> {
+function getUserId(): string {
+  try {
+    const raw = localStorage.getItem('crm_user');
+    if (!raw) throw new Error('Não autenticado');
+    const u = JSON.parse(raw);
+    const id = u?.id || u?.user_id;
+    if (!id) throw new Error('Usuário sem id');
+    return id;
+  } catch (e) {
+    throw new Error('Não autenticado');
+  }
+}
+
+async function call(action: string) {
+  const user_id = getUserId();
   const res = await callEdgeFunction<any>('evolution-proxy', {
     method: 'POST',
-    body: { action: 'create' },
+    body: { action, user_id },
   });
   if (res.error) throw new Error(res.error);
   return res.data;
+}
+
+export async function createInstance(): Promise<CreateInstanceResult> {
+  return await call('create');
 }
 
 export async function reconnectInstance(): Promise<CreateInstanceResult> {
-  const res = await callEdgeFunction<any>('evolution-proxy', {
-    method: 'POST',
-    body: { action: 'connect' },
-  });
-  if (res.error) throw new Error(res.error);
-  return res.data;
+  return await call('connect');
 }
 
 export async function fetchConnectionStatus(): Promise<StatusResult> {
-  const res = await callEdgeFunction<any>('evolution-proxy', {
-    method: 'POST',
-    body: { action: 'status' },
-  });
-  if (res.error) throw new Error(res.error);
-  return res.data || { state: 'close' };
+  const data = await call('status');
+  return data || { state: 'close' };
 }
 
 export async function disconnectInstance(): Promise<void> {
-  const res = await callEdgeFunction<any>('evolution-proxy', {
-    method: 'POST',
-    body: { action: 'logout' },
-  });
-  if (res.error) throw new Error(res.error);
+  await call('logout');
 }
