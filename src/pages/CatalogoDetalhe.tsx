@@ -261,7 +261,14 @@ export default function CatalogoDetalhePage() {
             <Button variant="outline" onClick={() => setModalImport(true)}>
               <FileSpreadsheet className="h-4 w-4 mr-2" /> Importar Excel
             </Button>
-            <Button onClick={() => { setEditingProduto(null); setForm({ nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true }); setModalProduto(true); }}>
+            <Button onClick={() => { 
+              setEditingProduto(null); 
+              setForm({ 
+                nome: "", descricao: "", preco: 0, preco_promocional: 0, codigo: "", estoque: 0, ativo: true,
+                marcador: "GERAL", linha_produto: "CONVENCIONAL", variacao: "", costura: ""
+              }); 
+              setModalProduto(true); 
+            }}>
               <Plus className="h-4 w-4 mr-2" /> Novo Produto
             </Button>
           </div>
