@@ -137,74 +137,116 @@ export function WhatsAppStatus() {
       </CardHeader>
       <CardContent className="space-y-4">
         {!isConnected && !qrData?.qrCode && (
-          <div className="flex flex-col items-center justify-center py-6 text-center space-y-4">
-            <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
-              <QrCode className="h-8 w-8 text-muted-foreground" />
+          <div className="flex flex-col items-center justify-center py-8 text-center space-y-4 animate-in fade-in zoom-in duration-300">
+            <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center ring-8 ring-primary/5">
+              <QrCode className="h-10 w-10 text-primary" />
             </div>
-            <div>
-              <p className="text-sm text-muted-foreground max-w-[280px]">
-                Conecte seu WhatsApp para que o Agente IA possa responder suas mensagens em tempo real.
+            <div className="space-y-1">
+              <h3 className="font-bold text-lg">Pronto para Conectar?</h3>
+              <p className="text-sm text-muted-foreground max-w-[320px]">
+                Conecte seu WhatsApp para que o Agente IA possa automatizar seu atendimento em tempo real.
               </p>
             </div>
             <Button 
               onClick={handleConnect} 
               disabled={actionLoading}
-              className="w-full sm:w-auto px-8"
+              className="w-full sm:w-auto px-8 py-6 text-base font-semibold transition-all hover:scale-105"
             >
-              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <QrCode className="h-4 w-4 mr-2" />}
-              Gerar QR Code
+              {actionLoading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <QrCode className="h-5 w-5 mr-2" />}
+              Gerar QR Code de Conexão
             </Button>
           </div>
         )}
 
         {qrData?.qrCode && !isConnected && (
-          <div className="flex flex-col items-center justify-center py-6 text-center space-y-6">
-            <div className="bg-white p-4 rounded-xl shadow-inner border-4 border-primary/10">
-              <img 
-                src={qrData.qrCode} 
-                alt="WhatsApp QR Code" 
-                className="w-48 h-48"
-              />
+          <div className="flex flex-col items-center justify-center py-6 text-center space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+            <div className="relative group">
+              <div className="absolute -inset-1 bg-gradient-to-r from-primary to-accent rounded-2xl blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
+              <div className="relative bg-white p-5 rounded-2xl shadow-2xl border border-white/20">
+                <img 
+                  src={qrData.qrCode} 
+                  alt="WhatsApp QR Code" 
+                  className="w-56 h-56 transition-transform duration-500 hover:scale-105"
+                />
+                {actionLoading && (
+                  <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center rounded-2xl">
+                    <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="space-y-2">
-              <p className="font-bold text-sm">Escaneie o QR Code</p>
-              <p className="text-xs text-muted-foreground max-w-[250px]">
-                Abra o WhatsApp no seu celular {'>'} Configurações {'>'} Aparelhos Conectados {'>'} Conectar um Aparelho.
-              </p>
+            <div className="space-y-3">
+              <div className="flex flex-col items-center gap-2">
+                <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20 px-3 py-1">
+                  <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Aguardando Leitura
+                </Badge>
+                <h3 className="font-bold text-xl">Escaneie com seu Celular</h3>
+              </div>
+              <div className="bg-muted/50 p-4 rounded-xl text-left space-y-2 border border-border/50 max-w-[350px]">
+                <p className="text-sm flex gap-3"><span className="flex-shrink-0 w-5 h-5 bg-primary text-white rounded-full flex items-center justify-center text-[10px] font-bold">1</span> Abra o WhatsApp e vá em <strong>Aparelhos Conectados</strong></p>
+                <p className="text-sm flex gap-3"><span className="flex-shrink-0 w-5 h-5 bg-primary text-white rounded-full flex items-center justify-center text-[10px] font-bold">2</span> Toque em <strong>Conectar um Aparelho</strong></p>
+                <p className="text-sm flex gap-3"><span className="flex-shrink-0 w-5 h-5 bg-primary text-white rounded-full flex items-center justify-center text-[10px] font-bold">3</span> Aponte sua câmera para este QR Code</p>
+              </div>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">O código atualiza automaticamente a cada 20s</p>
             </div>
-            <Button 
-              variant="outline" 
-              onClick={checkStatus} 
-              disabled={actionLoading}
-              className="w-full sm:w-auto"
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${actionLoading ? "animate-spin" : ""}`} />
-              Já escaneei
-            </Button>
+            <div className="flex gap-2 w-full max-w-[350px]">
+              <Button 
+                variant="outline" 
+                onClick={checkStatus} 
+                disabled={actionLoading}
+                className="flex-1"
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${actionLoading ? "animate-spin" : ""}`} />
+                Atualizar Status
+              </Button>
+              <Button 
+                variant="secondary" 
+                onClick={() => setQrData(null)}
+                className="px-3"
+              >
+                <XCircle className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         )}
 
         {isConnected && (
-          <div className="flex flex-col sm:flex-row items-center justify-between p-4 rounded-xl bg-muted/30 border border-border/50 gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center">
-                <CheckCircle2 className="h-5 w-5 text-success" />
+          <div className="flex flex-col p-6 rounded-2xl bg-success/5 border border-success/20 animate-in fade-in duration-500">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
+              <div className="flex items-center gap-4">
+                <div className="relative">
+                  <div className="absolute -inset-2 bg-success rounded-full blur opacity-20 animate-pulse"></div>
+                  <div className="relative w-14 h-14 rounded-full bg-success/10 flex items-center justify-center ring-4 ring-success/5">
+                    <CheckCircle2 className="h-8 w-8 text-success" />
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-success-foreground">Agente IA Conectado</h3>
+                  <p className="text-sm text-muted-foreground">Operando via {status.phoneNumber || "WhatsApp"}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-bold">Conexão Ativa</p>
-                <p className="text-[10px] text-muted-foreground">O agente está operando normalmente</p>
+              <div className="flex gap-2 w-full sm:w-auto">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={checkStatus}
+                  className="flex-1 sm:flex-none"
+                >
+                  <RefreshCw className="h-3.5 w-3.5 mr-2" />
+                  Verificar
+                </Button>
+                <Button 
+                  variant="destructive" 
+                  size="sm" 
+                  onClick={handleDisconnect}
+                  disabled={actionLoading}
+                  className="flex-1 sm:flex-none"
+                >
+                  {actionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : <LogOut className="h-3.5 w-3.5 mr-2" />}
+                  Desconectar
+                </Button>
               </div>
             </div>
-            <Button 
-              variant="destructive" 
-              size="sm" 
-              onClick={handleDisconnect}
-              disabled={actionLoading}
-              className="w-full sm:w-auto"
-            >
-              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <LogOut className="h-4 w-4 mr-2" />}
-              Desconectar
-            </Button>
           </div>
         )}
       </CardContent>
