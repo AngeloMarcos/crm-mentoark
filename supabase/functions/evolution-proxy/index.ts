@@ -34,7 +34,6 @@ Deno.serve(async (req) => {
     const { action, user_id: userId } = body
 
     if (!action) return jsonResponse({ error: 'Missing action' }, 400)
-    
     if (!userId) return jsonResponse({ error: 'Missing user_id' }, 400)
 
     const instanceName = body.instance_name || `user_${userId.slice(0, 8)}`
@@ -45,6 +44,12 @@ Deno.serve(async (req) => {
           headers: { 'apikey': EVO_API_KEY }
         })
         const data = await res.json()
+        
+        // Se a instância não existe na Evolution, retorna fechado
+        if (res.status === 404) {
+           return jsonResponse({ state: 'close' })
+        }
+
         return jsonResponse({
           state: data.instance?.state || 'close',
           phoneNumber: data.instance?.ownerJid?.split(':')[0]
@@ -52,31 +57,42 @@ Deno.serve(async (req) => {
       }
 
       case 'create': {
-        console.log(`[evolution-proxy] Creating/fetching QR for ${instanceName}`)
-        // Tenta criar primeiro com a integração correta
-        const createRes = await fetch(`${EVO_BASE_URL}/instance/create`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'apikey': EVO_API_KEY },
-          body: JSON.stringify({
-            instanceName,
-            integration: "WHATSAPP-BAILEYS",
-            qrcode: true
-          })
+        console.log(`[evolution-proxy] Inciando criação/conexão para ${instanceName}`)
+        
+        // 1. Verifica se a instância já existe
+        const checkRes = await fetch(`${EVO_BASE_URL}/instance/fetchInstances?instanceName=${instanceName}`, {
+          headers: { 'apikey': EVO_API_KEY }
         })
-        
-        const createData = await createRes.json()
-        console.log(`[evolution-proxy] Create response status ${createRes.status}:`, createData)
+        const instances = await checkRes.json()
+        const exists = Array.isArray(instances) ? instances.some(i => i.instanceName === instanceName) : false
 
-        let qrCode = createData.qrcode?.base64 || createData.instance?.qrcode?.base64
-        
+        let qrCode = null
+
+        if (!exists) {
+          console.log(`[evolution-proxy] Criando nova instância ${instanceName}`)
+          const createRes = await fetch(`${EVO_BASE_URL}/instance/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'apikey': EVO_API_KEY },
+            body: JSON.stringify({
+              instanceName,
+              integration: "WHATSAPP-BAILEYS",
+              qrcode: true
+            })
+          })
+          const createData = await createRes.json()
+          qrCode = createData.qrcode?.base64
+        }
+
+        // 2. Se não criou agora ou não veio QR, solicita conexão para obter o código
         if (!qrCode) {
-          console.log(`[evolution-proxy] QR not in create response, fetching via /instance/connect/${instanceName}`)
-          const qrRes = await fetch(`${EVO_BASE_URL}/instance/connect/${instanceName}`, {
+          console.log(`[evolution-proxy] Buscando QR code de conexão para ${instanceName}`)
+          const connectRes = await fetch(`${EVO_BASE_URL}/instance/connect/${instanceName}`, {
             headers: { 'apikey': EVO_API_KEY }
           })
-          const qrData = await qrRes.json()
-          console.log(`[evolution-proxy] Connect response:`, qrData)
-          qrCode = qrData.base64 || qrData.code || qrData.qrcode?.base64 || qrData.instance?.qrcode?.base64
+          const connectData = await connectRes.json()
+          
+          // O QR pode vir em diferentes campos dependendo da versão/estado
+          qrCode = connectData.base64 || connectData.code || connectData.qrcode?.base64
         }
 
         return jsonResponse({
@@ -87,7 +103,8 @@ Deno.serve(async (req) => {
       }
 
       case 'logout': {
-        await fetch(`${EVO_BASE_URL}/instance/logout/${instanceName}`, {
+        console.log(`[evolution-proxy] Removendo instância ${instanceName}`)
+        await fetch(`${EVO_BASE_URL}/instance/delete/${instanceName}`, {
           method: 'DELETE',
           headers: { 'apikey': EVO_API_KEY }
         })
@@ -98,6 +115,7 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: 'Action not supported' }, 400)
     }
   } catch (error: any) {
+    console.error(`[evolution-proxy] Erro fatal:`, error)
     return jsonResponse({ error: error.message }, 500)
   }
 })
