@@ -21,8 +21,20 @@ export function WhatsAppStatus() {
   const [actionLoading, setActionLoading] = useState(false);
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   const [showDebug, setShowDebug] = useState(false);
-  const [lastError, setLastError] = useState<{ message: string; timestamp: string; lastAction: 'create' | 'status' | 'logout' } | null>(null);
+  const [lastError, setLastError] = useState<{ message: string; timestamp: string; lastAction: 'create' | 'status' | 'logout' } | null>(() => {
+    const saved = localStorage.getItem('whatsapp_last_error');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [autoRetrying, setAutoRetrying] = useState(false);
+
+  // Persistir erro no localStorage
+  useEffect(() => {
+    if (lastError) {
+      localStorage.setItem('whatsapp_last_error', JSON.stringify(lastError));
+    } else {
+      localStorage.removeItem('whatsapp_last_error');
+    }
+  }, [lastError]);
 
   const retryCountRef = useRef(0);
   const maxRetries = 5;
