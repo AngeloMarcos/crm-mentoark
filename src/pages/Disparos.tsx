@@ -644,7 +644,7 @@ export default function DisparosPage() {
   // Auto-refresh do painel ativo enquanto rodando
   useEffect(() => {
     if (!activeId || !activeDisparo || activeDisparo.status !== "em_andamento") return;
-    const t = setInterval(() => refreshActive(activeId), 4000);
+    const t = setInterval(() => refreshActive(activeId), 8000);
     return () => clearInterval(t);
   }, [activeId, activeDisparo?.status]);
 

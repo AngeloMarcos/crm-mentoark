@@ -166,10 +166,9 @@ export default function catalogoRouter(pool: Pool): Router {
   router.delete('/:catalogoId/produtos/:id', async (req: AuthRequest, res: Response) => {
     try {
       const imgs = await pool.query('SELECT url FROM produto_imagens WHERE produto_id = $1 AND user_id = $2', [req.params.id, req.userId]);
-      for (const img of imgs.rows) {
-        const file = path.join(UPLOADS_DIR, path.basename(img.url));
-        if (fs.existsSync(file)) fs.unlinkSync(file);
-      }
+      await Promise.all(imgs.rows.map((img) =>
+        fs.promises.unlink(path.join(UPLOADS_DIR, path.basename(img.url))).catch(() => {})
+      ));
       await pool.query('DELETE FROM produtos WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
       res.status(204).send();
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -466,7 +465,7 @@ export default function catalogoRouter(pool: Pool): Router {
       res.status(201).json(r.rows[0]);
     } catch (e: any) {
       const file = (req as any).file;
-      if (file) fs.unlinkSync(file.path);
+      if (file) fs.promises.unlink(file.path).catch(() => {});
       res.status(500).json({ message: e.message });
     }
   });
@@ -477,7 +476,7 @@ export default function catalogoRouter(pool: Pool): Router {
       const r = await pool.query('SELECT url FROM produto_imagens WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
       if (!r.rows.length) return res.status(404).json({ message: 'Imagem não encontrada' });
       const file = path.join(UPLOADS_DIR, path.basename(r.rows[0].url));
-      if (fs.existsSync(file)) fs.unlinkSync(file);
+      await fs.promises.unlink(file).catch(() => {});
       await pool.query('DELETE FROM produto_imagens WHERE id = $1', [req.params.id]);
       res.status(204).send();
     } catch (e: any) { res.status(500).json({ message: e.message }); }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -543,7 +543,7 @@ export default function LeadsPage() {
   };
 
   // ============ FILTROS ============
-  const filtered = contatos.filter((c) => {
+  const filtered = useMemo(() => contatos.filter((c) => {
     const s = search.toLowerCase();
     const matchSearch = !s ||
       c.nome.toLowerCase().includes(s) ||
@@ -553,7 +553,7 @@ export default function LeadsPage() {
     const matchStatus = statusFilter === "todos" || c.status === statusFilter;
     const matchLista = listaFiltro === "todas" || c.lista_id === listaFiltro;
     return matchSearch && matchStatus && matchLista;
-  });
+  }), [contatos, search, statusFilter, listaFiltro]);
 
   return (
     <CRMLayout>
