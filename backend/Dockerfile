@@ -1,11 +1,10 @@
 FROM node:20-alpine AS builder
 
 WORKDIR /app
-COPY package*.json ./
+COPY package*.json .swcrc ./
 RUN npm ci
-COPY tsconfig.json ./
 COPY src ./src
-RUN NODE_OPTIONS=--max-old-space-size=1024 npm run build
+RUN npm run build
 
 FROM node:20-alpine AS runner
 
