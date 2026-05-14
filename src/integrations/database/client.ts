@@ -188,6 +188,17 @@ class QueryBuilder {
   private _idFilter(): Filter | undefined { return this._filters.find(f => f.col === 'id' && f.op === 'eq'); }
 
   private async _exec(): Promise<{ data: any; count?: number | null; error: any }> {
+    const token = _getToken();
+    if (token && _isExpired(token)) {
+      const ok = await auth._refreshSilent();
+      if (!ok) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        _currentUser = null;
+        _notify('SIGNED_OUT', null);
+        return { data: null, error: { message: 'Sessão expirada. Faça login novamente.' } };
+      }
+    }
     const headers = _authHeaders();
     const baseUrl = `${API_BASE}/api/${this._table}`;
 

@@ -144,9 +144,9 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
       delete item.created_at;
       delete item.updated_at;
 
-      const cols = Object.keys(item);
+      const cols = Object.keys(item).filter(k => /^[a-z_]+$/.test(k));
       if (!cols.length) continue;
-      const vals = Object.values(item);
+      const vals = cols.map(k => item[k]);
       const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ');
       const sql = `INSERT INTO ${tableName} (${cols.join(', ')}) VALUES (${placeholders}) RETURNING *`;
       const r = await pool.query(sql, vals);
@@ -163,13 +163,14 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     delete data[idCol];
     delete data[userIdCol ?? ''];
     delete data.created_at;
+    delete data.updated_at;
 
-    const cols = Object.keys(data);
+    const cols = Object.keys(data).filter(k => /^[a-z_]+$/.test(k));
     if (!cols.length) return res.status(400).json({ message: 'Nenhum campo para atualizar' });
 
     const setClauses = cols.map((col, i) => `${col} = $${i + 1}`).join(', ');
-    const vals: any[] = [...Object.values(data), req.params.id];
-    let sql = `UPDATE ${tableName} SET ${setClauses} WHERE ${idCol} = $${cols.length + 1}`;
+    const vals: any[] = [...cols.map(k => data[k]), req.params.id];
+    let sql = `UPDATE ${tableName} SET ${setClauses}, updated_at = NOW() WHERE ${idCol} = $${cols.length + 1}`;
 
     if (userIdCol && userId) {
       sql += ` AND ${userIdCol} = $${cols.length + 2}`;
@@ -196,13 +197,14 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     delete data[idCol];
     delete data[userIdCol ?? ''];
     delete data.created_at;
+    delete data.updated_at;
 
-    const cols = Object.keys(data);
+    const cols = Object.keys(data).filter(k => /^[a-z_]+$/.test(k));
     if (!cols.length) return res.status(400).json({ message: 'Nenhum campo para atualizar' });
 
-    const allParams = [...whereParams, ...Object.values(data)];
+    const allParams = [...whereParams, ...cols.map(k => data[k])];
     const setClauses = cols.map((col, i) => `${col} = $${nextIdx + i}`).join(', ');
-    const sql = `UPDATE ${tableName} SET ${setClauses} WHERE ${conditions.join(' AND ')} RETURNING *`;
+    const sql = `UPDATE ${tableName} SET ${setClauses}, updated_at = NOW() WHERE ${conditions.join(' AND ')} RETURNING *`;
 
     const r = await pool.query(sql, allParams);
     return res.json(r.rows);
