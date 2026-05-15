@@ -15,6 +15,7 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-https://crm.mentoark.com.br}
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-https://disparo.mentoark.com.br}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-mentoark2025evolutionkey}
+      MCP_SECRET: ${MCP_SECRET:-mentoark2025mcpsecretkey}
     expose:
       - "3000"
     networks:
