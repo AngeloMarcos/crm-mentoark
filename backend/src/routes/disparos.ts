@@ -9,14 +9,21 @@ export default function disparos(pool: Pool): Router {
   // We need a fresh router to add special routes before the base CRUD catches them
   const router = Router();
 
-  // POST /disparos/enviar — proxy seguro para Evolution (evita expor api_key no frontend)
+  // POST /disparos/enviar — proxy seguro para Evolution (api_key nunca vai ao frontend)
   router.post('/enviar', async (req: AuthRequest, res: Response) => {
-    try {
-      const { telefone, texto, disparo_log_id } = req.body;
-      if (!telefone || !texto) {
-        return res.status(400).json({ message: 'telefone e texto obrigatórios' });
-      }
+    const { telefone, texto, disparo_log_id, disparo_id } = req.body;
+    if (!telefone || !texto || !disparo_log_id || !disparo_id) {
+      return res.status(400).json({ message: 'telefone, texto, disparo_log_id e disparo_id são obrigatórios' });
+    }
 
+    // Marca como enviando + incremento atômico de tentativas
+    await pool.query(
+      `UPDATE disparo_logs SET status = 'sending', tentativas = tentativas + 1
+       WHERE id = $1 AND user_id = $2`,
+      [disparo_log_id, req.userId]
+    ).catch(() => {});
+
+    try {
       const evoRes = await pool.query(
         `SELECT url, api_key, instancia FROM integracoes_config
          WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado')
@@ -24,33 +31,63 @@ export default function disparos(pool: Pool): Router {
         [req.userId]
       );
       if (!evoRes.rows.length) {
+        await pool.query(
+          `UPDATE disparo_logs SET status = 'failed', erro = $1 WHERE id = $2 AND user_id = $3`,
+          ['Evolution API não configurada', disparo_log_id, req.userId]
+        );
+        await pool.query(
+          `UPDATE disparos SET falhas = falhas + 1 WHERE id = $1 AND user_id = $2`,
+          [disparo_id, req.userId]
+        );
         return res.status(400).json({ message: 'Evolution API não configurada ou desconectada' });
       }
       const { url, api_key, instancia } = evoRes.rows[0];
       const baseUrl = url.replace(/\/$/, '');
 
+      // Delay proporcional ao tamanho da mensagem — simula digitação humana
+      const typingDelay = Math.min(3000, Math.max(800, texto.length * 40));
+
       const resp = await fetch(`${baseUrl}/message/sendText/${instancia}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: api_key },
-        body: JSON.stringify({ number: telefone, text: texto, delay: 1200 }),
+        body: JSON.stringify({ number: telefone, text: texto, delay: typingDelay }),
       });
 
       if (!resp.ok) {
         const errBody = await resp.text().catch(() => '');
-        return res.status(resp.status).json({ message: `Evolution API ${resp.status}: ${errBody}` });
+        const errMsg = `Evolution API ${resp.status}: ${errBody}`;
+        await pool.query(
+          `UPDATE disparo_logs SET status = 'failed', erro = $1 WHERE id = $2 AND user_id = $3`,
+          [errMsg, disparo_log_id, req.userId]
+        );
+        await pool.query(
+          `UPDATE disparos SET falhas = falhas + 1 WHERE id = $1 AND user_id = $2`,
+          [disparo_id, req.userId]
+        );
+        return res.status(resp.status).json({ message: errMsg });
       }
 
-      if (disparo_log_id) {
-        await pool.query(
-          `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW()
-           WHERE id = $1 AND user_id = $2`,
-          [disparo_log_id, req.userId]
-        );
-      }
+      // Atualiza log e contador de forma atômica (sem read-modify-write)
+      await pool.query(
+        `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW() WHERE id = $1 AND user_id = $2`,
+        [disparo_log_id, req.userId]
+      );
+      await pool.query(
+        `UPDATE disparos SET enviados = enviados + 1 WHERE id = $1 AND user_id = $2`,
+        [disparo_id, req.userId]
+      );
 
       return res.json({ ok: true });
     } catch (err: any) {
       console.error('[DISPARO/ENVIAR]', err.message);
+      await pool.query(
+        `UPDATE disparo_logs SET status = 'failed', erro = $1 WHERE id = $2 AND user_id = $3`,
+        [err.message, disparo_log_id, req.userId]
+      ).catch(() => {});
+      await pool.query(
+        `UPDATE disparos SET falhas = falhas + 1 WHERE id = $1 AND user_id = $2`,
+        [disparo_id, req.userId]
+      ).catch(() => {});
       return res.status(500).json({ message: err.message });
     }
   });

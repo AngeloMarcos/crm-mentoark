@@ -500,19 +500,18 @@ export default function DisparosPage() {
   };
 
   // -------- Execução --------
-  const enviarMensagem = async (cfg: EvolutionCfg, telefone: string, texto: string) => {
-    const baseUrl = cfg.url.replace(/\/$/, "");
-    const res = await fetch(`${baseUrl}/message/sendText/${cfg.instancia}`, {
+  // Proxy via backend — api_key nunca exposta no browser, delay de digitação incluído
+  const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+  const enviarMensagem = async (telefone: string, texto: string, logId: string, disparoId: string) => {
+    const token = localStorage.getItem("access_token") ?? "";
+    const res = await fetch(`${API_BASE}/api/disparos/enviar`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": cfg.api_key,
-      },
-      body: JSON.stringify({ number: telefone, text: texto }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ telefone, texto, disparo_log_id: logId, disparo_id: disparoId }),
     });
     if (!res.ok) {
-      const body = await res.text().catch(() => "sem detalhe");
-      throw new Error(`Evolution API ${res.status}: ${body}`);
+      const body = await res.json().catch(() => ({ message: "sem detalhe" }));
+      throw new Error(body.message || `Erro ${res.status}`);
     }
   };
 
@@ -576,27 +575,11 @@ export default function DisparosPage() {
       return;
     }
 
-    // Trava + envio
+    // Trava + envio — backend gerencia log, tentativas e contadores atomicamente
     lockRef.current = true;
-    await api.from("disparo_logs").update({ status: "sending", tentativas: log.tentativas + 1 }).eq("id", log.id);
-    let sucesso = false;
-    let erroMsg: string | null = null;
     try {
-      await enviarMensagem(evolution, log.telefone, log.mensagem_enviada ?? "");
-      sucesso = true;
-    } catch (err: any) {
-      erroMsg = err?.message ?? "erro";
-    }
-
-    if (sucesso) {
-      await api.from("disparo_logs").update({ status: "sent", enviado_at: new Date().toISOString() }).eq("id", log.id);
-      const { data: cur } = await api.from("disparos").select("enviados").eq("id", d.id).single();
-      await api.from("disparos").update({ enviados: ((cur as any)?.enviados ?? 0) + 1 }).eq("id", d.id);
-    } else {
-      await api.from("disparo_logs").update({ status: "failed", erro: erroMsg }).eq("id", log.id);
-      const { data: cur } = await api.from("disparos").select("falhas").eq("id", d.id).single();
-      await api.from("disparos").update({ falhas: ((cur as any)?.falhas ?? 0) + 1 }).eq("id", d.id);
-    }
+      await enviarMensagem(log.telefone, log.mensagem_enviada ?? "", log.id, d.id);
+    } catch (_err: any) {}
     lockRef.current = false;
 
     lotePorDisparoRef.current[d.id] = (lotePorDisparoRef.current[d.id] ?? 0) + 1;
