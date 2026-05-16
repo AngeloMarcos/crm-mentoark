@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -248,13 +248,12 @@ export default function LoginPage() {
                 </Button>
 
                 <div className="text-center pt-2">
-                  <button 
-                    type="button" 
-                    onClick={() => setIsLogin(!isLogin)} 
+                  <Link 
+                    to="/register" 
                     className="text-sm text-purple-300 hover:text-white hover:underline transition-colors"
                   >
-                    {isLogin ? "Não tem uma conta? Cadastre-se gratuitamente" : "Já possui uma conta? Realizar login"}
-                  </button>
+                    Não tem uma conta? Cadastre-se gratuitamente
+                  </Link>
                 </div>
               </CardContent>
             </Card>
