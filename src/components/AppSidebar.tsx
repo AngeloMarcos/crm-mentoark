@@ -86,8 +86,8 @@ export function AppSidebar() {
                           <span className="absolute left-0 top-1/2 -translate-y-1/2 h-7 w-[3px] rounded-r gradient-brand shadow-[0_0_12px_hsl(262_83%_58%/0.6)]" />
                         )}
                         <item.icon
-                          className={`h-5 w-5 shrink-0 transition-colors ${
-                            isActive ? "text-primary" : "group-hover:text-primary"
+                          className={`h-5 w-5 shrink-0 transition-all duration-300 ${
+                            isActive ? item.color + " scale-110 brightness-125" : "text-muted-foreground group-hover:" + item.color + " group-hover:scale-110"
                           }`}
                         />
                         {!collapsed && (
