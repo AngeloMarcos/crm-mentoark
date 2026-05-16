@@ -618,7 +618,7 @@ export function WhatsAppInterface() {
           </DialogContent>
         </Dialog>
 
-
+        {activeChat ? (
           <>
             {/* Chat header */}
             <div className="flex items-center justify-between px-6 py-4 border-b bg-background/40 backdrop-blur-md shrink-0 z-10 shadow-sm">
