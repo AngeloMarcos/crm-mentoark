@@ -8,6 +8,8 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AuthProvider } from "@/hooks/useAuth";
 import LoginPage from "./pages/Login";
 import RegisterPage from "./pages/Register";
+import TermsPage from "./pages/Terms";
+import PrivacyPage from "./pages/Privacy";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
 import ContatosPage from "./pages/Contatos";
@@ -44,6 +46,8 @@ const App = () => (
               <Route path="/" element={<Navigate to="/login" replace />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
+              <Route path="/termos" element={<TermsPage />} />
+              <Route path="/privacidade" element={<PrivacyPage />} />
 
               <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
               <Route path="/leads"        element={<ProtectedRoute requireModulo="leads">       <LeadsPage /></ProtectedRoute>} />
