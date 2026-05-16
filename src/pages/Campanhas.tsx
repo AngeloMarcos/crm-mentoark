@@ -615,6 +615,11 @@ export default function CampanhasPage() {
           <DialogHeader>
             <DialogTitle>
               {editing ? "Editar campanha" : "Nova campanha"}
+              {!editing && infraSelecionada && (
+                <span className="ml-2 text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                  {INFRA_OPTIONS.find((o) => o.key === infraSelecionada)?.titulo}
+                </span>
+              )}
             </DialogTitle>
             <DialogDescription>
               CTR e CPL são calculados automaticamente.
