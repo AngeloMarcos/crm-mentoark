@@ -207,9 +207,26 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
   const resposta = completion.choices[0]?.message?.content;
   if (!resposta) throw new Error('OpenAI não retornou resposta');
 
-  // 9. Salvar conversa no histórico
+  // 9. Salvar conversa no histórico (n8n_chat_histories para RAG)
   await salvarMensagem(pool, sessionId, agente.user_id, entrada.instancia, 'user', entrada.texto);
   await salvarMensagem(pool, sessionId, agente.user_id, entrada.instancia, 'assistant', resposta);
+
+  // 9b. Salvar resposta do agente em whatsapp_messages
+  await pool.query(
+    `INSERT INTO whatsapp_messages
+       (id, user_id, instancia, session_id, remote_jid, from_me, push_name, tipo, conteudo, status, timestamp_unix)
+     VALUES ($1, $2, $3, $4, $5, true, 'Agente IA', 'text', $6, 'sent', $7)
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      `resp_${entrada.messageId}`,
+      agente.user_id,
+      entrada.instancia,
+      entrada.telefone,
+      `${entrada.telefone}@s.whatsapp.net`,
+      resposta,
+      Math.floor(Date.now() / 1000),
+    ]
+  ).catch(err => console.warn('[AGT] Falha ao salvar em whatsapp_messages:', err.message));
 
   // 10. Enviar resposta via Evolution API
   await enviarResposta(

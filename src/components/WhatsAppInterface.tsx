@@ -13,6 +13,20 @@ import {
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
 
+const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
+function apiHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  const t = localStorage.getItem('access_token');
+  if (t) h['Authorization'] = `Bearer ${t}`;
+  return h;
+}
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch { return ''; }
+}
+
 type ChatTab = "todos" | "fila" | "meus";
 
 interface Message {
@@ -21,6 +35,10 @@ interface Message {
   content: string;
   timestamp: string;
   senderName?: string;
+  tipo?: string;
+  midia_url?: string;
+  midia_mime?: string;
+  midia_nome?: string;
 }
 
 interface Chat {
@@ -45,75 +63,6 @@ const TAG_COLORS: Record<string, string> = {
   ATIVO: "bg-emerald-100 text-emerald-700",
 };
 
-const MOCK_CHATS: Chat[] = [
-  {
-    id: "1",
-    name: "João Silva",
-    phone: "5511988887777",
-    status: "Lead Qualificado",
-    tag: "LEAD",
-    source: "teste",
-    lastMessage: "Olá, gostaria de saber mais sobre o plano Pro.",
-    timestamp: "14:47",
-    unread: 2,
-    online: true,
-    notes: "",
-    messages: [
-      { id: "m1", role: "user", content: "Salve", timestamp: "13:45", senderName: "João" },
-      { id: "m2", role: "assistant", content: "Vai trampar hj?", timestamp: "13:50", senderName: "Agente" },
-      { id: "m3", role: "user", content: "ja to trampando irmao, eu nao durmo", timestamp: "13:50", senderName: "João" },
-      { id: "m4", role: "assistant", content: "Call??", timestamp: "13:51", senderName: "Agente" },
-      { id: "m5", role: "user", content: "jaja entro ai", timestamp: "13:51", senderName: "João" },
-      { id: "m6", role: "assistant", content: "eae", timestamp: "14:46", senderName: "Agente" },
-      { id: "m7", role: "assistant", content: "bora", timestamp: "14:46", senderName: "Agente" },
-      { id: "m8", role: "user", content: "To la", timestamp: "14:47", senderName: "João" },
-    ],
-  },
-  {
-    id: "2",
-    name: "Nathiele Santos",
-    phone: "5511977776666",
-    tag: "FECHAMENTO",
-    source: "TESTE",
-    lastMessage: "anhh ta bom, se nao ficar...",
-    timestamp: "14:53",
-    online: false,
-    notes: "",
-    messages: [
-      { id: "n1", role: "user", content: "Boa tarde! Quero fechar o plano.", timestamp: "14:40", senderName: "Nathiele" },
-      { id: "n2", role: "assistant", content: "Perfeito! Vou preparar o contrato.", timestamp: "14:41", senderName: "Agente" },
-      { id: "n3", role: "user", content: "anhh ta bom, se nao ficar...", timestamp: "14:53", senderName: "Nathiele" },
-    ],
-  },
-  {
-    id: "3",
-    name: "447974905007",
-    phone: "447974905007",
-    tag: "NEGOCIAÇÃO",
-    source: "TESTE",
-    lastMessage: "testado",
-    timestamp: "13:51",
-    online: false,
-    notes: "",
-    messages: [
-      { id: "k1", role: "user", content: "testado", timestamp: "13:51", senderName: "447974905007" },
-    ],
-  },
-  {
-    id: "4",
-    name: "Emanuel Pires",
-    phone: "5511966665555",
-    tag: "LEAD",
-    source: "TESTE",
-    lastMessage: "https://meet.google.com/...",
-    timestamp: "13:33",
-    online: false,
-    notes: "",
-    messages: [
-      { id: "e1", role: "user", content: "https://meet.google.com/abc-defg-hij", timestamp: "13:33", senderName: "Emanuel" },
-    ],
-  },
-];
 
 export function WhatsAppInterface() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -125,7 +74,9 @@ export function WhatsAppInterface() {
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [connecting, setConnecting] = useState(false);
-  const [chats, setChats] = useState<Chat[]>(MOCK_CHATS);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [loadingChats, setLoadingChats] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
@@ -137,6 +88,48 @@ export function WhatsAppInterface() {
     ),
     [chats, searchTerm]
   );
+
+  const fetchConversas = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
+      if (!res.ok) return;
+      const rows: any[] = await res.json();
+      const mapped: Chat[] = rows.map(row => ({
+        id: row.session_id,
+        name: row.nome || row.session_id,
+        phone: row.session_id,
+        source: row.instancia || undefined,
+        lastMessage: row.ultima_mensagem || '',
+        timestamp: formatTime(row.ultima_atividade),
+        messages: [],
+        notes: '',
+      }));
+      setChats(mapped);
+    } catch {}
+    finally { setLoadingChats(false); }
+  };
+
+  const fetchMensagens = async (phone: string, chatName: string) => {
+    setLoadingMessages(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}`, { headers: apiHeaders() });
+      if (!res.ok) return;
+      const rows: any[] = await res.json();
+      const msgs: Message[] = rows.map((m, i) => ({
+        id: m.id || `msg-${i}`,
+        role: (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant',
+        content: m.content || m.conteudo || '',
+        timestamp: formatTime(m.created_at),
+        senderName: m.role === 'assistant' || m.from_me ? (m.push_name || 'Agente') : (m.push_name || chatName),
+        tipo: m.tipo || 'text',
+        midia_url: m.midia_url,
+        midia_mime: m.midia_mime,
+        midia_nome: m.midia_nome,
+      }));
+      setChats(prev => prev.map(c => c.id === phone ? { ...c, messages: msgs } : c));
+    } catch {}
+    finally { setLoadingMessages(false); }
+  };
 
   const checkStatus = async (silent = true) => {
     try {
@@ -173,9 +166,18 @@ export function WhatsAppInterface() {
 
   useEffect(() => {
     checkStatus();
+    fetchConversas();
     const t = setInterval(checkStatus, 30000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (!activeChatId) return;
+    const chat = chats.find(c => c.id === activeChatId);
+    if (chat && chat.messages.length === 0) {
+      fetchMensagens(activeChatId, chat.name);
+    }
+  }, [activeChatId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -282,6 +284,17 @@ export function WhatsAppInterface() {
 
         {/* Chat list */}
         <ScrollArea className="flex-1">
+          {loadingChats && (
+            <div className="flex items-center justify-center py-12 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Carregando...
+            </div>
+          )}
+          {!loadingChats && filteredChats.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground text-sm">
+              <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
+              Nenhuma conversa
+            </div>
+          )}
           <div className="divide-y divide-border/50">
             {filteredChats.map(chat => {
               const isActive = activeChatId === chat.id;
@@ -290,12 +303,11 @@ export function WhatsAppInterface() {
                   key={chat.id}
                   onClick={() => setActiveChatId(chat.id)}
                   className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
-                    isActive 
-                      ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary" 
+                    isActive
+                      ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary"
                       : "hover:bg-muted/30"
                   }`}
                 >
-                  {/* Avatar */}
                   <div className="relative shrink-0">
                     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-base uppercase transition-transform group-hover:scale-105 ${
                       isActive ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20" : "bg-primary/10 text-primary"
@@ -306,31 +318,20 @@ export function WhatsAppInterface() {
                       <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-background rounded-full shadow-sm" />
                     )}
                   </div>
-                  {/* Info */}
                   <div className="flex-1 min-w-0 py-0.5">
                     <div className="flex items-center justify-between mb-1">
-                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : "text-foreground"}`}>
-                        {chat.name}
-                      </span>
+                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : "text-foreground"}`}>{chat.name}</span>
                       <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
                     </div>
-                    
                     <div className="flex items-center gap-1.5 mb-1.5">
                       {chat.source && (
-                        <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">
-                          {chat.source}
-                        </span>
+                        <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
                       )}
                       {chat.tag && (
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>
-                          {chat.tag}
-                        </span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>{chat.tag}</span>
                       )}
                     </div>
-
-                    <p className={`text-xs truncate ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>
-                      {chat.lastMessage}
-                    </p>
+                    <p className={`text-xs truncate ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>{chat.lastMessage}</p>
                   </div>
                   {chat.unread ? (
                     <div className="min-w-[20px] h-5 px-1.5 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center font-black shadow-lg shadow-green-500/20 shrink-0 animate-in zoom-in">
@@ -406,10 +407,12 @@ export function WhatsAppInterface() {
 
             {/* Messages */}
             <ScrollArea className="flex-1 bg-muted/10 relative">
-              {/* WhatsApp background pattern (using CSS) */}
-              <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[url('https://web.whatsapp.com/img/bg-chat-tile-dark_a4be512e71aaddda92969c3641b2cc2f.png')] dark:opacity-[0.05]" />
-              
               <div className="px-8 py-6 space-y-1 relative z-1">
+                {loadingMessages && (
+                  <div className="flex items-center justify-center py-12 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin mr-2" /> Carregando mensagens...
+                  </div>
+                )}
                 {activeChat.messages.map((m, i) => {
                   const isOut = m.role === "assistant";
                   const prevRole = i > 0 ? activeChat.messages[i - 1].role : null;
@@ -424,7 +427,18 @@ export function WhatsAppInterface() {
                         {showName && (
                           <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
                         )}
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content}</p>
+                        {m.tipo === 'image' && m.midia_url ? (
+                          <img src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" />
+                        ) : m.tipo === 'audio' ? (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                            <Mic className="h-4 w-4" /> Áudio
+                          </div>
+                        ) : m.tipo === 'document' && m.midia_url ? (
+                          <a href={m.midia_url} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-xs text-primary underline py-1">
+                            <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
+                          </a>
+                        ) : null}
+                        {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content}</p>}
                         <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : "text-muted-foreground/60"}`}>
                           <span className="text-[10px] font-bold">{m.timestamp}</span>
                           {isOut && <Check className="h-3 w-3 opacity-80" />}

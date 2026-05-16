@@ -67,50 +67,97 @@ export default function whatsappRouter(pool: Pool): Router {
     try {
       const userId = req.userId!;
 
-      const r = await pool.query(
-        `SELECT
-           h.session_id,
-           h.instancia,
-           MAX(h.created_at) AS ultima_atividade,
-           COUNT(*) AS total,
-           (
-             SELECT h2.message->>'content'
-             FROM n8n_chat_histories h2
-             WHERE h2.session_id = h.session_id AND h2.user_id = $1
-             ORDER BY h2.created_at DESC LIMIT 1
-           ) AS ultima_mensagem,
-           (
-             SELECT h2.message->>'role'
-             FROM n8n_chat_histories h2
-             WHERE h2.session_id = h.session_id AND h2.user_id = $1
-             ORDER BY h2.created_at DESC LIMIT 1
-           ) AS ultimo_role
-         FROM n8n_chat_histories h
-         WHERE h.user_id = $1
-         GROUP BY h.session_id, h.instancia
-         ORDER BY ultima_atividade DESC
-         LIMIT 200`,
-        [userId]
+      // Tenta primeiro a tabela whatsapp_messages (nova)
+      const hasTable = await pool.query(
+        `SELECT to_regclass('public.whatsapp_messages') AS t`
       );
+      const useNewTable = !!hasTable.rows[0]?.t;
 
-      let nomes: Record<string, string> = {};
-      if (r.rows.length) {
+      let rows: any[] = [];
+
+      if (useNewTable) {
+        const r = await pool.query(
+          `SELECT
+             m.session_id,
+             m.instancia,
+             MAX(m.created_at) AS ultima_atividade,
+             COUNT(*) AS total,
+             (
+               SELECT m2.conteudo FROM whatsapp_messages m2
+               WHERE m2.session_id = m.session_id AND m2.user_id = $1
+               ORDER BY m2.created_at DESC LIMIT 1
+             ) AS ultima_mensagem,
+             (
+               SELECT CASE WHEN m2.from_me THEN 'assistant' ELSE 'user' END
+               FROM whatsapp_messages m2
+               WHERE m2.session_id = m.session_id AND m2.user_id = $1
+               ORDER BY m2.created_at DESC LIMIT 1
+             ) AS ultimo_role,
+             (
+               SELECT m2.push_name FROM whatsapp_messages m2
+               WHERE m2.session_id = m.session_id AND m2.user_id = $1
+                 AND m2.push_name IS NOT NULL AND m2.from_me = false
+               ORDER BY m2.created_at DESC LIMIT 1
+             ) AS push_name
+           FROM whatsapp_messages m
+           WHERE m.user_id = $1
+           GROUP BY m.session_id, m.instancia
+           ORDER BY ultima_atividade DESC
+           LIMIT 200`,
+          [userId]
+        );
+        rows = r.rows;
+      } else {
+        const r = await pool.query(
+          `SELECT
+             h.session_id,
+             h.instancia,
+             MAX(h.created_at) AS ultima_atividade,
+             COUNT(*) AS total,
+             (
+               SELECT h2.message->>'content' FROM n8n_chat_histories h2
+               WHERE h2.session_id = h.session_id AND h2.user_id = $1
+               ORDER BY h2.created_at DESC LIMIT 1
+             ) AS ultima_mensagem,
+             (
+               SELECT h2.message->>'role' FROM n8n_chat_histories h2
+               WHERE h2.session_id = h.session_id AND h2.user_id = $1
+               ORDER BY h2.created_at DESC LIMIT 1
+             ) AS ultimo_role,
+             NULL AS push_name
+           FROM n8n_chat_histories h
+           WHERE h.user_id = $1
+           GROUP BY h.session_id, h.instancia
+           ORDER BY ultima_atividade DESC
+           LIMIT 200`,
+          [userId]
+        );
+        rows = r.rows;
+      }
+
+      // Enriquecer com dados de contatos
+      let nomes: Record<string, { nome: string; push_name?: string }> = {};
+      if (rows.length) {
         const contatos = await pool.query(
-          `SELECT telefone, nome FROM contatos WHERE user_id = $1`,
+          `SELECT telefone, nome, push_name FROM contatos WHERE user_id = $1`,
           [userId]
         );
         for (const c of contatos.rows) {
           const digits = (c.telefone || '').replace(/\D/g, '');
-          nomes[digits] = c.nome;
+          nomes[digits] = { nome: c.nome, push_name: c.push_name };
+          if (digits.length > 11) nomes[digits.slice(-11)] = { nome: c.nome, push_name: c.push_name };
         }
       }
 
-      const conversas = r.rows.map(row => {
+      const conversas = rows.map(row => {
         const digits = (row.session_id || '').replace(/\D/g, '');
+        const contato = nomes[digits] || nomes[digits.slice(-11)];
+        const nome = contato?.nome || row.push_name || row.session_id;
         return {
           session_id: row.session_id,
           instancia: row.instancia,
-          nome: nomes[digits] || nomes[digits.slice(-11)] || null,
+          nome,
+          push_name: row.push_name || contato?.push_name || null,
           ultima_atividade: row.ultima_atividade,
           ultima_mensagem: row.ultima_mensagem || '',
           ultimo_role: row.ultimo_role,
@@ -131,6 +178,38 @@ export default function whatsappRouter(pool: Pool): Router {
       const userId = req.userId!;
       const phone = decodeURIComponent(req.params.phone);
 
+      // Tenta whatsapp_messages primeiro
+      const hasTable = await pool.query(
+        `SELECT to_regclass('public.whatsapp_messages') AS t`
+      );
+      const useNewTable = !!hasTable.rows[0]?.t;
+
+      if (useNewTable) {
+        const r = await pool.query(
+          `SELECT id, from_me, push_name, tipo, conteudo, midia_url, midia_mime, midia_nome, status, timestamp_unix, created_at
+           FROM whatsapp_messages
+           WHERE session_id = $1 AND user_id = $2
+           ORDER BY created_at ASC`,
+          [phone, userId]
+        );
+
+        const mensagens = r.rows.map(row => ({
+          id: row.id,
+          role: row.from_me ? 'assistant' : 'user',
+          content: row.conteudo || '',
+          push_name: row.push_name,
+          tipo: row.tipo,
+          midia_url: row.midia_url,
+          midia_mime: row.midia_mime,
+          midia_nome: row.midia_nome,
+          status: row.status,
+          created_at: row.created_at,
+        }));
+
+        return res.json(mensagens);
+      }
+
+      // Fallback: n8n_chat_histories
       const r = await pool.query(
         `SELECT message, created_at
          FROM n8n_chat_histories
@@ -144,6 +223,7 @@ export default function whatsappRouter(pool: Pool): Router {
         return {
           role: msg.role as 'user' | 'assistant',
           content: msg.content as string,
+          tipo: 'text',
           created_at: row.created_at,
         };
       }).filter(m => m.role && m.content);

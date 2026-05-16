@@ -27,6 +27,7 @@ import modulosRouter from './routes/modulos';
 import whatsappRouter from './routes/whatsapp';
 import { mcpRouter } from './routes/mcp';
 import { initCronJobs } from './cron';
+import { runMigrations } from './migrations';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 
@@ -171,6 +172,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
+runMigrations(pool).catch(err => console.error('[MIGRATIONS] Erro:', err));
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`API running on port ${PORT}`);
   initCronJobs();

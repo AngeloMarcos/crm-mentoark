@@ -1,23 +1,10 @@
-import { api } from "@/integrations/database/client";
+const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 
-async function callProxy(action: string) {
-  const { data: { session } } = await api.auth.getSession();
-  if (!session?.user?.id) {
-    throw new Error('Usuário não autenticado');
-  }
-
-  const { data, error } = await api.functions.invoke('evolution-proxy', {
-    body: {
-      action,
-      user_id: session.user.id
-    }
-  });
-
-  if (error) {
-    throw new Error(error.message || 'Erro ao comunicar com a Evolution API');
-  }
-
-  return data;
+function authHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  const t = localStorage.getItem('access_token');
+  if (t) h['Authorization'] = `Bearer ${t}`;
+  return h;
 }
 
 export interface CreateInstanceResult {
@@ -33,18 +20,30 @@ export interface StatusResult {
 }
 
 export async function fetchConnectionStatus(): Promise<StatusResult> {
-  return await callProxy('status');
+  const res = await fetch(`${API_BASE}/api/whatsapp/status`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) return { state: 'close' };
+  return res.json();
 }
 
 export async function createInstance(): Promise<CreateInstanceResult> {
-  return await callProxy('create');
+  const res = await fetch(`${API_BASE}/api/whatsapp/connect`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Erro ao conectar instância');
+  return res.json();
 }
 
 export async function reconnectInstance(): Promise<CreateInstanceResult> {
-  return await callProxy('create');
+  return createInstance();
 }
 
 export async function disconnectInstance(): Promise<void> {
-  await callProxy('logout');
+  await fetch(`${API_BASE}/api/whatsapp/disconnect`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
 }
-
