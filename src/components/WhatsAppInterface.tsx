@@ -490,5 +490,77 @@ export function WhatsAppInterface() {
         </div>
       )}
     </div>
+
+    {/* Painel de Diagnóstico */}
+    <div className="border rounded-2xl overflow-hidden bg-background shadow-sm">
+      <button
+        onClick={() => setDiagOpen(o => !o)}
+        className="w-full flex items-center justify-between p-4 hover:bg-muted/30 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-xl ${errorCount > 0 ? 'bg-red-500/10 text-red-600' : 'bg-muted text-muted-foreground'}`}>
+            <Activity className="h-4 w-4" />
+          </div>
+          <div className="text-left">
+            <p className="font-bold text-sm">Diagnóstico da Conexão</p>
+            <p className="text-[11px] text-muted-foreground">
+              {diagEvents.length} {diagEvents.length === 1 ? 'evento registrado' : 'eventos registrados'}
+              {errorCount > 0 && ` · ${errorCount} erro(s)`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {errorCount > 0 && (
+            <Badge variant="destructive" className="rounded-full text-[10px]">{errorCount}</Badge>
+          )}
+          {diagOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {diagOpen && (
+        <div className="border-t bg-muted/10">
+          <div className="p-3 border-b flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground font-mono">
+              <span>Status: <strong className="text-foreground">{connectionStatus?.state || '—'}</strong></span>
+              {connectionStatus?.phoneNumber && <span>· Tel: <strong className="text-foreground">{connectionStatus.phoneNumber}</strong></span>}
+              {qrData?.instanceName && <span>· Inst: <strong className="text-foreground">{qrData.instanceName}</strong></span>}
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => checkStatus(false)} className="h-8 text-xs">
+                <RefreshCw className="h-3 w-3 mr-1" /> Atualizar
+              </Button>
+              <Button size="sm" variant="outline" onClick={copyDiagnostic} disabled={diagEvents.length === 0} className="h-8 text-xs">
+                <Copy className="h-3 w-3 mr-1" /> Copiar
+              </Button>
+              <Button size="sm" variant="ghost" onClick={clearDiagnostic} disabled={diagEvents.length === 0} className="h-8 text-xs text-muted-foreground">
+                <Trash2 className="h-3 w-3 mr-1" /> Limpar
+              </Button>
+            </div>
+          </div>
+          <ScrollArea className="h-64">
+            <div className="p-3 space-y-2">
+              {diagEvents.length === 0 ? (
+                <p className="text-center text-xs text-muted-foreground py-8 italic font-mono">
+                  Nenhum evento registrado. Clique em "Gerar QR Code" para iniciar o diagnóstico.
+                </p>
+              ) : (
+                diagEvents.map(ev => (
+                  <div key={ev.id} className={`rounded-lg border px-3 py-2 text-xs font-mono ${levelStyles[ev.level]}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold">{ev.event}</span>
+                      <span className="text-[10px] opacity-70 shrink-0">{ev.timestamp}</span>
+                    </div>
+                    {ev.detail && (
+                      <p className="mt-1 opacity-80 break-all whitespace-pre-wrap">{ev.detail}</p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+        </div>
+      )}
+    </div>
+    </div>
   );
 }
