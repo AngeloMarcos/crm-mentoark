@@ -89,7 +89,7 @@ const ParticlesBackground: React.FC<ParticlesBackgroundProps> = ({
         // Draw particle
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fillStyle = i % 2 === 0 ? 'rgba(192, 132, 252, 0.6)' : 'rgba(96, 165, 250, 0.6)';
+        ctx.fillStyle = i % 2 === 0 ? 'rgba(139, 92, 246, 0.6)' : 'rgba(59, 130, 246, 0.6)'; // Cores mais vivas (Vibrant Purple and Blue)
         ctx.fill();
 
         // Connect particles
@@ -101,7 +101,7 @@ const ParticlesBackground: React.FC<ParticlesBackgroundProps> = ({
 
           if (dist < connDist) {
             ctx.beginPath();
-            ctx.strokeStyle = i % 2 === 0 ? `rgba(192, 132, 252, ${(1 - dist / connDist) * 0.5})` : `rgba(96, 165, 250, ${(1 - dist / connDist) * 0.5})`;
+            ctx.strokeStyle = i % 2 === 0 ? `rgba(139, 92, 246, ${(1 - dist / connDist) * 0.5})` : `rgba(59, 130, 246, ${(1 - dist / connDist) * 0.5})`;
             ctx.lineWidth = 0.5;
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(p2.x, p2.y);
