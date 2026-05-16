@@ -255,6 +255,12 @@ export default function LoginPage() {
                     Não tem uma conta? Cadastre-se gratuitamente
                   </Link>
                 </div>
+
+                <div className="flex items-center justify-center gap-4 text-[11px] text-white/30 pt-2">
+                  <Link to="/termos" className="hover:text-white/60 transition-colors">Termos de Uso</Link>
+                  <span>|</span>
+                  <Link to="/privacidade" className="hover:text-white/60 transition-colors">Privacidade</Link>
+                </div>
               </CardContent>
             </Card>
 
