@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Eye, EyeOff, LogIn, UserPlus, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/integrations/database/client";
@@ -20,6 +21,7 @@ export default function LoginPage() {
   const [displayName, setDisplayName] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -29,6 +31,15 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    if (!acceptedTerms) {
+      toast({
+        title: "Atenção",
+        description: "Você deve aceitar os Termos de Uso e Política de Privacidade.",
+        variant: "destructive",
+      });
+      setLoading(false);
+      return;
+    }
     try {
       if (isLogin) {
         const { error } = await api.auth.signInWithPassword({ email, password });
@@ -204,6 +215,24 @@ export default function LoginPage() {
                       </Button>
                     </div>
                   </div>
+                  <div className="flex items-start space-x-2 py-2">
+                    <Checkbox 
+                      id="terms" 
+                      checked={acceptedTerms} 
+                      onCheckedChange={(checked) => setAcceptedTerms(checked as boolean)}
+                      className="border-white/20 data-[state=checked]:bg-purple-600 data-[state=checked]:border-purple-600 mt-1"
+                    />
+                    <Label 
+                      htmlFor="terms" 
+                      className="text-xs text-white/60 leading-tight cursor-pointer select-none"
+                    >
+                      Eu li e concordo com os{" "}
+                      <Link to="/termos" className="text-purple-400 hover:underline">Termos de Uso</Link>
+                      {" "}e a{" "}
+                      <Link to="/privacidade" className="text-purple-400 hover:underline">Política de Privacidade</Link>.
+                    </Label>
+                  </div>
+
                   <Button 
                     type="submit" 
                     className="w-full gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white border-none shadow-lg shadow-purple-500/20 transition-all duration-300 transform hover:scale-[1.02]" 
