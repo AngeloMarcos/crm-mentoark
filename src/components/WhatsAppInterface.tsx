@@ -307,7 +307,7 @@ export function WhatsAppInterface() {
                 Escaneie o código acima com seu celular para sincronizar as mensagens com o Agente MentoArk.
               </p>
             </div>
-            <Button variant="outline" onClick={checkStatus}>
+            <Button variant="outline" onClick={() => checkStatus(false)}>
               <RefreshCw className="h-4 w-4 mr-2" /> Já escaneei
             </Button>
           </div>
