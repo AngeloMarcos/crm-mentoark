@@ -14,11 +14,11 @@ export function AppHeader() {
   return (
     <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20 overflow-hidden">
       {/* Background Particles */}
-      <div className="absolute inset-0 pointer-events-none opacity-40">
+      <div className="absolute inset-0 pointer-events-none opacity-80">
         <ParticlesBackground 
-          className="absolute inset-0" 
-          count={25} 
-          connectionDistance={100} 
+          className="block w-full h-full" 
+          count={35} 
+          connectionDistance={120} 
         />
       </div>
 
