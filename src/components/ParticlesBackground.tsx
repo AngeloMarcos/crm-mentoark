@@ -36,15 +36,20 @@ const ParticlesBackground: React.FC<ParticlesBackgroundProps> = ({
 
     const resize = () => {
       const parent = canvas.parentElement;
-      if (parent) {
-        canvas.width = parent.clientWidth;
-        canvas.height = parent.clientHeight;
-      } else {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-      }
+      const w = parent ? parent.clientWidth : window.innerWidth;
+      const h = parent ? parent.clientHeight : window.innerHeight;
+      canvas.width = w;
+      canvas.height = h;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
       initParticles();
     };
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (canvas.parentElement && 'ResizeObserver' in window) {
+      resizeObserver = new ResizeObserver(() => resize());
+      resizeObserver.observe(canvas.parentElement);
+    }
 
     const initParticles = () => {
       particles = [];
@@ -123,14 +128,15 @@ const ParticlesBackground: React.FC<ParticlesBackgroundProps> = ({
       window.removeEventListener('resize', resize);
       window.removeEventListener('mousemove', handleMouseMove);
       cancelAnimationFrame(animationFrameId);
+      if (resizeObserver) resizeObserver.disconnect();
     };
-  }, []);
+  }, [count, connectionDistance]);
 
   return (
     <canvas
       ref={canvasRef}
       className={className}
-      style={{ background: 'transparent' }}
+      style={{ background: 'transparent', display: 'block' }}
     />
   );
 };
