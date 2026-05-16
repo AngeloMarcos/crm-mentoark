@@ -118,10 +118,14 @@ Deno.serve(async (req) => {
                    connectData.instance?.qrcode?.base64;
         }
 
+        const finalQrCode = qrCode && !qrCode.startsWith('data:image') 
+          ? `data:image/png;base64,${qrCode}` 
+          : qrCode
+
         return jsonResponse({
-          qrCode,
+          qrCode: finalQrCode,
           instanceName,
-          state: qrCode ? 'connecting' : 'close',
+          state: finalQrCode ? 'connecting' : 'close',
           raw: createData
         })
       }
