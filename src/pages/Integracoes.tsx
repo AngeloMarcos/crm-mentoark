@@ -40,8 +40,8 @@ import {
   MapPin,
   Brain,
   Volume2,
-  Instagram,
-  Facebook,
+  Mail,
+  Share2,
   Send as TelegramIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -80,8 +80,8 @@ const iconMap = {
   MapPin,
   Brain,
   Volume2,
-  Instagram,
-  Facebook,
+  Mail,
+  Share2,
   TelegramIcon,
 } as const;
 
@@ -170,7 +170,7 @@ const TEMPLATES: Template[] = [
     tipo: "instagram",
     nome: "Instagram Business",
     descricao: "Gestão de Directs e comentários via API",
-    icone: "Instagram",
+    icone: "Share2",
     campos: { api_key: true },
     urlLabel: "",
   },
@@ -178,7 +178,7 @@ const TEMPLATES: Template[] = [
     tipo: "messenger",
     nome: "Facebook Messenger",
     descricao: "Integração com chat do Facebook",
-    icone: "Facebook",
+    icone: "MessageCircle",
     campos: { api_key: true },
     urlLabel: "",
   },
