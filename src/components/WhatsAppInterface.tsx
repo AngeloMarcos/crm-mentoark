@@ -114,14 +114,23 @@ export function WhatsAppInterface() {
   const handleConnect = async () => {
     try {
       setConnecting(true);
+      // Primeiro tenta dar um logout/reset para limpar estados presos
+      try {
+        await disconnectInstance();
+      } catch (e) {
+        // Ignora erro no logout
+      }
+      
       const res = await createInstance();
       setQrData(res);
       if (res.state === 'open') {
         setConnectionStatus({ state: 'open', phoneNumber: res.phoneNumber });
-        toast.success("WhatsApp conectado!");
+        toast.success("WhatsApp já está conectado!");
+      } else if (res.qrCode) {
+        toast.info("Escaneie o QR Code gerado");
       }
     } catch (error: any) {
-      toast.error("Erro ao conectar: " + error.message);
+      toast.error("Erro ao gerar QR Code: " + error.message);
     } finally {
       setConnecting(false);
     }
