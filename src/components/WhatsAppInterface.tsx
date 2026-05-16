@@ -11,7 +11,7 @@ import {
   CheckCircle2, Info, Calendar, MapPin, Mail, Tag,
   Clock, AlertTriangle
 } from "lucide-react";
-import { fetchConnectionStatus, createInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
+import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
 
 interface Message {
@@ -114,14 +114,23 @@ export function WhatsAppInterface() {
   const handleConnect = async () => {
     try {
       setConnecting(true);
+      // Primeiro tenta dar um logout/reset para limpar estados presos
+      try {
+        await disconnectInstance();
+      } catch (e) {
+        // Ignora erro no logout
+      }
+      
       const res = await createInstance();
       setQrData(res);
       if (res.state === 'open') {
         setConnectionStatus({ state: 'open', phoneNumber: res.phoneNumber });
-        toast.success("WhatsApp conectado!");
+        toast.success("WhatsApp já está conectado!");
+      } else if (res.qrCode) {
+        toast.info("Escaneie o QR Code gerado");
       }
     } catch (error: any) {
-      toast.error("Erro ao conectar: " + error.message);
+      toast.error("Erro ao gerar QR Code: " + error.message);
     } finally {
       setConnecting(false);
     }
@@ -312,9 +321,9 @@ export function WhatsAppInterface() {
                 Selecione uma conversa para visualizar os dados do cliente e gerenciar o atendimento automático.
               </p>
               {!isConnected && (
-                <Button onClick={handleConnect} disabled={connecting} className="mt-4 rounded-xl px-8 h-12 font-bold">
+                <Button onClick={handleConnect} disabled={connecting} className="mt-4 rounded-xl px-8 h-12 font-bold bg-primary hover:bg-primary/90">
                   {connecting ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <QrCode className="h-5 w-5 mr-2" />}
-                  Conectar Canal
+                  Gerar QR Code de Conexão
                 </Button>
               )}
             </div>
