@@ -58,7 +58,7 @@ const ParticlesBackground: React.FC = () => {
         // Draw particle
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.fillStyle = i % 2 === 0 ? 'rgba(192, 132, 252, 0.6)' : 'rgba(96, 165, 250, 0.6)';
         ctx.fill();
 
         // Connect particles
