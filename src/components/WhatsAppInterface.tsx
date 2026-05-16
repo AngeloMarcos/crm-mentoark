@@ -84,6 +84,7 @@ export function WhatsAppInterface() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [showConnectModal, setShowConnectModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
   const [instanceName, setInstanceName] = useState("");
   const [instancePhone, setInstancePhone] = useState("");
   const [instanceCountry, setInstanceCountry] = useState("BR");
@@ -165,8 +166,11 @@ export function WhatsAppInterface() {
     try {
       setConnecting(true);
       try { await disconnectInstance(); } catch {}
-      const res = await createInstance(instanceName);
+      const phoneDigits = instancePhone.replace(/\D/g, '');
+      const res = await createInstance(instanceName, phoneDigits || undefined);
       setQrData(res);
+      setShowConnectModal(false);
+      setShowQrModal(true);
       setShowConnectModal(false);
       
       if (res.state === "open") {
