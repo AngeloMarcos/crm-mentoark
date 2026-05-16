@@ -12,7 +12,7 @@ export function AppHeader() {
   const initials = user?.email ? user.email.slice(0, 2).toUpperCase() : "U";
 
   return (
-    <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20 overflow-hidden">
+    <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20 overflow-hidden shadow-[0_4px_30px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
       {/* Background Particles */}
       <div className="absolute inset-0 pointer-events-none opacity-80">
         <ParticlesBackground 
@@ -24,12 +24,12 @@ export function AppHeader() {
 
       <div className="absolute bottom-0 left-0 right-0 h-[2px] pointer-events-none overflow-hidden">
         <div
-          className="h-full w-full"
+          className="h-full w-full opacity-80"
           style={{
             background:
-              "linear-gradient(90deg, transparent, hsl(226 85% 52%), hsl(262 83% 58%), hsl(226 85% 52%), transparent)",
+              "linear-gradient(90deg, transparent, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--primary)), transparent)",
             backgroundSize: "200% 100%",
-            animation: "gradient-shift 6s linear infinite",
+            animation: "gradient-shift 3s linear infinite",
           }}
         />
       </div>

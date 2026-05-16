@@ -5,35 +5,35 @@
 @layer base {
   :root {
     /* Backgrounds */
-    --background: 230 30% 96%;
-    --foreground: 230 25% 10%;
+    --background: 230 40% 97%;
+    --foreground: 230 45% 8%;
 
     --card: 0 0% 100%;
-    --card-foreground: 230 25% 10%;
+    --card-foreground: 230 45% 8%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 230 25% 10%;
+    --popover-foreground: 230 45% 8%;
 
-    /* Primary — azul vibrante */
-    --primary: 226 85% 52%;
+    /* Primary — azul vibrante mais saturado */
+    --primary: 226 95% 55%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 230 20% 92%;
-    --secondary-foreground: 230 25% 20%;
+    --secondary: 230 30% 94%;
+    --secondary-foreground: 230 35% 15%;
 
-    --muted: 230 20% 94%;
-    --muted-foreground: 230 12% 48%;
+    --muted: 230 25% 95%;
+    --muted-foreground: 230 15% 45%;
 
-    /* Accent — roxo */
-    --accent: 262 83% 58%;
+    /* Accent — roxo neon */
+    --accent: 265 90% 60%;
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 0 90% 62%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 230 20% 88%;
-    --input: 230 20% 88%;
-    --ring: 226 85% 52%;
+    --border: 230 25% 90%;
+    --input: 230 25% 90%;
+    --ring: 226 95% 55%;
 
     --radius: 0.75rem;
 
@@ -60,35 +60,35 @@
 
   .dark {
     /* Backgrounds — azul profundo */
-    --background: 232 32% 7%;
-    --foreground: 225 20% 90%;
+    --background: 232 45% 5%;
+    --foreground: 225 30% 95%;
 
-    --card: 232 28% 10%;
-    --card-foreground: 225 20% 90%;
+    --card: 232 40% 8%;
+    --card-foreground: 225 30% 95%;
 
-    --popover: 232 28% 10%;
-    --popover-foreground: 225 20% 90%;
+    --popover: 232 40% 8%;
+    --popover-foreground: 225 30% 95%;
 
-    /* Primary — azul brilhante */
-    --primary: 226 90% 62%;
-    --primary-foreground: 0 0% 100%;
+    /* Primary — azul elétrico */
+    --primary: 220 100% 65%;
+    --primary-foreground: 220 100% 5%;
 
-    --secondary: 232 22% 17%;
-    --secondary-foreground: 225 18% 82%;
+    --secondary: 232 30% 14%;
+    --secondary-foreground: 225 25% 88%;
 
-    --muted: 232 22% 14%;
-    --muted-foreground: 225 12% 52%;
+    --muted: 232 30% 12%;
+    --muted-foreground: 225 15% 55%;
 
-    /* Accent — roxo brilhante */
-    --accent: 262 85% 65%;
-    --accent-foreground: 0 0% 100%;
+    /* Accent — roxo elétrico */
+    --accent: 270 100% 70%;
+    --accent-foreground: 270 100% 5%;
 
-    --destructive: 0 62% 42%;
+    --destructive: 0 85% 55%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 232 22% 17%;
-    --input: 232 22% 17%;
-    --ring: 226 90% 62%;
+    --border: 232 30% 15%;
+    --input: 232 30% 15%;
+    --ring: 220 100% 65%;
 
     /* Sidebar escuro — quase preto azulado */
     --sidebar-background: 232 35% 5%;
@@ -114,7 +114,12 @@
 
 @layer base {
   * { @apply border-border; }
-  body { @apply bg-background text-foreground; }
+  body { @apply bg-background text-foreground transition-colors duration-500; }
+  
+  /* Melhora padrão de cards */
+  .card {
+    @apply transition-all duration-300;
+  }
 
   /* Aurora ambiente — blobs degradê fixos no fundo */
   body::before {
@@ -322,10 +327,18 @@
     0%   { transform: scale(0.8); opacity: 0.7; }
     80%, 100% { transform: scale(1.6); opacity: 0; }
   }
-  @keyframes breathe {
-    0%, 100% { box-shadow: 0 0 20px hsl(226 85% 52% / 0.25), 0 0 40px hsl(262 83% 58% / 0.10); }
-    50%      { box-shadow: 0 0 32px hsl(226 85% 52% / 0.45), 0 0 64px hsl(262 83% 58% / 0.25); }
+  @keyframes float {
+    0%, 100% { transform: translateY(0) translateX(0); }
+    33% { transform: translateY(-20px) translateX(10px); }
+    66% { transform: translateY(10px) translateX(-15px); }
   }
+  @keyframes pulse-slow {
+    0%, 100% { opacity: 0.3; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.1); }
+  }
+  .animate-float { animation: float 15s ease-in-out infinite; }
+  .animate-float-delayed { animation: float 18s ease-in-out infinite -5s; }
+  .animate-pulse-slow { animation: pulse-slow 10s ease-in-out infinite; }
   .animate-breathe { animation: breathe 3.5s ease-in-out infinite; }
 
   /* Animação shimmer para skeletons e loaders */
