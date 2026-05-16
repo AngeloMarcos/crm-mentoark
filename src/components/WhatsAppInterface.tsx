@@ -164,10 +164,8 @@ export function WhatsAppInterface() {
     
     try {
       setConnecting(true);
-      // Aqui poderíamos passar o instanceName se o serviço suportasse
-      // Por enquanto mantemos o padrão mas o modal já está pronto para o futuro
       try { await disconnectInstance(); } catch {}
-      const res = await createInstance();
+      const res = await createInstance(instanceName);
       setQrData(res);
       setShowConnectModal(false);
       
