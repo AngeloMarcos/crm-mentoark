@@ -232,9 +232,18 @@ export function WhatsAppInterface() {
 
   const isConnected = connectionStatus?.state === 'open';
 
+  const errorCount = diagEvents.filter(e => e.level === 'error').length;
+  const levelStyles: Record<DiagLevel, string> = {
+    info: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
+    success: 'bg-green-500/10 text-green-600 border-green-500/20',
+    warn: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+    error: 'bg-red-500/10 text-red-600 border-red-500/20',
+  };
+
   return (
+    <div className="space-y-4">
     <div className="flex h-[calc(100vh-12rem)] border rounded-2xl overflow-hidden bg-background shadow-xl">
-      
+
       {/* Sidebar - Lista de Conversas */}
       <div className="w-80 md:w-96 border-r flex flex-col bg-muted/5">
         <div className="p-4 border-b space-y-4">
