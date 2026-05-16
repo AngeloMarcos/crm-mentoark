@@ -60,35 +60,35 @@
 
   .dark {
     /* Backgrounds — azul profundo */
-    --background: 232 32% 7%;
-    --foreground: 225 20% 90%;
+    --background: 232 45% 5%;
+    --foreground: 225 30% 95%;
 
-    --card: 232 28% 10%;
-    --card-foreground: 225 20% 90%;
+    --card: 232 40% 8%;
+    --card-foreground: 225 30% 95%;
 
-    --popover: 232 28% 10%;
-    --popover-foreground: 225 20% 90%;
+    --popover: 232 40% 8%;
+    --popover-foreground: 225 30% 95%;
 
-    /* Primary — azul brilhante */
-    --primary: 226 90% 62%;
-    --primary-foreground: 0 0% 100%;
+    /* Primary — azul elétrico */
+    --primary: 220 100% 65%;
+    --primary-foreground: 220 100% 5%;
 
-    --secondary: 232 22% 17%;
-    --secondary-foreground: 225 18% 82%;
+    --secondary: 232 30% 14%;
+    --secondary-foreground: 225 25% 88%;
 
-    --muted: 232 22% 14%;
-    --muted-foreground: 225 12% 52%;
+    --muted: 232 30% 12%;
+    --muted-foreground: 225 15% 55%;
 
-    /* Accent — roxo brilhante */
-    --accent: 262 85% 65%;
-    --accent-foreground: 0 0% 100%;
+    /* Accent — roxo elétrico */
+    --accent: 270 100% 70%;
+    --accent-foreground: 270 100% 5%;
 
-    --destructive: 0 62% 42%;
+    --destructive: 0 85% 55%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 232 22% 17%;
-    --input: 232 22% 17%;
-    --ring: 226 90% 62%;
+    --border: 232 30% 15%;
+    --input: 232 30% 15%;
+    --ring: 220 100% 65%;
 
     /* Sidebar escuro — quase preto azulado */
     --sidebar-background: 232 35% 5%;
