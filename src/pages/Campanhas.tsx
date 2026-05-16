@@ -62,8 +62,51 @@ import {
   Loader2,
   Target,
   RefreshCw,
+  Megaphone,
+  BadgeCheck,
+  Smartphone,
+  MessageSquareText,
+  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
+
+type Infraestrutura = "api" | "qrcode" | "sms";
+
+const INFRA_OPTIONS: {
+  key: Infraestrutura;
+  titulo: string;
+  descricao: string;
+  icon: any;
+  iconBg: string;
+  iconColor: string;
+  badge?: any;
+}[] = [
+  {
+    key: "api",
+    titulo: "Números Oficiais (API)",
+    descricao: "Use números conectados à API da Meta. Maior segurança contra banimentos e envios de altíssimo volume.",
+    icon: MessageSquareText,
+    iconBg: "bg-emerald-500/10",
+    iconColor: "text-emerald-600",
+    badge: BadgeCheck,
+  },
+  {
+    key: "qrcode",
+    titulo: "Aparelhos Físicos (QR Code)",
+    descricao: "Envie usando as suas próprias instâncias de WhatsApp escaneadas. Ideal para aquecimento de chips e envios orgânicos.",
+    icon: Smartphone,
+    iconBg: "bg-green-500/10",
+    iconColor: "text-green-600",
+  },
+  {
+    key: "sms",
+    titulo: "Mensagem de Texto (SMS)",
+    descricao: "Alcance direto na operadora. Sem bloqueios de internet. Excelente para alertas, cobranças e engajamento.",
+    icon: MessageSquareText,
+    iconBg: "bg-purple-500/10",
+    iconColor: "text-purple-600",
+  },
+];
 
 type CampanhaStatus = "ativa" | "pausada" | "finalizada";
 
