@@ -34,6 +34,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS push_name TEXT`);
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS profile_pic_url TEXT`);
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ultima_mensagem_em TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS opt_out BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS n8n_webhook_url TEXT`);
 
   await pool.query(`
@@ -50,6 +51,21 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_optout_user_telefone
     ON opt_out_contatos (user_id, telefone)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS disparo_optouts (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id UUID NOT NULL,
+      telefone TEXT NOT NULL,
+      motivo TEXT DEFAULT 'usuario_solicitou',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_disparo_optouts_user_telefone
+    ON disparo_optouts (user_id, telefone, created_at DESC)
   `);
 
   console.log('[MIGRATIONS] OK');

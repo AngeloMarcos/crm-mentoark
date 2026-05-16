@@ -29,6 +29,11 @@ interface EvolutionPayload {
   };
 }
 
+// Palavras-chave de opt-out (comparação case-insensitive após trim)
+const OPT_OUT_KEYWORDS = new Set([
+  'sair', 'stop', 'parar', 'cancelar', 'remover', 'não quero', 'nao quero',
+]);
+
 function extrairTexto(data: EvolutionPayload['data']): string | null {
   const m = data.message;
   if (!m) return null;
@@ -100,7 +105,7 @@ export default function webhookRouter(pool: Pool): Router {
       processados.add(messageId);
       setTimeout(() => processados.delete(messageId), 60000);
 
-      // Deduplicação no banco (coluna message_id, não id)
+      // Deduplicação no banco
       const jaExiste = await pool.query(
         'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
         [messageId]
@@ -162,21 +167,50 @@ export default function webhookRouter(pool: Pool): Router {
       // Só processar se houver texto
       if (!texto) return;
 
-      // Detecção automática de opt-out por palavra-chave
-      const OPT_OUT_KEYWORDS = ['sair', 'parar', 'remover', 'descadastrar', 'cancelar', 'stop'];
+      // ── Detecção automática de opt-out ─────────────────────────────────────
       const textoNorm = texto.trim().toLowerCase();
-      if (userId && OPT_OUT_KEYWORDS.includes(textoNorm)) {
+      if (userId && OPT_OUT_KEYWORDS.has(textoNorm)) {
+        // Marcar opt-out na tabela contatos (campo oficial)
         await pool.query(
-          `INSERT INTO opt_out_contatos (user_id, telefone, keyword)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (user_id, telefone) DO UPDATE SET keyword = $3, created_at = NOW()`,
+          `UPDATE contatos SET opt_out = true, updated_at = NOW()
+           WHERE user_id = $1 AND telefone ILIKE $2`,
+          [userId, `%${telefone.slice(-11)}`]
+        ).catch(err => console.warn('[WEBHOOK] Falha ao marcar opt-out em contatos:', err.message));
+
+        // Registrar log em disparo_optouts
+        await pool.query(
+          `INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`,
           [userId, telefone, textoNorm]
-        ).catch(err => console.warn('[WEBHOOK] Falha ao registrar opt-out:', err.message));
+        ).catch(() => {});
+
         console.log(`[WEBHOOK] Opt-out registrado: ${telefone} via "${textoNorm}"`);
-        return;
+
+        // Enviar mensagem de confirmação via Evolution
+        const evoConf = await pool.query(
+          `SELECT url, api_key, instancia AS inst FROM integracoes_config
+           WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado') LIMIT 1`,
+          [userId]
+        ).catch(() => ({ rows: [] as any[] }));
+
+        if (evoConf.rows.length) {
+          const { url: evoUrl, api_key: evoKey, inst: evoInst } = evoConf.rows[0];
+          fetch(`${evoUrl.replace(/\/$/, '')}/message/sendText/${evoInst}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: evoKey },
+            body: JSON.stringify({
+              number: telefone,
+              text: 'Você foi removido da nossa lista. Não receberá mais mensagens. Para reativar, entre em contato conosco.',
+              delay: 1000,
+            }),
+          }).catch(err =>
+            console.warn('[WEBHOOK] Falha ao enviar confirmação de opt-out:', err.message)
+          );
+        }
+
+        return; // Não encaminhar para n8n/agentEngine
       }
 
-      // Roteamento: n8n (primário) ou agentEngine (fallback)
+      // ── Roteamento: n8n (primário) ou agentEngine (fallback) ───────────────
       if (n8nWebhookUrl) {
         fetch(n8nWebhookUrl, {
           method: 'POST',
