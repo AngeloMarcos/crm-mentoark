@@ -59,27 +59,32 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative min-h-screen flex items-center justify-center bg-background p-4 overflow-hidden">
-      {/* Aurora orbs */}
+    <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1a1c2c] via-[#4a1942] to-[#0f172a] p-4 overflow-hidden">
+      {/* Particles Background */}
+      <ParticlesBackground />
+      
+      {/* Ambient glow effects */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-32 -left-32 w-[28rem] h-[28rem] rounded-full bg-primary/25 blur-3xl opacity-40" />
-        <div className="absolute -bottom-40 -right-32 w-[32rem] h-[32rem] rounded-full bg-accent/25 blur-3xl opacity-35" />
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[24rem] h-[24rem] rounded-full bg-primary/15 blur-3xl opacity-25" />
+        <div className="absolute -top-32 -left-32 w-[40rem] h-[40rem] rounded-full bg-purple-600/20 blur-[120px] animate-pulse" />
+        <div className="absolute -bottom-40 -right-32 w-[40rem] h-[40rem] rounded-full bg-blue-600/20 blur-[120px] animate-pulse" style={{ animationDelay: '2s' }} />
       </div>
 
       <div className="relative z-10 w-full max-w-md space-y-6 animate-fade-in">
-        <div className="text-center space-y-2">
-          <div className="ring-gradient mx-auto w-fit animate-breathe">
-            <img src={logo} alt="MentoArk" className="w-20 h-20 rounded-2xl object-cover bg-card" />
+        <div className="text-center space-y-3">
+          <div className="relative mx-auto w-fit">
+            <div className="absolute inset-0 bg-white/20 blur-xl rounded-full" />
+            <div className="relative p-1 bg-gradient-to-tr from-purple-500 to-blue-500 rounded-2xl animate-breathe shadow-2xl">
+              <img src={logo} alt="MentoArk" className="w-20 h-20 rounded-xl object-cover bg-[#1e1e2d]" />
+            </div>
           </div>
-          <h1 className="text-3xl font-bold tracking-tight">
-            <span className="text-foreground">Mento</span>
-            <span className="gradient-text-animated">Ark</span>
+          <h1 className="text-4xl font-extrabold tracking-tight">
+            <span className="text-white drop-shadow-md">Mento</span>
+            <span className="bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-blue-400 drop-shadow-sm">Ark</span>
           </h1>
-          <p className="text-sm text-muted-foreground">CRM de automação comercial</p>
+          <p className="text-blue-100/70 font-medium tracking-wide">CRM de automação comercial</p>
         </div>
 
-        <Card className="card-gradient-border glow-soft">
+        <Card className="bg-white/5 backdrop-blur-xl border-white/10 shadow-2xl ring-1 ring-white/20">
           <CardHeader className="text-center pb-4">
             <CardTitle className="text-lg">{isLogin ? "Entrar" : "Criar Conta"}</CardTitle>
             <CardDescription>{isLogin ? "Acesse sua conta para continuar" : "Preencha os dados para se cadastrar"}</CardDescription>
