@@ -321,9 +321,9 @@ export function WhatsAppInterface() {
                 Selecione uma conversa para visualizar os dados do cliente e gerenciar o atendimento automático.
               </p>
               {!isConnected && (
-                <Button onClick={handleConnect} disabled={connecting} className="mt-4 rounded-xl px-8 h-12 font-bold">
+                <Button onClick={handleConnect} disabled={connecting} className="mt-4 rounded-xl px-8 h-12 font-bold bg-primary hover:bg-primary/90">
                   {connecting ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <QrCode className="h-5 w-5 mr-2" />}
-                  Conectar Canal
+                  Gerar QR Code de Conexão
                 </Button>
               )}
             </div>
