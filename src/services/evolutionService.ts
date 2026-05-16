@@ -28,10 +28,11 @@ export async function fetchConnectionStatus(): Promise<StatusResult> {
   return res.json();
 }
 
-export async function createInstance(): Promise<CreateInstanceResult> {
+export async function createInstance(instanceName?: string): Promise<CreateInstanceResult> {
   const res = await fetch(`${API_BASE}/api/whatsapp/connect`, {
     method: 'POST',
     headers: authHeaders(),
+    body: JSON.stringify({ instanceName }),
   });
   if (!res.ok) throw new Error('Erro ao conectar instância');
   return res.json();
