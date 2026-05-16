@@ -6,7 +6,7 @@ import ParticlesBackground from "@/components/ParticlesBackground";
 export default function PrivacyPage() {
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-[#1a1c2c] via-[#4a1942] to-[#0f172a] text-white overflow-hidden">
-      <ParticlesBackground />
+      <ParticlesBackground showContrastToggle />
       
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -top-32 -left-32 w-[40rem] h-[40rem] rounded-full bg-purple-600/10 blur-[120px]" />

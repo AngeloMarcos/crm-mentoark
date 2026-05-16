@@ -121,7 +121,7 @@ export default function LoginPage() {
   return (
     <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#1e1e2d] p-0 overflow-hidden">
       {/* Particles Background */}
-      <ParticlesBackground />
+      <ParticlesBackground showContrastToggle />
       
       {/* Ambient glow effects */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
