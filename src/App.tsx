@@ -26,6 +26,7 @@ import CatalogoEnviosPage from "./pages/CatalogoEnvios";
 import GaleriaPage from "./pages/Galeria";
 import WorkflowsPage from "./pages/Workflows";
 import DocsPage from "./pages/Docs";
+import CentralBIPage from "./pages/CentralBI";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -60,6 +61,7 @@ const App = () => (
               <Route path="/galeria"      element={<ProtectedRoute requireModulo="galeria">     <GaleriaPage /></ProtectedRoute>} />
               <Route path="/workflows"    element={<ProtectedRoute requireModulo="workflows">   <WorkflowsPage /></ProtectedRoute>} />
               <Route path="/docs"         element={<ProtectedRoute requireModulo="docs">        <DocsPage /></ProtectedRoute>} />
+              <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />
               <Route path="/usuarios"     element={<ProtectedRoute requireAdmin>               <UsuariosPage /></ProtectedRoute>} />
 
               <Route path="*" element={<NotFound />} />
