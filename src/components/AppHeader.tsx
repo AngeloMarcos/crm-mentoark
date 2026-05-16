@@ -24,12 +24,12 @@ export function AppHeader() {
 
       <div className="absolute bottom-0 left-0 right-0 h-[2px] pointer-events-none overflow-hidden">
         <div
-          className="h-full w-full"
+          className="h-full w-full opacity-80"
           style={{
             background:
-              "linear-gradient(90deg, transparent, hsl(226 85% 52%), hsl(262 83% 58%), hsl(226 85% 52%), transparent)",
+              "linear-gradient(90deg, transparent, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--primary)), transparent)",
             backgroundSize: "200% 100%",
-            animation: "gradient-shift 6s linear infinite",
+            animation: "gradient-shift 3s linear infinite",
           }}
         />
       </div>
