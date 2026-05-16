@@ -11,7 +11,7 @@ import {
   CheckCircle2, Info, Calendar, MapPin, Mail, Tag,
   Clock, AlertTriangle
 } from "lucide-react";
-import { fetchConnectionStatus, createInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
+import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
 
 interface Message {
