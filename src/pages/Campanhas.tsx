@@ -154,6 +154,8 @@ export default function CampanhasPage() {
   const [loading, setLoading] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [modalCampanha, setModalCampanha] = useState(false);
+  const [modalInfra, setModalInfra] = useState(false);
+  const [infraSelecionada, setInfraSelecionada] = useState<Infraestrutura | null>(null);
   const [editing, setEditing] = useState<Campanha | null>(null);
   const [form, setForm] = useState(formInicial);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -182,6 +184,13 @@ export default function CampanhasPage() {
   const abrirCriar = () => {
     setEditing(null);
     setForm(formInicial);
+    setInfraSelecionada(null);
+    setModalInfra(true);
+  };
+
+  const escolherInfra = (infra: Infraestrutura) => {
+    setInfraSelecionada(infra);
+    setModalInfra(false);
     setModalCampanha(true);
   };
 
