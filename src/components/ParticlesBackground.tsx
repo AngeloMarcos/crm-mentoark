@@ -94,9 +94,9 @@ const ParticlesBackground: React.FC<ParticlesBackgroundProps> = ({
           const dy = p.y - p2.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
 
-          if (dist < connectionDistance) {
+          if (dist < connDist) {
             ctx.beginPath();
-            ctx.strokeStyle = i % 2 === 0 ? `rgba(192, 132, 252, ${(1 - dist / connectionDistance) * 0.5})` : `rgba(96, 165, 250, ${(1 - dist / connectionDistance) * 0.5})`;
+            ctx.strokeStyle = i % 2 === 0 ? `rgba(192, 132, 252, ${(1 - dist / connDist) * 0.5})` : `rgba(96, 165, 250, ${(1 - dist / connDist) * 0.5})`;
             ctx.lineWidth = 0.5;
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(p2.x, p2.y);
