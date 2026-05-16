@@ -149,14 +149,16 @@ export function WhatsAppInterface() {
   }, [chats, searchTerm]);
 
   // Lógica de Conexão com Evolution
-  const checkStatus = async () => {
+  const checkStatus = async (silent = true) => {
     try {
       const res = await fetchConnectionStatus();
       setConnectionStatus(res);
+      if (!silent) logEvent('info', 'Status consultado', { state: res.state, phone: res.phoneNumber });
       if (res.state === 'open') {
         setQrData(null);
       }
-    } catch (error) {
+    } catch (error: any) {
+      logEvent('error', 'Falha ao consultar status', error?.message || String(error));
       console.error("Erro status:", error);
     } finally {
       setLoadingStatus(false);
@@ -166,22 +168,31 @@ export function WhatsAppInterface() {
   const handleConnect = async () => {
     try {
       setConnecting(true);
-      // Primeiro tenta dar um logout/reset para limpar estados presos
+      logEvent('info', 'Solicitação de conexão iniciada');
       try {
         await disconnectInstance();
-      } catch (e) {
-        // Ignora erro no logout
+        logEvent('info', 'Reset de instância concluído');
+      } catch (e: any) {
+        logEvent('warn', 'Reset de instância falhou (ignorado)', e?.message);
       }
       
       const res = await createInstance();
       setQrData(res);
+      logEvent('info', 'Resposta da Evolution recebida', { state: res.state, hasQr: !!res.qrCode, instance: res.instanceName });
+
       if (res.state === 'open') {
         setConnectionStatus({ state: 'open', phoneNumber: res.phoneNumber });
+        logEvent('success', 'WhatsApp já estava conectado', { phone: res.phoneNumber });
         toast.success("WhatsApp já está conectado!");
       } else if (res.qrCode) {
+        logEvent('success', 'QR Code gerado com sucesso');
         toast.info("Escaneie o QR Code gerado");
+      } else {
+        logEvent('error', 'Evolution não retornou QR Code', res);
+        toast.error('A Evolution não retornou um QR Code válido');
       }
     } catch (error: any) {
+      logEvent('error', 'Erro ao gerar QR Code', error?.message || String(error));
       toast.error("Erro ao gerar QR Code: " + error.message);
     } finally {
       setConnecting(false);
