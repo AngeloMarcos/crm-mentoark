@@ -405,22 +405,29 @@ export function WhatsAppInterface() {
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 bg-[#efeae2]">
-              <div className="px-6 py-4 space-y-1">
+            <ScrollArea className="flex-1 bg-muted/10 relative">
+              {/* WhatsApp background pattern (using CSS) */}
+              <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[url('https://web.whatsapp.com/img/bg-chat-tile-dark_a4be512e71aaddda92969c3641b2cc2f.png')] dark:opacity-[0.05]" />
+              
+              <div className="px-8 py-6 space-y-1 relative z-1">
                 {activeChat.messages.map((m, i) => {
                   const isOut = m.role === "assistant";
                   const prevRole = i > 0 ? activeChat.messages[i - 1].role : null;
                   const showName = !isOut && prevRole !== "user";
                   return (
-                    <div key={m.id} className={`flex ${isOut ? "justify-end" : "justify-start"} ${i > 0 && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-3"}`}>
-                      <div className={`max-w-[65%] rounded-lg px-3 py-1.5 shadow-sm relative ${isOut ? "bg-[#d9fdd3] rounded-tr-none" : "bg-white rounded-tl-none"}`}>
+                    <div key={m.id} className={`flex ${isOut ? "justify-end" : "justify-start"} ${i > 0 && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
+                      <div className={`max-w-[70%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
+                        isOut 
+                          ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10" 
+                          : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
+                      }`}>
                         {showName && (
-                          <p className="text-[11px] font-bold text-primary mb-0.5">{m.senderName ?? activeChat.name}</p>
+                          <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
                         )}
-                        <p className="text-sm leading-snug whitespace-pre-wrap">{m.content}</p>
-                        <div className={`flex items-center justify-end gap-1 mt-0.5 ${isOut ? "text-green-700/70" : "text-muted-foreground"}`}>
-                          <span className="text-[10px]">{m.timestamp}</span>
-                          {isOut && <Check className="h-3 w-3" />}
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content}</p>
+                        <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : "text-muted-foreground/60"}`}>
+                          <span className="text-[10px] font-bold">{m.timestamp}</span>
+                          {isOut && <Check className="h-3 w-3 opacity-80" />}
                         </div>
                       </div>
                     </div>
@@ -431,29 +438,62 @@ export function WhatsAppInterface() {
             </ScrollArea>
 
             {/* Input */}
-            <div className="border-t bg-white shrink-0">
-              <div className="px-4 pt-2 pb-1 flex gap-3 border-b">
+            <div className="border-t bg-background/50 backdrop-blur-lg shrink-0 p-4">
+              <div className="flex gap-4 p-1 bg-muted/40 rounded-xl mb-3 w-fit">
                 <button
                   onClick={() => setInputMode("responder")}
-                  className={`text-xs font-medium pb-1 border-b-2 transition-colors ${inputMode === "responder" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
+                  className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${inputMode === "responder" ? "bg-background shadow-sm text-primary ring-1 ring-black/5" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   Responder
                 </button>
                 <button
                   onClick={() => setInputMode("nota")}
-                  className={`flex items-center gap-1 text-xs font-medium pb-1 border-b-2 transition-colors ${inputMode === "nota" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
+                  className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${inputMode === "nota" ? "bg-amber-500 shadow-sm text-white ring-1 ring-black/5" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                  🔒 Nota Privada
+                  <Info className="h-3 w-3" /> Nota Privada
                 </button>
               </div>
-              <div className="px-4 py-2">
-                <p className="text-[11px] text-muted-foreground mb-2">
-                  Shift + enter para pular linha. Use '/' para atalhos rápidos.
-                </p>
-                <div className="flex items-end gap-2">
-                  <div className="flex-1">
-                    <Input
-                      placeholder={inputMode === "nota" ? "Adicionar nota privada..." : "Digite uma mensagem..."}
+              
+              <div className="bg-background rounded-2xl border border-border/50 shadow-sm overflow-hidden focus-within:ring-2 focus-within:ring-primary/20 transition-all">
+                <div className="px-4 py-3 bg-muted/20 border-b border-border/30 flex items-center justify-between">
+                  <p className="text-[11px] font-bold text-muted-foreground/70 uppercase tracking-widest">
+                    {inputMode === "nota" ? "Anotando privadamente..." : "Enviando como Agente..."}
+                  </p>
+                  <p className="text-[10px] font-medium text-muted-foreground/50 italic">
+                    Shift + Enter para nova linha
+                  </p>
+                </div>
+                
+                <div className="p-2 flex items-end gap-2">
+                  <div className="flex-1 relative">
+                    <textarea
+                      placeholder={inputMode === "nota" ? "O que aconteceu nesta conversa?" : "Escreva sua mensagem aqui..."}
+                      className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-transparent border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
+                      value={messageInput}
+                      onChange={e => setMessageInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendMessage();
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2 p-1">
+                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl hover:bg-primary/5 hover:text-primary transition-colors">
+                      <Paperclip className="h-5 w-5" />
+                    </Button>
+                    <Button 
+                      className={`h-9 w-9 rounded-xl shadow-lg transition-all active:scale-90 ${messageInput.trim() ? "bg-primary hover:bg-primary/90 shadow-primary/20" : "bg-muted text-muted-foreground opacity-50"}`}
+                      disabled={!messageInput.trim()}
+                      onClick={handleSendMessage}
+                    >
+                      <Send className="h-4.5 w-4.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
                       className={`border-none bg-transparent p-0 shadow-none focus-visible:ring-0 text-sm resize-none ${inputMode === "nota" ? "text-amber-700" : ""}`}
                       value={messageInput}
                       onChange={e => setMessageInput(e.target.value)}
