@@ -55,6 +55,49 @@ export function WhatsAppInterface() {
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [connecting, setConnecting] = useState(false);
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagEvents, setDiagEvents] = useState<DiagEvent[]>(() => {
+    try {
+      const saved = localStorage.getItem('whatsapp_diag_events');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+
+  const logEvent = (level: DiagLevel, event: string, detail?: any) => {
+    const entry: DiagEvent = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: new Date().toLocaleString('pt-BR'),
+      level,
+      event,
+      detail: detail !== undefined ? (typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 500)) : undefined
+    };
+    setDiagEvents(prev => {
+      const next = [entry, ...prev].slice(0, 50);
+      try { localStorage.setItem('whatsapp_diag_events', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const copyDiagnostic = () => {
+    const lines = diagEvents.map(e => `[${e.timestamp}] [${e.level.toUpperCase()}] ${e.event}${e.detail ? ` — ${e.detail}` : ''}`);
+    const header = [
+      `=== Diagnóstico WhatsApp MentoArk ===`,
+      `Gerado em: ${new Date().toLocaleString('pt-BR')}`,
+      `Status atual: ${connectionStatus?.state || 'desconhecido'}`,
+      `Telefone: ${connectionStatus?.phoneNumber || '—'}`,
+      `Instância: ${qrData?.instanceName || '—'}`,
+      ''.padEnd(40, '-'),
+      ''
+    ].join('\n');
+    navigator.clipboard.writeText(header + lines.join('\n'));
+    toast.success('Diagnóstico copiado para a área de transferência');
+  };
+
+  const clearDiagnostic = () => {
+    setDiagEvents([]);
+    try { localStorage.removeItem('whatsapp_diag_events'); } catch {}
+    toast.info('Histórico de diagnóstico limpo');
+  };
 
   // Mock de dados enriquecidos para o lado direito (perfil do contato)
   const [chats, setChats] = useState<Chat[]>([
