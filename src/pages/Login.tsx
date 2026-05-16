@@ -8,6 +8,7 @@ import { Eye, EyeOff, LogIn, UserPlus, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
+import ParticlesBackground from "@/components/ParticlesBackground";
 import logo from "@/assets/mentoark-logo.png";
 
 export default function LoginPage() {
