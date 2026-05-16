@@ -47,6 +47,16 @@ const ParticlesBackground: React.FC = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       
       particles.forEach((p, i) => {
+        // Interaction with mouse
+        const dxMouse = mouse.x - p.x;
+        const dyMouse = mouse.y - p.y;
+        const distMouse = Math.sqrt(dxMouse * dxMouse + dyMouse * dyMouse);
+        if (distMouse < mouse.radius) {
+          const force = (mouse.radius - distMouse) / mouse.radius;
+          p.x -= dxMouse * force * 0.02;
+          p.y -= dyMouse * force * 0.02;
+        }
+
         // Update position
         p.x += p.vx;
         p.y += p.vy;
