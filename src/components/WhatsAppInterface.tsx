@@ -308,7 +308,16 @@ export function WhatsAppInterface() {
         {!isConnected && qrData?.qrCode ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-6 animate-in fade-in zoom-in-95">
             <div className="p-6 bg-white rounded-3xl shadow-2xl border border-border/50">
-              <img src={qrData.qrCode} alt="WhatsApp QR Code" className="w-64 h-64" />
+              {qrData.qrCode.includes(',') && !qrData.qrCode.startsWith('data:image') ? (
+                <div className="w-64 h-64 flex flex-col items-center justify-center text-muted-foreground p-4 bg-muted/20 rounded-xl">
+                  <AlertTriangle className="h-12 w-12 text-amber-500 mb-4" />
+                  <p className="text-sm font-medium">QR Code em formato de texto.</p>
+                  <p className="text-xs mt-2 opacity-70">Aguardando geração da imagem pela Evolution API...</p>
+                  <Button variant="link" size="sm" className="mt-4" onClick={handleConnect}>Tentar novamente</Button>
+                </div>
+              ) : (
+                <img src={qrData.qrCode} alt="WhatsApp QR Code" className="w-64 h-64" />
+              )}
             </div>
             <div className="space-y-2">
               <h3 className="text-xl font-bold">Conecte seu WhatsApp</h3>
