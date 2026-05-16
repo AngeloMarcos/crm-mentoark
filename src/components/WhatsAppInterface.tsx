@@ -201,16 +201,22 @@ export function WhatsAppInterface() {
   const isConnected = connectionStatus?.state === "open";
 
   return (
-    <div className="flex h-[calc(100vh-5rem)] overflow-hidden rounded-xl border shadow-sm bg-background">
+    <div className="flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border shadow-xl bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
 
       {/* ── LEFT: Conversation List ── */}
-      <div className="w-[320px] shrink-0 border-r flex flex-col bg-white">
+      <div className="w-[340px] shrink-0 border-r flex flex-col bg-card/30 backdrop-blur-sm">
         {/* Header */}
-        <div className="px-4 pt-4 pb-2 border-b space-y-3">
+        <div className="px-5 pt-5 pb-3 border-b space-y-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold">Conversas</h2>
-              <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                <MessageSquare className="h-4.5 w-4.5 text-primary" />
+              </div>
+              <h2 className="text-lg font-bold tracking-tight">Conversas</h2>
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+              </span>
             </div>
             <div className="flex items-center gap-1">
               {!isConnected && (
@@ -229,24 +235,29 @@ export function WhatsAppInterface() {
 
           {/* Filter chip */}
           <div className="flex gap-2">
-            <div className="flex items-center gap-1 bg-muted/60 rounded-full px-3 py-1 text-xs font-medium text-foreground cursor-pointer">
-              Status Especi...
-              <X className="h-3 w-3 ml-1 text-muted-foreground" />
+            <div className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95">
+              Status Especial
+              <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
+            </div>
+            <div className="flex items-center gap-1.5 bg-muted/50 hover:bg-muted border border-transparent rounded-full px-3 py-1 text-[11px] font-semibold text-muted-foreground cursor-pointer transition-all active:scale-95">
+              Etiqueta
+              <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
             </div>
           </div>
 
           {/* Tabs */}
-          <div className="flex border-b -mb-2">
+          <div className="flex gap-1 p-1 bg-muted/40 rounded-lg">
             {(["Meus", "Fila", "Todos"] as const).map(t => {
               const key = t.toLowerCase() as ChatTab;
+              const isActive = activeTab === key;
               return (
                 <button
                   key={t}
                   onClick={() => setActiveTab(key)}
-                  className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${
-                    activeTab === key
-                      ? "border-primary text-primary"
-                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
+                    isActive
+                      ? "bg-white shadow-sm text-primary ring-1 ring-black/5"
+                      : "text-muted-foreground hover:text-foreground hover:bg-white/50"
                   }`}
                 >
                   {t}
@@ -257,12 +268,12 @@ export function WhatsAppInterface() {
         </div>
 
         {/* Search */}
-        <div className="px-3 py-2 border-b bg-white">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <div className="px-4 py-3 border-b bg-card/20">
+          <div className="relative group">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
             <Input
-              placeholder="Buscar..."
-              className="pl-9 h-9 bg-muted/40 border-none text-sm"
+              placeholder="Buscar por nome ou telefone..."
+              className="pl-9 h-10 bg-background/50 border-muted focus:bg-background focus:ring-primary/20 transition-all text-sm rounded-xl"
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
             />
@@ -271,48 +282,65 @@ export function WhatsAppInterface() {
 
         {/* Chat list */}
         <ScrollArea className="flex-1">
-          {filteredChats.map(chat => (
-            <div
-              key={chat.id}
-              onClick={() => setActiveChatId(chat.id)}
-              className={`flex items-start gap-3 px-3 py-3 cursor-pointer border-b hover:bg-muted/30 transition-colors ${
-                activeChatId === chat.id ? "bg-primary/5 border-l-2 border-l-primary" : ""
-              }`}
-            >
-              {/* Avatar */}
-              <div className="relative shrink-0">
-                <div className="w-11 h-11 rounded-full bg-primary/10 flex items-center justify-center font-bold text-sm text-primary uppercase">
-                  {chat.name[0]}
+          <div className="divide-y divide-border/50">
+            {filteredChats.map(chat => {
+              const isActive = activeChatId === chat.id;
+              return (
+                <div
+                  key={chat.id}
+                  onClick={() => setActiveChatId(chat.id)}
+                  className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
+                    isActive 
+                      ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary" 
+                      : "hover:bg-muted/30"
+                  }`}
+                >
+                  {/* Avatar */}
+                  <div className="relative shrink-0">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-base uppercase transition-transform group-hover:scale-105 ${
+                      isActive ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20" : "bg-primary/10 text-primary"
+                    }`}>
+                      {chat.name[0]}
+                    </div>
+                    {chat.online && (
+                      <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-background rounded-full shadow-sm" />
+                    )}
+                  </div>
+                  {/* Info */}
+                  <div className="flex-1 min-w-0 py-0.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : "text-foreground"}`}>
+                        {chat.name}
+                      </span>
+                      <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      {chat.source && (
+                        <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">
+                          {chat.source}
+                        </span>
+                      )}
+                      {chat.tag && (
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>
+                          {chat.tag}
+                        </span>
+                      )}
+                    </div>
+
+                    <p className={`text-xs truncate ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>
+                      {chat.lastMessage}
+                    </p>
+                  </div>
+                  {chat.unread ? (
+                    <div className="min-w-[20px] h-5 px-1.5 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center font-black shadow-lg shadow-green-500/20 shrink-0 animate-in zoom-in">
+                      {chat.unread}
+                    </div>
+                  ) : null}
                 </div>
-                {chat.online && (
-                  <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full" />
-                )}
-              </div>
-              {/* Info */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="text-sm font-semibold truncate">{chat.name}</span>
-                  <span className="text-[10px] text-muted-foreground shrink-0 ml-1">{chat.timestamp}</span>
-                </div>
-                {chat.source && (
-                  <p className="text-[10px] text-muted-foreground font-medium mb-0.5 uppercase tracking-wide">
-                    ✓ {chat.source}
-                  </p>
-                )}
-                <p className="text-xs text-muted-foreground truncate">{chat.lastMessage}</p>
-                {chat.tag && (
-                  <span className={`inline-block mt-1 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>
-                    {chat.tag}
-                  </span>
-                )}
-              </div>
-              {chat.unread ? (
-                <div className="w-5 h-5 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center font-bold shrink-0 mt-1">
-                  {chat.unread}
-                </div>
-              ) : null}
-            </div>
-          ))}
+              );
+            })}
+          </div>
         </ScrollArea>
       </div>
 
@@ -343,32 +371,35 @@ export function WhatsAppInterface() {
         ) : activeChat ? (
           <>
             {/* Chat header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b bg-white shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center font-bold text-sm text-primary uppercase">
+            <div className="flex items-center justify-between px-6 py-4 border-b bg-background/40 backdrop-blur-md shrink-0 z-10 shadow-sm">
+              <div className="flex items-center gap-4">
+                <div className="w-11 h-11 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center font-bold text-lg text-primary uppercase shadow-inner">
                   {activeChat.name[0]}
                 </div>
                 <div>
-                  <p className="text-sm font-semibold">{activeChat.name}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    via {activeChat.source ?? "teste"} · {activeChat.phone}
+                  <div className="flex items-center gap-2">
+                    <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
+                    <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+                  </div>
+                  <p className="text-[11px] font-medium text-muted-foreground">
+                    <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span> · {activeChat.phone}
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                  <Phone className="h-4 w-4" />
+              <div className="flex items-center gap-3">
+                <Button variant="outline" size="icon" className="h-10 w-10 rounded-xl hover:bg-primary/5 hover:text-primary transition-colors">
+                  <Phone className="h-4.5 w-4.5" />
                 </Button>
-                <div className="flex items-stretch rounded-lg overflow-hidden border border-green-500">
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-xs font-semibold transition-colors">
-                    <Check className="h-3.5 w-3.5" /> Resolver
+                <div className="flex items-stretch rounded-xl overflow-hidden shadow-lg shadow-green-500/20 border border-green-500/30">
+                  <button className="flex items-center gap-2 px-5 py-2 bg-green-500 hover:bg-green-600 text-white text-xs font-bold transition-all active:scale-95">
+                    <Check className="h-4 w-4" /> Resolver Conversa
                   </button>
-                  <button className="px-1.5 bg-green-500 hover:bg-green-600 text-white border-l border-green-400 transition-colors">
-                    <ChevronDown className="h-3.5 w-3.5" />
+                  <button className="px-2.5 bg-green-500 hover:bg-green-600 text-white border-l border-white/20 transition-colors">
+                    <ChevronDown className="h-4 w-4" />
                   </button>
                 </div>
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                  <Info className="h-4 w-4" />
+                <Button variant="ghost" size="icon" className="h-10 w-10 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
+                  <Info className="h-4.5 w-4.5" />
                 </Button>
               </div>
             </div>
