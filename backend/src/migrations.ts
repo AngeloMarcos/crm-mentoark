@@ -36,5 +36,21 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ultima_mensagem_em TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS n8n_webhook_url TEXT`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS opt_out_contatos (
+      id BIGSERIAL PRIMARY KEY,
+      user_id UUID NOT NULL,
+      telefone TEXT NOT NULL,
+      keyword TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, telefone)
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_optout_user_telefone
+    ON opt_out_contatos (user_id, telefone)
+  `);
+
   console.log('[MIGRATIONS] OK');
 }

@@ -162,6 +162,20 @@ export default function webhookRouter(pool: Pool): Router {
       // Só processar se houver texto
       if (!texto) return;
 
+      // Detecção automática de opt-out por palavra-chave
+      const OPT_OUT_KEYWORDS = ['sair', 'parar', 'remover', 'descadastrar', 'cancelar', 'stop'];
+      const textoNorm = texto.trim().toLowerCase();
+      if (userId && OPT_OUT_KEYWORDS.includes(textoNorm)) {
+        await pool.query(
+          `INSERT INTO opt_out_contatos (user_id, telefone, keyword)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, telefone) DO UPDATE SET keyword = $3, created_at = NOW()`,
+          [userId, telefone, textoNorm]
+        ).catch(err => console.warn('[WEBHOOK] Falha ao registrar opt-out:', err.message));
+        console.log(`[WEBHOOK] Opt-out registrado: ${telefone} via "${textoNorm}"`);
+        return;
+      }
+
       // Roteamento: n8n (primário) ou agentEngine (fallback)
       if (n8nWebhookUrl) {
         fetch(n8nWebhookUrl, {

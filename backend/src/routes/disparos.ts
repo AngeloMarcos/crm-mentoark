@@ -16,6 +16,30 @@ export default function disparos(pool: Pool): Router {
       return res.status(400).json({ message: 'telefone, texto, disparo_log_id e disparo_id são obrigatórios' });
     }
 
+    // Validação de formato do telefone: apenas dígitos, mínimo 10 (DDI+DDD+número)
+    if (!/^\d{10,15}$/.test(String(telefone))) {
+      return res.status(400).json({ message: 'telefone com formato inválido — use apenas dígitos (DDI+DDD+número)' });
+    }
+
+    // Conformidade Meta: texto não pode ser vazio ou só espaços
+    if (!String(texto).trim()) {
+      return res.status(400).json({ message: 'texto não pode ser vazio ou conter apenas espaços em branco' });
+    }
+
+    // Conformidade Meta: limite de 4096 caracteres por mensagem
+    if (String(texto).length > 4096) {
+      return res.status(400).json({ message: 'texto excede o limite de 4096 caracteres permitido pela Meta' });
+    }
+
+    // Verificar opt-out: contato pode ter se descadastrado via palavra-chave
+    const optOutRes = await pool.query(
+      `SELECT 1 FROM opt_out_contatos WHERE user_id = $1 AND telefone = $2 LIMIT 1`,
+      [req.userId, telefone]
+    ).catch(() => ({ rows: [] }));
+    if (optOutRes.rows.length) {
+      return res.status(400).json({ message: 'contato descadastrado — opt-out registrado' });
+    }
+
     // Marca como enviando + incremento atômico de tentativas
     await pool.query(
       `UPDATE disparo_logs SET status = 'sending', tentativas = tentativas + 1
