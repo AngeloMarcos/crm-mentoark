@@ -3,6 +3,7 @@ import { useTheme } from "@/components/ThemeProvider";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useAuth } from "@/hooks/useAuth";
+import ParticlesBackground from "@/components/ParticlesBackground";
 
 export function AppHeader() {
   const { theme, toggleTheme } = useTheme();
