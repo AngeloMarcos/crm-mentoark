@@ -70,7 +70,7 @@ const ParticlesBackground: React.FC = () => {
 
           if (dist < connectionDistance) {
             ctx.beginPath();
-            ctx.strokeStyle = `rgba(255, 255, 255, ${1 - dist / connectionDistance})`;
+            ctx.strokeStyle = i % 2 === 0 ? `rgba(192, 132, 252, ${(1 - dist / connectionDistance) * 0.5})` : `rgba(96, 165, 250, ${(1 - dist / connectionDistance) * 0.5})`;
             ctx.lineWidth = 0.5;
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(p2.x, p2.y);
