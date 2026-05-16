@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, X, Pencil, Plus,
   Mic, LayoutGrid, MessageSquare, SlidersHorizontal,
   UserPlus, AlertTriangle, Check, Smartphone,
-  Zap, Copy, ExternalLink, Shield,
+  Zap, Copy, ExternalLink, Shield, ShieldAlert, Tag,
 } from "lucide-react";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
@@ -85,6 +85,8 @@ export function WhatsAppInterface() {
   const [connecting, setConnecting] = useState(false);
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [instanceName, setInstanceName] = useState("");
+  const [instancePhone, setInstancePhone] = useState("");
+  const [instanceCountry, setInstanceCountry] = useState("BR");
   const [chats, setChats] = useState<Chat[]>([]);
   const [loadingChats, setLoadingChats] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -381,80 +383,136 @@ export function WhatsAppInterface() {
         
         {/* Modal de Conexão Inteligente */}
         <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
-          <DialogContent className="sm:max-w-[500px] p-0 overflow-hidden border-none shadow-2xl animate-in zoom-in-95 duration-300">
-            <div className="bg-gradient-to-br from-primary via-primary/90 to-primary/80 p-8 text-white relative">
-              <div className="absolute top-0 right-0 p-8 opacity-10">
-                <Smartphone size={120} />
+          <DialogContent className="sm:max-w-[520px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl animate-in zoom-in-95 duration-300 [&>button]:hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-full bg-green-50 flex items-center justify-center ring-1 ring-green-100">
+                  <MessageSquare className="h-5 w-5 text-green-600" />
+                </div>
+                <DialogTitle className="text-xl font-bold tracking-tight">
+                  Nova Conexão WhatsApp
+                </DialogTitle>
               </div>
-              <div className="relative z-10 space-y-2">
-                <Badge variant="outline" className="bg-white/10 text-white border-white/20 hover:bg-white/20 transition-colors">
-                  Nova Conexão
-                </Badge>
-                <h2 className="text-3xl font-black tracking-tighter">Conectar Instância</h2>
-                <p className="text-white/80 text-sm font-medium">Configure seu WhatsApp de forma inteligente e segura.</p>
-              </div>
+              <button
+                onClick={() => setShowConnectModal(false)}
+                className="w-8 h-8 rounded-full flex items-center justify-center bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
-            <div className="p-8 space-y-6 bg-background">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground ml-1">
-                    Nome da Instância
+            {/* Body */}
+            <div className="p-6 space-y-5">
+              {/* Security warning */}
+              <div className="rounded-xl border-l-4 border-amber-500 bg-amber-50/80 p-4">
+                <div className="flex items-start gap-3">
+                  <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-2">
+                    <p className="text-[13px] font-extrabold text-amber-900 tracking-wide uppercase">
+                      Atenção à Segurança (Anti-Ban)
+                    </p>
+                    <p className="text-[12.5px] text-amber-900/90 leading-relaxed">
+                      Utilizamos <strong>Proxies</strong> para blindar seu número. Para evitar bloqueios:
+                    </p>
+                    <ul className="text-[12.5px] text-amber-900/90 leading-relaxed space-y-1 list-disc pl-4">
+                      <li><strong>Nunca conecte</strong> no WhatsApp Web ou outros sistemas simultaneamente.</li>
+                      <li><strong>Desligue a internet</strong> do celular (Wi-Fi/4G) logo após ler o QR Code.</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {/* Nome da Identificação */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold uppercase tracking-wider text-orange-600">
+                  Nome da Identificação<span className="text-orange-600">*</span>
+                </label>
+                <div className="relative">
+                  <Tag className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-orange-500" />
+                  <Input
+                    placeholder="Ex: Vendas Matriz"
+                    className={`pl-10 h-11 rounded-xl border-2 transition-all ${
+                      instanceName.trim()
+                        ? "border-muted focus-visible:ring-primary/20"
+                        : "border-orange-300 focus-visible:ring-orange-200"
+                    }`}
+                    value={instanceName}
+                    onChange={(e) => setInstanceName(e.target.value)}
+                  />
+                </div>
+                {!instanceName.trim() && (
+                  <p className="text-[11px] text-muted-foreground pl-1">
+                    O nome é obrigatório para identificação.
+                  </p>
+                )}
+              </div>
+
+              {/* País + Número */}
+              <div className="grid grid-cols-[180px_1fr] gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                    País<span className="text-orange-600">*</span>
                   </label>
-                  <div className="relative group">
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground group-focus-within:text-primary transition-colors">
-                      <Zap size={18} />
-                    </div>
-                    <Input 
-                      placeholder="Ex: Comercial 01, Suporte..." 
-                      className="pl-11 h-12 bg-muted/30 border-muted focus:bg-background focus:ring-primary/20 transition-all rounded-xl font-medium"
-                      value={instanceName}
-                      onChange={(e) => setInstanceName(e.target.value)}
+                  <div className="relative">
+                    <select
+                      value={instanceCountry}
+                      onChange={(e) => setInstanceCountry(e.target.value)}
+                      className="w-full h-11 pl-3 pr-8 rounded-xl border-2 border-muted bg-background text-sm font-medium appearance-none focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
+                    >
+                      <option value="BR">🇧🇷 Brasil (+55)</option>
+                      <option value="US">🇺🇸 EUA (+1)</option>
+                      <option value="PT">🇵🇹 Portugal (+351)</option>
+                      <option value="AR">🇦🇷 Argentina (+54)</option>
+                      <option value="MX">🇲🇽 México (+52)</option>
+                      <option value="ES">🇪🇸 Espanha (+34)</option>
+                    </select>
+                    <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Número do WhatsApp<span className="text-orange-600">*</span>
+                  </label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Ex: (11) 99999-9999"
+                      className="pl-10 h-11 rounded-xl border-2 border-muted focus-visible:ring-primary/20"
+                      value={instancePhone}
+                      onChange={(e) => setInstancePhone(e.target.value)}
                     />
                   </div>
                 </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-4 rounded-xl border border-muted bg-muted/10 space-y-2 hover:border-primary/30 hover:bg-primary/5 transition-all cursor-default group">
-                    <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
-                      <Shield size={18} />
-                    </div>
-                    <p className="text-[11px] font-bold uppercase tracking-tight">Segurança Total</p>
-                    <p className="text-[10px] text-muted-foreground leading-relaxed">Criptografia de ponta a ponta em todas as conexões.</p>
-                  </div>
-                  <div className="p-4 rounded-xl border border-muted bg-muted/10 space-y-2 hover:border-primary/30 hover:bg-primary/5 transition-all cursor-default group">
-                    <div className="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center text-green-600 group-hover:scale-110 transition-transform">
-                      <CheckCircle2 size={18} />
-                    </div>
-                    <p className="text-[11px] font-bold uppercase tracking-tight">Multi-Agente</p>
-                    <p className="text-[10px] text-muted-foreground leading-relaxed">Vários atendentes em um único número conectado.</p>
-                  </div>
-                </div>
               </div>
+            </div>
 
-              <div className="pt-2">
-                <Button 
-                  className="w-full h-12 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-lg shadow-primary/20 transition-all active:scale-[0.98] group"
-                  onClick={handleConnect}
-                  disabled={connecting || !instanceName.trim()}
-                >
-                  {connecting ? (
-                    <>
-                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                      Iniciando Instância...
-                    </>
-                  ) : (
-                    <>
-                      Gerar QR Code de Conexão
-                      <ChevronRight className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" />
-                    </>
-                  )}
-                </Button>
-                <p className="text-center text-[10px] text-muted-foreground mt-4 flex items-center justify-center gap-1">
-                  <Info size={12} />
-                  Ao clicar, uma nova instância será criada na Evolution API.
-                </p>
-              </div>
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t bg-muted/20">
+              <Button
+                variant="ghost"
+                onClick={() => setShowConnectModal(false)}
+                className="text-muted-foreground hover:text-foreground font-semibold"
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleConnect}
+                disabled={connecting || !instanceName.trim()}
+                className="h-11 px-6 rounded-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold shadow-lg shadow-green-500/30 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted disabled:from-muted disabled:to-muted disabled:text-muted-foreground disabled:shadow-none transition-all active:scale-[0.98]"
+              >
+                {connecting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Gerando...
+                  </>
+                ) : (
+                  <>
+                    <QrCode className="mr-2 h-4 w-4" />
+                    Gerar QR Code
+                  </>
+                )}
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
