@@ -519,29 +519,106 @@ export function WhatsAppInterface() {
           </DialogContent>
         </Dialog>
 
-        {/* QR Code screen */}
-        {!isConnected && qrData?.qrCode ? (
-          <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] p-8 text-center space-y-6">
-            <div className="p-5 bg-white rounded-2xl shadow-lg border">
-              {qrData.qrCode.startsWith("data:image") ? (
-                <img src={qrData.qrCode} alt="QR Code" className="w-56 h-56" />
-              ) : (
-                <div className="w-56 h-56 flex items-center justify-center bg-muted/20 rounded-xl">
-                  <p className="text-xs text-muted-foreground">QR Code indisponível</p>
-                </div>
-              )}
+        {/* Modal QR Code + Pairing Code */}
+        <Dialog open={showQrModal && !!qrData} onOpenChange={(o) => { setShowQrModal(o); if (!o) checkStatus(false); }}>
+          <DialogContent className="sm:max-w-[460px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl [&>button]:hidden">
+            <div className="px-6 pt-5 pb-3 border-b">
+              <DialogTitle className="text-base font-bold text-foreground">
+                Conectar Instância: <span className="text-foreground">{qrData?.instanceName || instanceName || 'Mentoark'}</span>
+              </DialogTitle>
             </div>
-            <div className="space-y-1">
-              <h3 className="text-lg font-bold">Conecte seu WhatsApp</h3>
-              <p className="text-sm text-muted-foreground max-w-xs">
-                Abra o WhatsApp → Dispositivos conectados → Conectar dispositivo
+
+            <div className="max-h-[70vh] overflow-y-auto px-6 py-5 space-y-4 bg-background">
+              <p className="text-center text-sm text-muted-foreground font-medium">
+                Escaneie o QR Code ou use o Código de Pareamento.
               </p>
+
+              {/* Opção 1: Pairing Code */}
+              <div className="rounded-xl border bg-card p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Smartphone className="h-4.5 w-4.5 text-orange-500" />
+                  <p className="text-sm font-bold">Opção 1: Código de Pareamento</p>
+                </div>
+                <p className="text-[12px] text-muted-foreground leading-relaxed">
+                  No WhatsApp: <strong>Configurações</strong> &gt; <strong>Aparelhos Conectados</strong> &gt; <strong>Conectar</strong> &gt; <strong>Conectar com número de telefone</strong>
+                </p>
+                <div className="border border-dashed rounded-lg py-3 px-4 text-center bg-muted/20">
+                  {qrData?.pairingCode ? (
+                    <p
+                      className="text-lg font-mono font-bold tracking-[0.35em] cursor-pointer hover:text-primary transition-colors"
+                      onClick={() => {
+                        navigator.clipboard.writeText(qrData.pairingCode!.replace(/\s/g, ''));
+                        toast.success('Código copiado!');
+                      }}
+                      title="Clique para copiar"
+                    >
+                      {qrData.pairingCode}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">
+                      {instancePhone ? 'Gerando código...' : 'Informe um número de telefone para receber o código.'}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">ou</span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+
+              {/* Opção 2: QR Code */}
+              <div className="rounded-xl border bg-card p-4 space-y-3">
+                <div className="flex items-center gap-2 justify-center">
+                  <QrCode className="h-4.5 w-4.5 text-orange-500" />
+                  <p className="text-sm font-bold">Opção 2: Escanear QR Code</p>
+                </div>
+                <div className="flex justify-center">
+                  {qrData?.qrCode?.startsWith('data:image') ? (
+                    <img src={qrData.qrCode} alt="QR Code" className="w-56 h-56" />
+                  ) : (
+                    <div className="w-56 h-56 flex items-center justify-center bg-muted/20 rounded-lg">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-            <Button variant="outline" size="sm" onClick={() => checkStatus(false)}>
-              <RefreshCw className="h-4 w-4 mr-2" /> Já escaneei
-            </Button>
-          </div>
-        ) : activeChat ? (
+
+            <div className="flex items-center justify-between gap-3 px-6 py-4 border-t bg-muted/10">
+              <Button
+                variant="outline"
+                onClick={() => { setShowQrModal(false); setQrData(null); }}
+                className="font-semibold"
+              >
+                Fechar
+              </Button>
+              <Button
+                onClick={async () => {
+                  try {
+                    setConnecting(true);
+                    const phoneDigits = instancePhone.replace(/\D/g, '');
+                    const res = await createInstance(instanceName, phoneDigits || undefined);
+                    setQrData(res);
+                    toast.success('Códigos atualizados!');
+                  } catch (e: any) {
+                    toast.error('Erro ao atualizar: ' + e.message);
+                  } finally {
+                    setConnecting(false);
+                  }
+                }}
+                disabled={connecting}
+                className="bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-bold shadow-lg shadow-orange-500/30"
+              >
+                {connecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Atualizar Códigos
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+
           <>
             {/* Chat header */}
             <div className="flex items-center justify-between px-6 py-4 border-b bg-background/40 backdrop-blur-md shrink-0 z-10 shadow-sm">
