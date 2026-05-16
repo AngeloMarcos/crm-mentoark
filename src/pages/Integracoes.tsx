@@ -40,6 +40,9 @@ import {
   MapPin,
   Brain,
   Volume2,
+  Instagram,
+  Facebook,
+  Send as TelegramIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -77,6 +80,9 @@ const iconMap = {
   MapPin,
   Brain,
   Volume2,
+  Instagram,
+  Facebook,
+  TelegramIcon,
 } as const;
 
 const statusConfig: Record<IntegStatus, { label: string; color: string; icon: any }> = {
@@ -157,6 +163,30 @@ const TEMPLATES: Template[] = [
     nome: "ElevenLabs",
     descricao: "Síntese de voz para respostas de áudio via IA",
     icone: "Volume2",
+    campos: { api_key: true },
+    urlLabel: "",
+  },
+  {
+    tipo: "instagram",
+    nome: "Instagram Business",
+    descricao: "Gestão de Directs e comentários via API",
+    icone: "Instagram",
+    campos: { api_key: true },
+    urlLabel: "",
+  },
+  {
+    tipo: "messenger",
+    nome: "Facebook Messenger",
+    descricao: "Integração com chat do Facebook",
+    icone: "Facebook",
+    campos: { api_key: true },
+    urlLabel: "",
+  },
+  {
+    tipo: "telegram",
+    nome: "Telegram Bot",
+    descricao: "Automação via Telegram",
+    icone: "TelegramIcon",
     campos: { api_key: true },
     urlLabel: "",
   },
