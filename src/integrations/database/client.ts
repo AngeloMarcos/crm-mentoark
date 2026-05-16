@@ -123,6 +123,28 @@ const auth = {
     _notify('SIGNED_IN', session);
     return { data: { session }, error: null };
   },
+  async signInWithOAuth({ provider, options }: { provider: string; options?: any }) {
+    // Redireciona para o backend para iniciar o fluxo OAuth (ex: Google)
+    const params = new URLSearchParams({ 
+      provider, 
+      redirect_to: options?.redirectTo || window.location.origin 
+    });
+    window.location.href = `${API_BASE}/auth/authorize?${params.toString()}`;
+    return { data: null, error: null };
+  },
+
+  async resetPasswordForEmail(email: string, options?: { redirectTo?: string }) {
+    const res = await fetch(`${API_BASE}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, redirectTo: options?.redirectTo }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      return { error: { message: e.message || 'Falha ao enviar e-mail de recuperação' } };
+    }
+    return { error: null };
+  },
 };
 
 // ── Query Builder ─────────────────────────────────────────────
