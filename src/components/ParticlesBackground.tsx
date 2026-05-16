@@ -8,7 +8,17 @@ interface Particle {
   size: number;
 }
 
-const ParticlesBackground: React.FC = () => {
+interface ParticlesBackgroundProps {
+  className?: string;
+  count?: number;
+  connectionDistance?: number;
+}
+
+const ParticlesBackground: React.FC<ParticlesBackgroundProps> = ({ 
+  className = "fixed inset-0 pointer-events-none z-0",
+  count = 80,
+  connectionDistance = 150
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
