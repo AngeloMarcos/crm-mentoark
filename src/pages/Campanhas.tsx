@@ -62,8 +62,51 @@ import {
   Loader2,
   Target,
   RefreshCw,
+  Megaphone,
+  BadgeCheck,
+  Smartphone,
+  MessageSquareText,
+  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
+
+type Infraestrutura = "api" | "qrcode" | "sms";
+
+const INFRA_OPTIONS: {
+  key: Infraestrutura;
+  titulo: string;
+  descricao: string;
+  icon: any;
+  iconBg: string;
+  iconColor: string;
+  badge?: any;
+}[] = [
+  {
+    key: "api",
+    titulo: "Números Oficiais (API)",
+    descricao: "Use números conectados à API da Meta. Maior segurança contra banimentos e envios de altíssimo volume.",
+    icon: MessageSquareText,
+    iconBg: "bg-emerald-500/10",
+    iconColor: "text-emerald-600",
+    badge: BadgeCheck,
+  },
+  {
+    key: "qrcode",
+    titulo: "Aparelhos Físicos (QR Code)",
+    descricao: "Envie usando as suas próprias instâncias de WhatsApp escaneadas. Ideal para aquecimento de chips e envios orgânicos.",
+    icon: Smartphone,
+    iconBg: "bg-green-500/10",
+    iconColor: "text-green-600",
+  },
+  {
+    key: "sms",
+    titulo: "Mensagem de Texto (SMS)",
+    descricao: "Alcance direto na operadora. Sem bloqueios de internet. Excelente para alertas, cobranças e engajamento.",
+    icon: MessageSquareText,
+    iconBg: "bg-purple-500/10",
+    iconColor: "text-purple-600",
+  },
+];
 
 type CampanhaStatus = "ativa" | "pausada" | "finalizada";
 
@@ -111,6 +154,8 @@ export default function CampanhasPage() {
   const [loading, setLoading] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [modalCampanha, setModalCampanha] = useState(false);
+  const [modalInfra, setModalInfra] = useState(false);
+  const [infraSelecionada, setInfraSelecionada] = useState<Infraestrutura | null>(null);
   const [editing, setEditing] = useState<Campanha | null>(null);
   const [form, setForm] = useState(formInicial);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -139,6 +184,13 @@ export default function CampanhasPage() {
   const abrirCriar = () => {
     setEditing(null);
     setForm(formInicial);
+    setInfraSelecionada(null);
+    setModalInfra(true);
+  };
+
+  const escolherInfra = (infra: Infraestrutura) => {
+    setInfraSelecionada(infra);
+    setModalInfra(false);
     setModalCampanha(true);
   };
 
@@ -502,6 +554,53 @@ export default function CampanhasPage() {
         </Card>
       </div>
 
+      {/* Modal: escolha da infraestrutura */}
+      <Dialog open={modalInfra} onOpenChange={setModalInfra}>
+        <DialogContent className="w-[95vw] max-w-md">
+          <DialogHeader className="items-center text-center space-y-3">
+            <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
+              <Megaphone className="h-6 w-6" />
+            </div>
+            <DialogTitle className="text-xl">Nova Campanha</DialogTitle>
+            <DialogDescription className="text-sm">
+              Selecione qual a infraestrutura de envio que você deseja utilizar.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 pt-2">
+            {INFRA_OPTIONS.map((opt) => {
+              const Icon = opt.icon;
+              const Badge = opt.badge;
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => escolherInfra(opt.key)}
+                  className="w-full text-left flex items-start gap-3 p-4 rounded-xl border bg-card hover:border-primary/40 hover:shadow-md hover:bg-primary/[0.02] transition-all group"
+                >
+                  <div className={`w-11 h-11 rounded-xl ${opt.iconBg} ${opt.iconColor} flex items-center justify-center shrink-0`}>
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <p className="font-semibold text-sm">{opt.titulo}</p>
+                      {Badge && <Badge className="h-4 w-4 text-primary" />}
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{opt.descricao}</p>
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-muted-foreground self-center group-hover:text-primary group-hover:translate-x-0.5 transition-all" />
+                </button>
+              );
+            })}
+          </div>
+
+          <DialogFooter className="sm:justify-center pt-2">
+            <Button variant="outline" onClick={() => setModalInfra(false)} className="rounded-full px-8">
+              Cancelar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={modalCampanha}
         onOpenChange={(o) => {
@@ -516,6 +615,11 @@ export default function CampanhasPage() {
           <DialogHeader>
             <DialogTitle>
               {editing ? "Editar campanha" : "Nova campanha"}
+              {!editing && infraSelecionada && (
+                <span className="ml-2 text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                  {INFRA_OPTIONS.find((o) => o.key === infraSelecionada)?.titulo}
+                </span>
+              )}
             </DialogTitle>
             <DialogDescription>
               CTR e CPL são calculados automaticamente.
