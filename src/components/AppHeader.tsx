@@ -3,6 +3,7 @@ import { useTheme } from "@/components/ThemeProvider";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useAuth } from "@/hooks/useAuth";
+import ParticlesBackground from "@/components/ParticlesBackground";
 
 export function AppHeader() {
   const { theme, toggleTheme } = useTheme();
@@ -11,8 +12,16 @@ export function AppHeader() {
   const initials = user?.email ? user.email.slice(0, 2).toUpperCase() : "U";
 
   return (
-    <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20">
-      {/* Linha degradê animada na base do header */}
+    <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20 overflow-hidden">
+      {/* Background Particles */}
+      <div className="absolute inset-0 pointer-events-none opacity-40">
+        <ParticlesBackground 
+          className="absolute inset-0" 
+          count={25} 
+          connectionDistance={100} 
+        />
+      </div>
+
       <div className="absolute bottom-0 left-0 right-0 h-[2px] pointer-events-none overflow-hidden">
         <div
           className="h-full w-full"

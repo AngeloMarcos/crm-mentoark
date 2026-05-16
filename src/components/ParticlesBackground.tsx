@@ -8,7 +8,17 @@ interface Particle {
   size: number;
 }
 
-const ParticlesBackground: React.FC = () => {
+interface ParticlesBackgroundProps {
+  className?: string;
+  count?: number;
+  connectionDistance?: number;
+}
+
+const ParticlesBackground: React.FC<ParticlesBackgroundProps> = ({ 
+  className = "fixed inset-0 pointer-events-none z-0",
+  count = 80,
+  connectionDistance = 150
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -20,13 +30,19 @@ const ParticlesBackground: React.FC = () => {
 
     let animationFrameId: number;
     let particles: Particle[] = [];
-    const particleCount = 80;
-    const connectionDistance = 150;
+    const particleCount = count;
+    const connDist = connectionDistance;
     const mouse = { x: -100, y: -100, radius: 150 };
 
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const parent = canvas.parentElement;
+      if (parent) {
+        canvas.width = parent.clientWidth;
+        canvas.height = parent.clientHeight;
+      } else {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
       initParticles();
     };
 
@@ -78,9 +94,9 @@ const ParticlesBackground: React.FC = () => {
           const dy = p.y - p2.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
 
-          if (dist < connectionDistance) {
+          if (dist < connDist) {
             ctx.beginPath();
-            ctx.strokeStyle = i % 2 === 0 ? `rgba(192, 132, 252, ${(1 - dist / connectionDistance) * 0.5})` : `rgba(96, 165, 250, ${(1 - dist / connectionDistance) * 0.5})`;
+            ctx.strokeStyle = i % 2 === 0 ? `rgba(192, 132, 252, ${(1 - dist / connDist) * 0.5})` : `rgba(96, 165, 250, ${(1 - dist / connDist) * 0.5})`;
             ctx.lineWidth = 0.5;
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(p2.x, p2.y);
@@ -113,7 +129,7 @@ const ParticlesBackground: React.FC = () => {
   return (
     <canvas
       ref={canvasRef}
-      className="fixed inset-0 pointer-events-none z-0"
+      className={className}
       style={{ background: 'transparent' }}
     />
   );
