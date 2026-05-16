@@ -93,7 +93,7 @@ export default function RegisterPage() {
   if (isSuccess) {
     return (
       <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1a1c2c] via-[#4a1942] to-[#0f172a] p-4 overflow-hidden text-white">
-        <ParticlesBackground />
+        <ParticlesBackground showContrastToggle />
         <Card className="relative z-10 w-full max-w-md bg-white/5 backdrop-blur-xl border-white/10 shadow-2xl p-8 text-center space-y-6">
           <div className="mx-auto w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center mb-4">
             <MailCheck className="h-8 w-8 text-green-400" />
@@ -113,7 +113,7 @@ export default function RegisterPage() {
 
   return (
     <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#1e1e2d] p-0 overflow-hidden">
-      <ParticlesBackground />
+      <ParticlesBackground showContrastToggle />
       
       {/* Ambient glow effects */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
