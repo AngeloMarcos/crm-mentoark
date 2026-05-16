@@ -112,16 +112,22 @@ Deno.serve(async (req) => {
              })
           }
 
+          // Se a API retornar "code" (string separada por vírgulas), ela não é um base64 de imagem
+          // Precisamos priorizar qrcode.base64 ou base64 se existirem
           qrCode = connectData.base64 || 
-                   connectData.code || 
                    connectData.qrcode?.base64 || 
-                   connectData.instance?.qrcode?.base64;
+                   connectData.instance?.qrcode?.base64 ||
+                   connectData.code;
         }
 
+        const finalQrCode = qrCode && !qrCode.startsWith('data:image') && !qrCode.includes(',')
+          ? `data:image/png;base64,${qrCode}` 
+          : qrCode
+
         return jsonResponse({
-          qrCode,
+          qrCode: finalQrCode,
           instanceName,
-          state: qrCode ? 'connecting' : 'close',
+          state: finalQrCode ? 'connecting' : 'close',
           raw: createData
         })
       }
