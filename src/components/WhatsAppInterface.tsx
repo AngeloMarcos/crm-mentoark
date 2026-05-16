@@ -494,7 +494,6 @@ export function WhatsAppInterface() {
                 </div>
               </div>
             </div>
-            </div>
           </>
         ) : (
           /* Empty state */
