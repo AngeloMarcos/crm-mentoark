@@ -128,14 +128,15 @@ const ParticlesBackground: React.FC<ParticlesBackgroundProps> = ({
       window.removeEventListener('resize', resize);
       window.removeEventListener('mousemove', handleMouseMove);
       cancelAnimationFrame(animationFrameId);
+      if (resizeObserver) resizeObserver.disconnect();
     };
-  }, []);
+  }, [count, connectionDistance]);
 
   return (
     <canvas
       ref={canvasRef}
       className={className}
-      style={{ background: 'transparent' }}
+      style={{ background: 'transparent', display: 'block' }}
     />
   );
 };
