@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug,
   LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch,
-  Contact, BookOpen, LayoutGrid, Images,
+  Contact, BookOpen, LayoutGrid, Images, PieChart,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/mentoark-logo.png";
@@ -14,6 +14,7 @@ import {
 
 const items = [
   { title: "Dashboard",         url: "/dashboard",   icon: LayoutDashboard, modulo: "dashboard"   },
+  { title: "Central de BI",     url: "/bi",          icon: PieChart,        modulo: "dashboard"   },
   { title: "Leads",             url: "/leads",       icon: Users,           modulo: "leads"       },
   { title: "Contatos",          url: "/contatos",    icon: Contact,         modulo: "contatos"    },
   { title: "Discagem",          url: "/discagem",    icon: PhoneCall,       modulo: "discagem"    },
