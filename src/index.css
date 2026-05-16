@@ -322,10 +322,18 @@
     0%   { transform: scale(0.8); opacity: 0.7; }
     80%, 100% { transform: scale(1.6); opacity: 0; }
   }
-  @keyframes breathe {
-    0%, 100% { box-shadow: 0 0 20px hsl(226 85% 52% / 0.25), 0 0 40px hsl(262 83% 58% / 0.10); }
-    50%      { box-shadow: 0 0 32px hsl(226 85% 52% / 0.45), 0 0 64px hsl(262 83% 58% / 0.25); }
+  @keyframes float {
+    0%, 100% { transform: translateY(0) translateX(0); }
+    33% { transform: translateY(-20px) translateX(10px); }
+    66% { transform: translateY(10px) translateX(-15px); }
   }
+  @keyframes pulse-slow {
+    0%, 100% { opacity: 0.3; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.1); }
+  }
+  .animate-float { animation: float 15s ease-in-out infinite; }
+  .animate-float-delayed { animation: float 18s ease-in-out infinite -5s; }
+  .animate-pulse-slow { animation: pulse-slow 10s ease-in-out infinite; }
   .animate-breathe { animation: breathe 3.5s ease-in-out infinite; }
 
   /* Animação shimmer para skeletons e loaders */
