@@ -494,56 +494,23 @@ export function WhatsAppInterface() {
                 </div>
               </div>
             </div>
-                      className={`border-none bg-transparent p-0 shadow-none focus-visible:ring-0 text-sm resize-none ${inputMode === "nota" ? "text-amber-700" : ""}`}
-                      value={messageInput}
-                      onChange={e => setMessageInput(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
-                      }}
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center justify-between mt-2 pt-2 border-t">
-                  <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                      <Smile className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                      <Paperclip className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                      <span className="text-xs">A</span>
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                      <span className="text-xs font-bold">⚡</span>
-                    </Button>
-                  </div>
-                  <Button
-                    size="icon"
-                    className="h-9 w-9 rounded-full bg-green-500 hover:bg-green-600 text-white shrink-0"
-                    onClick={handleSendMessage}
-                  >
-                    <Mic className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
             </div>
           </>
         ) : (
           /* Empty state */
-          <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] text-center gap-4">
-            <div className="w-20 h-20 rounded-full bg-white/80 shadow flex items-center justify-center">
-              <MessageSquare className="h-9 w-9 text-muted-foreground/40" />
+          <div className="flex-1 flex flex-col items-center justify-center bg-muted/5 text-center p-8 gap-6 animate-in fade-in duration-700">
+            <div className="w-24 h-24 rounded-3xl bg-primary/5 shadow-inner flex items-center justify-center animate-bounce duration-[3000ms]">
+              <MessageSquare className="h-10 w-10 text-primary/30" />
             </div>
-            <div className="space-y-1">
-              <p className="font-semibold text-muted-foreground">Selecione uma conversa</p>
-              <p className="text-sm text-muted-foreground/60">
-                para visualizar as mensagens e o perfil do contato
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold tracking-tight">Suas conversas aparecem aqui</h3>
+              <p className="text-sm text-muted-foreground/70 max-w-[280px] mx-auto leading-relaxed">
+                Selecione um contato na lista ao lado para começar a interagir ou visualizar o histórico.
               </p>
             </div>
             {!isConnected && !loadingStatus && (
-              <Button onClick={handleConnect} disabled={connecting} size="sm" className="mt-2">
-                {connecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <QrCode className="h-4 w-4 mr-2" />}
+              <Button onClick={handleConnect} disabled={connecting} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 gap-2 font-bold px-8">
+                {connecting ? <Loader2 className="h-5 w-5 animate-spin" /> : <QrCode className="h-5 w-5" />}
                 Conectar WhatsApp
               </Button>
             )}
