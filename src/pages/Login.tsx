@@ -141,7 +141,7 @@ export default function LoginPage() {
               </div>
               <h1 className="text-3xl font-extrabold tracking-tight">
                 <span className="text-white drop-shadow-md">Mento</span>
-                <span className="bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-blue-400">Ark</span>
+                <span className="gradient-text-animated">Ark</span>
               </h1>
             </div>
 
