@@ -519,12 +519,12 @@ export function WhatsAppInterface() {
 
       {/* ── RIGHT: Contact Profile Panel ── */}
       {activeChat && (
-        <div className="w-[280px] shrink-0 border-l bg-white flex flex-col">
+        <div className="w-[300px] shrink-0 border-l bg-card/20 backdrop-blur-md flex flex-col animate-in slide-in-from-right duration-500">
           {/* Panel header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b">
-            <h3 className="text-sm font-semibold">Perfil do Contato</h3>
+          <div className="flex items-center justify-between px-5 py-4 border-b bg-background/40">
+            <h3 className="text-sm font-bold tracking-tight">Detalhes do Contato</h3>
             <Button
-              variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground"
+              variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-muted"
               onClick={() => setActiveChatId(null)}
             >
               <X className="h-4 w-4" />
@@ -533,72 +533,80 @@ export function WhatsAppInterface() {
 
           <ScrollArea className="flex-1">
             {/* Avatar + name + phone */}
-            <div className="flex flex-col items-center pt-6 pb-4 px-4">
-              <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center text-2xl font-bold text-primary uppercase mb-3 ring-4 ring-primary/5">
+            <div className="flex flex-col items-center pt-8 pb-6 px-5 bg-gradient-to-b from-primary/[0.03] to-transparent">
+              <div className="w-24 h-24 rounded-[2rem] bg-primary/10 border-4 border-background flex items-center justify-center text-3xl font-black text-primary uppercase mb-4 shadow-xl shadow-primary/10 transition-transform hover:scale-105 duration-500">
                 {activeChat.name[0]}
               </div>
-              <div className="flex items-center gap-1.5 mb-1">
-                <p className="font-bold text-sm">{activeChat.name}</p>
-                <button className="text-muted-foreground hover:text-foreground transition-colors">
+              <div className="flex items-center gap-2 mb-1.5">
+                <p className="font-black text-base tracking-tight">{activeChat.name}</p>
+                <button className="p-1 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all">
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-medium mb-0.5">
-                Telefone / WhatsApp
-              </p>
-              <p className="text-sm font-medium">{activeChat.phone}</p>
+              <div className="bg-muted/50 rounded-full px-4 py-1 flex flex-col items-center">
+                <p className="text-[9px] text-muted-foreground/60 uppercase font-black tracking-[0.15em] mb-0.5">
+                  WhatsApp Principal
+                </p>
+                <p className="text-xs font-bold text-foreground/80 leading-none pb-0.5">{activeChat.phone}</p>
+              </div>
             </div>
 
             {/* CRM Button */}
-            <div className="px-4 pb-4">
-              <Button className="w-full h-9 text-sm font-semibold gap-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg">
+            <div className="px-5 pb-6">
+              <Button className="w-full h-11 text-xs font-black gap-2.5 bg-primary hover:bg-primary/90 text-white rounded-2xl shadow-lg shadow-primary/20 transition-all active:scale-95">
                 <LayoutGrid className="h-4 w-4" />
-                Acessar Painel CRM
+                ABRIR NO CRM
               </Button>
             </div>
 
             {/* Mídia, Links e Docs */}
-            <div className="border-t px-4 py-3">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-semibold">Mídia, Links e Docs</p>
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            <div className="border-t border-border/40 px-5 py-5">
+            <div className="flex items-center justify-between mb-4">
+                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Mídia Recente</p>
+                <ChevronRight className="h-4 w-4 text-muted-foreground/40" />
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 gap-2.5">
                 {[0, 1, 2, 3, 4, 5].map(i => (
                   <div
                     key={i}
-                    className="aspect-square rounded-lg bg-orange-50 flex items-center justify-center cursor-pointer hover:bg-orange-100 transition-colors"
+                    className="aspect-square rounded-xl bg-primary/5 flex items-center justify-center cursor-pointer hover:bg-primary/10 border border-primary/5 transition-all hover:scale-105"
                   >
-                    <Mic className="h-5 w-5 text-orange-400" />
+                    <Mic className="h-5 w-5 text-primary/40" />
                   </div>
                 ))}
               </div>
             </div>
 
             {/* Observações do CRM */}
-            <div className="border-t px-4 py-3">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold">Observações do CRM</p>
-                <button className="text-muted-foreground hover:text-foreground transition-colors">
+            <div className="border-t border-border/40 px-5 py-5 bg-amber-500/[0.02]">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-black uppercase tracking-widest text-amber-600/70">Anotações do CRM</p>
+                <button className="p-1 rounded-md text-amber-600/40 hover:text-amber-600 hover:bg-amber-500/10 transition-all">
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
               </div>
               {activeChat.notes ? (
-                <p className="text-xs text-foreground leading-relaxed">{activeChat.notes}</p>
+                <p className="text-xs font-medium text-foreground/80 leading-relaxed bg-white/50 p-3 rounded-xl border border-amber-500/10 italic">"{activeChat.notes}"</p>
               ) : (
-                <p className="text-xs text-muted-foreground italic">Nenhuma observação neste cliente.</p>
+                <div className="flex flex-col items-center justify-center py-4 px-2 bg-muted/20 rounded-xl border border-dashed border-muted-foreground/20">
+                  <Plus className="h-4 w-4 text-muted-foreground/30 mb-1" />
+                  <p className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-tighter">Sem anotações</p>
+                </div>
               )}
             </div>
 
             {/* Cofre de Documentos */}
-            <div className="border-t px-4 py-3">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold">Cofre de Documentos</p>
-                <button className="text-muted-foreground hover:text-foreground transition-colors">
+            <div className="border-t border-border/40 px-5 py-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Documentos</p>
+                <button className="p-1 rounded-md text-muted-foreground/40 hover:text-primary hover:bg-primary/10 transition-all">
                   <Plus className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <p className="text-xs text-muted-foreground italic">Nenhum documento salvo.</p>
+              <div className="bg-muted/10 border border-dashed border-border p-4 rounded-xl flex flex-col items-center">
+                <Plus className="h-4 w-4 text-muted-foreground/20 mb-1" />
+                <p className="text-[10px] font-black text-muted-foreground/30 uppercase tracking-tighter">Adicionar Arquivo</p>
+              </div>
             </div>
           </ScrollArea>
         </div>
