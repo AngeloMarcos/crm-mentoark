@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mentoark-crm": {
+      "url": "https://api.mentoark.com.br/mcp/sse",
+      "headers": {
+        "x-mcp-key": "44a7e8fb5b3f64bad08158179e43f94312da1c6b327f3c5a574d0d03fca96864"
+      }
+    }
+  }
+}
