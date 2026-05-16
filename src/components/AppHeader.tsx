@@ -17,8 +17,8 @@ export function AppHeader() {
       <div className="absolute inset-0 pointer-events-none opacity-80">
         <ParticlesBackground 
           className="block w-full h-full" 
-          count={35} 
-          connectionDistance={120} 
+          count={75} 
+          connectionDistance={170} 
         />
       </div>
 
