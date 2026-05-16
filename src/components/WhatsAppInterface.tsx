@@ -9,10 +9,19 @@ import {
   Search, User, Bot, Send, Phone, MoreVertical, 
   Paperclip, Smile, QrCode, RefreshCw, Loader2, 
   CheckCircle2, Info, Calendar, MapPin, Mail, Tag,
-  Clock, AlertTriangle
+  Clock, AlertTriangle, Activity, Copy, Trash2, ChevronDown, ChevronUp
 } from "lucide-react";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
+
+type DiagLevel = 'info' | 'success' | 'warn' | 'error';
+interface DiagEvent {
+  id: string;
+  timestamp: string;
+  level: DiagLevel;
+  event: string;
+  detail?: string;
+}
 
 interface Message {
   id: string;
