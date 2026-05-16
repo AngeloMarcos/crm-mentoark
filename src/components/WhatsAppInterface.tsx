@@ -9,10 +9,19 @@ import {
   Search, User, Bot, Send, Phone, MoreVertical, 
   Paperclip, Smile, QrCode, RefreshCw, Loader2, 
   CheckCircle2, Info, Calendar, MapPin, Mail, Tag,
-  Clock, AlertTriangle
+  Clock, AlertTriangle, Activity, Copy, Trash2, ChevronDown, ChevronUp
 } from "lucide-react";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
+
+type DiagLevel = 'info' | 'success' | 'warn' | 'error';
+interface DiagEvent {
+  id: string;
+  timestamp: string;
+  level: DiagLevel;
+  event: string;
+  detail?: string;
+}
 
 interface Message {
   id: string;
@@ -46,6 +55,49 @@ export function WhatsAppInterface() {
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [connecting, setConnecting] = useState(false);
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagEvents, setDiagEvents] = useState<DiagEvent[]>(() => {
+    try {
+      const saved = localStorage.getItem('whatsapp_diag_events');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+
+  const logEvent = (level: DiagLevel, event: string, detail?: any) => {
+    const entry: DiagEvent = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: new Date().toLocaleString('pt-BR'),
+      level,
+      event,
+      detail: detail !== undefined ? (typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 500)) : undefined
+    };
+    setDiagEvents(prev => {
+      const next = [entry, ...prev].slice(0, 50);
+      try { localStorage.setItem('whatsapp_diag_events', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const copyDiagnostic = () => {
+    const lines = diagEvents.map(e => `[${e.timestamp}] [${e.level.toUpperCase()}] ${e.event}${e.detail ? ` — ${e.detail}` : ''}`);
+    const header = [
+      `=== Diagnóstico WhatsApp MentoArk ===`,
+      `Gerado em: ${new Date().toLocaleString('pt-BR')}`,
+      `Status atual: ${connectionStatus?.state || 'desconhecido'}`,
+      `Telefone: ${connectionStatus?.phoneNumber || '—'}`,
+      `Instância: ${qrData?.instanceName || '—'}`,
+      ''.padEnd(40, '-'),
+      ''
+    ].join('\n');
+    navigator.clipboard.writeText(header + lines.join('\n'));
+    toast.success('Diagnóstico copiado para a área de transferência');
+  };
+
+  const clearDiagnostic = () => {
+    setDiagEvents([]);
+    try { localStorage.removeItem('whatsapp_diag_events'); } catch {}
+    toast.info('Histórico de diagnóstico limpo');
+  };
 
   // Mock de dados enriquecidos para o lado direito (perfil do contato)
   const [chats, setChats] = useState<Chat[]>([
@@ -97,14 +149,16 @@ export function WhatsAppInterface() {
   }, [chats, searchTerm]);
 
   // Lógica de Conexão com Evolution
-  const checkStatus = async () => {
+  const checkStatus = async (silent = true) => {
     try {
       const res = await fetchConnectionStatus();
       setConnectionStatus(res);
+      if (!silent) logEvent('info', 'Status consultado', { state: res.state, phone: res.phoneNumber });
       if (res.state === 'open') {
         setQrData(null);
       }
-    } catch (error) {
+    } catch (error: any) {
+      logEvent('error', 'Falha ao consultar status', error?.message || String(error));
       console.error("Erro status:", error);
     } finally {
       setLoadingStatus(false);
@@ -114,22 +168,31 @@ export function WhatsAppInterface() {
   const handleConnect = async () => {
     try {
       setConnecting(true);
-      // Primeiro tenta dar um logout/reset para limpar estados presos
+      logEvent('info', 'Solicitação de conexão iniciada');
       try {
         await disconnectInstance();
-      } catch (e) {
-        // Ignora erro no logout
+        logEvent('info', 'Reset de instância concluído');
+      } catch (e: any) {
+        logEvent('warn', 'Reset de instância falhou (ignorado)', e?.message);
       }
       
       const res = await createInstance();
       setQrData(res);
+      logEvent('info', 'Resposta da Evolution recebida', { state: res.state, hasQr: !!res.qrCode, instance: res.instanceName });
+
       if (res.state === 'open') {
         setConnectionStatus({ state: 'open', phoneNumber: res.phoneNumber });
+        logEvent('success', 'WhatsApp já estava conectado', { phone: res.phoneNumber });
         toast.success("WhatsApp já está conectado!");
       } else if (res.qrCode) {
+        logEvent('success', 'QR Code gerado com sucesso');
         toast.info("Escaneie o QR Code gerado");
+      } else {
+        logEvent('error', 'Evolution não retornou QR Code', res);
+        toast.error('A Evolution não retornou um QR Code válido');
       }
     } catch (error: any) {
+      logEvent('error', 'Erro ao gerar QR Code', error?.message || String(error));
       toast.error("Erro ao gerar QR Code: " + error.message);
     } finally {
       setConnecting(false);
@@ -169,9 +232,18 @@ export function WhatsAppInterface() {
 
   const isConnected = connectionStatus?.state === 'open';
 
+  const errorCount = diagEvents.filter(e => e.level === 'error').length;
+  const levelStyles: Record<DiagLevel, string> = {
+    info: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
+    success: 'bg-green-500/10 text-green-600 border-green-500/20',
+    warn: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+    error: 'bg-red-500/10 text-red-600 border-red-500/20',
+  };
+
   return (
+    <div className="space-y-4">
     <div className="flex h-[calc(100vh-12rem)] border rounded-2xl overflow-hidden bg-background shadow-xl">
-      
+
       {/* Sidebar - Lista de Conversas */}
       <div className="w-80 md:w-96 border-r flex flex-col bg-muted/5">
         <div className="p-4 border-b space-y-4">
@@ -244,7 +316,7 @@ export function WhatsAppInterface() {
                 Escaneie o código acima com seu celular para sincronizar as mensagens com o Agente MentoArk.
               </p>
             </div>
-            <Button variant="outline" onClick={checkStatus}>
+            <Button variant="outline" onClick={() => checkStatus(false)}>
               <RefreshCw className="h-4 w-4 mr-2" /> Já escaneei
             </Button>
           </div>
@@ -417,6 +489,78 @@ export function WhatsAppInterface() {
           </ScrollArea>
         </div>
       )}
+    </div>
+
+    {/* Painel de Diagnóstico */}
+    <div className="border rounded-2xl overflow-hidden bg-background shadow-sm">
+      <button
+        onClick={() => setDiagOpen(o => !o)}
+        className="w-full flex items-center justify-between p-4 hover:bg-muted/30 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-xl ${errorCount > 0 ? 'bg-red-500/10 text-red-600' : 'bg-muted text-muted-foreground'}`}>
+            <Activity className="h-4 w-4" />
+          </div>
+          <div className="text-left">
+            <p className="font-bold text-sm">Diagnóstico da Conexão</p>
+            <p className="text-[11px] text-muted-foreground">
+              {diagEvents.length} {diagEvents.length === 1 ? 'evento registrado' : 'eventos registrados'}
+              {errorCount > 0 && ` · ${errorCount} erro(s)`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {errorCount > 0 && (
+            <Badge variant="destructive" className="rounded-full text-[10px]">{errorCount}</Badge>
+          )}
+          {diagOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {diagOpen && (
+        <div className="border-t bg-muted/10">
+          <div className="p-3 border-b flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground font-mono">
+              <span>Status: <strong className="text-foreground">{connectionStatus?.state || '—'}</strong></span>
+              {connectionStatus?.phoneNumber && <span>· Tel: <strong className="text-foreground">{connectionStatus.phoneNumber}</strong></span>}
+              {qrData?.instanceName && <span>· Inst: <strong className="text-foreground">{qrData.instanceName}</strong></span>}
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => checkStatus(false)} className="h-8 text-xs">
+                <RefreshCw className="h-3 w-3 mr-1" /> Atualizar
+              </Button>
+              <Button size="sm" variant="outline" onClick={copyDiagnostic} disabled={diagEvents.length === 0} className="h-8 text-xs">
+                <Copy className="h-3 w-3 mr-1" /> Copiar
+              </Button>
+              <Button size="sm" variant="ghost" onClick={clearDiagnostic} disabled={diagEvents.length === 0} className="h-8 text-xs text-muted-foreground">
+                <Trash2 className="h-3 w-3 mr-1" /> Limpar
+              </Button>
+            </div>
+          </div>
+          <ScrollArea className="h-64">
+            <div className="p-3 space-y-2">
+              {diagEvents.length === 0 ? (
+                <p className="text-center text-xs text-muted-foreground py-8 italic font-mono">
+                  Nenhum evento registrado. Clique em "Gerar QR Code" para iniciar o diagnóstico.
+                </p>
+              ) : (
+                diagEvents.map(ev => (
+                  <div key={ev.id} className={`rounded-lg border px-3 py-2 text-xs font-mono ${levelStyles[ev.level]}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold">{ev.event}</span>
+                      <span className="text-[10px] opacity-70 shrink-0">{ev.timestamp}</span>
+                    </div>
+                    {ev.detail && (
+                      <p className="mt-1 opacity-80 break-all whitespace-pre-wrap">{ev.detail}</p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+        </div>
+      )}
+    </div>
     </div>
   );
 }
