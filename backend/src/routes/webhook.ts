@@ -118,17 +118,22 @@ export default function webhookRouter(pool: Pool): Router {
       const midia = extrairMidia(payload.data);
       const timestamp = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
 
-      // Encontrar user_id pela instância
+      // Encontrar user_id e n8n_webhook_url pela instância
       const agenteRes = await pool.query(
-        `SELECT user_id FROM agentes WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
+        `SELECT user_id, n8n_webhook_url FROM agentes
+         WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
          ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       );
 
-      if (agenteRes.rows.length) {
-        const userId = agenteRes.rows[0].user_id;
+      let userId: string | null = null;
+      let n8nWebhookUrl: string | null = null;
 
-        // Salvar na tabela whatsapp_messages (não falha silenciosamente)
+      if (agenteRes.rows.length) {
+        userId = agenteRes.rows[0].user_id;
+        n8nWebhookUrl = agenteRes.rows[0].n8n_webhook_url || null;
+
+        // Salvar na tabela whatsapp_messages
         await pool.query(
           `INSERT INTO whatsapp_messages
              (id, user_id, instancia, session_id, remote_jid, from_me, push_name, tipo,
@@ -154,19 +159,38 @@ export default function webhookRouter(pool: Pool): Router {
         );
       }
 
-      // Só chamar agente se houver texto
+      // Só processar se houver texto
       if (!texto) return;
 
-      processarMensagem(pool, {
-        instancia,
-        messageId,
-        telefone,
-        pushName,
-        texto,
-        timestamp,
-      }).catch(err => {
-        console.error(`[WEBHOOK] Erro ao processar mensagem ${messageId}:`, err);
-      });
+      // Roteamento: n8n (primário) ou agentEngine (fallback)
+      if (n8nWebhookUrl) {
+        fetch(n8nWebhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            telefone,
+            pushName,
+            texto,
+            instancia,
+            messageId,
+            timestamp,
+            user_id: userId,
+          }),
+        }).catch(err => {
+          console.error(`[WEBHOOK] Erro ao chamar n8n (${n8nWebhookUrl}):`, err.message);
+        });
+      } else {
+        processarMensagem(pool, {
+          instancia,
+          messageId,
+          telefone,
+          pushName,
+          texto,
+          timestamp,
+        }).catch(err => {
+          console.error(`[WEBHOOK] Erro ao processar mensagem ${messageId}:`, err);
+        });
+      }
 
     } catch (err) {
       console.error('[WEBHOOK] Erro crítico no receptor:', err);
