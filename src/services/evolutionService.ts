@@ -9,6 +9,7 @@ function authHeaders(): Record<string, string> {
 
 export interface CreateInstanceResult {
   qrCode?: string;
+  pairingCode?: string;
   instanceName?: string;
   state?: string;
   phoneNumber?: string;
@@ -28,11 +29,11 @@ export async function fetchConnectionStatus(): Promise<StatusResult> {
   return res.json();
 }
 
-export async function createInstance(instanceName?: string): Promise<CreateInstanceResult> {
+export async function createInstance(instanceName?: string, phoneNumber?: string): Promise<CreateInstanceResult> {
   const res = await fetch(`${API_BASE}/api/whatsapp/connect`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ instanceName }),
+    body: JSON.stringify({ instanceName, phoneNumber }),
   });
   if (!res.ok) throw new Error('Erro ao conectar instância');
   return res.json();
