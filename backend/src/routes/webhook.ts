@@ -100,16 +100,16 @@ export default function webhookRouter(pool: Pool): Router {
       processados.add(messageId);
       setTimeout(() => processados.delete(messageId), 60000);
 
-      // Deduplicação no banco
+      // Deduplicação no banco (coluna message_id, não id)
       const jaExiste = await pool.query(
-        'SELECT id FROM webhook_mensagens_processadas WHERE id = $1',
+        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
         [messageId]
       );
       if (jaExiste.rows.length) return;
 
       await pool.query(
-        'INSERT INTO webhook_mensagens_processadas (id, instancia, telefone) VALUES ($1, $2, $3)',
-        [messageId, instancia, telefone]
+        'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2)',
+        [messageId, instancia]
       );
 
       // Extrair dados da mensagem
