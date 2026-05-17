@@ -1,10 +1,16 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
+import { randomUUID } from 'crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 
-const sessions = new Map<string, SSEServerTransport>();
+// SSE sessions (Claude Code / legacy clients)
+const sseSessions = new Map<string, SSEServerTransport>();
+
+// Streamable HTTP sessions (n8n, Claude Desktop)
+const httpSessions = new Map<string, StreamableHTTPServerTransport>();
 
 function checkAuth(req: Request, res: Response): boolean {
   const secret = process.env.MCP_SECRET;
@@ -23,7 +29,7 @@ function checkAuth(req: Request, res: Response): boolean {
   return true;
 }
 
-function buildServer(pool: Pool): McpServer {
+export function buildServer(pool: Pool): McpServer {
   const server = new McpServer({ name: 'mentoark-crm', version: '1.0.0' });
 
   // ── buscar_contatos ────────────────────────────────────────
@@ -242,21 +248,76 @@ function buildServer(pool: Pool): McpServer {
 export function mcpRouter(pool: Pool): Router {
   const router = Router();
 
-  // SSE endpoint — n8n conecta aqui
+  // ── Streamable HTTP — POST /mcp (n8n, Claude Desktop) ─────────────────────
+  // Suporta sessões (stateful) ou requests independentes (stateless).
+  router.post('/', async (req: Request, res: Response) => {
+    if (!checkAuth(req, res)) return;
+
+    const existingId = req.headers['mcp-session-id'] as string | undefined;
+    if (existingId) {
+      const transport = httpSessions.get(existingId);
+      if (!transport) {
+        res.status(404).json({ error: 'MCP session not found' });
+        return;
+      }
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
+    // Nova sessão
+    let capturedId: string | undefined;
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => {
+        capturedId = randomUUID();
+        return capturedId;
+      },
+    });
+    const server = buildServer(pool);
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+
+    // Registra sessão após handleRequest ter gerado o ID
+    const sid = capturedId ?? transport.sessionId;
+    if (sid) {
+      httpSessions.set(sid, transport);
+      transport.onclose = () => httpSessions.delete(sid);
+    }
+  });
+
+  // GET /mcp — retomada de sessão SSE via Streamable HTTP
+  router.get('/', async (req: Request, res: Response) => {
+    if (!checkAuth(req, res)) return;
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !httpSessions.has(sessionId)) {
+      res.status(404).json({ error: 'Use POST /mcp para inicializar uma sessão' });
+      return;
+    }
+    await httpSessions.get(sessionId)!.handleRequest(req, res);
+  });
+
+  // DELETE /mcp — encerramento explícito de sessão
+  router.delete('/', async (req: Request, res: Response) => {
+    if (!checkAuth(req, res)) return;
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (sessionId) httpSessions.delete(sessionId);
+    res.status(200).json({ ok: true });
+  });
+
+  // ── SSE legacy — GET /mcp/sse (Claude Code) ───────────────────────────────
   router.get('/sse', async (req: Request, res: Response) => {
     if (!checkAuth(req, res)) return;
     const transport = new SSEServerTransport('/mcp/messages', res);
-    sessions.set(transport.sessionId, transport);
+    sseSessions.set(transport.sessionId, transport);
     const server = buildServer(pool);
     await server.connect(transport);
-    req.on('close', () => sessions.delete(transport.sessionId));
+    req.on('close', () => sseSessions.delete(transport.sessionId));
   });
 
-  // POST endpoint — n8n envia mensagens aqui
+  // POST /mcp/messages — mensagens SSE legacy
   router.post('/messages', async (req: Request, res: Response) => {
     if (!checkAuth(req, res)) return;
     const sessionId = req.query.sessionId as string;
-    const transport = sessions.get(sessionId);
+    const transport = sseSessions.get(sessionId);
     if (!transport) {
       res.status(404).json({ error: 'Session not found' });
       return;
