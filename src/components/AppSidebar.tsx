@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug,
   LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch,
-  Contact, BookOpen, LayoutGrid, Images, PieChart, Timer,
+  Contact, BookOpen, LayoutGrid, Images, PieChart, Timer, Zap,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/mentoark-logo.png";
@@ -21,6 +21,7 @@ const items = [
   { title: "Funil de Vendas",   url: "/funil",       icon: Kanban,          modulo: "funil",       color: "text-orange-500" },
   { title: "WhatsApp",          url: "/whatsapp",    icon: MessageCircle,   modulo: "whatsapp",    color: "text-green-500" },
   { title: "SLA",               url: "/sla",         icon: Timer,           modulo: "whatsapp",    color: "text-orange-500" },
+  { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap,      modulo: "whatsapp",    color: "text-yellow-500" },
   { title: "Disparos",          url: "/disparos",    icon: Send,            modulo: "disparos",    color: "text-sky-500" },
   { title: "Campanhas",         url: "/campanhas",   icon: Megaphone,       modulo: "campanhas",   color: "text-rose-500" },
   { title: "Workflows",         url: "/workflows",   icon: GitBranch,       modulo: "workflows",   color: "text-violet-500" },
