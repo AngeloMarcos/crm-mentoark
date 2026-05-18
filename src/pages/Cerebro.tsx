@@ -9,7 +9,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database, MessageCircle, FileCode, Settings, Loader2, RefreshCw, Wand2, Search, Upload } from "lucide-react";
+import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database, MessageCircle, FileCode, Settings, Loader2, RefreshCw, Wand2, Search, Upload, Volume2 } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
@@ -418,6 +422,143 @@ function ScriptsEditor({ items, onSave, onDelete }: EditorProps) {
   );
 }
 
+// ============ VOZ DO AGENTE ============
+function VozAgente() {
+  const { user } = useAuth();
+  const [provider, setProvider] = useState("Nenhum");
+  const [voiceId, setVoiceId] = useState("");
+  const [stability, setStability] = useState(65);
+  const [similarity, setSimilarity] = useState(75);
+  const [speakerBoost, setSpeakerBoost] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    (api as any)
+      .from("agentes")
+      .select("voice_provider, voice_id, voice_stability, voice_similarity, voice_speaker_boost")
+      .eq("user_id", user.id)
+      .maybeSingle()
+      .then(({ data }: { data: any }) => {
+        if (data) {
+          setProvider(data.voice_provider || "Nenhum");
+          setVoiceId(data.voice_id || "");
+          setStability(data.voice_stability ?? 65);
+          setSimilarity(data.voice_similarity ?? 75);
+          setSpeakerBoost(data.voice_speaker_boost ?? false);
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [user]);
+
+  const salvar = async () => {
+    if (!user) return;
+    setSaving(true);
+    try {
+      const payload = { voice_provider: provider, voice_id: voiceId, voice_stability: stability, voice_similarity: similarity, voice_speaker_boost: speakerBoost };
+      const { data: agente } = await (api as any).from("agentes").select("id").eq("user_id", user.id).maybeSingle();
+      if (agente) await (api as any).from("agentes").update(payload).eq("id", agente.id);
+      else await (api as any).from("agentes").insert({ user_id: user.id, nome: "Agente", ativo: true, ...payload });
+      toast.success("Configuração de voz salva!");
+    } catch {
+      toast.error("Erro ao salvar configuração de voz");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <Card><CardContent className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-primary" /></CardContent></Card>;
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-l-4 border-l-primary bg-primary/5">
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-start gap-3">
+            <Volume2 className="h-5 w-5 text-primary mt-0.5 shrink-0" />
+            <p className="text-sm text-muted-foreground">
+              Configure a voz do seu agente. O <strong className="text-foreground">Voice ID</strong> é obtido diretamente no
+              painel do ElevenLabs após criar ou clonar uma voz.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="pt-6 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="space-y-2">
+              <Label>Provider</Label>
+              <Select value={provider} onValueChange={setProvider}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ElevenLabs">ElevenLabs</SelectItem>
+                  <SelectItem value="OpenAI TTS">OpenAI TTS</SelectItem>
+                  <SelectItem value="Nenhum">Nenhum</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Voice ID</Label>
+              <Input
+                placeholder="Ex: 21m00Tcm4TlvDq8ikWAM"
+                value={voiceId}
+                onChange={e => setVoiceId(e.target.value)}
+                disabled={provider === "Nenhum"}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <Label>Stability</Label>
+                <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{stability}</span>
+              </div>
+              <Slider
+                value={[stability]}
+                min={0} max={100} step={1}
+                onValueChange={([v]) => setStability(v)}
+                disabled={provider !== "ElevenLabs"}
+              />
+              <p className="text-[11px] text-muted-foreground">Valores altos = mais consistente. Baixos = mais expressivo.</p>
+            </div>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <Label>Similarity</Label>
+                <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{similarity}</span>
+              </div>
+              <Slider
+                value={[similarity]}
+                min={0} max={100} step={1}
+                onValueChange={([v]) => setSimilarity(v)}
+                disabled={provider !== "ElevenLabs"}
+              />
+              <p className="text-[11px] text-muted-foreground">Fidelidade à voz original clonada.</p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div>
+              <Label className="text-sm font-medium">Speaker Boost</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">Melhora clareza em ambientes ruidosos (apenas ElevenLabs).</p>
+            </div>
+            <Switch
+              checked={speakerBoost}
+              onCheckedChange={setSpeakerBoost}
+              disabled={provider !== "ElevenLabs"}
+            />
+          </div>
+
+          <Button onClick={salvar} disabled={saving} className="w-full">
+            {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Salvando...</> : <><Volume2 className="h-4 w-4 mr-2" /> Salvar configuração de voz</>}
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ============ MAIN PAGE ============
 export default function CerebroPage() {
   const { user } = useAuth();
@@ -720,6 +861,7 @@ export default function CerebroPage() {
                 <TabsTrigger value="vetorial"><Database className="h-4 w-4 mr-1" /> Vetorial</TabsTrigger>
                 <TabsTrigger value="prompt"><FileCode className="h-4 w-4 mr-1" /> Prompt</TabsTrigger>
                 <TabsTrigger value="testar"><MessageCircle className="h-4 w-4 mr-1" /> Testar</TabsTrigger>
+                <TabsTrigger value="voz"><Volume2 className="h-4 w-4 mr-1" /> Voz</TabsTrigger>
                 <TabsTrigger value="config"><Settings className="h-4 w-4 mr-1" /> Configurações</TabsTrigger>
               </TabsList>
             </div>
@@ -747,6 +889,9 @@ export default function CerebroPage() {
             </TabsContent>
             <TabsContent value="prompt" className="mt-4">
               <PromptAgente />
+            </TabsContent>
+            <TabsContent value="voz" className="mt-4">
+              <VozAgente />
             </TabsContent>
             <TabsContent value="config" className="mt-4">
               <Configuracoes />
