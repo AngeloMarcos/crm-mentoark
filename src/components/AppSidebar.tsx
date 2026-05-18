@@ -3,7 +3,10 @@ import {
   LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch,
   Contact, BookOpen, LayoutGrid, Images, PieChart, Timer, Zap, Tag,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
+import { useQuery } from "@tanstack/react-query";
 import logo from "@/assets/mentoark-logo.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -40,7 +43,22 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const navigate = useNavigate();
-  const { hasModulo, signOut } = useAuth();
+  const { hasModulo, signOut, user } = useAuth();
+
+  const { data: overdueCount = 0 } = useQuery({
+    queryKey: ["overdue-followups-count"],
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("follow_ups" as any)
+        .select("*", { count: 'exact', head: true })
+        .eq("status", "pendente")
+        .lt("data_retorno", new Date().toISOString());
+      if (error) throw error;
+      return count || 0;
+    },
+    enabled: !!user?.id,
+    refetchInterval: 60000 // Refresh every minute
+  });
 
   const handleLogout = async () => {
     await signOut();
@@ -94,7 +112,14 @@ export function AppSidebar() {
                           }`}
                         />
                         {!collapsed && (
-                          <span className={isActive ? "gradient-brand-text" : ""}>{item.title}</span>
+                          <div className="flex items-center justify-between flex-1">
+                            <span className={isActive ? "gradient-brand-text" : ""}>{item.title}</span>
+                            {item.url === "/contatos" && overdueCount > 0 && (
+                              <Badge className="bg-destructive text-white border-none h-5 px-1.5 min-w-[20px] justify-center text-[10px] animate-pulse">
+                                {overdueCount}
+                              </Badge>
+                            )}
+                          </div>
                         )}
                       </NavLink>
                     </SidebarMenuButton>
