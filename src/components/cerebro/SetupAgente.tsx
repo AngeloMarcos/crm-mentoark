@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ChevronRight, ChevronLeft, Building2, Bot, Wrench, MessageCircle, Code2, Check, Copy, Wand2, Plus, Trash2 } from "lucide-react";
+import { Loader2, ChevronRight, ChevronLeft, Building2, Bot, Wrench, MessageCircle, Code2, Check, Copy, Wand2, Plus, Trash2, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -26,7 +26,8 @@ const STEPS = [
   { id: 2, label: "Personalidade", icon: Bot },
   { id: 3, label: "Ferramentas", icon: Wrench },
   { id: 4, label: "Fluxo", icon: MessageCircle },
-  { id: 5, label: "Config", icon: Code2 },
+  { id: 5, label: "Script", icon: FileText },
+  { id: 6, label: "Config", icon: Code2 },
 ];
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
@@ -67,7 +68,11 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
     ],
     follow_up: { dia_1: "Oi! Passando para ver se conseguiu ler minha última mensagem.", dia_3: "Ainda interessado? Ficamos à disposição para tirar qualquer dúvida.", dia_7: "Notei que ainda não decidimos o próximo passo. Gostaria de encerrar por aqui ou agendamos um papo rápido?" },
     encerramento: "",
-    // Passo 5
+    // Passo 5: Script
+    script_apresentacao: "", script_primeira_pergunta: "",
+    script_mensagem_produto: "", script_principal_beneficio: "",
+    script_proximo_passo: "", script_despedida: "",
+    // Passo 6
     webhook_principal: "", webhook_indexacao: "", webhook_teste: "",
     evolution_server_url: "", evolution_api_key: "", evolution_instancia: "",
     rag_threshold: 0.7, rag_resultados: 5, rag_ativo: true
@@ -167,7 +172,7 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
       const json = jsonGerado();
 
       // Salva conhecimento individualmente para aparecer nas abas do Cerebro
-      await api.from("conhecimento").delete().eq("user_id", user.id).in("tipo", ["negocio", "personalidade"]);
+      await api.from("conhecimento").delete().eq("user_id", user.id).in("tipo", ["negocio", "personalidade", "script"]);
       
       const conhecimentoRows: any[] = [];
       
@@ -185,6 +190,19 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
         if (data[f as keyof typeof data]) {
           conhecimentoRows.push({ user_id: user.id, tipo: "personalidade", campo: f, conteudo: String(data[f as keyof typeof data]), indexado: false });
         }
+      });
+
+      // Script
+      const scriptMap: Record<string, string> = {
+        apresentacao: data.script_apresentacao,
+        primeira_pergunta: data.script_primeira_pergunta,
+        mensagem_produto: data.script_mensagem_produto,
+        principal_beneficio: data.script_principal_beneficio,
+        proximo_passo: data.script_proximo_passo,
+        despedida: data.script_despedida,
+      };
+      Object.entries(scriptMap).forEach(([campo, conteudo]) => {
+        if (conteudo) conhecimentoRows.push({ user_id: user.id, tipo: "script", campo, conteudo, indexado: false });
       });
 
       if (conhecimentoRows.length > 0) {
@@ -565,8 +583,82 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
             </div>
           )}
 
-          {/* PASSO 5 */}
+          {/* PASSO 5: SCRIPT */}
           {step === 5 && (
+            <div className="space-y-4">
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><MessageCircle className="h-4 w-4 text-primary" /> Abordagem inicial</h4>
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Como o agente se apresenta?</Label>
+                    <Textarea
+                      placeholder='Ex: "Olá! Sou a Cris, assistente virtual da Mentoark. Fico feliz em te atender!"'
+                      value={data.script_apresentacao}
+                      onChange={e => update("script_apresentacao", e.target.value)}
+                      rows={3}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Qual a primeira pergunta que faz ao lead?</Label>
+                    <Input
+                      placeholder='Ex: "Você já conhece nossos planos ou está buscando uma solução específica?"'
+                      value={data.script_primeira_pergunta}
+                      onChange={e => update("script_primeira_pergunta", e.target.value)}
+                    />
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><FileText className="h-4 w-4 text-primary" /> Mensagens principais</h4>
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">O que falar sobre o produto/serviço?</Label>
+                    <Textarea
+                      placeholder="Descreva os pontos principais que o agente deve comunicar sobre o produto..."
+                      value={data.script_mensagem_produto}
+                      onChange={e => update("script_mensagem_produto", e.target.value)}
+                      rows={3}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Qual o principal benefício que deve destacar?</Label>
+                    <Input
+                      placeholder='Ex: "Automatize seu atendimento e economize 4h por dia"'
+                      value={data.script_principal_beneficio}
+                      onChange={e => update("script_principal_beneficio", e.target.value)}
+                    />
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="p-4 bg-muted/20">
+                <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><Check className="h-4 w-4 text-primary" /> Encerramento</h4>
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Como conduz o lead para o próximo passo?</Label>
+                    <Textarea
+                      placeholder='Ex: "Posso te mandar o link para você já garantir sua vaga com desconto hoje?"'
+                      value={data.script_proximo_passo}
+                      onChange={e => update("script_proximo_passo", e.target.value)}
+                      rows={3}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Mensagem de despedida padrão</Label>
+                    <Input
+                      placeholder='Ex: "Qualquer dúvida é só chamar! Bom dia 😊"'
+                      value={data.script_despedida}
+                      onChange={e => update("script_despedida", e.target.value)}
+                    />
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {/* PASSO 6: CONFIG */}
+          {step === 6 && (
             <div className="space-y-6">
               <Card className="p-4 bg-muted/20">
                 <h4 className="font-bold mb-4 flex items-center gap-2 text-sm"><Wrench className="h-4 w-4" /> Webhooks n8n</h4>
@@ -638,7 +730,7 @@ export function SetupAgente({ open, onClose, onConcluir }: Props) {
 
         <div className="p-6 border-t flex justify-between bg-muted/10">
           <Button variant="ghost" onClick={() => setStep(s => s - 1)} disabled={step === 1}><ChevronLeft className="h-4 w-4 mr-2" /> Anterior</Button>
-          {step < 5 ? (
+          {step < 6 ? (
             <Button onClick={() => setStep(s => s + 1)}>Próximo <ChevronRight className="h-4 w-4 ml-2" /></Button>
           ) : (
             <Button 
