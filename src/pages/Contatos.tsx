@@ -12,17 +12,34 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Loader2, Phone, User, Calendar, Bot, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, Loader2, Phone, User, Calendar, Bot, ChevronLeft, ChevronRight, Check, Trash2, Clock, ExternalLink } from "lucide-react";
 import { api } from "@/integrations/database/client";
+import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/hooks/useAuth";
 
 interface DadoCliente {
-  id: number;
+  id: string; // Changed to string to match table definitions
   nomewpp: string | null;
   telefone: string | null;
   Setor: string | null;
   atendimento_ia: boolean | null;
   created_at: string;
+}
+
+interface FollowUp {
+  id: string;
+  contato_id: string;
+  data_retorno: string;
+  motivo: string;
+  observacao: string;
+  status: 'pendente' | 'concluido' | 'atrasado';
+  contatos: {
+    nomewpp: string;
+    telefone: string;
+  };
 }
 
 function setorBadgeClass(setor: string | null) {
@@ -44,6 +61,8 @@ function formatDate(iso: string) {
 export default function ContatosPage() {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [data, setData] = useState<DadoCliente[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -55,44 +74,77 @@ export default function ContatosPage() {
   useEffect(() => {
     const fetchContatos = async () => {
       setLoading(true);
-      const { data, error } = await api
-        .from("dados_cliente")
+      const { data, error } = await supabase
+        .from("contatos" as any)
         .select("*")
         .order("created_at", { ascending: false });
       if (error) {
         toast({ title: "Erro ao carregar", description: error.message, variant: "destructive" });
       } else {
-        setData((data || []) as DadoCliente[]);
+        setData((data || []) as unknown as DadoCliente[]);
       }
       setLoading(false);
     };
 
     fetchContatos();
-
-    // Inscrição Realtime
-    const channel = api
-      .channel("public:dados_cliente")
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "dados_cliente" },
-        (payload) => {
-          const updatedRecord = payload.new as DadoCliente;
-          setData((prev) =>
-            prev.map((item) => (item.id === updatedRecord.id ? updatedRecord : item))
-          );
-        }
-      )
-      .subscribe();
-
-    return () => {
-      api.removeChannel(channel);
-    };
   }, [toast]);
+
+  const { data: followUps = [], isLoading: loadingFollowUps } = useQuery({
+    queryKey: ["follow-ups-list"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("follow_ups" as any)
+        .select("*, contatos:contato_id(nomewpp, telefone)")
+        .order("data_retorno", { ascending: true });
+      if (error) throw error;
+      return data as unknown as FollowUp[];
+    },
+    enabled: !!user?.id
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      const { error } = await supabase
+        .from("follow_ups" as any)
+        .update({ status })
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["follow-ups-list"] });
+      toast({ title: "Status atualizado!" });
+    }
+  });
+
+  const deleteFollowUpMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from("follow_ups" as any)
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["follow-ups-list"] });
+      toast({ title: "Follow-up removido!" });
+    }
+  });
+
+  const getFollowUpStatus = (date: string, status: string) => {
+    if (status === 'concluido') return 'concluido';
+    if (new Date(date) < new Date()) return 'atrasado';
+    return 'pendente';
+  };
+
+  const statusBadge = (date: string, status: string) => {
+    const s = getFollowUpStatus(date, status);
+    if (s === 'concluido') return <Badge className="bg-success text-success-foreground">Concluído</Badge>;
+    if (s === 'atrasado') return <Badge variant="destructive">Atrasado</Badge>;
+    return <Badge className="bg-yellow-500 text-white">Pendente</Badge>;
+  };
 
   const filtered = useMemo(() => {
     let result = data;
-
-    // Busca por texto
     const q = query.trim().toLowerCase();
     if (q) {
       result = result.filter(d =>
@@ -100,18 +152,13 @@ export default function ContatosPage() {
         (d.telefone || "").toLowerCase().includes(q)
       );
     }
-
-    // Filtro por setor
     if (setorFilter !== "TODOS") {
       result = result.filter(d => (d.Setor || "").trim().toUpperCase() === setorFilter);
     }
-
-    // Filtro por IA
     if (iaFilter !== "TODOS") {
       const active = iaFilter === "ATIVA";
       result = result.filter(d => d.atendimento_ia === active);
     }
-
     return result;
   }, [data, query, setorFilter, iaFilter]);
 
@@ -121,7 +168,6 @@ export default function ContatosPage() {
     return filtered.slice(start, start + itemsPerPage);
   }, [filtered, currentPage]);
 
-  // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [query, setorFilter, iaFilter]);
@@ -130,11 +176,19 @@ export default function ContatosPage() {
     <CRMLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Contatos</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Gestão de Contatos</h1>
           <p className="text-sm text-muted-foreground">
-            {loading ? "Carregando..." : `${filtered.length} contato${filtered.length === 1 ? "" : "s"}`}
+            Visualize e gerencie seus contatos e follow-ups agendados.
           </p>
         </div>
+
+        <Tabs defaultValue="lista" className="w-full">
+          <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsTrigger value="lista">Lista de Contatos</TabsTrigger>
+            <TabsTrigger value="followups">Follow-ups</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="lista" className="space-y-6 pt-4">
 
         <div className="flex flex-col md:flex-row gap-4">
           <div className="relative w-full md:max-w-md">
@@ -263,6 +317,84 @@ export default function ContatosPage() {
             )}
           </>
         )}
+          </TabsContent>
+
+          <TabsContent value="followups" className="pt-4">
+            {loadingFollowUps ? (
+              <div className="flex items-center justify-center py-20">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              </div>
+            ) : followUps.length === 0 ? (
+              <Card>
+                <CardContent className="py-16 text-center text-muted-foreground">
+                  Nenhum follow-up agendado.
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {followUps.map((fu) => (
+                  <Card key={fu.id} className="hover:shadow-md transition-all">
+                    <CardContent className="p-5 space-y-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                            <Clock className="w-4 h-4 text-primary" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold">{fu.contatos?.nomewpp || "Contato"}</p>
+                            <p className="text-xs text-muted-foreground">{fu.contatos?.telefone}</p>
+                          </div>
+                        </div>
+                        {statusBadge(fu.data_retorno, fu.status)}
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Badge variant="outline">{fu.motivo}</Badge>
+                        </div>
+                        <p className="text-xs font-medium mt-2">{formatDate(fu.data_retorno)}</p>
+                        {fu.observacao && (
+                          <p className="text-xs text-muted-foreground bg-muted p-2 rounded mt-2 italic">
+                            "{fu.observacao}"
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-2 border-t border-border/50">
+                        {fu.status === 'pendente' && (
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="flex-1 text-[10px] h-8"
+                            onClick={() => updateStatusMutation.mutate({ id: fu.id, status: 'concluido' })}
+                          >
+                            <Check className="w-3 h-3 mr-1" /> Concluir
+                          </Button>
+                        )}
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-8"
+                          onClick={() => navigate(`/contatos/${fu.contato_id}`)}
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </Button>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-8 text-destructive"
+                          onClick={() => deleteFollowUpMutation.mutate(fu.id)}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
     </CRMLayout>
   );

@@ -729,6 +729,47 @@ export type Database = {
         }
         Relationships: []
       }
+      follow_ups: {
+        Row: {
+          contato_id: string | null
+          created_at: string | null
+          data_retorno: string
+          id: string
+          motivo: string | null
+          observacao: string | null
+          status: string | null
+          user_id: string
+        }
+        Insert: {
+          contato_id?: string | null
+          created_at?: string | null
+          data_retorno: string
+          id?: string
+          motivo?: string | null
+          observacao?: string | null
+          status?: string | null
+          user_id: string
+        }
+        Update: {
+          contato_id?: string | null
+          created_at?: string | null
+          data_retorno?: string
+          id?: string
+          motivo?: string | null
+          observacao?: string | null
+          status?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "follow_ups_contato_id_fkey"
+            columns: ["contato_id"]
+            isOneToOne: false
+            referencedRelation: "contatos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       funil_estagios: {
         Row: {
           cor: string | null

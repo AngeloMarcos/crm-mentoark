@@ -13,8 +13,10 @@ import {
   Bot, 
   Play, 
   Pause,
-  MessageSquare
+  MessageSquare,
+  Clock,
 } from "lucide-react";
+import { FollowUpModal } from "@/components/FollowUpModal";
 import { api } from "@/integrations/database/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -61,6 +63,7 @@ export default function ContatoDetalhePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingIa, setUpdatingIa] = useState(false);
+  const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -183,7 +186,16 @@ export default function ContatoDetalhePage() {
           <Button variant="ghost" size="sm" onClick={() => navigate("/contatos")} className="gap-2">
             <ArrowLeft className="h-4 w-4" /> Voltar
           </Button>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => setIsFollowUpModalOpen(true)}
+              className="gap-2 border-yellow-500/50 text-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-950/20"
+            >
+              <Clock className="h-4 w-4" />
+              Follow-up
+            </Button>
             {iaAtiva ? (
               <Button 
                 variant="destructive" 
@@ -326,6 +338,13 @@ export default function ContatoDetalhePage() {
             </Card>
           </div>
         </div>
+
+        <FollowUpModal 
+          isOpen={isFollowUpModalOpen}
+          onClose={() => setIsFollowUpModalOpen(false)}
+          contatoId={contato.id.toString()}
+          contatoNome={contato.nomewpp || "Contato"}
+        />
       </div>
     </CRMLayout>
   );

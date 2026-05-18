@@ -6,9 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/integrations/database/client";
+import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   Users,
   MessageCircle,
@@ -17,6 +19,9 @@ import {
   Bot,
   CirclePause,
   ExternalLink,
+  Clock,
+  CheckCircle2,
+  CalendarDays,
 } from "lucide-react";
 
 interface DashboardStats {
@@ -120,6 +125,28 @@ export default function DashboardPage() {
     carregar();
   }, [carregar]);
 
+  const { data: followUpsHoje = [], isLoading: loadingFollowUps } = useQuery({
+    queryKey: ["follow-ups-hoje"],
+    queryFn: async () => {
+      const hoje = new Date();
+      hoje.setHours(0, 0, 0, 0);
+      const amanha = new Date(hoje);
+      amanha.setDate(amanha.getDate() + 1);
+
+      const { data, error } = await supabase
+        .from("follow_ups" as any)
+        .select("*, contatos:contato_id(nomewpp, telefone)")
+        .eq("status", "pendente")
+        .gte("data_retorno", hoje.toISOString())
+        .lt("data_retorno", amanha.toISOString())
+        .order("data_retorno", { ascending: true });
+      
+      if (error) throw error;
+      return data as any[];
+    },
+    enabled: !!user?.id
+  });
+
   const handleRefresh = async () => {
     setRefreshing(true);
     await carregar();
@@ -189,78 +216,121 @@ export default function DashboardPage() {
           />
         </div>
 
-        <Card className="card-gradient-border">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-lg font-semibold flex items-center gap-2">
-                <Activity className="h-5 w-5 text-primary" />
-                Contatos Recentes
-              </CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => navigate("/contatos")} className="text-xs">
-                Ver todos
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {loadingDash ? (
-              <div className="space-y-2">
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="card-gradient-border">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg font-semibold flex items-center gap-2">
+                  <Activity className="h-5 w-5 text-primary" />
+                  Contatos Recentes
+                </CardTitle>
+                <Button variant="ghost" size="sm" onClick={() => navigate("/contatos")} className="text-xs">
+                  Ver todos
+                </Button>
               </div>
-            ) : stats.recentes.length === 0 ? (
-              <div className="text-center py-10 text-muted-foreground">
-                Nenhum contato cadastrado ainda.
-              </div>
-            ) : (
-              <div className="relative overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Nome</TableHead>
-                      <TableHead>Telefone</TableHead>
-                      <TableHead>Setor</TableHead>
-                      <TableHead>Status IA</TableHead>
-                      <TableHead className="text-right">Ação</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {stats.recentes.map((c) => (
-                      <TableRow key={c.id}>
-                        <TableCell className="font-medium truncate max-w-[150px]">
-                          {c.nomewpp || "Sem nome"}
-                        </TableCell>
-                        <TableCell>{c.telefone || "—"}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-[10px] uppercase">
-                            {c.Setor || "N/A"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge 
-                            variant="secondary" 
-                            className={c.atendimento_ia ? "bg-success/10 text-success border-success/20" : "bg-destructive/10 text-destructive border-destructive/20"}
-                          >
-                            {c.atendimento_ia ? "Ativa" : "Pausada"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            onClick={() => navigate(`/contatos/${c.id}`)}
-                          >
-                            <ExternalLink className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
+            </CardHeader>
+            <CardContent>
+              {loadingDash ? (
+                <div className="space-y-2">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <Skeleton key={i} className="h-12 w-full" />
+                  ))}
+                </div>
+              ) : stats.recentes.length === 0 ? (
+                <div className="text-center py-10 text-muted-foreground">
+                  Nenhum contato cadastrado ainda.
+                </div>
+              ) : (
+                <div className="relative overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Nome</TableHead>
+                        <TableHead>Setor</TableHead>
+                        <TableHead className="text-right">Ação</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {stats.recentes.map((c) => (
+                        <TableRow key={c.id}>
+                          <TableCell className="font-medium truncate max-w-[150px]">
+                            {c.nomewpp || "Sem nome"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-[10px] uppercase">
+                              {c.Setor || "N/A"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={() => navigate(`/contatos/${c.id}`)}
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="card-gradient-border border-yellow-500/20">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg font-semibold flex items-center gap-2 text-yellow-600 dark:text-yellow-500">
+                  <Clock className="h-5 w-5" />
+                  Follow-ups de Hoje
+                </CardTitle>
+                <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600">
+                  {followUpsHoje.length} pendentes
+                </Badge>
               </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent>
+              {loadingFollowUps ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-16 w-full" />
+                  <Skeleton className="h-16 w-full" />
+                </div>
+              ) : followUpsHoje.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <CheckCircle2 className="h-8 w-8 mx-auto mb-2 opacity-20" />
+                  <p className="text-sm">Tudo em dia para hoje!</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {followUpsHoje.map((fu) => (
+                    <div 
+                      key={fu.id} 
+                      className="flex items-center justify-between p-3 rounded-lg border bg-card/50 hover:bg-card transition-colors cursor-pointer group"
+                      onClick={() => navigate(`/contatos/${fu.contato_id}`)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-yellow-500/10 flex items-center justify-center">
+                          <Clock className="w-4 h-4 text-yellow-600" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium">{fu.contatos?.nomewpp || "Contato"}</p>
+                          <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <CalendarDays className="w-3 h-3" />
+                            {new Date(fu.data_retorno).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                            • {fu.motivo}
+                          </p>
+                        </div>
+                      </div>
+                      <ExternalLink className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </CRMLayout>
   );
