@@ -103,7 +103,7 @@ const TagsFunilPage = () => {
           { id: "default-4", nome: "VIP", cor: "#8b5cf6", count: 0 },
         ];
       }
-      return data as TagType[];
+      return data as unknown as TagType[];
     },
     enabled: !!user?.id
   });
@@ -130,7 +130,7 @@ const TagsFunilPage = () => {
           count: 0
         }));
       }
-      return data as StageType[];
+      return data as unknown as StageType[];
     },
     enabled: !!user?.id
   });
