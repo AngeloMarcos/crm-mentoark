@@ -3,7 +3,15 @@
     "allow": [
       "Bash(dig *)",
       "Bash(sshpass -p 'Mentoark@2025' ssh *)",
-      "Bash(sshpass -p 'Mentoark@2025' scp *)"
+      "Bash(sshpass -p 'Mentoark@2025' scp *)",
+      "Bash(git fetch *)",
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "PowerShell(ssh -o StrictHostKeyChecking=no root@147.93.9.172 *)",
+      "PowerShell(scp -o StrictHostKeyChecking=no *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(where.exe *)"
     ]
   },
   "hooks": {
