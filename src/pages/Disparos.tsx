@@ -429,15 +429,15 @@ function StepReview({ form, onStart }: any) {
   const [agendarAt, setAgendarAt] = useState("");
 
   const handleStart = async (now = true) => {
-    const payload = {
+    const payload: any = {
       user_id: (await supabase.auth.getUser()).data.user?.id,
       nome: form.nome || "Disparo em Massa " + new Date().toLocaleDateString(),
       status: now ? 'em_andamento' : 'rascunho',
       perfil_velocidade: form.perfil_velocidade,
-      janela_inicio: form.janela_inicio,
-      janela_fim: form.janela_fim,
+      horario_inicio: form.janela_inicio,
+      horario_fim: form.janela_fim,
       instancias_ids: form.instancias_ids,
-      total_contatos: 450, // Mock
+      total_leads: 450, // Mock
       mensagem_template: form.mensagem,
       tipo_midia: form.tipo_midia,
       url_midia: form.url_midia,
@@ -449,7 +449,8 @@ function StepReview({ form, onStart }: any) {
       pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
     };
 
-    const { data, error } = await supabase.from("disparos").insert(payload).select().single();
+    const { data, error } = await supabase.from("disparos").insert(payload as any).select().single();
+
     if (error) {
       toast.error("Erro ao salvar campanha: " + error.message);
       return;
