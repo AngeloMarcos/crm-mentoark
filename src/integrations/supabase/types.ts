@@ -1156,6 +1156,30 @@ export type Database = {
         }
         Relationships: []
       }
+      tags: {
+        Row: {
+          cor: string | null
+          created_at: string | null
+          id: string
+          nome: string
+          user_id: string
+        }
+        Insert: {
+          cor?: string | null
+          created_at?: string | null
+          id?: string
+          nome: string
+          user_id: string
+        }
+        Update: {
+          cor?: string | null
+          created_at?: string | null
+          id?: string
+          nome?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       tarefas: {
         Row: {
           concluida_at: string | null
