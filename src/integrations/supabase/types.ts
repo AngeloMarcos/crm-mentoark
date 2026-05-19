@@ -64,6 +64,8 @@ export type Database = {
           rag_resultados: number | null
           rag_threshold: number | null
           regras: string | null
+          score_fatores: Json | null
+          score_updated_at: string | null
           temperatura: number
           tom: string
           updated_at: string
@@ -74,6 +76,7 @@ export type Database = {
           webhook_indexacao: string | null
           webhook_principal: string | null
           webhook_teste: string | null
+          whatsapp_score: number | null
         }
         Insert: {
           ativo?: boolean
@@ -94,6 +97,8 @@ export type Database = {
           rag_resultados?: number | null
           rag_threshold?: number | null
           regras?: string | null
+          score_fatores?: Json | null
+          score_updated_at?: string | null
           temperatura?: number
           tom?: string
           updated_at?: string
@@ -104,6 +109,7 @@ export type Database = {
           webhook_indexacao?: string | null
           webhook_principal?: string | null
           webhook_teste?: string | null
+          whatsapp_score?: number | null
         }
         Update: {
           ativo?: boolean
@@ -124,6 +130,8 @@ export type Database = {
           rag_resultados?: number | null
           rag_threshold?: number | null
           regras?: string | null
+          score_fatores?: Json | null
+          score_updated_at?: string | null
           temperatura?: number
           tom?: string
           updated_at?: string
@@ -134,6 +142,7 @@ export type Database = {
           webhook_indexacao?: string | null
           webhook_principal?: string | null
           webhook_teste?: string | null
+          whatsapp_score?: number | null
         }
         Relationships: []
       }
