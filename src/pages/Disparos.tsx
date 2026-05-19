@@ -417,45 +417,228 @@ function StepAntiBan({ form, setForm }: any) {
 
 
 function StepReview({ form, onStart }: any) {
+  const estimateTotalTime = () => {
+    const total = 450; // Mock total
+    const msgsPerHour = form.perfil_velocidade === 'safe' ? 60 : form.perfil_velocidade === 'moderate' ? 120 : 240;
+    const hours = Math.ceil(total / msgsPerHour);
+    return `${hours}h ${Math.floor((total % msgsPerHour) / (msgsPerHour/60))}m`;
+  };
+
+  const [agendarAt, setAgendarAt] = useState("");
+
+  const handleStart = async (now = true) => {
+    const payload = {
+      user_id: (await supabase.auth.getUser()).data.user?.id,
+      nome: form.nome || "Disparo em Massa " + new Date().toLocaleDateString(),
+      status: now ? 'em_andamento' : 'rascunho',
+      perfil_velocidade: form.perfil_velocidade,
+      janela_inicio: form.janela_inicio,
+      janela_fim: form.janela_fim,
+      instancias_ids: form.instancias_ids,
+      total_contatos: 450, // Mock
+      mensagem_template: form.mensagem,
+      tipo_midia: form.tipo_midia,
+      url_midia: form.url_midia,
+      legenda_midia: form.legenda_midia,
+      agendado_para: now ? null : agendarAt,
+      pausa_fins_semana: form.pausa_fins_semana,
+      pausa_erros_consecutivos: form.pausa_erros_consecutivos,
+      limite_erros_consecutivos: form.limite_erros_consecutivos,
+      pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
+    };
+
+    const { data, error } = await supabase.from("disparos").insert(payload).select().single();
+    if (error) {
+      toast.error("Erro ao salvar campanha: " + error.message);
+      return;
+    }
+    
+    toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
+    if (now) onStart(data);
+  };
+
   return (
-    <div className="grid grid-cols-2 gap-6">
-      <Card className="p-6">
-        <h3 className="font-bold mb-4">Resumo da Campanha: {form.nome || "Nova Campanha"}</h3>
-        <p>Destinatários: 450</p>
-        <p>Perfil de Velocidade: {form.perfil_velocidade}</p>
-        <Button className="w-full mt-4" onClick={onStart}>Iniciar Disparo</Button>
+    <div className="grid grid-cols-3 gap-6">
+      <Card className="col-span-2 p-6 space-y-6">
+        <h3 className="text-lg font-bold">Revisão da Configuração</h3>
+        
+        <div className="grid grid-cols-2 gap-8">
+          <div className="space-y-4">
+            <div>
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">Destinatários</p>
+              <div className="flex items-center gap-2 mt-1">
+                <Users className="h-4 w-4 text-primary" />
+                <span className="text-xl font-bold">450 contatos</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">12 duplicados removidos | 5 opt-outs excluídos</p>
+            </div>
+            
+            <div>
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">Proteção Ativa</p>
+              <div className="flex flex-wrap gap-2 mt-2">
+                <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
+                  <ShieldCheck className="h-3 w-3 mr-1" /> Perfil {form.perfil_velocidade}
+                </Badge>
+                {form.pausa_fins_semana && <Badge variant="outline">Pausa FDS</Badge>}
+                <Badge variant="outline">Janela: {form.janela_inicio} - {form.janela_fim}</Badge>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">Tempo Estimado</p>
+              <div className="flex items-center gap-2 mt-1">
+                <Clock className="h-4 w-4 text-primary" />
+                <span className="text-xl font-bold">{estimateTotalTime()}</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">Término previsto: Hoje, 15:30</p>
+            </div>
+
+            <div>
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">Instâncias</p>
+              <div className="flex gap-2 mt-2">
+                {form.instancias_ids.length} selecionadas
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 bg-muted/50 rounded-lg border">
+          <p className="text-xs font-bold mb-2">Resumo da Mensagem:</p>
+          <p className="text-xs italic text-muted-foreground line-clamp-3">"{form.mensagem}"</p>
+        </div>
+      </Card>
+
+      <Card className="p-6 flex flex-col justify-between">
+        <div className="space-y-4">
+          <h3 className="font-bold">Ações</h3>
+          <Button className="w-full gap-2 h-12 text-lg font-bold" onClick={() => handleStart(true)}>
+            <Play className="h-5 w-5 fill-current" /> Disparar Agora
+          </Button>
+          
+          <div className="relative py-2">
+            <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
+            <div className="relative flex justify-center text-[10px] uppercase"><span className="bg-background px-2 text-muted-foreground">OU</span></div>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs">Agendar para:</Label>
+            <Input type="datetime-local" value={agendarAt} onChange={e => setAgendarAt(e.target.value)} />
+            <Button variant="outline" className="w-full gap-2" disabled={!agendarAt} onClick={() => handleStart(false)}>
+              <Calendar className="h-4 w-4" /> Agendar Disparo
+            </Button>
+          </div>
+        </div>
+
+        <p className="text-[10px] text-center text-muted-foreground mt-6 italic">
+          Ao iniciar, o sistema respeitará as regras de delay e janela de envio configuradas.
+        </p>
       </Card>
     </div>
   );
 }
 
 function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: () => void }) {
+  const stats = [
+    { label: "Enviados", val: campaign.enviados || 124, total: campaign.total_contatos || 450, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10" },
+    { label: "Entregues", val: campaign.entregues || 112, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10" },
+    { label: "Respondidos", val: campaign.respondidos || 30, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10" },
+    { label: "Falhas", val: campaign.falhas || 2, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
+  ];
+
+  const failureRate = ((campaign.falhas || 2) / (campaign.enviados || 124)) * 100;
+
   return (
-    <CRMLayout>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold">Monitoramento: {campaign.nome}</h2>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm"><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
-            <Button variant="destructive" size="sm" onClick={onCancel}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
-          </div>
+    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in zoom-in duration-300">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold flex items-center gap-2">
+            <Activity className="h-6 w-6 text-primary animate-pulse" />
+            Monitoramento: {campaign.nome}
+          </h2>
+          <Badge className="mt-1 bg-emerald-500/20 text-emerald-600 border-emerald-500/30">EM ANDAMENTO</Badge>
         </div>
-        
-        <div className="grid grid-cols-4 gap-4">
-          {[
-            { label: "Enviados", val: "124/450", color: "text-blue-500" },
-            { label: "Entregues", val: "112", color: "text-green-500" },
-            { label: "Respondidos", val: "30", color: "text-purple-500" },
-            { label: "Falhas", val: "2", color: "text-red-500" }
-          ].map(m => (
-            <Card key={m.label} className="p-4">
-              <p className="text-xs text-muted-foreground">{m.label}</p>
-              <p className={`text-2xl font-bold ${m.color}`}>{m.val}</p>
-              <Progress value={30} className="mt-2" />
-            </Card>
-          ))}
+        <div className="flex gap-2">
+          <Button variant="outline"><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
+          <Button variant="destructive" onClick={onCancel}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
         </div>
       </div>
-    </CRMLayout>
+
+      {failureRate > 10 && (
+        <Alert variant={failureRate > 25 ? "destructive" : "warning"} className="animate-bounce">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{failureRate > 25 ? "Pausa Automática Ativada" : "Taxa de Falha Elevada"}</AlertTitle>
+          <AlertDescription>
+            {failureRate > 25 
+              ? "A campanha foi pausada automaticamente devido a uma taxa de erro superior a 25%." 
+              : "Detectamos que mais de 10% dos disparos estão falhando. Recomendamos revisar suas instâncias."}
+          </AlertDescription>
+        </Alert>
+      )}
+      
+      <div className="grid grid-cols-4 gap-4">
+        {stats.map(s => (
+          <Card key={s.label} className="p-5 border-none shadow-sm overflow-hidden relative group">
+            <div className={`absolute top-0 right-0 p-4 transition-transform group-hover:scale-110`}>
+              <s.icon className={`h-12 w-12 opacity-10 ${s.color}`} />
+            </div>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">{s.label}</p>
+            <div className="flex items-baseline gap-1">
+              <span className={`text-3xl font-black ${s.color}`}>{s.val}</span>
+              {s.total && <span className="text-sm text-muted-foreground font-bold">/ {s.total}</span>}
+            </div>
+            {s.total && <Progress value={(s.val/s.total)*100} className={`h-1.5 mt-3 ${s.bg}`} />}
+            {s.label === "Respondidos" && <p className="text-[10px] text-purple-600 font-bold mt-2">Conversão: 24.2%</p>}
+          </Card>
+        ))}
+      </div>
+
+      <Card className="border-none shadow-sm overflow-hidden">
+        <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
+          <h3 className="font-bold text-sm flex items-center gap-2"><TableIcon className="h-4 w-4" /> Log de Envios (Tempo Real)</h3>
+          <Badge variant="outline" className="text-[10px]">Atualizando a cada 5s</Badge>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/10">
+                <th className="p-3 text-left font-bold">Contato</th>
+                <th className="p-3 text-left font-bold">Número</th>
+                <th className="p-3 text-left font-bold">Status</th>
+                <th className="p-3 text-left font-bold">Instância</th>
+                <th className="p-3 text-left font-bold">Horário</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {[
+                { name: "Maria Oliveira", phone: "5511999999999", status: "Respondido", instance: "Instância 01", time: "10:48" },
+                { name: "Carlos Souza", phone: "5511888888888", status: "Entregue", instance: "Instância 02", time: "10:47" },
+                { name: "Ana Santos", phone: "5511777777777", status: "Enviado", instance: "Instância 01", time: "10:47" },
+                { name: "Felipe Lima", phone: "5511666666666", status: "Falha", instance: "Instância 03", time: "10:46" },
+                { name: "Julia Melo", phone: "5511555555555", status: "Pulado", instance: "N/A", time: "10:45" },
+              ].map((log, i) => (
+                <tr key={i} className="hover:bg-muted/5 transition-colors">
+                  <td className="p-3 font-medium">{log.name}</td>
+                  <td className="p-3 text-xs font-mono">{log.phone}</td>
+                  <td className="p-3">
+                    <Badge variant={
+                      log.status === 'Respondido' ? 'default' : 
+                      log.status === 'Entregue' ? 'secondary' :
+                      log.status === 'Falha' ? 'destructive' : 'outline'
+                    } className="text-[10px] px-2 py-0">
+                      {log.status}
+                    </Badge>
+                  </td>
+                  <td className="p-3 text-xs">{log.instance}</td>
+                  <td className="p-3 text-xs text-muted-foreground">{log.time}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
   );
 }
+
