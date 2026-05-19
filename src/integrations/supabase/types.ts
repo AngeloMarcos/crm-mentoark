@@ -590,66 +590,111 @@ export type Database = {
       }
       disparos: {
         Row: {
+          agendado_para: string | null
+          concluido_em: string | null
           created_at: string
           data_fim: string | null
           data_inicio: string | null
+          entregues: number | null
           enviados: number
           falhas: number
           horario_fim: string
           horario_inicio: string
           id: string
+          iniciado_em: string | null
+          instancias_ids: string[] | null
           intervalo_max: number
           intervalo_min: number
+          legenda_midia: string | null
+          limite_dia_instancia: number | null
+          limite_erros_consecutivos: number | null
           lista_id: string | null
           mensagem_template: string | null
           nome: string
           pausa_a_cada: number
+          pausa_bloqueios_detectados: boolean | null
           pausa_duracao: number
+          pausa_erros_consecutivos: boolean | null
+          pausa_fins_semana: boolean | null
+          perfil_velocidade: string | null
+          respondidos: number | null
           status: string
+          tipo_midia: string | null
           total_leads: number
           updated_at: string
+          url_midia: string | null
           user_id: string
         }
         Insert: {
+          agendado_para?: string | null
+          concluido_em?: string | null
           created_at?: string
           data_fim?: string | null
           data_inicio?: string | null
+          entregues?: number | null
           enviados?: number
           falhas?: number
           horario_fim?: string
           horario_inicio?: string
           id?: string
+          iniciado_em?: string | null
+          instancias_ids?: string[] | null
           intervalo_max?: number
           intervalo_min?: number
+          legenda_midia?: string | null
+          limite_dia_instancia?: number | null
+          limite_erros_consecutivos?: number | null
           lista_id?: string | null
           mensagem_template?: string | null
           nome: string
           pausa_a_cada?: number
+          pausa_bloqueios_detectados?: boolean | null
           pausa_duracao?: number
+          pausa_erros_consecutivos?: boolean | null
+          pausa_fins_semana?: boolean | null
+          perfil_velocidade?: string | null
+          respondidos?: number | null
           status?: string
+          tipo_midia?: string | null
           total_leads?: number
           updated_at?: string
+          url_midia?: string | null
           user_id: string
         }
         Update: {
+          agendado_para?: string | null
+          concluido_em?: string | null
           created_at?: string
           data_fim?: string | null
           data_inicio?: string | null
+          entregues?: number | null
           enviados?: number
           falhas?: number
           horario_fim?: string
           horario_inicio?: string
           id?: string
+          iniciado_em?: string | null
+          instancias_ids?: string[] | null
           intervalo_max?: number
           intervalo_min?: number
+          legenda_midia?: string | null
+          limite_dia_instancia?: number | null
+          limite_erros_consecutivos?: number | null
           lista_id?: string | null
           mensagem_template?: string | null
           nome?: string
           pausa_a_cada?: number
+          pausa_bloqueios_detectados?: boolean | null
           pausa_duracao?: number
+          pausa_erros_consecutivos?: boolean | null
+          pausa_fins_semana?: boolean | null
+          perfil_velocidade?: string | null
+          respondidos?: number | null
           status?: string
+          tipo_midia?: string | null
           total_leads?: number
           updated_at?: string
+          url_midia?: string | null
           user_id?: string
         }
         Relationships: []
@@ -1107,6 +1152,30 @@ export type Database = {
           id?: string
           mensagem?: string
           titulo?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      tags: {
+        Row: {
+          cor: string | null
+          created_at: string | null
+          id: string
+          nome: string
+          user_id: string
+        }
+        Insert: {
+          cor?: string | null
+          created_at?: string | null
+          id?: string
+          nome: string
+          user_id: string
+        }
+        Update: {
+          cor?: string | null
+          created_at?: string | null
+          id?: string
+          nome?: string
           user_id?: string
         }
         Relationships: []

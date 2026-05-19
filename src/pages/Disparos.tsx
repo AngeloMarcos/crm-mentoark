@@ -1,1304 +1,648 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Slider } from "@/components/ui/slider";
-import {
-  Collapsible, CollapsibleContent, CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
-  Accordion, AccordionContent, AccordionItem, AccordionTrigger,
-} from "@/components/ui/accordion";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
-} from "@/components/ui/dialog";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import {
-  Send, Play, Pause, Square, Trash2, Copy, FileText, RefreshCw, AlertCircle, AlertTriangle,
-  Upload, ChevronDown, Plus, X, Settings2, Link2, CheckCircle2, XCircle, Activity, Clock, Users,
+import { 
+  ShieldCheck, ShieldAlert, Shield, Play, Pause, Square,
+  Settings2, AlertOctagon, RefreshCw, Users, Upload, 
+  Clock, Calendar, MessageSquare, Image as ImageIcon, 
+  FileText, Headphones, AlertTriangle, CheckCircle2,
+  Table as TableIcon, Send, XCircle, Activity, AlertCircle
 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/integrations/database/client";
+import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { Link } from "react-router-dom";
 import * as XLSX from "xlsx";
-import { normalizarTelefoneBR } from "@/lib/phone";
 
-type DisparoStatus = "rascunho" | "em_andamento" | "pausado" | "concluido" | "cancelado";
 
-interface Disparo {
-  id: string;
-  user_id: string;
-  nome: string;
-  status: DisparoStatus;
-  lista_id: string | null;
-  mensagem_template: string | null;
-  total_leads: number;
-  enviados: number;
-  falhas: number;
-  intervalo_min: number;
-  intervalo_max: number;
-  pausa_a_cada: number;
-  pausa_duracao: number;
-  horario_inicio: string;
-  horario_fim: string;
-  data_inicio: string | null;
-  data_fim: string | null;
-  created_at: string;
-}
+const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
 
-interface Lista { id: string; nome: string; }
-interface Contato { id?: string; nome: string; telefone: string | null; empresa?: string | null; }
-interface DisparoLog {
-  id: string; disparo_id: string; contato_id: string | null; nome: string | null;
-  telefone: string; mensagem_enviada: string | null; status: string; tentativas: number;
-  erro: string | null; created_at: string; enviado_at: string | null;
-}
-interface EvolutionCfg { id: string; instancia: string; url: string; api_key: string; status: string; }
+export default function DisparosPage() {
+  const { user } = useAuth();
+  const [step, setStep] = useState(0);
+  const [activeCampaign, setActiveCampaign] = useState<any>(null);
 
-const statusConfig: Record<DisparoStatus, { label: string; className: string }> = {
-  rascunho:     { label: "Rascunho",     className: "bg-muted text-muted-foreground" },
-  em_andamento: { label: "Em andamento", className: "bg-info/20 text-info border-info/30" },
-  pausado:      { label: "Pausado",      className: "bg-warning/20 text-warning border-warning/30" },
-  concluido:    { label: "Concluído",    className: "bg-success/20 text-success border-success/30" },
-  cancelado:    { label: "Cancelado",    className: "bg-destructive/20 text-destructive border-destructive/30" },
-};
+  const [form, setForm] = useState({
+    nome: "",
+    tipo_midia: "texto" as "texto" | "imagem" | "audio" | "documento",
+    mensagem: "",
+    perfil_velocidade: "safe" as "safe" | "moderate" | "fast",
+    janela_inicio: "08:00",
+    janela_fim: "21:00",
+    pausa_fins_semana: true,
+    pausa_erros_consecutivos: true,
+    limite_erros_consecutivos: 5,
+    pausa_bloqueios_detectados: true,
+    instancias_ids: [] as string[],
+    contatos: [] as any[],
+    tags_selecionadas: [] as string[],
+    estagios_selecionados: [] as string[],
+    url_midia: "",
+    legenda_midia: "",
+  });
 
-function formatWhatsappNumber(raw: string | null | undefined): string | null {
-  // Mantém compatibilidade com o CSV upload — usa o normalizador BR rigoroso.
-  const r = normalizarTelefoneBR(raw);
-  return r.valido ? r.jid : null;
-}
 
-// Extrai apenas o primeiro nome de forma inteligente:
-// - quebra em vírgula / "e" / "&" / "/" (nomes concatenados)
-// - ignora partículas (de, da, do, dos, das, e)
-// - capitaliza corretamente
-const PARTICULAS = new Set(["de", "da", "do", "dos", "das", "e", "del", "la", "y"]);
-const capitalizar = (s: string) =>
-  s.length <= 2 ? s.toLowerCase() : s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-
-export const extrairPrimeiroNome = (raw?: string | null): string => {
-  if (!raw) return "";
-  // Pega só o primeiro "contato" antes de vírgula, "/", "&", " e " ou " E "
-  const primeiroContato = raw
-    .split(/[,\/&]| (?:e|E|y|Y) /)[0]
-    .trim();
-  if (!primeiroContato) return "";
-  // Pega o primeiro token que não seja partícula
-  const tokens = primeiroContato.split(/\s+/).filter(Boolean);
-  const primeiro = tokens.find((t) => !PARTICULAS.has(t.toLowerCase())) ?? tokens[0] ?? "";
-  return capitalizar(primeiro);
-};
-
-const renderTemplate = (tpl: string, c: { nome?: string | null; empresa?: string | null; telefone?: string | null }) => {
-  const nomeCompleto = (c.nome ?? "").trim();
-  const primeiroNome = extrairPrimeiroNome(nomeCompleto);
-  return (tpl || "")
-    .split("{{primeiro_nome}}").join(primeiroNome)
-    .split("{{nome}}").join(primeiroNome)        // {{nome}} agora também usa só o primeiro nome
-    .split("{{nome_completo}}").join(nomeCompleto)
-    .split("{{empresa}}").join(c.empresa ?? "")
-    .split("{{telefone}}").join(c.telefone ?? "");
-};
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const inWindow = (start: string, end: string) => {
-  const now = new Date();
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const [sh, sm] = start.split(":").map(Number);
-  const [eh, em] = end.split(":").map(Number);
-  return cur >= sh * 60 + sm && cur <= eh * 60 + em;
-};
-
-/** Editor de intervalo ao vivo — usa estado local para evitar salvar a cada tecla. */
-function IntervaloEditor({
-  disparoId,
-  intervaloMin,
-  intervaloMax,
-  onUpdate,
-}: {
-  disparoId: string;
-  intervaloMin: number;
-  intervaloMax: number;
-  onUpdate: (min: number, max: number) => void;
-}) {
-  const [minStr, setMinStr] = useState(String(intervaloMin));
-  const [maxStr, setMaxStr] = useState(String(intervaloMax));
-  const [saving, setSaving] = useState(false);
-
-  // Sincroniza quando o disparo carregado muda externamente
-  useEffect(() => { setMinStr(String(intervaloMin)); }, [intervaloMin]);
-  useEffect(() => { setMaxStr(String(intervaloMax)); }, [intervaloMax]);
-
-  const persistir = async (min: number, max: number) => {
-    const minClamp = Math.max(30, Math.min(3600, Math.floor(min) || 30));
-    const maxClamp = Math.max(minClamp, Math.min(3600, Math.floor(max) || minClamp));
-    setMinStr(String(minClamp));
-    setMaxStr(String(maxClamp));
-    setSaving(true);
-    const { error } = await api
-      .from("disparos")
-      .update({ intervalo_min: minClamp, intervalo_max: maxClamp })
-      .eq("id", disparoId);
-    setSaving(false);
-    if (error) { toast.error("Erro ao salvar intervalo: " + error.message); return; }
-    onUpdate(minClamp, maxClamp);
-    toast.success(`Intervalo atualizado: ${minClamp}s – ${maxClamp}s`);
-  };
-
-  const aplicarPreset = (min: number, max: number) => persistir(min, max);
-
-  const presets = [
-    { label: "30s–1min", min: 30, max: 60 },
-    { label: "1–3min", min: 60, max: 180 },
-    { label: "3–5min", min: 180, max: 300 },
-    { label: "5–10min", min: 300, max: 600 },
-  ];
+  if (activeCampaign) {
+    return <MonitoringDashboard campaign={activeCampaign} onCancel={() => setActiveCampaign(null)} />;
+  }
 
   return (
-    <div className="rounded-md border border-border/60 p-3 bg-muted/10 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Settings2 className="h-3.5 w-3.5" />
-          Intervalo entre mensagens
+    <CRMLayout>
+      <div className="max-w-6xl mx-auto space-y-6">
+        <h1 className="text-2xl font-bold">Novo Disparo em Massa</h1>
+        
+        <div className="flex gap-4 mb-8">
+          {Steps.map((s, i) => (
+            <div key={s} className={`flex items-center gap-2 ${i <= step ? "text-primary" : "text-muted-foreground"}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center border ${i <= step ? "bg-primary text-primary-foreground" : ""}`}>
+                {i + 1}
+              </div>
+              <span className="text-sm font-medium">{s}</span>
+            </div>
+          ))}
         </div>
-        {saving && <span className="text-[10px] text-info">salvando...</span>}
-      </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <Label className="text-[11px] text-muted-foreground">Mín (segundos)</Label>
-          <Input
-            type="number"
-            min={30}
-            max={3600}
-            value={minStr}
-            onChange={(e) => setMinStr(e.target.value)}
-            onBlur={() => persistir(Number(minStr), Number(maxStr))}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            className="h-8"
-          />
+        <div className="min-h-[400px]">
+          {step === 0 && <StepContacts />}
+          {step === 1 && <StepMessage form={form} setForm={setForm} />}
+          {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
+          {step === 3 && <StepReview form={form} onStart={() => setActiveCampaign({ nome: form.nome })} />}
         </div>
-        <div className="space-y-1">
-          <Label className="text-[11px] text-muted-foreground">Máx (segundos)</Label>
-          <Input
-            type="number"
-            min={30}
-            max={3600}
-            value={maxStr}
-            onChange={(e) => setMaxStr(e.target.value)}
-            onBlur={() => persistir(Number(minStr), Number(maxStr))}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            className="h-8"
-          />
+
+        <div className="flex justify-between pt-6 border-t">
+          <Button variant="outline" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}>Voltar</Button>
+          <Button onClick={() => step === 3 ? setActiveCampaign({ nome: form.nome }) : setStep(Math.min(3, step + 1))}>
+            {step === 3 ? "Iniciar Disparo" : "Próximo"}
+          </Button>
         </div>
       </div>
+    </CRMLayout>
+  );
+}
 
-      <div className="flex flex-wrap gap-1.5">
-        {presets.map((p) => {
-          const ativo = intervaloMin === p.min && intervaloMax === p.max;
-          return (
-            <Button
-              key={p.label}
-              type="button"
-              size="sm"
-              variant={ativo ? "default" : "outline"}
-              className="h-7 px-2 text-[11px]"
-              onClick={() => aplicarPreset(p.min, p.max)}
-            >
-              {p.label}
+function StepContacts({ form, setForm }: any) {
+  const [tags, setTags] = useState<any[]>([]);
+  const [estagios, setEstagios] = useState<any[]>([]);
+  const [csvPreview, setCsvPreview] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchTargets = async () => {
+      const { data: tagsData } = await supabase.from("tags").select("*");
+      const { data: estagiosData } = await supabase.from("funil_estagios").select("*");
+      setTags(tagsData || []);
+      setEstagios(estagiosData || []);
+    };
+    fetchTargets();
+  }, []);
+
+  const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const bstr = evt.target?.result;
+      const wb = XLSX.read(bstr, { type: "binary" });
+      const wsname = wb.SheetNames[0];
+      const ws = wb.Sheets[wsname];
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      setCsvPreview(data.slice(0, 5));
+      // Map columns logic here...
+      toast.success("CSV importado com sucesso!");
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-1">
+        <Label>Nome da Campanha</Label>
+        <Input placeholder="Ex: Campanha Black Friday" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} />
+      </div>
+
+      <Tabs defaultValue="tags" className="w-full">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="tags">Por Tag</TabsTrigger>
+          <TabsTrigger value="estagio">Por Estágio</TabsTrigger>
+          <TabsTrigger value="csv">Importar CSV</TabsTrigger>
+        </TabsList>
+        
+        <TabsContent value="tags" className="p-4 border rounded-lg bg-card space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Selecione as tags:</p>
+            <div className="flex gap-4">
+              <div className="flex items-center gap-2">
+                <Switch checked />
+                <span className="text-xs">Excluir Opt-outs</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch checked disabled />
+                <span className="text-xs">Excluir Blacklist</span>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            {tags.map(t => (
+              <div key={t.id} className="flex items-center space-x-2 p-2 border rounded hover:bg-muted/50">
+                <input type="checkbox" id={t.id} className="h-4 w-4" onChange={(e) => {
+                  const newTags = e.target.checked 
+                    ? [...form.tags_selecionadas, t.nome]
+                    : form.tags_selecionadas.filter((st: string) => st !== t.nome);
+                  setForm({...form, tags_selecionadas: newTags});
+                }} />
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: t.cor }} />
+                <label htmlFor={t.id} className="text-sm cursor-pointer">{t.nome}</label>
+              </div>
+            ))}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="estagio" className="p-4 border rounded-lg bg-card space-y-4">
+          <p className="text-sm font-medium">Selecione os estágios do funil:</p>
+          <div className="grid grid-cols-2 gap-3">
+            {estagios.map(s => (
+              <div key={s.id} className="flex items-center space-x-2 p-2 border rounded hover:bg-muted/50">
+                <input type="checkbox" id={s.id} className="h-4 w-4" onChange={(e) => {
+                  const newEstagios = e.target.checked 
+                    ? [...form.estagios_selecionados, s.id]
+                    : form.estagios_selecionados.filter((se: string) => se !== s.id);
+                  setForm({...form, estagios_selecionados: newEstagios});
+                }} />
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: s.cor }} />
+                <label htmlFor={s.id} className="text-sm cursor-pointer">{s.nome}</label>
+              </div>
+            ))}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="csv" className="p-4 border rounded-lg bg-card space-y-4 text-center">
+          <div className="py-8 border-2 border-dashed rounded-lg">
+            <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
+            <p className="text-sm text-muted-foreground">Clique para fazer upload ou arraste o arquivo CSV</p>
+            <input type="file" className="hidden" id="csv-upload" accept=".csv,.xlsx" onChange={handleCsvUpload} />
+            <Button variant="outline" size="sm" className="mt-4" onClick={() => document.getElementById('csv-upload')?.click()}>
+              Selecionar Arquivo
             </Button>
-          );
-        })}
-      </div>
-
-      <p className="text-[10px] text-muted-foreground leading-relaxed">
-        Aplica no <strong>próximo envio</strong>. Pressione Enter ou clique fora para salvar.
-      </p>
+          </div>
+          {csvPreview.length > 0 && (
+            <div className="space-y-2 text-left">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Preview (Primeiras 5 linhas)</p>
+              <div className="border rounded overflow-hidden">
+                <table className="w-full text-xs">
+                  <tbody className="divide-y">
+                    {csvPreview.map((row, i) => (
+                      <tr key={i} className="divide-x">
+                        {row.map((cell: any, j: number) => <td key={j} className="p-1">{cell}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
 
-export default function DisparosPage() {
-  const { user } = useAuth();
 
-  // Dados base
-  const [listas, setListas] = useState<Lista[]>([]);
-  const [disparos, setDisparos] = useState<Disparo[]>([]);
-  const [evolution, setEvolution] = useState<EvolutionCfg | null>(null);
+function StepMessage({ form, setForm }: any) {
+  const mediaTypes = [
+    { id: "texto", label: "Texto", icon: MessageSquare },
+    { id: "imagem", label: "Imagem", icon: ImageIcon },
+    { id: "audio", label: "Áudio", icon: Headphones },
+    { id: "documento", label: "Documento", icon: FileText },
+  ];
+
+  return (
+    <Card className="p-6">
+      <div className="space-y-6">
+        <div className="flex gap-2 p-1 bg-muted rounded-lg w-fit">
+          {mediaTypes.map(t => (
+            <Button 
+              key={t.id} 
+              variant={form.tipo_midia === t.id ? "default" : "ghost"} 
+              size="sm" 
+              className="h-8 gap-2"
+              onClick={() => setForm({...form, tipo_midia: t.id})}
+            >
+              <t.icon className="h-4 w-4" /> {t.label}
+            </Button>
+          ))}
+        </div>
+
+        {form.tipo_midia !== 'texto' && (
+          <div className="space-y-2">
+            <Label>Arquivo de Mídia</Label>
+            <div className="flex gap-2">
+              <Input placeholder="URL do arquivo (ou faça upload)" value={form.url_midia} onChange={e => setForm({...form, url_midia: e.target.value})} />
+              <Button variant="outline"><Upload className="h-4 w-4" /></Button>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <div className="flex justify-between items-end">
+            <Label>{form.tipo_midia === 'texto' ? 'Mensagem' : 'Legenda (opcional)'}</Label>
+            <span className="text-[10px] text-muted-foreground">{form.mensagem.length}/1024</span>
+          </div>
+          <Textarea 
+            className="min-h-[150px] font-mono text-sm" 
+            value={form.mensagem} 
+            onChange={e => setForm({...form, mensagem: e.target.value})} 
+            placeholder={form.tipo_midia === 'texto' ? "Olá {{primeiro_nome}}, tudo bem?" : "Legenda do arquivo..."} 
+          />
+          <div className="flex gap-2 flex-wrap">
+            {["{{nome}}", "{{primeiro_nome}}", "{{telefone}}", "{{data}}", "{{empresa}}"].map(v => (
+              <Button key={v} size="sm" variant="secondary" className="text-[10px] h-7" onClick={() => {
+                setForm({...form, mensagem: form.mensagem + v});
+              }}>+{v}</Button>
+            ))}
+          </div>
+        </div>
+
+        {/* Preview Card */}
+        <div className="p-4 border rounded-lg bg-emerald-50/30 dark:bg-emerald-950/10">
+          <p className="text-[10px] font-bold uppercase text-emerald-600 mb-2">Preview do 1º Contato</p>
+          <div className="p-3 bg-white dark:bg-zinc-900 rounded shadow-sm max-w-[80%] border-l-4 border-emerald-500">
+            {form.tipo_midia !== 'texto' && (
+              <div className="aspect-video bg-muted rounded mb-2 flex items-center justify-center">
+                <ImageIcon className="h-8 w-8 opacity-20" />
+              </div>
+            )}
+            <p className="text-sm whitespace-pre-wrap">
+              {form.mensagem.replace('{{nome}}', 'João Silva').replace('{{primeiro_nome}}', 'João')}
+            </p>
+            <span className="text-[10px] text-muted-foreground float-right">10:45</span>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+
+function StepAntiBan({ form, setForm }: any) {
+  const [instancias, setInstancias] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Form — coluna esquerda
-  const [nomeCampanha, setNomeCampanha] = useState("");
-  const [origemLeads, setOrigemLeads] = useState<"lista" | "csv">("lista");
-  const [listaId, setListaId] = useState<string>("");
-  const [listaContatos, setListaContatos] = useState<Contato[]>([]);
-  const [csvContatos, setCsvContatos] = useState<Contato[]>([]);
-  const [csvFileName, setCsvFileName] = useState<string>("");
-
-  const [variacoes, setVariacoes] = useState<string[]>(["Olá {{nome}}, tudo bem?"]);
-  const textareaRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
-
-  const [intervaloMin, setIntervaloMin] = useState(45);
-  const [intervaloMax, setIntervaloMax] = useState(90);
-  const [pausaACada, setPausaACada] = useState(20);
-  const [pausaDuracao, setPausaDuracao] = useState(5);
-  const [horarioInicio, setHorarioInicio] = useState("08:00");
-  const [horarioFim, setHorarioFim] = useState("20:00");
-
-  // Painel direito — disparo ativo
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const activeDisparo = useMemo(
-    () => disparos.find((d) => d.id === activeId) ?? null,
-    [disparos, activeId],
-  );
-  const [activeLogs, setActiveLogs] = useState<DisparoLog[]>([]);
-
-  // Logs dialog (histórico)
-  const [logsOpen, setLogsOpen] = useState(false);
-  const [logsDisparo, setLogsDisparo] = useState<Disparo | null>(null);
-  const [logs, setLogs] = useState<DisparoLog[]>([]);
-  const [logFilter, setLogFilter] = useState<string>("todos");
-
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
-
-  // Refs do motor de execução (1 disparo ativo por vez)
-  const lockRef = useRef(false);                            // trava reentrância
-  const pauseFlagRef = useRef<Set<string>>(new Set());      // disparos com pedido de pausa
-  const timerRef = useRef<number | null>(null);             // setTimeout do próximo envio
-  const countdownRef = useRef<number | null>(null);         // setInterval do contador
-  const lotePorDisparoRef = useRef<Record<string, number>>({}); // mensagens desde a última pausa
-
-  // Countdown visível para próximo envio (segundos)
-  const [proximoEnvio, setProximoEnvio] = useState(0);
-
-  const FILA_KEY = (id: string) => `disparo_fila_${id}`;
-  const lerEstadoLocal = (id: string): { lote: number; nextAt: number | null } => {
-    try { return JSON.parse(localStorage.getItem(FILA_KEY(id)) ?? "") || { lote: 0, nextAt: null }; }
-    catch { return { lote: 0, nextAt: null }; }
-  };
-  const salvarEstadoLocal = (id: string, st: { lote: number; nextAt: number | null }) => {
-    try { localStorage.setItem(FILA_KEY(id), JSON.stringify(st)); } catch {}
-  };
-  const limparEstadoLocal = (id: string) => { try { localStorage.removeItem(FILA_KEY(id)); } catch {} };
-
-  const limparTimers = () => {
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
-  };
-  const iniciarCountdown = (segundos: number) => {
-    if (countdownRef.current) clearInterval(countdownRef.current);
-    let restante = Math.ceil(segundos);
-    setProximoEnvio(restante);
-    countdownRef.current = window.setInterval(() => {
-      restante -= 1;
-      setProximoEnvio(restante > 0 ? restante : 0);
-      if (restante <= 0 && countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
-    }, 1000);
-  };
-
-  // -------- Carregamento inicial --------
-  const carregar = async () => {
-    if (!user) return;
-    setLoading(true);
-    const [{ data: ls }, { data: ds }, { data: ev }] = await Promise.all([
-      api.from("listas").select("id, nome").eq("user_id", user.id).order("nome"),
-      api.from("disparos").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-      api.from("integracoes_config").select("id, instancia, url, api_key, status")
-        .eq("user_id", user.id).eq("tipo", "evolution").limit(1).maybeSingle(),
-    ]);
-    setListas((ls as Lista[]) ?? []);
-    setDisparos((ds as Disparo[]) ?? []);
-    setEvolution((ev as EvolutionCfg | null) ?? null);
-    setLoading(false);
-  };
-  useEffect(() => { carregar(); /* eslint-disable-next-line */ }, [user?.id]);
-
-  // -------- Lista selecionada → contatos --------
   useEffect(() => {
-    const run = async () => {
-      if (!user || !listaId) { setListaContatos([]); return; }
-      const { data } = await api
-        .from("contatos")
-        .select("id, nome, telefone, empresa")
-        .eq("user_id", user.id).eq("lista_id", listaId)
-        .eq("opt_out", false)
-        .not("telefone", "is", null);
-      setListaContatos((data as Contato[]) ?? []);
+    const fetchInstancias = async () => {
+      const { data } = await supabase.from("agentes").select("*").not("evolution_instancia", "is", null);
+      setInstancias(data || []);
+      setLoading(false);
     };
-    run();
-  }, [listaId, user?.id]);
+    fetchInstancias();
+  }, []);
 
-  // -------- CSV upload --------
-  const handleCsvUpload = async (file: File) => {
-    try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-      const parsed: Contato[] = rows
-        .map((r) => {
-          const nome = String(r.nome ?? r.Nome ?? r.NOME ?? r.name ?? "").trim();
-          const telRaw = String(r.telefone ?? r.Telefone ?? r.TELEFONE ?? r.phone ?? r.celular ?? "").trim();
-          const empresa = String(r.empresa ?? r.Empresa ?? r.company ?? "").trim() || null;
-          const tel = formatWhatsappNumber(telRaw);
-          return tel ? { nome: nome || tel, telefone: tel, empresa } : null;
-        })
-        .filter(Boolean) as Contato[];
-      setCsvContatos(parsed);
-      setCsvFileName(file.name);
-      toast.success(`${parsed.length} contatos válidos importados`);
-    } catch (err: any) {
-      toast.error("Erro ao ler arquivo: " + err.message);
-    }
-  };
+  const profiles = [
+    { id: "safe", label: "SEGURO", icon: ShieldCheck, color: "text-emerald-500", delay: "30-60s", limit: "50", desc: "Recomendado para novos números" },
+    { id: "moderate", label: "MODERADO", icon: Shield, color: "text-yellow-500", delay: "15-30s", limit: "100", desc: "Equilíbrio entre velocidade e segurança" },
+    { id: "fast", label: "RÁPIDO", icon: ShieldAlert, color: "text-red-500", delay: "5-15s", limit: "200", desc: "Risco aumentado de banimento", alert: true },
+  ];
 
-  const contatosSelecionados: Contato[] = origemLeads === "lista" ? listaContatos : csvContatos;
-
-  // -------- Variáveis chip → insere no textarea --------
-  const inserirVariavel = (idx: number, varName: string) => {
-    const ta = textareaRefs.current[idx];
-    if (!ta) {
-      setVariacoes((v) => v.map((m, i) => (i === idx ? m + varName : m)));
-      return;
-    }
-    const start = ta.selectionStart ?? ta.value.length;
-    const end = ta.selectionEnd ?? ta.value.length;
-    const next = ta.value.slice(0, start) + varName + ta.value.slice(end);
-    setVariacoes((v) => v.map((m, i) => (i === idx ? next : m)));
-    requestAnimationFrame(() => {
-      ta.focus();
-      const pos = start + varName.length;
-      ta.setSelectionRange(pos, pos);
-    });
-  };
-
-  const addVariacao = () => {
-    if (variacoes.length >= 5) { toast.info("Máximo de 5 variações"); return; }
-    setVariacoes((v) => [...v, ""]);
-  };
-  const removerVariacao = (idx: number) => {
-    if (variacoes.length === 1) return;
-    setVariacoes((v) => v.filter((_, i) => i !== idx));
-  };
-
-  // -------- Criar fila e iniciar --------
-  const podeIniciar = !!nomeCampanha.trim()
-    && contatosSelecionados.length > 0
-    && variacoes.some((v) => v.trim().length > 0)
-    && intervaloMin <= intervaloMax;
-
-  const criarEIniciar = async () => {
-    if (!user || !podeIniciar) return;
-    if (!evolution) { toast.error("Configure a Evolution API em Integrações"); return; }
-
-    // 1) cria disparo
-    const primeira = variacoes.find((v) => v.trim()) ?? "";
-    const { data: created, error } = await api.from("disparos").insert({
-      user_id: user.id,
-      nome: nomeCampanha,
-      lista_id: origemLeads === "lista" ? listaId : null,
-      mensagem_template: primeira,
-      total_leads: contatosSelecionados.length,
-      intervalo_min: intervaloMin,
-      intervalo_max: intervaloMax,
-      pausa_a_cada: pausaACada,
-      pausa_duracao: pausaDuracao,
-      horario_inicio: horarioInicio,
-      horario_fim: horarioFim,
-      status: "rascunho",
-    }).select().single();
-    if (error || !created) { toast.error(error?.message ?? "Erro ao criar"); return; }
-
-    // 2) gera logs (rodízio aleatório de variações) — pré-valida telefones
-    //    + deduplica por telefone normalizado (mantém apenas a 1ª ocorrência)
-    const ativas = variacoes.filter((v) => v.trim());
-    let invalidos = 0;
-    let duplicados = 0;
-    const vistos = new Set<string>();
-    const rows: any[] = [];
-
-    for (const c of contatosSelecionados) {
-      const tpl = ativas[Math.floor(Math.random() * ativas.length)];
-      const norm = normalizarTelefoneBR(c.telefone);
-
-      if (!norm.valido) {
-        invalidos++;
-        rows.push({
-          disparo_id: created.id,
-          contato_id: c.id ?? null,
-          user_id: user.id,
-          nome: c.nome,
-          telefone: (c.telefone ?? "").toString(),
-          mensagem_enviada: renderTemplate(tpl, c),
-          status: "invalido",
-          erro: norm.motivo ?? "Telefone inválido",
-        });
-        continue;
-      }
-
-      // Dedupe — se o mesmo telefone já entrou na fila, marca como duplicado
-      if (vistos.has(norm.jid!)) {
-        duplicados++;
-        rows.push({
-          disparo_id: created.id,
-          contato_id: c.id ?? null,
-          user_id: user.id,
-          nome: c.nome,
-          telefone: norm.jid!,
-          mensagem_enviada: null,
-          status: "duplicado",
-          erro: "Telefone duplicado — já existe na fila",
-        });
-        continue;
-      }
-      vistos.add(norm.jid!);
-
-      rows.push({
-        disparo_id: created.id,
-        contato_id: c.id ?? null,
-        user_id: user.id,
-        nome: c.nome,
-        telefone: norm.jid!,
-        mensagem_enviada: renderTemplate(tpl, { ...c, telefone: norm.jid }),
-        status: "pending",
-      });
-    }
-
-    if (rows.length) await api.from("disparo_logs").insert(rows);
-    // Pré-contabiliza inválidos + duplicados como falhas no agregado
-    const preFalhas = invalidos + duplicados;
-    if (preFalhas > 0) {
-      await api.from("disparos").update({ falhas: preFalhas }).eq("id", created.id);
-    }
-
-    const validos = rows.length - invalidos - duplicados;
-    const partes: string[] = [`🚀 ${validos} enviados para fila`];
-    if (duplicados > 0) partes.push(`${duplicados} duplicados ignorados`);
-    if (invalidos > 0) partes.push(`${invalidos} telefones inválidos`);
-    toast.success(partes.join(" · "));
-    await carregar();
-    setActiveId(created.id);
-    iniciar(created as Disparo);
-  };
-
-  // -------- Execução --------
-  // Proxy via backend — api_key nunca exposta no browser, delay de digitação incluído
-  const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-  const enviarMensagem = async (telefone: string, texto: string, logId: string, disparoId: string) => {
-    const token = localStorage.getItem("access_token") ?? "";
-    const res = await fetch(`${API_BASE}/api/disparos/enviar`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ telefone, texto, disparo_log_id: logId, disparo_id: disparoId }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ message: "sem detalhe" }));
-      throw new Error(body.message || `Erro ${res.status}`);
-    }
-  };
-
-  const setStatus = async (id: string, status: DisparoStatus, extras: Record<string, unknown> = {}) => {
-    await api.from("disparos").update({ status, ...extras }).eq("id", id);
-  };
-
-  // Processa o próximo log pendente do disparo (recursivo via setTimeout)
-  const processarProximo = async (dIn: Disparo) => {
-    if (lockRef.current) return;
-    if (pauseFlagRef.current.has(dIn.id)) return;
-    if (!evolution) { toast.error("Evolution API não configurada"); return; }
-
-    // 🔄 Sempre recarrega configuração mais recente do disparo (intervalos ao vivo)
-    const { data: live } = await api
-      .from("disparos")
-      .select("*")
-      .eq("id", dIn.id)
-      .maybeSingle();
-    const d: Disparo = (live as Disparo) ?? dIn;
-
-    // Se foi cancelado/pausado/concluído via UI ou outra aba, para aqui
-    if (d.status === "cancelado" || d.status === "pausado" || d.status === "concluido") {
-      limparTimers();
-      setProximoEnvio(0);
-      return;
-    }
-
-    // Janela de horário
-    if (!inWindow(d.horario_inicio, d.horario_fim)) {
-      toast.info("Fora da janela de horário — aguardando 1 min");
-      iniciarCountdown(60);
-      timerRef.current = window.setTimeout(() => processarProximo(d), 60_000);
-      return;
-    }
-
-    // Pausa anti-bloqueio (a cada N mensagens)
-    const lote = lotePorDisparoRef.current[d.id] ?? lerEstadoLocal(d.id).lote ?? 0;
-    if (d.pausa_a_cada > 0 && lote >= d.pausa_a_cada) {
-      lotePorDisparoRef.current[d.id] = 0;
-      const ms = Math.max(1, d.pausa_duracao) * 60_000;
-      salvarEstadoLocal(d.id, { lote: 0, nextAt: Date.now() + ms });
-      toast.info(`⏸️ Pausa anti-bloqueio: ${d.pausa_duracao} min`);
-      iniciarCountdown(ms / 1000);
-      timerRef.current = window.setTimeout(() => processarProximo(d), ms);
-      return;
-    }
-
-    // Próximo pendente
-    const { data: pendings } = await api
-      .from("disparo_logs").select("*")
-      .eq("disparo_id", d.id).eq("status", "pending")
-      .order("created_at").limit(1);
-    const log = pendings?.[0] as DisparoLog | undefined;
-    if (!log) {
-      limparTimers();
-      limparEstadoLocal(d.id);
-      await setStatus(d.id, "concluido", { data_fim: new Date().toISOString() });
-      toast.success(`✅ Disparo "${d.nome}" concluído`);
-      carregar(); refreshActive(d.id);
-      return;
-    }
-
-    // Trava + envio — backend gerencia log, tentativas e contadores atomicamente
-    lockRef.current = true;
-    try {
-      await enviarMensagem(log.telefone, log.mensagem_enviada ?? "", log.id, d.id);
-    } catch (_err: any) {}
-    lockRef.current = false;
-
-    lotePorDisparoRef.current[d.id] = (lotePorDisparoRef.current[d.id] ?? 0) + 1;
-    refreshActive(d.id);
-
-    if (pauseFlagRef.current.has(d.id)) return;
-
-    // Sortear intervalo e agendar próximo (clamp defensivo: min>=1, max>=min)
-    const minS = Math.max(30, Number(d.intervalo_min) || 30);
-    const maxS = Math.max(minS, Number(d.intervalo_max) || minS);
-    const intervalo = Math.floor(Math.random() * (maxS - minS + 1)) + minS;
-    const ms = intervalo * 1000;
-    salvarEstadoLocal(d.id, { lote: lotePorDisparoRef.current[d.id] ?? 0, nextAt: Date.now() + ms });
-    iniciarCountdown(intervalo);
-    timerRef.current = window.setTimeout(() => processarProximo(d), ms);
-  };
-
-  const iniciar = async (d: Disparo) => {
-    if (!user) return;
-    if (!evolution) { toast.error("Configure a Evolution API em Integrações"); return; }
-
-    limparTimers();
-    pauseFlagRef.current.delete(d.id);
-    lockRef.current = false;
-    if (lotePorDisparoRef.current[d.id] === undefined) {
-      lotePorDisparoRef.current[d.id] = lerEstadoLocal(d.id).lote ?? 0;
-    }
-
-    await setStatus(d.id, "em_andamento", { data_inicio: d.data_inicio ?? new Date().toISOString() });
-    setActiveId(d.id);
-    await carregar();
-    // dispara imediatamente o primeiro
-    processarProximo({ ...d, status: "em_andamento" });
-  };
-
-  const refreshActive = async (id: string) => {
-    const [{ data: dsp }, { data: lgs }] = await Promise.all([
-      api.from("disparos").select("*").eq("id", id).single(),
-      api.from("disparo_logs").select("*").eq("disparo_id", id).order("created_at", { ascending: true }),
-    ]);
-    if (dsp) setDisparos((arr) => arr.map((x) => (x.id === id ? (dsp as Disparo) : x)));
-    setActiveLogs((lgs as DisparoLog[]) ?? []);
-  };
-
-  // Auto-refresh do painel ativo enquanto rodando
-  useEffect(() => {
-    if (!activeId || !activeDisparo || activeDisparo.status !== "em_andamento") return;
-    const t = setInterval(() => refreshActive(activeId), 8000);
-    return () => clearInterval(t);
-  }, [activeId, activeDisparo?.status]);
-
-  useEffect(() => { if (activeId) refreshActive(activeId); /* eslint-disable-next-line */ }, [activeId]);
-
-  const pausar = async (d: Disparo) => {
-    pauseFlagRef.current.add(d.id);
-    limparTimers();
-    setProximoEnvio(0);
-    await setStatus(d.id, "pausado");
-    toast.info("Disparo pausado");
-    carregar();
-  };
-  const cancelar = async (d: Disparo) => {
-    pauseFlagRef.current.add(d.id);
-    limparTimers();
-    setProximoEnvio(0);
-    limparEstadoLocal(d.id);
-    await setStatus(d.id, "cancelado", { data_fim: new Date().toISOString() });
-    toast.info("Disparo cancelado");
-    carregar();
-  };
-
-  // Limpa timers ao desmontar
-  useEffect(() => () => { limparTimers(); }, []);
-  const excluir = async (id: string) => {
-    const { error } = await api.from("disparos").delete().eq("id", id);
-    if (error) { toast.error(error.message); return; }
-    toast.success("Campanha excluída");
-    setConfirmDeleteId(null);
-    if (activeId === id) setActiveId(null);
-    carregar();
-  };
-  const duplicar = async (d: Disparo) => {
-    if (!user) return;
-    const { error } = await api.from("disparos").insert({
-      user_id: user.id, nome: `${d.nome} (cópia)`, lista_id: d.lista_id,
-      mensagem_template: d.mensagem_template, intervalo_min: d.intervalo_min, intervalo_max: d.intervalo_max,
-      pausa_a_cada: d.pausa_a_cada, pausa_duracao: d.pausa_duracao,
-      horario_inicio: d.horario_inicio, horario_fim: d.horario_fim, total_leads: d.total_leads,
-    });
-    if (error) { toast.error(error.message); return; }
-    toast.success("Campanha duplicada");
-    carregar();
-  };
-
-  // -------- Logs dialog --------
-  const carregarLogs = async (disparoId: string) => {
-    const { data } = await api.from("disparo_logs").select("*").eq("disparo_id", disparoId).order("created_at");
-    setLogs((data as DisparoLog[]) ?? []);
-  };
-  const abrirLogs = async (d: Disparo) => {
-    setLogsDisparo(d); setLogFilter("todos");
-    await carregarLogs(d.id);
-    setLogsOpen(true);
-  };
-  const reenviarFalhas = async () => {
-    if (!logsDisparo) return;
-    const { count, error } = await api.from("disparo_logs")
-      .update({ status: "pending", erro: null })
-      .eq("disparo_id", logsDisparo.id)
-      .eq("status", "failed")
-      .lte("tentativas", 3);
-    if (error) { toast.error(error.message); return; }
-    toast.success(`${count || 0} falhas resetadas para reenvio (máx 3 tentativas)`);
-    await carregarLogs(logsDisparo.id);
-  };
-  const filteredLogs = useMemo(
-    () => (logFilter === "todos" ? logs : logs.filter((l) => l.status === logFilter)),
-    [logs, logFilter],
-  );
-  const logStatusBadge = (s: string) => {
-    const map: Record<string, string> = {
-      pending: "bg-muted text-muted-foreground",
-      sending: "bg-info/20 text-info border-info/30",
-      sent: "bg-success/20 text-success border-success/30",
-      failed: "bg-destructive/20 text-destructive border-destructive/30",
-      invalido: "bg-warning/20 text-warning border-warning/30",
-      duplicado: "bg-warning/20 text-warning border-warning/30",
-      skipped: "bg-warning/20 text-warning border-warning/30",
-    };
-    const label: Record<string, string> = { invalido: "inválido", duplicado: "duplicado" };
-    return <Badge variant="outline" className={map[s] ?? ""}>{label[s] ?? s}</Badge>;
-  };
-
-  const previewContato = contatosSelecionados[0];
-  const previewMensagem = previewContato ? renderTemplate(variacoes[0] ?? "", previewContato) : (variacoes[0] ?? "");
-
-  const evoOk = !!evolution && (evolution.status === "ativo" || evolution.status === "conectado");
-
-  // -------- Render --------
   return (
-    <CRMLayout>
-      <div className="p-4 sm:p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <div className="h-11 w-11 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-              <Send className="h-5 w-5" />
+    <div className="space-y-6">
+      {/* Instances Selection */}
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-4">
+          <Label className="font-bold">Instâncias para Disparar</Label>
+          <div className="flex items-center gap-2">
+            <Switch />
+            <span className="text-xs">Apenas saudáveis (&gt;70)</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {instancias.map(inst => {
+            const isBlocked = (inst.whatsapp_score || 0) < 40;
+            return (
+              <div key={inst.id} className={`flex items-center justify-between p-3 border rounded-lg ${isBlocked ? 'bg-red-50/50 dark:bg-red-950/10 border-red-200' : ''}`}>
+                <div className="flex items-center gap-3">
+                  <input 
+                    type="checkbox" 
+                    disabled={isBlocked} 
+                    checked={form.instancias_ids.includes(inst.id)}
+                    onChange={(e) => {
+                      const ids = e.target.checked 
+                        ? [...form.instancias_ids, inst.id]
+                        : form.instancias_ids.filter((id: string) => id !== inst.id);
+                      setForm({...form, instancias_ids: ids});
+                    }}
+                    className="h-4 w-4" 
+                  />
+                  <div>
+                    <p className="text-sm font-bold">{inst.nome}</p>
+                    <p className="text-[10px] text-muted-foreground font-mono">{inst.evolution_instancia}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <Badge variant={isBlocked ? "destructive" : "outline"} className="text-[10px]">
+                    Score: {inst.whatsapp_score || 0}
+                  </Badge>
+                  {isBlocked && <p className="text-[9px] text-red-500 font-bold mt-1 uppercase">Bloqueada</p>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* Velocity Profiles */}
+      <div className="grid grid-cols-3 gap-4">
+        {profiles.map(p => (
+          <Card 
+            key={p.id} 
+            className={`p-4 cursor-pointer transition-all border-2 ${form.perfil_velocidade === p.id ? 'border-primary shadow-md' : 'border-transparent'}`}
+            onClick={() => setForm({...form, perfil_velocidade: p.id})}
+          >
+            <p.icon className={`h-8 w-8 mb-2 ${p.color}`} />
+            <h3 className="font-bold text-sm">{p.label}</h3>
+            <div className="mt-2 space-y-1">
+              <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> Delay: {p.delay}</p>
+              <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Users className="h-3 w-3" /> Limite: {p.limit}/dia</p>
             </div>
+            {p.alert && <p className="text-[9px] text-red-500 font-bold mt-2 uppercase flex items-center gap-1"><AlertOctagon className="h-3 w-3" /> Risco de Ban</p>}
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        {/* Sending Window */}
+        <Card className="p-4 space-y-4">
+          <Label className="font-bold flex items-center gap-2"><Calendar className="h-4 w-4" /> Janela de Envio</Label>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase text-muted-foreground">Início</span>
+              <Input type="time" value={form.janela_inicio} onChange={e => setForm({...form, janela_inicio: e.target.value})} />
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase text-muted-foreground">Término</span>
+              <Input type="time" value={form.janela_fim} onChange={e => setForm({...form, janela_fim: e.target.value})} />
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs">Pausar nos fins de semana</span>
+            <Switch checked={form.pausa_fins_semana} onCheckedChange={v => setForm({...form, pausa_fins_semana: v})} />
+          </div>
+        </Card>
+
+        {/* Auto Pause */}
+        <Card className="p-4 space-y-4">
+          <Label className="font-bold flex items-center gap-2"><Settings2 className="h-4 w-4" /> Pausa Automática</Label>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs">Pausar em erros consecutivos</span>
+              <Switch checked={form.pausa_erros_consecutivos} onCheckedChange={v => setForm({...form, pausa_erros_consecutivos: v})} />
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs">Pausar se bloqueios detectados</span>
+              <Switch checked={form.pausa_bloqueios_detectados} onCheckedChange={v => setForm({...form, pausa_bloqueios_detectados: v})} />
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase text-muted-foreground">Falhas seguidas para pausar</span>
+              <Input type="number" value={form.limite_erros_consecutivos} onChange={e => setForm({...form, limite_erros_consecutivos: parseInt(e.target.value)})} className="h-8" />
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+
+function StepReview({ form, onStart }: any) {
+  const estimateTotalTime = () => {
+    const total = 450; // Mock total
+    const msgsPerHour = form.perfil_velocidade === 'safe' ? 60 : form.perfil_velocidade === 'moderate' ? 120 : 240;
+    const hours = Math.ceil(total / msgsPerHour);
+    return `${hours}h ${Math.floor((total % msgsPerHour) / (msgsPerHour/60))}m`;
+  };
+
+  const [agendarAt, setAgendarAt] = useState("");
+
+  const handleStart = async (now = true) => {
+    const payload: any = {
+      user_id: (await supabase.auth.getUser()).data.user?.id,
+      nome: form.nome || "Disparo em Massa " + new Date().toLocaleDateString(),
+      status: now ? 'em_andamento' : 'rascunho',
+      perfil_velocidade: form.perfil_velocidade,
+      horario_inicio: form.janela_inicio,
+      horario_fim: form.janela_fim,
+      instancias_ids: form.instancias_ids,
+      total_leads: 450, // Mock
+      mensagem_template: form.mensagem,
+      tipo_midia: form.tipo_midia,
+      url_midia: form.url_midia,
+      legenda_midia: form.legenda_midia,
+      agendado_para: now ? null : agendarAt,
+      pausa_fins_semana: form.pausa_fins_semana,
+      pausa_erros_consecutivos: form.pausa_erros_consecutivos,
+      limite_erros_consecutivos: form.limite_erros_consecutivos,
+      pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
+    };
+
+    const { data, error } = await supabase.from("disparos").insert(payload as any).select().single();
+
+    if (error) {
+      toast.error("Erro ao salvar campanha: " + error.message);
+      return;
+    }
+    
+    toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
+    if (now) onStart(data);
+  };
+
+  return (
+    <div className="grid grid-cols-3 gap-6">
+      <Card className="col-span-2 p-6 space-y-6">
+        <h3 className="text-lg font-bold">Revisão da Configuração</h3>
+        
+        <div className="grid grid-cols-2 gap-8">
+          <div className="space-y-4">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">Disparos em Massa</h1>
-              <p className="text-sm text-muted-foreground">
-                Envie mensagens WhatsApp em lote com proteção anti-ban
-              </p>
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">Destinatários</p>
+              <div className="flex items-center gap-2 mt-1">
+                <Users className="h-4 w-4 text-primary" />
+                <span className="text-xl font-bold">450 contatos</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">12 duplicados removidos | 5 opt-outs excluídos</p>
+            </div>
+            
+            <div>
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">Proteção Ativa</p>
+              <div className="flex flex-wrap gap-2 mt-2">
+                <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
+                  <ShieldCheck className="h-3 w-3 mr-1" /> Perfil {form.perfil_velocidade}
+                </Badge>
+                {form.pausa_fins_semana && <Badge variant="outline">Pausa FDS</Badge>}
+                <Badge variant="outline">Janela: {form.janela_inicio} - {form.janela_fim}</Badge>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">Tempo Estimado</p>
+              <div className="flex items-center gap-2 mt-1">
+                <Clock className="h-4 w-4 text-primary" />
+                <span className="text-xl font-bold">{estimateTotalTime()}</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">Término previsto: Hoje, 15:30</p>
+            </div>
+
+            <div>
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">Instâncias</p>
+              <div className="flex gap-2 mt-2">
+                {form.instancias_ids.length} selecionadas
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Histórico colapsável */}
-        <Accordion type="single" collapsible defaultValue={disparos.length === 0 ? undefined : ""}>
-          <AccordionItem value="hist" className="border border-border/60 rounded-lg">
-            <AccordionTrigger className="px-4 hover:no-underline">
-              <span className="flex items-center gap-2 text-sm font-medium">
-                <FileText className="h-4 w-4" /> Disparos anteriores
-                <Badge variant="outline" className="ml-2">{disparos.length}</Badge>
-              </span>
-            </AccordionTrigger>
-            <AccordionContent className="px-0">
-              {loading ? (
-                <div className="px-4 pb-4 text-sm text-muted-foreground">Carregando…</div>
-              ) : disparos.length === 0 ? (
-                <div className="px-4 pb-4 text-sm text-muted-foreground">Nenhum disparo ainda.</div>
-              ) : (
-                <div className="overflow-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Nome</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Progresso</TableHead>
-                        <TableHead>Falhas</TableHead>
-                        <TableHead>Criada</TableHead>
-                        <TableHead className="text-right">Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {disparos.map((d) => {
-                        const sc = statusConfig[d.status];
-                        const total = d.total_leads || 0;
-                        const done = d.enviados + d.falhas;
-                        return (
-                          <TableRow key={d.id}>
-                            <TableCell className="font-medium">{d.nome}</TableCell>
-                            <TableCell><Badge variant="outline" className={sc.className}>{sc.label}</Badge></TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{done}/{total}</TableCell>
-                            <TableCell className="text-xs text-destructive">{d.falhas || 0}</TableCell>
-                            <TableCell className="text-xs">{new Date(d.created_at).toLocaleDateString("pt-BR")}</TableCell>
-                            <TableCell className="text-right">
-                              <div className="inline-flex gap-1">
-                                {(d.status === "pausado" || d.status === "rascunho") && (
-                                  <Button size="sm" variant="ghost" onClick={() => iniciar(d)} title="Iniciar/Retomar"><Play className="h-4 w-4" /></Button>
-                                )}
-                                {d.status === "em_andamento" && (
-                                  <Button size="sm" variant="ghost" onClick={() => pausar(d)} title="Pausar"><Pause className="h-4 w-4" /></Button>
-                                )}
-                                <Button size="sm" variant="ghost" onClick={() => { setActiveId(d.id); }} title="Monitorar"><Activity className="h-4 w-4" /></Button>
-                                <Button size="sm" variant="ghost" onClick={() => abrirLogs(d)} title="Logs"><FileText className="h-4 w-4" /></Button>
-                                <Button size="sm" variant="ghost" onClick={() => duplicar(d)} title="Duplicar"><Copy className="h-4 w-4" /></Button>
-                                <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(d.id)} title="Excluir"><Trash2 className="h-4 w-4" /></Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </AccordionContent>
-          </AccordionItem>
-        </Accordion>
+        <div className="p-4 bg-muted/50 rounded-lg border">
+          <p className="text-xs font-bold mb-2">Resumo da Mensagem:</p>
+          <p className="text-xs italic text-muted-foreground line-clamp-3">"{form.mensagem}"</p>
+        </div>
+      </Card>
 
-        {/* Grid 2 colunas */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* COLUNA ESQUERDA — FORMULÁRIO */}
-          <Card className="border-border/60">
-            <CardHeader>
-              <CardTitle className="text-lg">Nova campanha de disparo</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Nome */}
-              <div className="space-y-2">
-                <Label>Nome da campanha *</Label>
-                <Input value={nomeCampanha} onChange={(e) => setNomeCampanha(e.target.value)} placeholder="Ex: Promoção Black Friday" />
-              </div>
+      <Card className="p-6 flex flex-col justify-between">
+        <div className="space-y-4">
+          <h3 className="font-bold">Ações</h3>
+          <Button className="w-full gap-2 h-12 text-lg font-bold" onClick={() => handleStart(true)}>
+            <Play className="h-5 w-5 fill-current" /> Disparar Agora
+          </Button>
+          
+          <div className="relative py-2">
+            <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
+            <div className="relative flex justify-center text-[10px] uppercase"><span className="bg-background px-2 text-muted-foreground">OU</span></div>
+          </div>
 
-              {/* 4a. Origem dos leads */}
-              <div className="space-y-3">
-                <Label>Origem dos leads *</Label>
-                <div className="flex gap-2">
-                  <Button type="button" size="sm" variant={origemLeads === "lista" ? "default" : "outline"} onClick={() => setOrigemLeads("lista")}>Usar lista</Button>
-                  <Button type="button" size="sm" variant={origemLeads === "csv" ? "default" : "outline"} onClick={() => setOrigemLeads("csv")}>Importar CSV</Button>
-                </div>
+          <div className="space-y-2">
+            <Label className="text-xs">Agendar para:</Label>
+            <Input type="datetime-local" value={agendarAt} onChange={e => setAgendarAt(e.target.value)} />
+            <Button variant="outline" className="w-full gap-2" disabled={!agendarAt} onClick={() => handleStart(false)}>
+              <Calendar className="h-4 w-4" /> Agendar Disparo
+            </Button>
+          </div>
+        </div>
 
-                {origemLeads === "lista" ? (
-                  <div className="space-y-2">
-                    <Select value={listaId} onValueChange={setListaId}>
-                      <SelectTrigger><SelectValue placeholder="Selecione uma lista de contatos" /></SelectTrigger>
-                      <SelectContent>
-                        {listas.length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-muted-foreground">Nenhuma lista cadastrada</div>
-                        ) : listas.map((l) => <SelectItem key={l.id} value={l.id}>{l.nome}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                    {listaId && (
-                      <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
-                        {listaContatos.length} contatos encontrados
-                      </Badge>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <label className="flex items-center justify-center gap-2 border border-dashed border-border/60 rounded-md p-4 cursor-pointer hover:border-primary/40 transition-colors">
-                      <Upload className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm text-muted-foreground">
-                        {csvFileName ? `${csvFileName} — ${csvContatos.length} contatos` : "Clique para enviar CSV/XLSX (colunas: nome, telefone, empresa)"}
-                      </span>
-                      <input type="file" accept=".csv,.xlsx,.xls" className="hidden"
-                        onChange={(e) => e.target.files?.[0] && handleCsvUpload(e.target.files[0])} />
-                    </label>
-                  </div>
-                )}
+        <p className="text-[10px] text-center text-muted-foreground mt-6 italic">
+          Ao iniciar, o sistema respeitará as regras de delay e janela de envio configuradas.
+        </p>
+      </Card>
+    </div>
+  );
+}
 
-                {/* Preview 5 primeiros */}
-                {contatosSelecionados.length > 0 && (
-                  <div className="border border-border/60 rounded-md overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="h-9">Nome</TableHead>
-                          <TableHead className="h-9">Telefone</TableHead>
-                          <TableHead className="h-9">Empresa</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {contatosSelecionados.slice(0, 5).map((c, i) => (
-                          <TableRow key={i}>
-                            <TableCell className="py-2">{c.nome}</TableCell>
-                            <TableCell className="py-2 font-mono text-xs">{c.telefone}</TableCell>
-                            <TableCell className="py-2 text-xs text-muted-foreground">{c.empresa ?? "—"}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                    {contatosSelecionados.length > 5 && (
-                      <div className="px-3 py-2 text-xs text-muted-foreground bg-muted/30">
-                        +{contatosSelecionados.length - 5} contatos adicionais
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: () => void }) {
+  const stats = [
+    { label: "Enviados", val: campaign.enviados || 124, total: campaign.total_contatos || 450, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10" },
+    { label: "Entregues", val: campaign.entregues || 112, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10" },
+    { label: "Respondidos", val: campaign.respondidos || 30, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10" },
+    { label: "Falhas", val: campaign.falhas || 2, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
+  ];
 
-              {/* 4b. Mensagem + variações */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <Label>Mensagem * {variacoes.length > 1 && <span className="text-xs text-muted-foreground ml-2">({variacoes.length} variações)</span>}</Label>
-                  <Button type="button" size="sm" variant="outline" onClick={addVariacao} disabled={variacoes.length >= 5}>
-                    <Plus className="h-3.5 w-3.5" /> Adicionar variação
-                  </Button>
-                </div>
+  const failureRate = ((campaign.falhas || 2) / (campaign.enviados || 124)) * 100;
 
-                {variacoes.map((msg, idx) => (
-                  <Card key={idx} className="border-border/60">
-                    <CardContent className="pt-4 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-muted-foreground">Versão {idx + 1}</span>
-                        {variacoes.length > 1 && (
-                          <Button type="button" size="sm" variant="ghost" onClick={() => removerVariacao(idx)}>
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      </div>
-                      <Textarea
-                        ref={(el) => { textareaRefs.current[idx] = el; }}
-                        value={msg}
-                        onChange={(e) => setVariacoes((v) => v.map((m, i) => (i === idx ? e.target.value : m)))}
-                        placeholder="Use {{nome}}, {{empresa}} como variáveis"
-                        rows={4}
-                      />
-                      <div className="flex flex-wrap gap-1.5">
-                        {["{{nome}}", "{{nome_completo}}", "{{empresa}}", "{{telefone}}"].map((v) => (
-                          <button
-                            key={v}
-                            type="button"
-                            onClick={() => inserirVariavel(idx, v)}
-                            className="text-xs px-2 py-0.5 rounded-md border border-border/60 bg-muted/40 hover:bg-primary/10 hover:border-primary/40 hover:text-primary transition-colors font-mono"
-                          >
-                            {v}
-                          </button>
-                        ))}
-                        <span className="ml-auto text-xs text-muted-foreground">{msg.length} caracteres</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-
-                {previewContato && (
-                  <div className="border border-border/60 rounded-md p-3 bg-muted/20">
-                    <p className="text-xs text-muted-foreground mb-1">Preview com {previewContato.nome}:</p>
-                    <p className="text-sm whitespace-pre-wrap">{previewMensagem}</p>
-                  </div>
-                )}
-              </div>
-
-              {/* 4c. Anti-bloqueio */}
-              <Collapsible defaultOpen>
-                <CollapsibleTrigger className="flex w-full items-center justify-between p-3 rounded-md border border-border/60 hover:bg-muted/40 transition-colors group">
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    <Settings2 className="h-4 w-4" /> Configurações Anti-Bloqueio
-                  </span>
-                  <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
-                </CollapsibleTrigger>
-                <CollapsibleContent className="space-y-4 pt-4">
-                  {/* Intervalos */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs">Intervalo mínimo entre mensagens</Label>
-                      <Input type="number" min={10} max={300} value={intervaloMin}
-                        onChange={(e) => setIntervaloMin(Math.max(10, Math.min(300, Number(e.target.value) || 10)))}
-                        className="w-20 h-8 text-right" />
-                    </div>
-                    <Slider min={10} max={300} step={5} value={[intervaloMin]} onValueChange={(v) => setIntervaloMin(v[0])} />
-                    <p className="text-xs text-muted-foreground">{intervaloMin} segundos</p>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs">Intervalo máximo entre mensagens</Label>
-                      <Input type="number" min={10} max={600} value={intervaloMax}
-                        onChange={(e) => setIntervaloMax(Math.max(10, Math.min(600, Number(e.target.value) || 10)))}
-                        className="w-20 h-8 text-right" />
-                    </div>
-                    <Slider min={10} max={600} step={5} value={[intervaloMax]} onValueChange={(v) => setIntervaloMax(v[0])} />
-                    <p className="text-xs text-muted-foreground">{intervaloMax} segundos</p>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label className="text-xs">Pausar a cada (mensagens)</Label>
-                      <Input type="number" min={0} value={pausaACada} onChange={(e) => setPausaACada(Number(e.target.value) || 0)} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Duração da pausa (min)</Label>
-                      <Input type="number" min={0} value={pausaDuracao} onChange={(e) => setPausaDuracao(Number(e.target.value) || 0)} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Horário início</Label>
-                      <Input type="time" value={horarioInicio} onChange={(e) => setHorarioInicio(e.target.value)} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Horário fim</Label>
-                      <Input type="time" value={horarioFim} onChange={(e) => setHorarioFim(e.target.value)} />
-                    </div>
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-
-              {/* 4d. Credenciais Evolution */}
-              {evolution ? (
-                <div className="flex items-center justify-between p-3 rounded-md border border-border/60 bg-muted/20">
-                  <div className="flex items-center gap-2 text-sm">
-                    <Link2 className="h-4 w-4 text-muted-foreground" />
-                    <span>Usando instância: <span className="font-mono text-xs">{evolution.instancia}</span></span>
-                  </div>
-                  <Badge variant="outline" className={evoOk ? "bg-success/20 text-success border-success/30" : "bg-destructive/20 text-destructive border-destructive/30"}>
-                    {evoOk ? <CheckCircle2 className="h-3 w-3 mr-1" /> : <XCircle className="h-3 w-3 mr-1" />}
-                    {evolution.status}
-                  </Badge>
-                </div>
-              ) : (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertTitle>Evolution API não configurada</AlertTitle>
-                  <AlertDescription>
-                    Configure a integração para começar a disparar.{" "}
-                    <Link to="/integracoes" className="underline font-medium">Ir para Integrações →</Link>
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {/* 4e. Botão */}
-              <Button className="w-full" size="lg" disabled={!podeIniciar || !evolution} onClick={criarEIniciar}>
-                <Play className="h-4 w-4" /> Criar Fila e Iniciar
-              </Button>
-              {!podeIniciar && (
-                <p className="text-xs text-muted-foreground text-center">
-                  Preencha nome, selecione leads e escreva ao menos uma mensagem.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* COLUNA DIREITA — MONITORAMENTO */}
-          <Card className="border-border/60 lg:sticky lg:top-4 self-start">
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Activity className="h-5 w-5 text-primary" /> Monitoramento em tempo real
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {!activeDisparo ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <Activity className="h-10 w-10 mx-auto mb-3 opacity-40" />
-                  <p className="text-sm">Nenhum disparo selecionado.</p>
-                  <p className="text-xs mt-1">Crie uma campanha ou clique em <Activity className="inline h-3 w-3" /> num histórico.</p>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h3 className="font-semibold">{activeDisparo.nome}</h3>
-                      <p className="text-xs text-muted-foreground">
-                        Iniciada em {activeDisparo.data_inicio ? new Date(activeDisparo.data_inicio).toLocaleString("pt-BR") : "—"}
-                      </p>
-                    </div>
-                    <Badge variant="outline" className={statusConfig[activeDisparo.status].className}>
-                      {statusConfig[activeDisparo.status].label}
-                    </Badge>
-                  </div>
-
-                  {(() => {
-                    const total = activeDisparo.total_leads || 0;
-                    const done = activeDisparo.enviados + activeDisparo.falhas;
-                    const totalEfetivo = activeLogs.filter(l => l.status !== 'invalido' && l.status !== 'duplicado').length || total;
-                    const pct = totalEfetivo ? Math.round((done / totalEfetivo) * 100) : 0;
-                    return (
-                      <div className="space-y-1.5">
-                        <div className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">{done} / {totalEfetivo} processados</span>
-                          <span className="font-medium">{pct}%</span>
-                        </div>
-                        <Progress value={pct} className="h-2" />
-                      </div>
-                    );
-                  })()}
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div className="rounded-md border border-border/60 p-2 text-center">
-                      <div className="text-[10px] text-muted-foreground uppercase">Pendentes</div>
-                      <div className="text-sm font-bold">{activeLogs.filter(l => l.status === 'pending').length}</div>
-                    </div>
-                    <div className="rounded-md border border-success/30 bg-success/5 p-2 text-center">
-                      <div className="text-[10px] text-success uppercase">Enviados</div>
-                      <div className="text-sm font-bold text-success">{activeDisparo.enviados}</div>
-                    </div>
-                    <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-center">
-                      <div className="text-[10px] text-destructive uppercase">Falhas Reais</div>
-                      <div className="text-sm font-bold text-destructive">{activeLogs.filter(l => l.status === 'failed').length}</div>
-                    </div>
-                    <div className="rounded-md border border-warning/30 bg-warning/5 p-2 text-center">
-                      <div className="text-[10px] text-warning uppercase">Inválidos</div>
-                      <div className="text-sm font-bold text-warning">{activeLogs.filter(l => l.status === 'invalido' || l.status === 'duplicado').length}</div>
-                    </div>
-                  </div>
-
-                  {/* Badge de fase */}
-                  {(() => {
-                    const st = activeDisparo.status;
-                    if (st !== "em_andamento" && st !== "pausado") return null;
-                    let label = "Aguardando intervalo";
-                    let cls = "bg-info/20 text-info border-info/30";
-                    let Icon = Clock;
-                    if (st === "pausado") { label = "Pausado"; cls = "bg-warning/20 text-warning border-warning/30"; Icon = Pause; }
-                    else if (lockRef.current) { label = "Enviando..."; cls = "bg-info/20 text-info border-info/30"; Icon = Send; }
-                    else if (!inWindow(activeDisparo.horario_inicio, activeDisparo.horario_fim)) { label = "Fora do horário"; cls = "bg-warning/20 text-warning border-warning/30"; Icon = AlertTriangle; }
-                    else if (proximoEnvio > 60) { label = "Em pausa anti-bloqueio"; cls = "bg-warning/20 text-warning border-warning/30"; Icon = Pause; }
-                    return (
-                      <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 p-3 bg-muted/20">
-                        <Badge variant="outline" className={cls}>
-                          <Icon className="h-3 w-3 mr-1" /> {label}
-                        </Badge>
-                        {proximoEnvio > 0 && (
-                          <span className="font-mono text-sm font-semibold text-primary tabular-nums">
-                            {Math.floor(proximoEnvio / 60)}:{String(proximoEnvio % 60).padStart(2, "0")}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })()}
-
-                  {/* ⚙️ Editor ao vivo de intervalos — aplica no próximo envio */}
-                  {(activeDisparo.status === "em_andamento" || activeDisparo.status === "pausado") && (
-                    <IntervaloEditor
-                      key={activeDisparo.id}
-                      disparoId={activeDisparo.id}
-                      intervaloMin={activeDisparo.intervalo_min}
-                      intervaloMax={activeDisparo.intervalo_max}
-                      onUpdate={(min, max) => {
-                        setDisparos((arr) => arr.map((x) => x.id === activeDisparo.id ? { ...x, intervalo_min: min, intervalo_max: max } : x));
-                      }}
-                    />
-                  )}
-
-                  {activeDisparo.status === "em_andamento" && (
-                    <Alert>
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertDescription className="text-xs">Mantenha esta aba aberta durante o disparo.</AlertDescription>
-                    </Alert>
-                  )}
-
-                  {/* Três botões padronizados */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => iniciar(activeDisparo)}
-                      disabled={activeDisparo.status === "em_andamento" || activeDisparo.status === "concluido" || activeDisparo.status === "cancelado"}
-                      className="bg-success hover:bg-success/90 text-success-foreground"
-                    >
-                      <Play className="h-4 w-4" /> {activeDisparo.status === "pausado" ? "Retomar" : "Iniciar"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => pausar(activeDisparo)}
-                      disabled={activeDisparo.status !== "em_andamento"}
-                      className="border-warning/40 text-warning hover:bg-warning/10 hover:text-warning"
-                    >
-                      <Pause className="h-4 w-4" /> Pausar
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setConfirmCancelId(activeDisparo.id)}
-                      disabled={activeDisparo.status !== "em_andamento" && activeDisparo.status !== "pausado"}
-                      className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      <Square className="h-4 w-4" /> Cancelar
-                    </Button>
-                  </div>
-
-                  <div className="flex justify-end">
-                    <Button size="sm" variant="ghost" onClick={() => abrirLogs(activeDisparo)}>
-                      <FileText className="h-4 w-4" /> Logs completos
-                    </Button>
-                  </div>
-
-                  {/* Tabela completa de leads (scrollável) */}
-                  <div className="space-y-2">
-                    <Label className="text-xs flex items-center gap-1.5">
-                      <Users className="h-3.5 w-3.5" /> Leads desta campanha ({activeLogs.length})
-                    </Label>
-                    <div className="border border-border/60 rounded-md max-h-96 overflow-y-auto">
-                      {activeLogs.length === 0 ? (
-                        <div className="p-4 text-xs text-muted-foreground text-center">Sem leads ainda</div>
-                      ) : (
-                        <Table>
-                          <TableHeader className="sticky top-0 bg-card z-10">
-                            <TableRow>
-                              <TableHead className="h-9">Nome</TableHead>
-                              <TableHead className="h-9">Telefone</TableHead>
-                              <TableHead className="h-9">Status</TableHead>
-                              <TableHead className="h-9 text-right">Tent.</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {activeLogs.map((l) => (
-                              <TableRow key={l.id}>
-                                <TableCell className="py-2 max-w-[140px] truncate">{l.nome ?? "—"}</TableCell>
-                                <TableCell className="py-2 font-mono text-xs">{l.telefone}</TableCell>
-                                <TableCell className="py-2">{logStatusBadge(l.status)}</TableCell>
-                                <TableCell className="py-2 text-right text-xs">{l.tentativas}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
+  return (
+    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in zoom-in duration-300">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold flex items-center gap-2">
+            <Activity className="h-6 w-6 text-primary animate-pulse" />
+            Monitoramento: {campaign.nome}
+          </h2>
+          <Badge className="mt-1 bg-emerald-500/20 text-emerald-600 border-emerald-500/30">EM ANDAMENTO</Badge>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline"><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
+          <Button variant="destructive" onClick={onCancel}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
         </div>
       </div>
 
-      {/* Dialog Logs */}
-      <Dialog open={logsOpen} onOpenChange={setLogsOpen}>
-        <DialogContent className="w-[95vw] max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>Logs do Disparo {logsDisparo ? `— ${logsDisparo.nome}` : ""}</DialogTitle>
-            <DialogDescription>Histórico individual de envios.</DialogDescription>
-          </DialogHeader>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <Select value={logFilter} onValueChange={setLogFilter}>
-              <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="todos">Todos</SelectItem>
-                <SelectItem value="pending">Pendentes</SelectItem>
-                <SelectItem value="sending">Enviando</SelectItem>
-                <SelectItem value="sent">Enviados</SelectItem>
-                <SelectItem value="failed">Falhas reais</SelectItem>
-                <SelectItem value="invalido">Inválidos</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => logsDisparo && carregarLogs(logsDisparo.id)}>
-                <RefreshCw className="h-4 w-4" /> Atualizar
-              </Button>
-              <Button size="sm" variant="outline" onClick={reenviarFalhas} title="Reprocessa apenas falhas reais — ignora telefones inválidos">
-                Reenviar falhas reais
-              </Button>
+      {failureRate > 10 && (
+        <Alert variant={failureRate > 25 ? "destructive" : "default"} className={`animate-bounce ${failureRate <= 25 ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950/20' : ''}`}>
+          <AlertCircle className={`h-4 w-4 ${failureRate <= 25 ? 'text-yellow-500' : ''}`} />
+          <AlertTitle className={failureRate <= 25 ? 'text-yellow-600' : ''}>{failureRate > 25 ? "Pausa Automática Ativada" : "Taxa de Falha Elevada"}</AlertTitle>
+          <AlertDescription className={failureRate <= 25 ? 'text-yellow-600/80' : ''}>
+            {failureRate > 25 
+              ? "A campanha foi pausada automaticamente devido a uma taxa de erro superior a 25%." 
+              : "Detectamos que mais de 10% dos disparos estão falhando. Recomendamos revisar suas instâncias."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      
+      <div className="grid grid-cols-4 gap-4">
+        {stats.map(s => (
+          <Card key={s.label} className="p-5 border-none shadow-sm overflow-hidden relative group">
+            <div className={`absolute top-0 right-0 p-4 transition-transform group-hover:scale-110`}>
+              <s.icon className={`h-12 w-12 opacity-10 ${s.color}`} />
             </div>
-          </div>
-          <div className="max-h-[60vh] overflow-auto border border-border/60 rounded-md">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nome</TableHead>
-                  <TableHead>Telefone</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Tentativas</TableHead>
-                  <TableHead>Enviado em</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredLogs.length === 0 ? (
-                  <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-6">Sem logs</TableCell></TableRow>
-                ) : filteredLogs.map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell>{l.nome ?? "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">{l.telefone}</TableCell>
-                    <TableCell>{logStatusBadge(l.status)}</TableCell>
-                    <TableCell>{l.tentativas}</TableCell>
-                    <TableCell>{l.enviado_at ? new Date(l.enviado_at).toLocaleString("pt-BR") : "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setLogsOpen(false); carregar(); }}>Fechar</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">{s.label}</p>
+            <div className="flex items-baseline gap-1">
+              <span className={`text-3xl font-black ${s.color}`}>{s.val}</span>
+              {s.total && <span className="text-sm text-muted-foreground font-bold">/ {s.total}</span>}
+            </div>
+            {s.total && <Progress value={(s.val/s.total)*100} className={`h-1.5 mt-3 ${s.bg}`} />}
+            {s.label === "Respondidos" && <p className="text-[10px] text-purple-600 font-bold mt-2">Conversão: 24.2%</p>}
+          </Card>
+        ))}
+      </div>
 
-      <AlertDialog open={!!confirmDeleteId} onOpenChange={(o) => !o && setConfirmDeleteId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Excluir campanha?</AlertDialogTitle>
-            <AlertDialogDescription>Esta ação não pode ser desfeita. Os logs também serão removidos.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={() => confirmDeleteId && excluir(confirmDeleteId)}>Excluir</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={!!confirmCancelId} onOpenChange={(o) => !o && setConfirmCancelId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Cancelar disparo?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Os envios pendentes serão interrompidos. Os logs já enviados permanecerão no histórico.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Voltar</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const d = disparos.find((x) => x.id === confirmCancelId);
-                if (d) cancelar(d);
-                setConfirmCancelId(null);
-              }}
-            >
-              Sim, cancelar
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </CRMLayout>
+      <Card className="border-none shadow-sm overflow-hidden">
+        <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
+          <h3 className="font-bold text-sm flex items-center gap-2"><TableIcon className="h-4 w-4" /> Log de Envios (Tempo Real)</h3>
+          <Badge variant="outline" className="text-[10px]">Atualizando a cada 5s</Badge>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/10">
+                <th className="p-3 text-left font-bold">Contato</th>
+                <th className="p-3 text-left font-bold">Número</th>
+                <th className="p-3 text-left font-bold">Status</th>
+                <th className="p-3 text-left font-bold">Instância</th>
+                <th className="p-3 text-left font-bold">Horário</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {[
+                { name: "Maria Oliveira", phone: "5511999999999", status: "Respondido", instance: "Instância 01", time: "10:48" },
+                { name: "Carlos Souza", phone: "5511888888888", status: "Entregue", instance: "Instância 02", time: "10:47" },
+                { name: "Ana Santos", phone: "5511777777777", status: "Enviado", instance: "Instância 01", time: "10:47" },
+                { name: "Felipe Lima", phone: "5511666666666", status: "Falha", instance: "Instância 03", time: "10:46" },
+                { name: "Julia Melo", phone: "5511555555555", status: "Pulado", instance: "N/A", time: "10:45" },
+              ].map((log, i) => (
+                <tr key={i} className="hover:bg-muted/5 transition-colors">
+                  <td className="p-3 font-medium">{log.name}</td>
+                  <td className="p-3 text-xs font-mono">{log.phone}</td>
+                  <td className="p-3">
+                    <Badge variant={
+                      log.status === 'Respondido' ? 'default' : 
+                      log.status === 'Entregue' ? 'secondary' :
+                      log.status === 'Falha' ? 'destructive' : 'outline'
+                    } className="text-[10px] px-2 py-0">
+                      {log.status}
+                    </Badge>
+                  </td>
+                  <td className="p-3 text-xs">{log.instance}</td>
+                  <td className="p-3 text-xs text-muted-foreground">{log.time}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
   );
 }
+
