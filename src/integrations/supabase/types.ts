@@ -796,7 +796,7 @@ export type Database = {
           orcamento_total: number | null
           plataforma: string | null
           status: string | null
-          user_id: string | null
+          user_id: string
         }
         Insert: {
           atualizado_em?: string | null
@@ -810,7 +810,7 @@ export type Database = {
           orcamento_total?: number | null
           plataforma?: string | null
           status?: string | null
-          user_id?: string | null
+          user_id: string
         }
         Update: {
           atualizado_em?: string | null
@@ -824,7 +824,7 @@ export type Database = {
           orcamento_total?: number | null
           plataforma?: string | null
           status?: string | null
-          user_id?: string | null
+          user_id?: string
         }
         Relationships: []
       }
@@ -965,6 +965,51 @@ export type Database = {
         }
         Relationships: []
       }
+      galeria_midias: {
+        Row: {
+          created_at: string | null
+          descricao: string | null
+          filename: string
+          id: string
+          media_type: string | null
+          pasta: string | null
+          tags: string[] | null
+          tamanho: number | null
+          tipo: string | null
+          titulo: string | null
+          url: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          descricao?: string | null
+          filename: string
+          id?: string
+          media_type?: string | null
+          pasta?: string | null
+          tags?: string[] | null
+          tamanho?: number | null
+          tipo?: string | null
+          titulo?: string | null
+          url: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          descricao?: string | null
+          filename?: string
+          id?: string
+          media_type?: string | null
+          pasta?: string | null
+          tags?: string[] | null
+          tamanho?: number | null
+          tipo?: string | null
+          titulo?: string | null
+          url?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       integracoes_config: {
         Row: {
           api_key: string | null
@@ -1054,7 +1099,7 @@ export type Database = {
           plataforma: string | null
           status_crm: string | null
           telefone: string | null
-          user_id: string | null
+          user_id: string
         }
         Insert: {
           campanha?: string | null
@@ -1069,7 +1114,7 @@ export type Database = {
           plataforma?: string | null
           status_crm?: string | null
           telefone?: string | null
-          user_id?: string | null
+          user_id: string
         }
         Update: {
           campanha?: string | null
@@ -1084,7 +1129,7 @@ export type Database = {
           plataforma?: string | null
           status_crm?: string | null
           telefone?: string | null
-          user_id?: string | null
+          user_id?: string
         }
         Relationships: []
       }
@@ -1251,6 +1296,33 @@ export type Database = {
           email?: string
           id?: string
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      refresh_tokens: {
+        Row: {
+          created_at: string | null
+          expires_at: string
+          id: string
+          revoked: boolean | null
+          token: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          expires_at: string
+          id?: string
+          revoked?: boolean | null
+          token: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          expires_at?: string
+          id?: string
+          revoked?: boolean | null
+          token?: string
           user_id?: string
         }
         Relationships: []
@@ -1456,6 +1528,78 @@ export type Database = {
           created_at?: string
           id?: string
           role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
+      webhook_mensagens_processadas: {
+        Row: {
+          criado_em: string | null
+          instancia: string | null
+          message_id: string
+        }
+        Insert: {
+          criado_em?: string | null
+          instancia?: string | null
+          message_id: string
+        }
+        Update: {
+          criado_em?: string | null
+          instancia?: string | null
+          message_id?: string
+        }
+        Relationships: []
+      }
+      whatsapp_messages: {
+        Row: {
+          conteudo: string | null
+          created_at: string | null
+          from_me: boolean
+          id: string
+          instancia: string
+          midia_mime: string | null
+          midia_nome: string | null
+          midia_url: string | null
+          push_name: string | null
+          remote_jid: string
+          session_id: string
+          status: string | null
+          timestamp_unix: number | null
+          tipo: string
+          user_id: string
+        }
+        Insert: {
+          conteudo?: string | null
+          created_at?: string | null
+          from_me?: boolean
+          id: string
+          instancia: string
+          midia_mime?: string | null
+          midia_nome?: string | null
+          midia_url?: string | null
+          push_name?: string | null
+          remote_jid: string
+          session_id: string
+          status?: string | null
+          timestamp_unix?: number | null
+          tipo?: string
+          user_id: string
+        }
+        Update: {
+          conteudo?: string | null
+          created_at?: string | null
+          from_me?: boolean
+          id?: string
+          instancia?: string
+          midia_mime?: string | null
+          midia_nome?: string | null
+          midia_url?: string | null
+          push_name?: string | null
+          remote_jid?: string
+          session_id?: string
+          status?: string | null
+          timestamp_unix?: number | null
+          tipo?: string
           user_id?: string
         }
         Relationships: []
