@@ -10,6 +10,8 @@ import { type ProjecaoInputs, type ProjecaoResultado } from "@/components/market
 import { ProjecaoResultados } from "@/components/marketing/ProjecaoResultados";
 import { ProjecaoComparativo, type SimulacaoSalva } from "@/components/marketing/ProjecaoComparativo";
 import { CampanhasDashboard } from "@/components/marketing/CampanhasDashboard";
+import { LeadsCaptados } from "@/components/marketing/LeadsCaptados";
+import { ContaMeta } from "@/components/marketing/ContaMeta";
 import { toast } from "sonner";
 
 // Importações alternativas para ícones que podem não estar disponíveis diretamente
@@ -177,13 +179,15 @@ export default function MarketingDigitalPage() {
           </TabsContent>
 
           <TabsContent value="leads">
-            <PlaceholderTab texto="Leads Ads + ativar Cris — Prompt 5" />
+            <LeadsCaptados metaConectado={meta.conectado} />
           </TabsContent>
+          
           <TabsContent value="criativo">
             <PlaceholderTab texto="Galeria de criativos e análise — Prompt futuro" />
           </TabsContent>
+          
           <TabsContent value="conta">
-            <PlaceholderTab texto="Conexão OAuth Meta Ads — Prompt 5" />
+            <ContaMeta status={meta} onRecarregar={meta.recarregar} />
           </TabsContent>
         </Tabs>
 
