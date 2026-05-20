@@ -258,6 +258,10 @@ export default function UsuariosPage() {
             </DialogTitle>
             <DialogDescription>
               Ative ou desative módulos para este usuário. As alterações são salvas imediatamente.
+              <br /><br />
+              <span className="text-xs text-amber-500 font-medium">
+                Nota: Os módulos de Automação & IA, Integrações e Configurações do Sistema são exclusivos do administrador e não podem ser delegados a usuários comuns.
+              </span>
             </DialogDescription>
           </DialogHeader>
 
