@@ -1,9 +1,12 @@
 import { useState } from "react";
-import { Megaphone, MessageCircle, BarChart3, Settings2, Zap } from "lucide-react";
+import { Megaphone, MessageCircle, BarChart3, Settings2, Zap, Target } from "lucide-react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { useMetaStatus } from "@/hooks/useMetaStatus";
+import { ProjecaoForm } from "@/components/marketing/ProjecaoForm";
+import { calcularProjecao } from "@/components/marketing/calcularProjecao";
+import { type ProjecaoInputs, type ProjecaoResultado } from "@/components/marketing/tipos";
 
 // Importações alternativas para ícones que podem não estar disponíveis diretamente
 const Facebook = ({ className }: { className?: string }) => (
@@ -54,6 +57,16 @@ function PlaceholderTab({ texto }: { texto: string }) {
 
 export default function MarketingDigitalPage() {
   const meta = useMetaStatus();
+  const [loadingCalc, setLoadingCalc] = useState(false);
+  const [resultado, setResultado] = useState<ProjecaoResultado | null>(null);
+  const token = localStorage.getItem("crm_access_token") || "";
+
+  const handleCalcular = async (inputs: ProjecaoInputs) => {
+    setLoadingCalc(true);
+    const r = await calcularProjecao(inputs, token);
+    setResultado(r);
+    setLoadingCalc(false);
+  };
 
   return (
     <CRMLayout>
@@ -125,9 +138,21 @@ export default function MarketingDigitalPage() {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="projecao">
-            <PlaceholderTab texto="Simulador de campanha — Prompt 2" />
+          <TabsContent value="projecao" className="mt-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <ProjecaoForm onCalcular={handleCalcular} loading={loadingCalc} />
+              <div className="rounded-xl border border-dashed p-12 text-center text-muted-foreground flex flex-col items-center justify-center gap-3">
+                {resultado
+                  ? <p>Resultados virão no Prompt 3</p>
+                  : <>
+                      <Target className="h-10 w-10 opacity-20" />
+                      <p className="font-medium">Sua projeção aparecerá aqui</p>
+                    </>
+                }
+              </div>
+            </div>
           </TabsContent>
+          
           <TabsContent value="campanhas">
             <PlaceholderTab texto="Dashboard de campanhas reais — Prompt 4" />
           </TabsContent>
