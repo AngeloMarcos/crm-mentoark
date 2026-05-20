@@ -216,7 +216,7 @@ export default function catalogoRouter(pool: Pool): Router {
       // Busca config da Evolution API
       const evoRes = await pool.query(
         `SELECT url, api_key, instancia FROM integracoes_config
-         WHERE user_id = $1 AND tipo = 'evolution' AND status = 'conectado' LIMIT 1`,
+         WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado') LIMIT 1`,
         [req.userId]
       );
       if (!evoRes.rows.length) {
