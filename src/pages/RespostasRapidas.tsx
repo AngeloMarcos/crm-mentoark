@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Edit2, Copy, Trash2, Info, Zap } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import {
@@ -17,12 +17,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 interface RespostaRapida {
   id: string;
@@ -38,7 +32,6 @@ const RespostasRapidas = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingResponse, setEditingResponse] = useState<RespostaRapida | null>(null);
 
-  // Form states
   const [atalho, setAtalho] = useState("");
   const [titulo, setTitulo] = useState("");
   const [mensagem, setMensagem] = useState("");
@@ -46,33 +39,32 @@ const RespostasRapidas = () => {
   const { data: responses = [], isLoading } = useQuery({
     queryKey: ["respostas-rapidas"],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const { data, error } = await api
         .from("respostas_rapidas")
         .select("*")
         .order("created_at", { ascending: false });
-
       if (error) throw error;
-      return data as RespostaRapida[];
+      return (data || []) as RespostaRapida[];
     },
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (newResponse: Partial<RespostaRapida>) => {
+    mutationFn: async (payload: Partial<RespostaRapida>) => {
       if (editingResponse) {
-        const { error } = await supabase
+        const { error } = await api
           .from("respostas_rapidas")
-          .update(newResponse)
+          .update(payload)
           .eq("id", editingResponse.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("respostas_rapidas")
-          .insert([{
-            atalho: newResponse.atalho as string,
-            titulo: newResponse.titulo as string,
-            mensagem: newResponse.mensagem as string,
-            user_id: user?.id as string
-          }]);
+        const { error } = await api.from("respostas_rapidas").insert([
+          {
+            atalho: payload.atalho,
+            titulo: payload.titulo,
+            mensagem: payload.mensagem,
+            user_id: user?.id,
+          },
+        ]);
         if (error) throw error;
       }
     },
@@ -82,7 +74,8 @@ const RespostasRapidas = () => {
       closeModal();
     },
     onError: (error: any) => {
-      if (error.code === "23505") {
+      const msg = error?.message || "";
+      if (msg.includes("duplicate") || error?.code === "23505") {
         toast.error("Este atalho já existe.");
       } else {
         toast.error("Erro ao salvar resposta.");
@@ -92,10 +85,7 @@ const RespostasRapidas = () => {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from("respostas_rapidas")
-        .delete()
-        .eq("id", id);
+      const { error } = await api.from("respostas_rapidas").delete().eq("id", id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -140,8 +130,7 @@ const RespostasRapidas = () => {
       toast.error("O atalho deve começar com / e ter pelo menos 2 caracteres.");
       return;
     }
-    const atalhoRegex = /^\/[a-zA-Z0-9-]+$/;
-    if (!atalhoRegex.test(atalho)) {
+    if (!/^\/[a-zA-Z0-9-]+$/.test(atalho)) {
       toast.error("O atalho só pode conter letras, números e hífen.");
       return;
     }
@@ -176,11 +165,11 @@ const RespostasRapidas = () => {
         </Button>
       </div>
 
-      <div className="flex items-center gap-3 bg-blue-500/10 border border-blue-500/20 p-4 rounded-xl text-blue-600 dark:text-blue-400">
+      <div className="flex items-center gap-3 bg-primary/10 border border-primary/20 p-4 rounded-xl text-primary">
         <Info className="w-5 h-5 shrink-0" />
         <p className="text-sm">
           <strong>Dica:</strong> Durante o atendimento no WhatsApp, digite{" "}
-          <code className="bg-blue-500/20 px-1 rounded">/</code> para buscar e inserir uma resposta rápida.
+          <code className="bg-primary/20 px-1 rounded">/</code> para buscar e inserir uma resposta rápida.
         </p>
       </div>
 
@@ -206,7 +195,7 @@ const RespostasRapidas = () => {
             <Card key={response.id} className="group hover:shadow-md transition-all border-sidebar-border/60 bg-card/50">
               <CardContent className="p-5 space-y-3">
                 <div className="flex items-start justify-between">
-                  <Badge variant="outline" className="font-mono text-yellow-600 bg-yellow-500/10 border-yellow-500/20">
+                  <Badge variant="outline" className="font-mono text-accent bg-accent/10 border-accent/20">
                     {response.atalho}
                   </Badge>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -299,7 +288,7 @@ const RespostasRapidas = () => {
           <DialogFooter>
             <Button variant="outline" onClick={closeModal}>Cancelar</Button>
             <Button onClick={handleSave} disabled={saveMutation.isPending}>
-              {saveMutation.isPending ? "Salvando..." : "Salvar Configurações"}
+              {saveMutation.isPending ? "Salvando..." : "Salvar"}
             </Button>
           </DialogFooter>
         </DialogContent>
