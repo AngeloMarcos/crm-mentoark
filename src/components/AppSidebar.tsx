@@ -23,11 +23,13 @@ interface NavItem {
   icon: React.ElementType;
   modulo: string;
   color: string;
+  adminOnly?: boolean;
 }
 
 interface NavGroup {
   label: string;
   items: NavItem[];
+  adminOnly?: boolean;
 }
 
 const navGroups: NavGroup[] = [
@@ -66,11 +68,12 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Automação & IA",
+    adminOnly: true,
     items: [
-      { title: "Workflows",         url: "/workflows",   icon: GitBranch, modulo: "workflows",   color: "text-violet-500" },
-      { title: "Agentes",           url: "/agentes",     icon: Bot,       modulo: "agentes",     color: "text-teal-500"   },
-      { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain,     modulo: "cerebro",     color: "text-purple-400" },
-      { title: "Integrações",       url: "/integracoes", icon: Plug,      modulo: "integracoes", color: "text-amber-500"  },
+      { title: "Workflows",         url: "/workflows",   icon: GitBranch, modulo: "workflows",   color: "text-violet-500", adminOnly: true },
+      { title: "Agentes",           url: "/agentes",     icon: Bot,       modulo: "agentes",     color: "text-teal-500",   adminOnly: true },
+      { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain,     modulo: "cerebro",     color: "text-purple-400", adminOnly: true },
+      { title: "Integrações",       url: "/integracoes", icon: Plug,      modulo: "integracoes", color: "text-amber-500",  adminOnly: true },
     ],
   },
   {
@@ -79,8 +82,8 @@ const navGroups: NavGroup[] = [
       { title: "Catálogo",      url: "/catalogo", icon: Package,    modulo: "catalogo", color: "text-fuchsia-500" },
       { title: "Galeria",       url: "/galeria",  icon: Images,     modulo: "galeria",  color: "text-pink-500"    },
       { title: "Documentação",  url: "/docs",     icon: BookOpen,   modulo: "docs",     color: "text-slate-400"   },
-      { title: "Usuários",      url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600"   },
-      { title: "Segurança",     url: "/seguranca", icon: Lock,        modulo: "usuarios", color: "text-red-400"    },
+      { title: "Usuários",      url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
+      { title: "Segurança",     url: "/seguranca", icon: Lock,        modulo: "usuarios", color: "text-red-400",  adminOnly: true },
     ],
   },
 ];
@@ -98,8 +101,9 @@ function NavGroupSection({
   hasModulo: (m: string) => boolean;
   location: { pathname: string };
 }) {
-  const visibleItems = group.items.filter((i) => hasModulo(i.modulo));
-  if (visibleItems.length === 0) return null;
+  const { isAdmin } = useAuth();
+  const visibleItems = group.items.filter((i) => hasModulo(i.modulo) && (!i.adminOnly || isAdmin));
+  if (visibleItems.length === 0 || (group.adminOnly && !isAdmin)) return null;
 
   // Grupo começa aberto se algum item está ativo
   const hasActive = visibleItems.some((i) =>

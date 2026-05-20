@@ -167,8 +167,8 @@ export function UsuariosAcessos() {
         {[
           { label: "Total de usuários", valor: users.length, icon: Users, color: "text-blue-500" },
           { label: "Administradores", valor: adminsCount, icon: Shield, color: "text-purple-500" },
-          { label: "Módulos padrão", valor: 7, icon: LayoutGrid, color: "text-emerald-500" },
-          { label: "Módulos premium", valor: todosModulos.length - 7, icon: ShieldOff, color: "text-orange-500" },
+          { label: "Módulos delegáveis", valor: todosModulos.length, icon: LayoutGrid, color: "text-emerald-500" },
+          { label: "Módulos padrão", valor: todosModulos.filter(m => m.padrao).length, icon: ShieldOff, color: "text-orange-500" },
         ].map((item) => (
           <Card key={item.label}>
             <CardContent className="pt-6">

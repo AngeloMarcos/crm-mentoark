@@ -55,8 +55,9 @@ const App = () => (
               <Route path="/privacidade" element={<PrivacyPage />} />
 
               <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
-               <Route path="/leads"        element={<ProtectedRoute requireModulo="leads">       <LeadsPage /></ProtectedRoute>} />
-               <Route path="/tags"         element={<ProtectedRoute requireModulo="leads">       <TagsPage /></ProtectedRoute>} />
+              <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />
+              <Route path="/leads"        element={<ProtectedRoute requireModulo="leads">       <LeadsPage /></ProtectedRoute>} />
+              <Route path="/tags-funil"   element={<ProtectedRoute requireModulo="leads">       <TagsPage /></ProtectedRoute>} />
               <Route path="/contatos"     element={<ProtectedRoute requireModulo="contatos">    <ContatosPage /></ProtectedRoute>} />
               <Route path="/contatos/:id" element={<ProtectedRoute requireModulo="contatos">    <ContatoDetalhePage /></ProtectedRoute>} />
               <Route path="/discagem"     element={<ProtectedRoute requireModulo="discagem">    <DiscagemPage /></ProtectedRoute>} />
@@ -66,17 +67,16 @@ const App = () => (
               <Route path="/respostas-rapidas" element={<ProtectedRoute requireModulo="whatsapp"> <RespostasRapidasPage /></ProtectedRoute>} />
               <Route path="/disparos"     element={<ProtectedRoute requireModulo="disparos">    <DisparosPage /></ProtectedRoute>} />
               <Route path="/campanhas"    element={<ProtectedRoute requireModulo="campanhas">   <CampanhasPage /></ProtectedRoute>} />
-              <Route path="/integracoes"  element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />
-              <Route path="/cerebro"      element={<ProtectedRoute requireModulo="cerebro">     <CerebroPage /></ProtectedRoute>} />
-              <Route path="/agentes"      element={<ProtectedRoute requireModulo="agentes">     <AgentesPage /></ProtectedRoute>} />
+              <Route path="/marketing-digital" element={<ProtectedRoute requireModulo="campanhas"> <MarketingDigitalPage /></ProtectedRoute>} />
+              <Route path="/integracoes"  element={<ProtectedRoute requireAdmin> <IntegracoesPage /></ProtectedRoute>} />
+              <Route path="/cerebro"      element={<ProtectedRoute requireAdmin>     <CerebroPage /></ProtectedRoute>} />
+              <Route path="/agentes"      element={<ProtectedRoute requireAdmin>     <AgentesPage /></ProtectedRoute>} />
               <Route path="/catalogo"     element={<ProtectedRoute requireModulo="catalogo">    <CatalogoPage /></ProtectedRoute>} />
               <Route path="/catalogo/:id" element={<ProtectedRoute requireModulo="catalogo">    <CatalogoDetalhePage /></ProtectedRoute>} />
               <Route path="/catalogo/envios" element={<ProtectedRoute requireModulo="catalogo"> <CatalogoEnviosPage /></ProtectedRoute>} />
               <Route path="/galeria"      element={<ProtectedRoute requireModulo="galeria">     <GaleriaPage /></ProtectedRoute>} />
-              <Route path="/workflows"    element={<ProtectedRoute requireModulo="workflows">   <WorkflowsPage /></ProtectedRoute>} />
+              <Route path="/workflows"    element={<ProtectedRoute requireAdmin>   <WorkflowsPage /></ProtectedRoute>} />
               <Route path="/docs"         element={<ProtectedRoute requireModulo="docs">        <DocsPage /></ProtectedRoute>} />
-              <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />
-              <Route path="/marketing-digital" element={<ProtectedRoute requireModulo="campanhas"> <MarketingDigitalPage /></ProtectedRoute>} />
               <Route path="/usuarios"     element={<ProtectedRoute requireAdmin>               <UsuariosPage /></ProtectedRoute>} />
               <Route path="/seguranca"    element={<ProtectedRoute requireAdmin>               <SegurancaPage /></ProtectedRoute>} />
 
