@@ -101,8 +101,9 @@ function NavGroupSection({
   hasModulo: (m: string) => boolean;
   location: { pathname: string };
 }) {
-  const visibleItems = group.items.filter((i) => hasModulo(i.modulo));
-  if (visibleItems.length === 0) return null;
+  const { isAdmin } = useAuth();
+  const visibleItems = group.items.filter((i) => hasModulo(i.modulo) && (!i.adminOnly || isAdmin));
+  if (visibleItems.length === 0 || (group.adminOnly && !isAdmin)) return null;
 
   // Grupo começa aberto se algum item está ativo
   const hasActive = visibleItems.some((i) =>
