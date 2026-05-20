@@ -147,6 +147,31 @@ const auth = {
   },
 };
 
+// ── OAuth hash bootstrap (Google callback) ────────────────────
+// Quando o backend redireciona para `${redirect_to}#access_token=...&refresh_token=...`,
+// capturamos os tokens, salvamos no localStorage e limpamos a URL.
+(function _consumeOAuthHash() {
+  if (typeof window === 'undefined') return;
+  const hash = window.location.hash;
+  if (!hash || hash.length < 2) return;
+  const params = new URLSearchParams(hash.slice(1));
+  const access_token = params.get('access_token');
+  const refresh_token = params.get('refresh_token');
+  if (access_token && refresh_token) {
+    localStorage.setItem('access_token', access_token);
+    localStorage.setItem('refresh_token', refresh_token);
+    _currentUser = _decodeUser(access_token);
+    // Remove o fragment da URL sem recarregar
+    const cleanUrl = window.location.pathname + window.location.search;
+    window.history.replaceState({}, document.title, cleanUrl);
+    // Notifica listeners assim que registrados (próximo tick)
+    setTimeout(() => {
+      const session = { access_token, refresh_token, user: _currentUser };
+      _notify('SIGNED_IN', session);
+    }, 0);
+  }
+})();
+
 // ── Query Builder ─────────────────────────────────────────────
 type FilterOp = 'eq'|'in'|'gte'|'lte'|'gt'|'lt'|'ilike'|'not_is';
 interface Filter { col: string; op: FilterOp; val: any }
