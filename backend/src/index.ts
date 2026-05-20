@@ -51,10 +51,14 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
 
-// ── Servir imagens de upload (público, sem JWT) ──────────────
-app.use('/uploads', express.static(UPLOADS_DIR));
+// ── Servir imagens de upload com log de auditoria ──────────────────────────
+app.use('/uploads', (req, res, next) => {
+  const ip = (req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || '').split(',')[0].trim();
+  console.log(`[UPLOAD_ACCESS] ${new Date().toISOString()} ${ip} ${req.path}`);
+  next();
+}, express.static(UPLOADS_DIR));
 
 // ── Public routes ───────────────────────────────────────────
 const marketing = marketingRouter(pool);

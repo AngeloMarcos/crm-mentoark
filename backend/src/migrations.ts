@@ -112,8 +112,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
       inicio          DATE,
       fim             DATE,
       metricas        JSONB DEFAULT '{}',
-      atualizado_em   TIMESTAMPTZ DEFAULT NOW()
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS webhook_mensagens_processadas (
+      message_id TEXT PRIMARY KEY,
+      instancia  TEXT,
+      criado_em  TIMESTAMPTZ DEFAULT NOW()
     )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_webhook_dedup_criado
+    ON webhook_mensagens_processadas (criado_em)
   `);
 
   console.log('[MIGRATIONS] OK');
