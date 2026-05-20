@@ -2,10 +2,36 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
+import rateLimit from 'express-rate-limit';
 import { pool } from './db';
 import { authMiddleware, AuthRequest } from './middleware';
 
 const router = Router();
+
+// Rate limiter: máximo 10 tentativas por IP+email em 15 minutos
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { message: 'Muitas tentativas de login. Aguarde 15 minutos.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const ip = ((req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '')
+      .split(',')[0].trim();
+    const email = (req.body?.email || '').toLowerCase().trim();
+    return `${ip}:${email}`;
+  },
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { message: 'Limite de cadastros por IP atingido. Aguarde 1 hora.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function signAccessToken(user: { id: string; email: string; role: string; display_name: string }) {
   const opts: SignOptions = { expiresIn: (process.env.JWT_EXPIRES_IN || '1h') as SignOptions['expiresIn'] };
