@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, GripVertical, Tag as TagIcon, Pencil, Check, X } from "lucide-react";
+import { CRMLayout } from "@/components/CRMLayout";
 import { Badge } from "@/components/ui/badge";
 import {
   DndContext,
@@ -206,6 +207,7 @@ const TagsFunilPage = () => {
   };
 
   return (
+    <CRMLayout>
     <div className="p-6 max-w-5xl mx-auto space-y-6 animate-in fade-in duration-500">
       <div className="flex flex-col gap-1">
         <h1 className="text-3xl font-bold tracking-tight">Gerenciamento de Tags e Funil</h1>
@@ -338,6 +340,7 @@ const TagsFunilPage = () => {
         </TabsContent>
       </Tabs>
     </div>
+    </CRMLayout>
   );
 };
 
