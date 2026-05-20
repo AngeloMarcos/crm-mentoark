@@ -1160,6 +1160,24 @@ export type Database = {
         }
         Relationships: []
       }
+      oauth_state: {
+        Row: {
+          expires_at: string
+          nonce: string
+          user_id: string
+        }
+        Insert: {
+          expires_at: string
+          nonce: string
+          user_id: string
+        }
+        Update: {
+          expires_at?: string
+          nonce?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       produto_imagens: {
         Row: {
           created_at: string | null
