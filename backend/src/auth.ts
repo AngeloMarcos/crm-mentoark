@@ -100,6 +100,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       if (valid) {
         const newHash = await bcrypt.hash(password, 12);
         await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, user.id]);
+        console.log(`[AUTH] Senha migrada de pgcrypto → bcrypt para user ${user.id}`);
       }
     }
 
