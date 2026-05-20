@@ -44,7 +44,29 @@ export default function LoginPage() {
       setLoading(false);
       return;
     }
+
+    if (!turnstileToken) {
+      toast({
+        title: "Verificação necessária",
+        description: "Aguarde a verificação do Cloudflare ser concluída.",
+        variant: "destructive",
+      });
+      setLoading(false);
+      return;
+    }
+
     try {
+      // Verificar token no backend antes de autenticar
+      const verifyResp = await fetch(`${API_BASE}/auth/turnstile-verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: turnstileToken }),
+      });
+
+      if (!verifyResp.ok) {
+        throw new Error("Falha na verificação de segurança. Tente novamente.");
+      }
+
       if (isLogin) {
         const { error } = await api.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -63,6 +85,9 @@ export default function LoginPage() {
         setIsLogin(true);
       }
     } catch (err: any) {
+      // Reset do widget em caso de erro
+      setTurnstileToken(null);
+      setTurnstileKey(k => k + 1);
       toast({
         title: "Erro",
         description: err.message?.includes("Invalid login") ? "E-mail ou senha incorretos." : err.message,
