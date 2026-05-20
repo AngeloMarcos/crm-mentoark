@@ -165,8 +165,9 @@ export default function marketing(pool: Pool) {
       );
       if (!conta) return res.status(401).json({ error: "Meta não conectado" });
 
-      const r = await fetch(`https://graph.facebook.com/v19.0/${req.params.id}?status=ACTIVE&access_token=${conta.access_token}`, {
-        method: 'POST'
+      const r = await fetch(`https://graph.facebook.com/v19.0/${req.params.id}?status=ACTIVE`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${conta.access_token}` }
       });
       const data: any = await r.json();
       if (data.error) return res.status(400).json({ error: data.error });
