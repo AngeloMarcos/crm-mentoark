@@ -3,7 +3,7 @@ import {
   PhoneCall, Filter, MessageCircle, Timer, Zap,
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
-  ChevronDown,
+  ChevronDown, Lock,
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -80,6 +80,7 @@ const navGroups: NavGroup[] = [
       { title: "Galeria",       url: "/galeria",  icon: Images,     modulo: "galeria",  color: "text-pink-500"    },
       { title: "Documentação",  url: "/docs",     icon: BookOpen,   modulo: "docs",     color: "text-slate-400"   },
       { title: "Usuários",      url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600"   },
+      { title: "Segurança",     url: "/seguranca", icon: Lock,        modulo: "usuarios", color: "text-red-400"    },
     ],
   },
 ];

@@ -34,6 +34,7 @@ import WorkflowsPage from "./pages/Workflows";
 import DocsPage from "./pages/Docs";
 import CentralBIPage from "./pages/CentralBI";
 import MarketingDigitalPage from "./pages/MarketingDigital";
+import SegurancaPage from "./pages/Seguranca";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -77,6 +78,7 @@ const App = () => (
               <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />
               <Route path="/marketing-digital" element={<ProtectedRoute requireModulo="campanhas"> <MarketingDigitalPage /></ProtectedRoute>} />
               <Route path="/usuarios"     element={<ProtectedRoute requireAdmin>               <UsuariosPage /></ProtectedRoute>} />
+              <Route path="/seguranca"    element={<ProtectedRoute requireAdmin>               <SegurancaPage /></ProtectedRoute>} />
 
               <Route path="*" element={<NotFound />} />
             </Routes>
