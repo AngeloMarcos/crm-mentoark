@@ -9,6 +9,7 @@ import { calcularProjecao } from "@/components/marketing/calcularProjecao";
 import { type ProjecaoInputs, type ProjecaoResultado } from "@/components/marketing/tipos";
 import { ProjecaoResultados } from "@/components/marketing/ProjecaoResultados";
 import { ProjecaoComparativo, type SimulacaoSalva } from "@/components/marketing/ProjecaoComparativo";
+import { CampanhasDashboard } from "@/components/marketing/CampanhasDashboard";
 import { toast } from "sonner";
 
 // Importações alternativas para ícones que podem não estar disponíveis diretamente
@@ -172,8 +173,9 @@ export default function MarketingDigitalPage() {
           </TabsContent>
           
           <TabsContent value="campanhas">
-            <PlaceholderTab texto="Dashboard de campanhas reais — Prompt 4" />
+            <CampanhasDashboard metaConectado={meta.conectado} />
           </TabsContent>
+
           <TabsContent value="leads">
             <PlaceholderTab texto="Leads Ads + ativar Cris — Prompt 5" />
           </TabsContent>
