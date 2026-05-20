@@ -131,7 +131,7 @@ export default function LoginPage() {
 
       <div className="relative z-10 flex w-full h-full min-h-screen">
         {/* Left Side: Login Form */}
-        <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#1e1e2d]/40 backdrop-blur-sm">
+        <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#1e1e2d]/20 backdrop-blur-[2px]">
           <div className="w-full max-w-md space-y-6 animate-fade-in">
             <div className="text-center space-y-3 mb-8 lg:hidden">
               <div className="relative mx-auto w-fit">
