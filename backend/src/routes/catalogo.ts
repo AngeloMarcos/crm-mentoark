@@ -194,6 +194,14 @@ export default function catalogoRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'produto_id e contatos[] são obrigatórios.' });
       }
 
+      // NOVO: cap de segurança
+      if (contatos.length > 100) {
+        return res.status(400).json({ message: 'Máximo de 100 contatos por envio. Use disparos para volumes maiores.' });
+      }
+
+      // Normalizar e validar intervalo_ms
+      const intervalMs = Math.max(2000, Math.min(30000, Number(intervalo_ms) || 3500));
+
       // Busca produto + imagem principal
       const pRes = await pool.query(
         `SELECT p.*, pi.url AS img_url
@@ -208,7 +216,7 @@ export default function catalogoRouter(pool: Pool): Router {
       // Busca config da Evolution API
       const evoRes = await pool.query(
         `SELECT url, api_key, instancia FROM integracoes_config
-         WHERE user_id = $1 AND tipo = 'evolution' AND status = 'conectado' LIMIT 1`,
+         WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado') LIMIT 1`,
         [req.userId]
       );
       if (!evoRes.rows.length) {
@@ -278,7 +286,7 @@ export default function catalogoRouter(pool: Pool): Router {
         );
 
         if (contatos.indexOf(numero) < contatos.length - 1) {
-          await new Promise(r => setTimeout(r, Math.max(2000, Number(intervalo_ms))));
+          await new Promise(r => setTimeout(r, intervalMs));
         }
       }
 
@@ -308,6 +316,14 @@ export default function catalogoRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'catalogo_id e contatos[] são obrigatórios.' });
       }
 
+      if (contatos.length > 50) {
+        return res.status(400).json({ message: 'Máximo de 50 contatos por envio de catálogo.' });
+      }
+
+      // Normalizar e validar intervalo_ms e max_produtos
+      const intervalMs = Math.max(2000, Math.min(30000, Number(intervalo_ms) || 4000));
+      const maxProd = Math.max(1, Math.min(20, Number(max_produtos) || 10));
+
       // Valida catálogo
       const catRes = await pool.query(
         'SELECT * FROM catalogos WHERE id = $1 AND user_id = $2 AND ativo = true',
@@ -323,8 +339,8 @@ export default function catalogoRouter(pool: Pool): Router {
          LEFT JOIN produto_imagens pi ON pi.produto_id = p.id AND pi.principal = true
          WHERE p.catalogo_id = $1 AND p.ativo = true
          ORDER BY p.ordem ASC, p.created_at ASC
-         LIMIT $2`,
-        [catalogo_id, Number(max_produtos)]
+          LIMIT $2`,
+        [catalogo_id, maxProd]
       );
       const produtos = prodRes.rows;
 
@@ -335,7 +351,7 @@ export default function catalogoRouter(pool: Pool): Router {
       // Busca config Evolution API
       const evoRes = await pool.query(
         `SELECT url, api_key, instancia FROM integracoes_config
-         WHERE user_id = $1 AND tipo = 'evolution' AND status = 'conectado' LIMIT 1`,
+         WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado') LIMIT 1`,
         [req.userId]
       );
       if (!evoRes.rows.length) {
@@ -388,7 +404,7 @@ export default function catalogoRouter(pool: Pool): Router {
               });
             }
 
-            await new Promise(r => setTimeout(r, Math.max(3000, Number(intervalo_ms))));
+            await new Promise(r => setTimeout(r, intervalMs));
           }
 
           resultados.push({ numero, status: 'enviado', produtos_enviados: produtos.length });
@@ -477,7 +493,7 @@ export default function catalogoRouter(pool: Pool): Router {
       if (!r.rows.length) return res.status(404).json({ message: 'Imagem não encontrada' });
       const file = path.join(UPLOADS_DIR, path.basename(r.rows[0].url));
       await fs.promises.unlink(file).catch(() => {});
-      await pool.query('DELETE FROM produto_imagens WHERE id = $1', [req.params.id]);
+      await pool.query('DELETE FROM produto_imagens WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
       res.status(204).send();
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
