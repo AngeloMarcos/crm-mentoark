@@ -64,7 +64,22 @@ app.use('/uploads', (req, res, next) => {
 const marketing = marketingRouter(pool);
 app.use('/auth', authRouter);
 app.use('/webhook', webhookRouter(pool));
-app.use('/mcp', mcpRouter(pool));
+// ── MCP com CORS específico para n8n Cloud ─────────────────────────────────
+app.use('/mcp', (req, res, next) => {
+  const mcpOrigins = (process.env.MCP_ALLOWED_ORIGINS || 'https://fierceparrot-n8n.cloudfy.live')
+    .split(',').map(s => s.trim());
+
+  const origin = req.headers.origin;
+  if (!origin || mcpOrigins.includes(origin) || mcpOrigins.includes('*')) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+  }
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-mcp-key, mcp-session-id');
+  res.header('Access-Control-Allow-Credentials', 'true');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  next();
+}, mcpRouter(pool));
 app.use('/api/marketing', marketing.public); // Public part of marketing (callback, webhook)
 
 // Endpoint do catálogo para n8n — protegido por segredo compartilhado
