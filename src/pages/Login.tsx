@@ -325,12 +325,17 @@ export default function LoginPage() {
                 </Button>
 
                 <div className="text-center pt-2">
-                  <Link 
-                    to="/register" 
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setIsLogin(!isLogin);
+                      setTurnstileToken(null);
+                      setTurnstileKey(k => k + 1);
+                    }}
                     className="text-sm text-purple-300 hover:text-white hover:underline transition-colors"
                   >
-                    Não tem uma conta? Cadastre-se gratuitamente
-                  </Link>
+                    {isLogin ? "Não tem uma conta? Cadastre-se gratuitamente" : "Já tem uma conta? Entre agora"}
+                  </button>
                 </div>
 
                 <div className="flex items-center justify-center gap-4 text-[11px] text-white/30 pt-2">
