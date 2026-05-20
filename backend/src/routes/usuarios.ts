@@ -6,11 +6,20 @@ export default function usuarios(pool: Pool): Router {
   const router = Router();
 
   // ----- Virtual table: profiles -----
-  // GET /api/profiles — returns all users as profile rows
+  // GET /api/profiles — returns users as profile rows with pagination
   router.get('/profiles', adminMiddleware, async (req: AuthRequest, res: Response) => {
     try {
+      const limit  = Math.min(parseInt(String(req.query.limit  || '50'), 10), 200);
+      const offset = Math.max(parseInt(String(req.query.offset || '0'),  10), 0);
+      const search = req.query.search ? `%${req.query.search}%` : null;
+
       const r = await pool.query(
-        `SELECT id AS user_id, email, display_name, created_at FROM users ORDER BY created_at DESC`
+        `SELECT id AS user_id, email, display_name, role, active, created_at
+         FROM users
+         WHERE ($1::text IS NULL OR email ILIKE $1 OR display_name ILIKE $1)
+         ORDER BY created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [search, limit, offset]
       );
       return res.json(r.rows);
     } catch (err: any) {
