@@ -18,7 +18,9 @@ export function LoginsSessoes() {
     { label: "Uploads servidos sem autenticação (qualquer URL é pública)", status: "warn" },
     { label: "Emails admin hardcoded em modulos.ts (MASTERS array)", status: "warn" },
     { label: "Rate limiting não configurado na API", status: "warn" },
-    { label: "MCP Client com acesso full ao banco", status: "error" },
+    { label: "Páginas admin-only protegidas por requireAdmin (Segurança, Usuários, Integrações, Agentes, Cérebro, Workflows)", status: "ok" },
+    { label: "Sidebar oculta itens admin para usuários comuns", status: "ok" },
+    { label: "Módulos admin-only removidos dos toggles de delegação", status: "ok" },
   ];
 
   const configAuth = [
