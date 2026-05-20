@@ -262,6 +262,25 @@ export default function LoginPage() {
                     </Label>
                   </div>
 
+                  <div className="flex justify-center my-2 scale-90">
+                    <Turnstile
+                      key={turnstileKey}
+                      siteKey={import.meta.env.VITE_TURNSTILE_SITE_KEY || "1x00000000000000000000AA"}
+                      onSuccess={(token) => setTurnstileToken(token)}
+                      onExpire={() => setTurnstileToken(null)}
+                      onError={() => {
+                        setTurnstileToken(null);
+                        toast({ title: "Erro de verificação", description: "Recarregue a página.", variant: "destructive" });
+                      }}
+                      options={{
+                        theme: "dark",
+                        language: "pt-BR",
+                        size: "normal",
+                      }}
+                      className="mx-auto"
+                    />
+                  </div>
+
                   <Button 
                     type="submit" 
                     className="w-full gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white border-none shadow-lg shadow-purple-500/20 transition-all duration-300 transform hover:scale-[1.02]" 
