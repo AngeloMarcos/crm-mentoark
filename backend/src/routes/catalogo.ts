@@ -286,7 +286,7 @@ export default function catalogoRouter(pool: Pool): Router {
         );
 
         if (contatos.indexOf(numero) < contatos.length - 1) {
-          await new Promise(r => setTimeout(r, Math.max(2000, Number(intervalo_ms))));
+          await new Promise(r => setTimeout(r, intervalMs));
         }
       }
 
