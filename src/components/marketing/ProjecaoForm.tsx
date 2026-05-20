@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   ChevronDown, DollarSign, Calendar, Users, Target,
   Image, Video, LayoutList, Smartphone, Clapperboard,
-  Facebook, Instagram, Share2,
+  Share2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
