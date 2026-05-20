@@ -180,4 +180,54 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// POST /auth/turnstile-verify
+// Verifica o token Turnstile gerado no frontend
+router.post('/turnstile-verify', async (req, res) => {
+  const { token } = req.body as { token?: string };
+
+  if (!token) {
+    return res.status(400).json({ error: 'Token ausente' });
+  }
+
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) {
+    // Se não configurado no servidor, permite passar (dev sem variável)
+    console.warn('[Turnstile] TURNSTILE_SECRET_KEY não configurado — verificação ignorada');
+    return res.json({ success: true, dev: true });
+  }
+
+  try {
+    const formData = new URLSearchParams();
+    formData.append('secret', secret);
+    formData.append('response', token);
+    // Opcional: remoteip para maior segurança
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    if (ip) formData.append('remoteip', String(ip).split(',')[0].trim());
+
+    const cfResp = await fetch(
+      'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData.toString(),
+      }
+    );
+
+    const result = await cfResp.json() as { success: boolean; 'error-codes'?: string[] };
+
+    if (!result.success) {
+      console.warn('[Turnstile] Falha na verificação:', result['error-codes']);
+      return res.status(403).json({
+        error: 'Verificação de segurança falhou. Tente novamente.',
+        codes: result['error-codes'],
+      });
+    }
+
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error('[Turnstile] Erro ao verificar:', err.message);
+    return res.status(500).json({ error: 'Erro interno na verificação' });
+  }
+});
+
 export default router;
