@@ -11,6 +11,7 @@ import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import ParticlesBackground from "@/components/ParticlesBackground";
 import logo from "@/assets/mentoark-logo.png";
+import { Turnstile } from "@marsidev/react-turnstile";
 
 export default function LoginPage() {
   const { toast } = useToast();
@@ -22,7 +23,10 @@ export default function LoginPage() {
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileKey, setTurnstileKey] = useState(0); // força reset do widget
   const navigate = useNavigate();
+  const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
   useEffect(() => {
     if (!authLoading && user) navigate("/dashboard", { replace: true });
@@ -40,7 +44,29 @@ export default function LoginPage() {
       setLoading(false);
       return;
     }
+
+    if (!turnstileToken) {
+      toast({
+        title: "Verificação necessária",
+        description: "Aguarde a verificação do Cloudflare ser concluída.",
+        variant: "destructive",
+      });
+      setLoading(false);
+      return;
+    }
+
     try {
+      // Verificar token no backend antes de autenticar
+      const verifyResp = await fetch(`${API_BASE}/auth/turnstile-verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: turnstileToken }),
+      });
+
+      if (!verifyResp.ok) {
+        throw new Error("Falha na verificação de segurança. Tente novamente.");
+      }
+
       if (isLogin) {
         const { error } = await api.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -59,6 +85,9 @@ export default function LoginPage() {
         setIsLogin(true);
       }
     } catch (err: any) {
+      // Reset do widget em caso de erro
+      setTurnstileToken(null);
+      setTurnstileKey(k => k + 1);
       toast({
         title: "Erro",
         description: err.message?.includes("Invalid login") ? "E-mail ou senha incorretos." : err.message,
@@ -233,10 +262,29 @@ export default function LoginPage() {
                     </Label>
                   </div>
 
+                  <div className="flex justify-center my-2 scale-90">
+                    <Turnstile
+                      key={turnstileKey}
+                      siteKey={import.meta.env.VITE_TURNSTILE_SITE_KEY || "1x00000000000000000000AA"}
+                      onSuccess={(token) => setTurnstileToken(token)}
+                      onExpire={() => setTurnstileToken(null)}
+                      onError={() => {
+                        setTurnstileToken(null);
+                        toast({ title: "Erro de verificação", description: "Recarregue a página.", variant: "destructive" });
+                      }}
+                      options={{
+                        theme: "dark",
+                        language: "pt-BR",
+                        size: "normal",
+                      }}
+                      className="mx-auto"
+                    />
+                  </div>
+
                   <Button 
                     type="submit" 
                     className="w-full gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white border-none shadow-lg shadow-purple-500/20 transition-all duration-300 transform hover:scale-[1.02]" 
-                    disabled={loading}
+                    disabled={loading || !turnstileToken}
                   >
                     {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : isLogin ? <LogIn className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
                     {loading ? "Processando..." : isLogin ? "Entrar na Plataforma" : "Criar Minha Conta"}
@@ -277,12 +325,17 @@ export default function LoginPage() {
                 </Button>
 
                 <div className="text-center pt-2">
-                  <Link 
-                    to="/register" 
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setIsLogin(!isLogin);
+                      setTurnstileToken(null);
+                      setTurnstileKey(k => k + 1);
+                    }}
                     className="text-sm text-purple-300 hover:text-white hover:underline transition-colors"
                   >
-                    Não tem uma conta? Cadastre-se gratuitamente
-                  </Link>
+                    {isLogin ? "Não tem uma conta? Cadastre-se gratuitamente" : "Já tem uma conta? Entre agora"}
+                  </button>
                 </div>
 
                 <div className="flex items-center justify-center gap-4 text-[11px] text-white/30 pt-2">
