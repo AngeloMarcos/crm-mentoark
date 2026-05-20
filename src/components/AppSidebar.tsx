@@ -28,6 +28,7 @@ const items = [
   { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap,      modulo: "whatsapp",    color: "text-yellow-500" },
   { title: "Disparos",          url: "/disparos",    icon: Send,            modulo: "disparos",    color: "text-sky-500" },
   { title: "Campanhas",         url: "/campanhas",   icon: Megaphone,       modulo: "campanhas",   color: "text-rose-500" },
+  { title: "Marketing Digital", url: "/marketing-digital", icon: Megaphone, modulo: "campanhas",   color: "text-blue-500" },
   { title: "Workflows",         url: "/workflows",   icon: GitBranch,       modulo: "workflows",   color: "text-violet-500" },
   { title: "Integrações",       url: "/integracoes", icon: Plug,            modulo: "integracoes", color: "text-amber-500" },
   { title: "Agentes",           url: "/agentes",     icon: Bot,             modulo: "agentes",     color: "text-blue-400" },
