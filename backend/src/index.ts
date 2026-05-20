@@ -6,7 +6,7 @@ import cors from 'cors';
 import path from 'path';
 
 import { pool } from './db';
-import { authMiddleware } from './middleware';
+import { authMiddleware, adminMiddleware } from './middleware';
 import { makeCrud } from './crud';
 
 import authRouter from './auth';
