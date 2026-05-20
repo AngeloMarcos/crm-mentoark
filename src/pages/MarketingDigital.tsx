@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Megaphone, MessageCircle, BarChart3, Settings2, Zap, Target } from "lucide-react";
+import { Megaphone, MessageCircle, BarChart3, Settings2, Zap, Target, TrendingUp } from "lucide-react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,9 @@ import { useMetaStatus } from "@/hooks/useMetaStatus";
 import { ProjecaoForm } from "@/components/marketing/ProjecaoForm";
 import { calcularProjecao } from "@/components/marketing/calcularProjecao";
 import { type ProjecaoInputs, type ProjecaoResultado } from "@/components/marketing/tipos";
+import { ProjecaoResultados } from "@/components/marketing/ProjecaoResultados";
+import { ProjecaoComparativo, type SimulacaoSalva } from "@/components/marketing/ProjecaoComparativo";
+import { toast } from "sonner";
 
 // Importações alternativas para ícones que podem não estar disponíveis diretamente
 const Facebook = ({ className }: { className?: string }) => (
@@ -59,13 +62,25 @@ export default function MarketingDigitalPage() {
   const meta = useMetaStatus();
   const [loadingCalc, setLoadingCalc] = useState(false);
   const [resultado, setResultado] = useState<ProjecaoResultado | null>(null);
+  const [historico, setHistorico] = useState<SimulacaoSalva[]>([]);
+  const [inputsAtual, setInputsAtual] = useState<ProjecaoInputs | null>(null);
   const token = localStorage.getItem("crm_access_token") || "";
 
   const handleCalcular = async (inputs: ProjecaoInputs) => {
     setLoadingCalc(true);
+    setInputsAtual(inputs);
     const r = await calcularProjecao(inputs, token);
     setResultado(r);
     setLoadingCalc(false);
+  };
+
+  const handleSalvar = (nome: string) => {
+    if (!resultado || !inputsAtual) return;
+    if (historico.length >= 5) { toast.error("Máximo 5 simulações. Remova uma antes."); return; }
+    setHistorico((prev) => [{
+      id: crypto.randomUUID(), nome, inputs: inputsAtual, resultado,
+      criadaEm: new Date().toLocaleDateString("pt-BR"),
+    }, ...prev]);
   };
 
   return (
@@ -141,16 +156,19 @@ export default function MarketingDigitalPage() {
           <TabsContent value="projecao" className="mt-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <ProjecaoForm onCalcular={handleCalcular} loading={loadingCalc} />
-              <div className="rounded-xl border border-dashed p-12 text-center text-muted-foreground flex flex-col items-center justify-center gap-3">
-                {resultado
-                  ? <p>Resultados virão no Prompt 3</p>
-                  : <>
-                      <Target className="h-10 w-10 opacity-20" />
-                      <p className="font-medium">Sua projeção aparecerá aqui</p>
-                    </>
-                }
-              </div>
+              {resultado && inputsAtual ? (
+                <ProjecaoResultados inputs={inputsAtual} resultado={resultado} onSalvar={handleSalvar} />
+              ) : (
+                <div className="rounded-xl border border-dashed p-12 text-center text-muted-foreground flex flex-col items-center justify-center gap-3">
+                  <TrendingUp className="h-10 w-10 opacity-20" />
+                  <div>
+                    <p className="font-medium">Sua projeção aparecerá aqui</p>
+                    <p className="text-sm mt-1">Preencha os parâmetros e clique em Calcular.</p>
+                  </div>
+                </div>
+              )}
             </div>
+            <ProjecaoComparativo historico={historico} onRemover={(id) => setHistorico((p) => p.filter((h) => h.id !== id))} />
           </TabsContent>
           
           <TabsContent value="campanhas">
