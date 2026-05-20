@@ -7,7 +7,10 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/integrations/database/client";
-import { Shield, ShieldOff, Loader2, Search, ChevronDown, ChevronUp, LayoutGrid, CheckCircle2, AlertCircle } from "lucide-react";
+import { 
+  Shield, ShieldOff, Loader2, Search, ChevronDown, ChevronUp, 
+  LayoutGrid, CheckCircle2, AlertCircle, Users 
+} from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { AnimatePresence, motion } from "framer-motion";
@@ -192,7 +195,7 @@ export function UsuariosAcessos() {
                   placeholder="Buscar usuário..."
                   value={busca}
                   onChange={e => setBusca(e.target.value)}
-                  className="pl-9 w-full sm:w-64 bg-white/5 border-white/10"
+                  className="pl-9 w-full sm:w-64 bg-white/5 border-white/10 text-white"
                 />
               </div>
               <div className="flex border border-white/10 rounded-md p-0.5">
@@ -313,7 +316,7 @@ export function UsuariosAcessos() {
                             ) : (
                               todosModulos.map(m => (
                                 <div key={m.key} className="flex items-center justify-between p-2 rounded border border-white/5 bg-black/20">
-                                  <Label htmlFor={`mod-${u.user_id}-${m.key}`} className="text-xs cursor-pointer flex-1 truncate pr-2">
+                                  <Label htmlFor={`mod-${u.user_id}-${m.key}`} className="text-xs cursor-pointer flex-1 truncate pr-2 text-white/70">
                                     {m.label}
                                   </Label>
                                   {salvandoModulo === m.key ? (
