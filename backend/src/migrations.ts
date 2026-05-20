@@ -227,5 +227,181 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `);
 
+  // ── Tabelas de CRM — Sprint de Funcionalidades ──────────────────────────────
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS respostas_rapidas (
+      id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id    UUID NOT NULL,
+      atalho     TEXT NOT NULL,
+      titulo     TEXT NOT NULL,
+      mensagem   TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, atalho)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_respostas_rapidas_user
+    ON respostas_rapidas (user_id, created_at DESC)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tags (
+      id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id    UUID NOT NULL,
+      nome       TEXT NOT NULL,
+      cor        TEXT NOT NULL DEFAULT '#3b82f6',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, nome)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tags_user
+    ON tags (user_id)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS funil_estagios (
+      id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id    UUID NOT NULL,
+      nome       TEXT NOT NULL,
+      cor        TEXT NOT NULL DEFAULT '#3b82f6',
+      ordem      INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_funil_estagios_user_ordem
+    ON funil_estagios (user_id, ordem)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS listas (
+      id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id    UUID NOT NULL,
+      nome       TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_listas_user
+    ON listas (user_id, created_at DESC)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chamadas (
+      id          UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id     UUID NOT NULL,
+      contato_id  UUID NOT NULL,
+      resultado   TEXT,
+      notas       TEXT,
+      duracao_seg INTEGER,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_chamadas_user_contato
+    ON chamadas (user_id, contato_id, created_at DESC)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS timeline_eventos (
+      id          UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id     UUID NOT NULL,
+      contato_id  UUID NOT NULL,
+      tipo        TEXT NOT NULL DEFAULT 'nota',
+      titulo      TEXT NOT NULL,
+      descricao   TEXT,
+      data_evento TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_timeline_user_contato
+    ON timeline_eventos (user_id, contato_id, data_evento DESC)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tarefas (
+      id           UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id      UUID NOT NULL,
+      contato_id   UUID NOT NULL,
+      titulo       TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'pendente',
+      prioridade   TEXT NOT NULL DEFAULT 'media',
+      prazo        TIMESTAMPTZ,
+      concluida_at TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tarefas_user_contato
+    ON tarefas (user_id, contato_id, prazo)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tarefas_user_status
+    ON tarefas (user_id, status, prazo)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dados_cliente (
+      id              BIGSERIAL PRIMARY KEY,
+      user_id         UUID NOT NULL,
+      nomewpp         TEXT,
+      telefone        TEXT,
+      "Setor"         TEXT,
+      atendimento_ia  BOOLEAN DEFAULT false,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_dados_cliente_user
+    ON dados_cliente (user_id, created_at DESC)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_dados_cliente_telefone
+    ON dados_cliente (user_id, telefone)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id           BIGSERIAL PRIMARY KEY,
+      user_id      UUID NOT NULL,
+      phone        TEXT,
+      user_message TEXT,
+      bot_message  TEXT,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_user_phone
+    ON chat_messages (user_id, phone, created_at ASC)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS follow_ups (
+      id           UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id      UUID NOT NULL,
+      contato_id   UUID NOT NULL,
+      data_retorno TIMESTAMPTZ NOT NULL,
+      motivo       TEXT,
+      observacao   TEXT,
+      status       TEXT NOT NULL DEFAULT 'pendente',
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_follow_ups_user_data
+    ON follow_ups (user_id, data_retorno, status)
+  `).catch(() => {});
+
+  // ── SLA: adicionar colunas na tabela agentes ─────────────────────────────────
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_ativo                BOOLEAN DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_tme                  INTEGER DEFAULT 15`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_ociosidade           INTEGER DEFAULT 30`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_tma                  INTEGER DEFAULT 120`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_acao_estouro         TEXT    DEFAULT 'none'`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_notificar_supervisor BOOLEAN DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_email_supervisor     TEXT`).catch(() => {});
+
   console.log('[MIGRATIONS] OK');
 }
