@@ -34,6 +34,7 @@ import WorkflowsPage from "./pages/Workflows";
 import DocsPage from "./pages/Docs";
 import CentralBIPage from "./pages/CentralBI";
 import MarketingDigitalPage from "./pages/MarketingDigital";
+import SegurancaPage from "./pages/Seguranca";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
