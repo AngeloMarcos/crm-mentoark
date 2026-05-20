@@ -107,7 +107,7 @@ function NavGroupSection({
       : location.pathname === i.url || location.pathname.startsWith(i.url + "/")
   );
 
-  const [open, setOpen] = useState(hasActive || true);
+  const [open, setOpen] = useState<boolean>(hasActive || true);
 
   return (
     <SidebarGroup className="py-0">
