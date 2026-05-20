@@ -1,5 +1,6 @@
 import { Router, Response, Request } from 'express';
 import { Pool } from 'pg';
+import crypto from 'crypto';
 import { AuthRequest } from '../middleware';
 
 export default function marketing(pool: Pool) {
@@ -54,7 +55,17 @@ export default function marketing(pool: Pool) {
   // GET /api/marketing/facebook/auth
   protectedRouter.get("/facebook/auth", async (req: AuthRequest, res: Response) => {
     try {
-      const state = Buffer.from(JSON.stringify({ user_id: req.userId })).toString("base64");
+      // Gerar nonce aleatório — armazena na sessão do usuário (via banco)
+      const nonce = crypto.randomBytes(16).toString('hex');
+
+      // Salvar nonce no banco com TTL de 10 minutos
+      await pool.query(`
+        INSERT INTO oauth_state (user_id, nonce, expires_at)
+        VALUES ($1, $2, NOW() + INTERVAL '10 minutes')
+        ON CONFLICT (user_id) DO UPDATE SET nonce=$2, expires_at=NOW() + INTERVAL '10 minutes'
+      `, [req.userId, nonce]);
+
+      const state = Buffer.from(JSON.stringify({ user_id: req.userId, nonce })).toString("base64");
       const url = new URL("https://www.facebook.com/v19.0/dialog/oauth");
       url.searchParams.set("client_id", process.env.FACEBOOK_APP_ID!);
       url.searchParams.set("redirect_uri", `${process.env.API_URL}/api/marketing/facebook/callback`);
@@ -88,9 +99,11 @@ export default function marketing(pool: Pool) {
       const url = `https://graph.facebook.com/v19.0/${conta.ad_account_id}/campaigns?` +
         `fields=id,name,status,objective,daily_budget,lifetime_budget,start_time,stop_time,` +
         `insights.date_preset(last_30d){impressions,reach,clicks,ctr,cpc,spend,actions}&` +
-        `effective_status=${status}&access_token=${conta.access_token}`;
+        `effective_status=${status}`;
 
-      const r = await fetch(url);
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${conta.access_token}` }
+      });
       const data: any = await r.json();
 
       if (data.error) {
@@ -132,8 +145,9 @@ export default function marketing(pool: Pool) {
       );
       if (!conta) return res.status(401).json({ error: "Meta não conectado" });
 
-      const r = await fetch(`https://graph.facebook.com/v19.0/${req.params.id}?status=PAUSED&access_token=${conta.access_token}`, {
-        method: 'POST'
+      const r = await fetch(`https://graph.facebook.com/v19.0/${req.params.id}?status=PAUSED`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${conta.access_token}` }
       });
       const data: any = await r.json();
       if (data.error) return res.status(400).json({ error: data.error });
@@ -151,8 +165,9 @@ export default function marketing(pool: Pool) {
       );
       if (!conta) return res.status(401).json({ error: "Meta não conectado" });
 
-      const r = await fetch(`https://graph.facebook.com/v19.0/${req.params.id}?status=ACTIVE&access_token=${conta.access_token}`, {
-        method: 'POST'
+      const r = await fetch(`https://graph.facebook.com/v19.0/${req.params.id}?status=ACTIVE`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${conta.access_token}` }
       });
       const data: any = await r.json();
       if (data.error) return res.status(400).json({ error: data.error });
@@ -209,7 +224,22 @@ export default function marketing(pool: Pool) {
     try {
       const { code, state } = req.query as { code: string; state: string };
       if (!state) return res.status(400).send("State missing");
-      const { user_id } = JSON.parse(Buffer.from(state, "base64").toString());
+
+      const { user_id, nonce } = JSON.parse(Buffer.from(state, "base64").toString());
+      if (!user_id || !nonce) return res.status(400).send("State inválido");
+
+      // Verificar nonce no banco para evitar CSRF
+      const { rows: stateRows } = await pool.query(`
+        SELECT user_id FROM oauth_state
+        WHERE user_id = $1 AND nonce = $2 AND expires_at > NOW()
+      `, [user_id, nonce]);
+
+      if (!stateRows.length) {
+        return res.status(403).send("CSRF detectado ou sessão expirada. Tente conectar novamente.");
+      }
+
+      // Limpar nonce usado
+      await pool.query('DELETE FROM oauth_state WHERE user_id = $1', [user_id]);
 
       const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?` +
         `client_id=${process.env.FACEBOOK_APP_ID}&client_secret=${process.env.FACEBOOK_APP_SECRET}` +
@@ -219,7 +249,9 @@ export default function marketing(pool: Pool) {
       
       if (tokenData.error) return res.status(400).json({ error: tokenData.error });
 
-      const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=name,adaccounts{name}&access_token=${tokenData.access_token}`);
+      const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=name,adaccounts{name}`, {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
       const meData: any = await meRes.json();
       const adAccount = meData.adaccounts?.data?.[0];
 
@@ -230,7 +262,11 @@ export default function marketing(pool: Pool) {
         SET ad_account_id=$2, nome_conta=$3, access_token=$4, atualizado_em=NOW()
       `, [user_id, adAccount?.id ?? "", meData.name, tokenData.access_token]);
 
-      res.send(`<script>window.opener?.postMessage('meta_connected','*'); window.close();</script>`);
+      const CRM_ORIGIN = process.env.CRM_ORIGIN || 'https://crm.mentoark.com.br';
+      res.send(`<script>
+        window.opener?.postMessage('meta_connected', ${JSON.stringify(CRM_ORIGIN)});
+        window.close();
+      </script>`);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -239,7 +275,8 @@ export default function marketing(pool: Pool) {
   // GET /api/marketing/webhook/leads (Verification)
   publicRouter.get("/webhook/leads", (req, res) => {
     const { "hub.mode": mode, "hub.challenge": challenge, "hub.verify_token": token } = req.query as any;
-    if (mode === "subscribe" && token === "mentoark-lead-webhook") {
+    const WEBHOOK_VERIFY_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN || 'mentoark-lead-webhook';
+    if (mode === "subscribe" && token === WEBHOOK_VERIFY_TOKEN) {
       return res.send(challenge);
     }
     res.status(403).send("Forbidden");
