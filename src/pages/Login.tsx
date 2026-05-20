@@ -154,8 +154,8 @@ export default function LoginPage() {
       
       {/* Ambient glow effects */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-32 -left-32 w-[40rem] h-[40rem] rounded-full bg-purple-600/20 blur-[120px] animate-pulse" />
-        <div className="absolute -bottom-40 -right-32 w-[40rem] h-[40rem] rounded-full bg-blue-600/20 blur-[120px] animate-pulse" style={{ animationDelay: '2s' }} />
+        <div className="absolute -top-32 -left-32 w-[40rem] h-[40rem] rounded-full bg-purple-600/20 blur-[96px] animate-pulse" />
+        <div className="absolute -bottom-40 -right-32 w-[40rem] h-[40rem] rounded-full bg-blue-600/20 blur-[96px] animate-pulse" style={{ animationDelay: '2s' }} />
       </div>
 
       <div className="relative z-10 flex w-full h-full min-h-screen">
