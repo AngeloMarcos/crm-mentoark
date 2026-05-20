@@ -1,5 +1,6 @@
 import { Router, Response, Request } from 'express';
 import { Pool } from 'pg';
+import crypto from 'crypto';
 import { AuthRequest } from '../middleware';
 
 export default function marketing(pool: Pool) {
