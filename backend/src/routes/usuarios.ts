@@ -85,6 +85,11 @@ export default function usuarios(pool: Pool): Router {
       const user_id = req.query.user_id || req.body.user_id;
       if (!user_id) return res.status(400).json({ message: 'user_id obrigatório' });
 
+      // Impedir auto-rebaixamento de admin
+      if (String(user_id) === req.userId) {
+        return res.status(403).json({ message: 'Você não pode remover seu próprio acesso de admin.' });
+      }
+
       await pool.query(`UPDATE users SET role = 'user' WHERE id = $1`, [user_id]);
       return res.status(204).send();
     } catch (err: any) {
