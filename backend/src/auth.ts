@@ -65,11 +65,14 @@ function mapUser(row: any) {
 }
 
 // POST /auth/login
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', loginLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ message: 'E-mail e senha são obrigatórios' });
+    }
+    if (!EMAIL_REGEX.test(String(email))) {
+      return res.status(400).json({ message: 'Formato de e-mail inválido' });
     }
 
     const { rows } = await pool.query(
