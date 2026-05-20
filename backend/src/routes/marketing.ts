@@ -275,7 +275,8 @@ export default function marketing(pool: Pool) {
   // GET /api/marketing/webhook/leads (Verification)
   publicRouter.get("/webhook/leads", (req, res) => {
     const { "hub.mode": mode, "hub.challenge": challenge, "hub.verify_token": token } = req.query as any;
-    if (mode === "subscribe" && token === "mentoark-lead-webhook") {
+    const WEBHOOK_VERIFY_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN || 'mentoark-lead-webhook';
+    if (mode === "subscribe" && token === WEBHOOK_VERIFY_TOKEN) {
       return res.send(challenge);
     }
     res.status(403).send("Forbidden");
