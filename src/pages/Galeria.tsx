@@ -5,13 +5,15 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import {
   Images, Upload, Trash2, Copy, Loader2, Check, X,
   Pencil, LayoutGrid, List, FileText, Music, Image,
-  Sparkles, Tag, Info,
+  Sparkles, Tag, Info, Bot, Search, Code, ExternalLink, CheckCircle2, AlertCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { BackgroundRemoverModal } from "@/components/catalogo/BackgroundRemoverModal";
