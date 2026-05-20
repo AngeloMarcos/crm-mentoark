@@ -52,11 +52,21 @@ export default function usuarios(pool: Pool): Router {
     }
   });
 
-  // POST /api/user_roles — grant admin role
+  const ROLES_PERMITIDOS = ['admin', 'user'] as const;
+  type UserRole = typeof ROLES_PERMITIDOS[number];
+
+  // POST /api/user_roles — grant role
   router.post('/user_roles', adminMiddleware, async (req: AuthRequest, res: Response) => {
     try {
       const { user_id, role } = req.body;
       if (!user_id || !role) return res.status(400).json({ message: 'user_id e role obrigatórios' });
+
+      // Validar role
+      if (!ROLES_PERMITIDOS.includes(role as UserRole)) {
+        return res.status(400).json({
+          message: `Role inválido. Valores aceitos: ${ROLES_PERMITIDOS.join(', ')}`,
+        });
+      }
 
       const r = await pool.query(
         `UPDATE users SET role = $1 WHERE id = $2 RETURNING id AS user_id, role`,
