@@ -220,7 +220,22 @@ export default function marketing(pool: Pool) {
     try {
       const { code, state } = req.query as { code: string; state: string };
       if (!state) return res.status(400).send("State missing");
-      const { user_id } = JSON.parse(Buffer.from(state, "base64").toString());
+
+      const { user_id, nonce } = JSON.parse(Buffer.from(state, "base64").toString());
+      if (!user_id || !nonce) return res.status(400).send("State inválido");
+
+      // Verificar nonce no banco para evitar CSRF
+      const { rows: stateRows } = await pool.query(`
+        SELECT user_id FROM oauth_state
+        WHERE user_id = $1 AND nonce = $2 AND expires_at > NOW()
+      `, [user_id, nonce]);
+
+      if (!stateRows.length) {
+        return res.status(403).send("CSRF detectado ou sessão expirada. Tente conectar novamente.");
+      }
+
+      // Limpar nonce usado
+      await pool.query('DELETE FROM oauth_state WHERE user_id = $1', [user_id]);
 
       const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?` +
         `client_id=${process.env.FACEBOOK_APP_ID}&client_secret=${process.env.FACEBOOK_APP_SECRET}` +
@@ -230,7 +245,9 @@ export default function marketing(pool: Pool) {
       
       if (tokenData.error) return res.status(400).json({ error: tokenData.error });
 
-      const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=name,adaccounts{name}&access_token=${tokenData.access_token}`);
+      const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=name,adaccounts{name}`, {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
       const meData: any = await meRes.json();
       const adAccount = meData.adaccounts?.data?.[0];
 
@@ -241,7 +258,11 @@ export default function marketing(pool: Pool) {
         SET ad_account_id=$2, nome_conta=$3, access_token=$4, atualizado_em=NOW()
       `, [user_id, adAccount?.id ?? "", meData.name, tokenData.access_token]);
 
-      res.send(`<script>window.opener?.postMessage('meta_connected','*'); window.close();</script>`);
+      const CRM_ORIGIN = process.env.CRM_ORIGIN || 'https://crm.mentoark.com.br';
+      res.send(`<script>
+        window.opener?.postMessage('meta_connected', ${JSON.stringify(CRM_ORIGIN)});
+        window.close();
+      </script>`);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
