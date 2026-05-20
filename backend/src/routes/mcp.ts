@@ -212,6 +212,102 @@ export function buildServer(pool: Pool): McpServer {
     },
   );
 
+  // ── buscar_midia ───────────────────────────────────────────
+  server.tool(
+    'buscar_midia',
+    'Busca na galeria de mídias do usuário (imagens, PDFs, áudios) pelo contexto da conversa. ' +
+    'Use quando o cliente pedir catálogo, preços, fotos, áudios, documentos ou qualquer material cadastrado na galeria.',
+    {
+      user_id: z.string().describe('UUID do usuário dono da galeria'),
+      query: z.string().describe(
+        'Termo de busca — ex: "catálogo de preços", "foto do imóvel", "áudio de boas-vindas". ' +
+        'Será comparado contra título, descrição e tags da mídia.'
+      ),
+      tipo: z.enum(['imagem', 'pdf', 'audio']).optional().describe(
+        'Filtrar por tipo de arquivo. Omitir para buscar em todos os tipos.'
+      ),
+      tag: z.string().optional().describe(
+        'Filtrar por tag exata cadastrada na mídia (ex: "catalogo", "preco").'
+      ),
+      limit: z.number().int().min(1).max(5).optional().default(1),
+    },
+    async ({ user_id, query, tipo, tag, limit }) => {
+      const params: any[] = [user_id, `%${query}%`];
+      let idx = 3;
+
+      // Busca em titulo, descricao e qualquer elemento do array tags
+      let where = `
+        WHERE user_id = $1
+          AND (
+            titulo    ILIKE $2 OR
+            descricao ILIKE $2 OR
+            EXISTS (
+              SELECT 1 FROM unnest(tags) t(tag)
+              WHERE t.tag ILIKE $2
+            )
+          )`;
+
+      // Filtro opcional por tipo (imagem/pdf/audio)
+      // A coluna media_type armazena 'image' | 'pdf' | 'audio'
+      // O parâmetro da tool usa 'imagem' para ficar em português — convertemos aqui
+      if (tipo) {
+        const dbTipo = tipo === 'imagem' ? 'image' : tipo;
+        where += ` AND media_type = $${idx}`;
+        params.push(dbTipo); idx++;
+      }
+
+      // Filtro opcional por tag exata
+      if (tag) {
+        where += ` AND $${idx} = ANY(tags)`;
+        params.push(tag); idx++;
+      }
+
+      const r = await pool.query(
+        `SELECT id, url, titulo, filename, tipo, media_type, tags, descricao
+         FROM galeria_midias
+         ${where}
+         ORDER BY
+           -- Prioriza mídias que têm descrição (mais contextualizadas para o agente)
+           CASE WHEN descricao IS NOT NULL THEN 0 ELSE 1 END,
+           created_at DESC
+         LIMIT $${idx}`,
+        [...params, limit ?? 1],
+      );
+
+      if (r.rows.length === 0) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              encontrado: false,
+              mensagem: 'Nenhuma mídia encontrada para este termo. Verifique se há mídias cadastradas com descrição ou tags relacionadas.',
+            }),
+          }],
+        };
+      }
+
+      const midias = r.rows.map(m => ({
+        id:        m.id,
+        url:       m.url,
+        titulo:    m.titulo || m.filename,
+        tipo:      m.media_type,   // 'image' | 'pdf' | 'audio'
+        tags:      m.tags ?? [],
+        descricao: m.descricao ?? null,
+      }));
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify(
+            limit === 1 ? { encontrado: true, midia: midias[0] }
+                        : { encontrado: true, midias },
+            null, 2
+          ),
+        }],
+      };
+    },
+  );
+
   // ── resumo_dashboard ───────────────────────────────────────
   server.tool(
     'resumo_dashboard',
