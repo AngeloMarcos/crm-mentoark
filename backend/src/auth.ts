@@ -2,10 +2,36 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
+import rateLimit from 'express-rate-limit';
 import { pool } from './db';
 import { authMiddleware, AuthRequest } from './middleware';
 
 const router = Router();
+
+// Rate limiter: máximo 10 tentativas por IP+email em 15 minutos
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { message: 'Muitas tentativas de login. Aguarde 15 minutos.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const ip = ((req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '')
+      .split(',')[0].trim();
+    const email = (req.body?.email || '').toLowerCase().trim();
+    return `${ip}:${email}`;
+  },
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { message: 'Limite de cadastros por IP atingido. Aguarde 1 hora.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function signAccessToken(user: { id: string; email: string; role: string; display_name: string }) {
   const opts: SignOptions = { expiresIn: (process.env.JWT_EXPIRES_IN || '1h') as SignOptions['expiresIn'] };
@@ -39,11 +65,14 @@ function mapUser(row: any) {
 }
 
 // POST /auth/login
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', loginLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ message: 'E-mail e senha são obrigatórios' });
+    }
+    if (!EMAIL_REGEX.test(String(email))) {
+      return res.status(400).json({ message: 'Formato de e-mail inválido' });
     }
 
     const { rows } = await pool.query(
@@ -71,6 +100,7 @@ router.post('/login', async (req: Request, res: Response) => {
       if (valid) {
         const newHash = await bcrypt.hash(password, 12);
         await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, user.id]);
+        console.log(`[AUTH] Senha migrada de pgcrypto → bcrypt para user ${user.id}`);
       }
     }
 
@@ -89,11 +119,14 @@ router.post('/login', async (req: Request, res: Response) => {
 });
 
 // POST /auth/register
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', registerLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password, display_name } = req.body;
     if (!email || !password) {
       return res.status(400).json({ message: 'E-mail e senha são obrigatórios' });
+    }
+    if (!EMAIL_REGEX.test(String(email))) {
+      return res.status(400).json({ message: 'Formato de e-mail inválido' });
     }
     if (password.length < 6) {
       return res.status(400).json({ message: 'Senha deve ter pelo menos 6 caracteres' });
