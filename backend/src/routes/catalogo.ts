@@ -339,8 +339,8 @@ export default function catalogoRouter(pool: Pool): Router {
          LEFT JOIN produto_imagens pi ON pi.produto_id = p.id AND pi.principal = true
          WHERE p.catalogo_id = $1 AND p.ativo = true
          ORDER BY p.ordem ASC, p.created_at ASC
-         LIMIT $2`,
-        [catalogo_id, Number(max_produtos)]
+          LIMIT $2`,
+        [catalogo_id, maxProd]
       );
       const produtos = prodRes.rows;
 
