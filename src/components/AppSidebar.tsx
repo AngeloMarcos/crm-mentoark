@@ -3,7 +3,7 @@ import {
   PhoneCall, Filter, MessageCircle, Timer, Zap,
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
-  ChevronDown,
+  ChevronDown, Lock,
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
