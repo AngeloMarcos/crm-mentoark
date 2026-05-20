@@ -160,7 +160,7 @@ export default function LoginPage() {
 
       <div className="relative z-10 flex w-full h-full min-h-screen">
         {/* Left Side: Login Form */}
-        <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#1e1e2d]/20 backdrop-blur-[2px]">
+        <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#1e1e2d]/20 backdrop-blur-[1.5px]">
           <div className="w-full max-w-md space-y-6 animate-fade-in">
             <div className="text-center space-y-3 mb-8 lg:hidden">
               <div className="relative mx-auto w-fit">
@@ -174,7 +174,7 @@ export default function LoginPage() {
               </h1>
             </div>
 
-            <Card className="bg-white/5 backdrop-blur-xl border-white/10 shadow-2xl ring-1 ring-white/20">
+            <Card className="bg-white/5 backdrop-blur-[19px] border-white/10 shadow-2xl ring-1 ring-white/20">
               <CardHeader className="text-center pb-4">
                 <CardTitle className="text-2xl font-bold text-white">
                   {isLogin ? "Bem-vindo" : "Criar Conta"}
@@ -350,7 +350,7 @@ export default function LoginPage() {
         </div>
 
         {/* Right Side: Logo & Branding */}
-        <div className="hidden lg:flex flex-1 flex-col items-center justify-between bg-gradient-to-br from-purple-900/30 via-[#1e1e2d]/60 to-blue-900/30 backdrop-blur-md relative overflow-hidden border-l border-white/10 py-16 px-12">
+        <div className="hidden lg:flex flex-1 flex-col items-center justify-between bg-gradient-to-br from-purple-900/30 via-[#1e1e2d]/60 to-blue-900/30 backdrop-blur-[10px] relative overflow-hidden border-l border-white/10 py-16 px-12">
           {/* Decorative lines */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
             <div className="absolute top-12 left-0 w-32 h-px bg-gradient-to-r from-purple-400/60 to-transparent" />
@@ -364,7 +364,7 @@ export default function LoginPage() {
           <div className="flex-1 flex flex-col items-center justify-center w-full">
             {/* Circular Logo */}
             <div className="relative mb-8">
-              <div className="absolute inset-0 bg-purple-500/20 blur-3xl rounded-full scale-150" />
+              <div className="absolute inset-0 bg-purple-500/20 blur-[51px] rounded-full scale-150" />
               <div className="relative w-36 h-36 rounded-full bg-white shadow-2xl flex items-center justify-center ring-4 ring-white/10">
                 <img src={logo} alt="MentoArk" className="w-24 h-24 object-contain" />
               </div>
