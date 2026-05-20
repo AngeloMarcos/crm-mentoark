@@ -23,11 +23,13 @@ interface NavItem {
   icon: React.ElementType;
   modulo: string;
   color: string;
+  adminOnly?: boolean;
 }
 
 interface NavGroup {
   label: string;
   items: NavItem[];
+  adminOnly?: boolean;
 }
 
 const navGroups: NavGroup[] = [
