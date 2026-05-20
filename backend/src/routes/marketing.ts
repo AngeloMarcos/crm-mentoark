@@ -55,7 +55,17 @@ export default function marketing(pool: Pool) {
   // GET /api/marketing/facebook/auth
   protectedRouter.get("/facebook/auth", async (req: AuthRequest, res: Response) => {
     try {
-      const state = Buffer.from(JSON.stringify({ user_id: req.userId })).toString("base64");
+      // Gerar nonce aleatório — armazena na sessão do usuário (via banco)
+      const nonce = crypto.randomBytes(16).toString('hex');
+
+      // Salvar nonce no banco com TTL de 10 minutos
+      await pool.query(`
+        INSERT INTO oauth_state (user_id, nonce, expires_at)
+        VALUES ($1, $2, NOW() + INTERVAL '10 minutes')
+        ON CONFLICT (user_id) DO UPDATE SET nonce=$2, expires_at=NOW() + INTERVAL '10 minutes'
+      `, [req.userId, nonce]);
+
+      const state = Buffer.from(JSON.stringify({ user_id: req.userId, nonce })).toString("base64");
       const url = new URL("https://www.facebook.com/v19.0/dialog/oauth");
       url.searchParams.set("client_id", process.env.FACEBOOK_APP_ID!);
       url.searchParams.set("redirect_uri", `${process.env.API_URL}/api/marketing/facebook/callback`);
