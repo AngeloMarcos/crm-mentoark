@@ -263,4 +263,124 @@ router.post('/turnstile-verify', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────
+// Google OAuth
+// ─────────────────────────────────────────────────────────────
+const GOOGLE_REDIRECT_URI =
+  process.env.GOOGLE_REDIRECT_URI ||
+  `${process.env.API_PUBLIC_URL || 'https://api.mentoark.com.br'}/auth/callback/google`;
+
+router.get('/authorize', (req: Request, res: Response) => {
+  const provider = String(req.query.provider || '');
+  const redirect_to = String(req.query.redirect_to || process.env.CORS_ORIGIN || 'https://crm.mentoark.com.br');
+
+  if (provider !== 'google') {
+    return res.status(400).send('Provider não suportado');
+  }
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    return res.status(500).send('Google OAuth não configurado no servidor');
+  }
+
+  const state = jwt.sign(
+    { redirect_to, nonce: uuidv4() },
+    process.env.JWT_SECRET!,
+    { expiresIn: '10m' }
+  );
+
+  const params = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID!,
+    redirect_uri: GOOGLE_REDIRECT_URI,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'offline',
+    prompt: 'select_account',
+    state,
+  });
+
+  return res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+});
+
+router.get('/callback/google', async (req: Request, res: Response) => {
+  try {
+    const { code, state, error: gError } = req.query as Record<string, string>;
+    if (gError) return res.status(400).send(`Google OAuth erro: ${gError}`);
+    if (!code || !state) return res.status(400).send('Parâmetros inválidos');
+
+    let payload: any;
+    try {
+      payload = jwt.verify(state, process.env.JWT_SECRET!);
+    } catch {
+      return res.status(400).send('State inválido ou expirado');
+    }
+    const redirect_to: string = payload.redirect_to;
+
+    // 1) Trocar code por token
+    const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: process.env.GOOGLE_CLIENT_ID!,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+        redirect_uri: GOOGLE_REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }).toString(),
+    });
+    const tokenData = await tokenResp.json() as any;
+    if (!tokenResp.ok || !tokenData.access_token) {
+      console.error('[GOOGLE] Token exchange falhou:', tokenData);
+      return res.status(400).send('Falha ao autenticar com Google');
+    }
+
+    // 2) Buscar perfil
+    const profileResp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const profile = await profileResp.json() as any;
+    if (!profile.email) {
+      return res.status(400).send('Não foi possível obter o e-mail do Google');
+    }
+
+    const email = String(profile.email).toLowerCase().trim();
+    const display_name = profile.name || email.split('@')[0];
+    const avatar_url = profile.picture || null;
+
+    // 3) Upsert do usuário
+    let user;
+    const existing = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (existing.rows.length) {
+      user = existing.rows[0];
+      if (!user.active) return res.status(403).send('Usuário desativado');
+      await pool.query(
+        `UPDATE users SET last_login_at = NOW(),
+           avatar_url = COALESCE(avatar_url, $1),
+           email_verified = true
+         WHERE id = $2`,
+        [avatar_url, user.id]
+      );
+    } else {
+      const randomHash = await bcrypt.hash(uuidv4(), 12);
+      const ins = await pool.query(
+        `INSERT INTO users (email, password_hash, display_name, avatar_url, role, active, email_verified, last_login_at)
+         VALUES ($1, $2, $3, $4, 'user', true, true, NOW()) RETURNING *`,
+        [email, randomHash, display_name, avatar_url]
+      );
+      user = ins.rows[0];
+    }
+
+    // 4) Emitir nossos JWTs
+    const access_token = signAccessToken({
+      id: user.id, email: user.email, role: user.role, display_name: user.display_name,
+    });
+    const refresh_token = await createRefreshToken(user.id);
+
+    // 5) Redirecionar com tokens no fragment (#)
+    const hash = new URLSearchParams({ access_token, refresh_token, token_type: 'bearer' }).toString();
+    return res.redirect(`${redirect_to}#${hash}`);
+  } catch (err: any) {
+    console.error('[GOOGLE CALLBACK] erro:', err);
+    return res.status(500).send('Erro interno no callback do Google');
+  }
+});
+
 export default router;
