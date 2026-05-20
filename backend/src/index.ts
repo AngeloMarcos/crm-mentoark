@@ -149,6 +149,7 @@ const SIMPLE_TABLES = [
   'chat_messages',
   'chats',
   'respostas_rapidas',
+];
 for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
