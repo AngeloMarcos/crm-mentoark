@@ -493,7 +493,7 @@ export default function catalogoRouter(pool: Pool): Router {
       if (!r.rows.length) return res.status(404).json({ message: 'Imagem não encontrada' });
       const file = path.join(UPLOADS_DIR, path.basename(r.rows[0].url));
       await fs.promises.unlink(file).catch(() => {});
-      await pool.query('DELETE FROM produto_imagens WHERE id = $1', [req.params.id]);
+      await pool.query('DELETE FROM produto_imagens WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
       res.status(204).send();
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
