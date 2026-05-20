@@ -316,6 +316,14 @@ export default function catalogoRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'catalogo_id e contatos[] são obrigatórios.' });
       }
 
+      if (contatos.length > 50) {
+        return res.status(400).json({ message: 'Máximo de 50 contatos por envio de catálogo.' });
+      }
+
+      // Normalizar e validar intervalo_ms e max_produtos
+      const intervalMs = Math.max(2000, Math.min(30000, Number(intervalo_ms) || 4000));
+      const maxProd = Math.max(1, Math.min(20, Number(max_produtos) || 10));
+
       // Valida catálogo
       const catRes = await pool.query(
         'SELECT * FROM catalogos WHERE id = $1 AND user_id = $2 AND ativo = true',
