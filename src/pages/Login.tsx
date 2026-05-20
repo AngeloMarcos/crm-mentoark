@@ -23,7 +23,10 @@ export default function LoginPage() {
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileKey, setTurnstileKey] = useState(0); // força reset do widget
   const navigate = useNavigate();
+  const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
   useEffect(() => {
     if (!authLoading && user) navigate("/dashboard", { replace: true });
