@@ -404,7 +404,7 @@ export default function catalogoRouter(pool: Pool): Router {
               });
             }
 
-            await new Promise(r => setTimeout(r, Math.max(3000, Number(intervalo_ms))));
+            await new Promise(r => setTimeout(r, intervalMs));
           }
 
           resultados.push({ numero, status: 'enviado', produtos_enviados: produtos.length });
