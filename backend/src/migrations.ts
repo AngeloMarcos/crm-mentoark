@@ -213,5 +213,14 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ON whatsapp_messages (user_id, session_id, created_at DESC)
   `).catch(() => {});
 
+  // ── Sprint 5: OAuth CSRF protection ────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS oauth_state (
+      user_id    UUID PRIMARY KEY,
+      nonce      TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL
+    )
+  `);
+
   console.log('[MIGRATIONS] OK');
 }
