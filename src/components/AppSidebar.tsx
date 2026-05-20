@@ -1,7 +1,8 @@
 import {
-  LayoutDashboard, Users, Kanban, MessageCircle, Megaphone, Plug,
-  LogOut, Brain, ShieldCheck, PhoneCall, Bot, Send, GitBranch,
-  Contact, BookOpen, LayoutGrid, Images, PieChart, Timer, Zap, Tag,
+  LayoutDashboard, BarChart3, UserPlus, Tags, BookUser,
+  PhoneCall, Filter, MessageCircle, Timer, Zap,
+  Send, Megaphone, Rocket, GitBranch, Bot, Plug,
+  Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/useAuth";
@@ -16,27 +17,40 @@ import {
 } from "@/components/ui/sidebar";
 
 const items = [
-  { title: "Dashboard",         url: "/dashboard",   icon: LayoutDashboard, modulo: "dashboard",   color: "text-blue-500" },
-  { title: "Central de BI",     url: "/bi",          icon: PieChart,        modulo: "dashboard",   color: "text-cyan-500" },
-  { title: "Leads",             url: "/leads",       icon: Users,           modulo: "leads",       color: "text-indigo-500" },
-  { title: "Tags e Funil",      url: "/tags",        icon: Tag,             modulo: "leads",       color: "text-pink-500" },
-  { title: "Contatos",          url: "/contatos",    icon: Contact,         modulo: "contatos",    color: "text-purple-500" },
+  // Visão Geral
+  { title: "Dashboard",         url: "/dashboard",   icon: LayoutDashboard, modulo: "dashboard",   color: "text-blue-500"    },
+  { title: "Central de BI",     url: "/bi",          icon: BarChart3,       modulo: "dashboard",   color: "text-cyan-500"    },
+
+  // Clientes & Vendas
+  { title: "Leads",             url: "/leads",       icon: UserPlus,        modulo: "leads",       color: "text-indigo-500"  },
+  { title: "Tags e Funil",      url: "/tags-funil",  icon: Tags,            modulo: "leads",       color: "text-violet-500"  },
+  { title: "Contatos",          url: "/contatos",    icon: BookUser,        modulo: "contatos",    color: "text-purple-500"  },
+  { title: "Funil de Vendas",   url: "/funil",       icon: Filter,          modulo: "funil",       color: "text-orange-500"  },
+
+  // Atendimento
+  { title: "WhatsApp",          url: "/whatsapp",    icon: MessageCircle,   modulo: "whatsapp",    color: "text-green-500"   },
   { title: "Discagem",          url: "/discagem",    icon: PhoneCall,       modulo: "discagem",    color: "text-emerald-500" },
-  { title: "Funil de Vendas",   url: "/funil",       icon: Kanban,          modulo: "funil",       color: "text-orange-500" },
-  { title: "WhatsApp",          url: "/whatsapp",    icon: MessageCircle,   modulo: "whatsapp",    color: "text-green-500" },
-  { title: "SLA",               url: "/sla",         icon: Timer,           modulo: "whatsapp",    color: "text-orange-500" },
-  { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap,      modulo: "whatsapp",    color: "text-yellow-500" },
-  { title: "Disparos",          url: "/disparos",    icon: Send,            modulo: "disparos",    color: "text-sky-500" },
-  { title: "Campanhas",         url: "/campanhas",   icon: Megaphone,       modulo: "campanhas",   color: "text-rose-500" },
-  { title: "Marketing Digital", url: "/marketing-digital", icon: Megaphone, modulo: "campanhas",   color: "text-blue-500" },
-  { title: "Workflows",         url: "/workflows",   icon: GitBranch,       modulo: "workflows",   color: "text-violet-500" },
-  { title: "Integrações",       url: "/integracoes", icon: Plug,            modulo: "integracoes", color: "text-amber-500" },
-  { title: "Agentes",           url: "/agentes",     icon: Bot,             modulo: "agentes",     color: "text-blue-400" },
-  { title: "Catálogo",          url: "/catalogo",    icon: LayoutGrid,      modulo: "catalogo",    color: "text-fuchsia-500" },
-  { title: "Galeria",           url: "/galeria",     icon: Images,          modulo: "galeria",     color: "text-pink-500" },
-  { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain,           modulo: "cerebro",     color: "text-purple-400" },
-  { title: "Documentação",      url: "/docs",        icon: BookOpen,        modulo: "docs",        color: "text-slate-400" },
-  { title: "Usuários",          url: "/usuarios",    icon: ShieldCheck,     modulo: "usuarios",    color: "text-teal-500" },
+  { title: "SLA",               url: "/sla",         icon: Timer,           modulo: "whatsapp",    color: "text-yellow-500"  },
+  { title: "Respostas Rápidas", url: "/respostas",   icon: Zap,             modulo: "whatsapp",    color: "text-amber-500"   },
+
+  // Comunicação
+  { title: "Disparos",          url: "/disparos",    icon: Send,            modulo: "disparos",    color: "text-sky-500"     },
+  { title: "Campanhas",         url: "/campanhas",   icon: Megaphone,       modulo: "campanhas",   color: "text-rose-500"    },
+  { title: "Marketing Digital", url: "/marketing-digital", icon: Rocket,   modulo: "campanhas",   color: "text-blue-600"    },
+
+  // Automação & IA
+  { title: "Workflows",         url: "/workflows",   icon: GitBranch,       modulo: "workflows",   color: "text-violet-500"  },
+  { title: "Agentes",           url: "/agentes",     icon: Bot,             modulo: "agentes",     color: "text-teal-500"    },
+  { title: "Cérebro do Agente", url: "/cerebro",     icon: Brain,           modulo: "cerebro",     color: "text-purple-400"  },
+  { title: "Integrações",       url: "/integracoes", icon: Plug,            modulo: "integracoes", color: "text-amber-500"   },
+
+  // Conteúdo
+  { title: "Catálogo",          url: "/catalogo",    icon: Package,         modulo: "catalogo",    color: "text-fuchsia-500" },
+  { title: "Galeria",           url: "/galeria",     icon: Images,          modulo: "galeria",     color: "text-pink-500"    },
+
+  // Admin
+  { title: "Documentação",      url: "/docs",        icon: BookOpen,        modulo: "docs",        color: "text-slate-400"   },
+  { title: "Usuários",          url: "/usuarios",    icon: ShieldCheck,     modulo: "usuarios",    color: "text-teal-600"    },
 ];
 
 export function AppSidebar() {
