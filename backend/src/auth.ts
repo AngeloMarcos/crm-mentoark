@@ -119,11 +119,14 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
 });
 
 // POST /auth/register
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', registerLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password, display_name } = req.body;
     if (!email || !password) {
       return res.status(400).json({ message: 'E-mail e senha são obrigatórios' });
+    }
+    if (!EMAIL_REGEX.test(String(email))) {
+      return res.status(400).json({ message: 'Formato de e-mail inválido' });
     }
     if (password.length < 6) {
       return res.status(400).json({ message: 'Senha deve ter pelo menos 6 caracteres' });
