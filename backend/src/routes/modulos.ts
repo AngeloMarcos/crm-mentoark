@@ -12,14 +12,9 @@ export const TODOS_MODULOS = [
   { key: 'whatsapp',    label: 'WhatsApp',           padrao: true  },
   { key: 'disparos',    label: 'Disparos',           padrao: true  },
   { key: 'campanhas',   label: 'Campanhas',          padrao: false },
-  { key: 'workflows',   label: 'Workflows',          padrao: false },
-  { key: 'integracoes', label: 'Integrações',        padrao: false },
-  { key: 'agentes',     label: 'Agentes',            padrao: false },
   { key: 'catalogo',    label: 'Catálogo',           padrao: false },
-  { key: 'cerebro',     label: 'Cérebro do Agente', padrao: false },
   { key: 'galeria',     label: 'Galeria',            padrao: false },
   { key: 'docs',        label: 'Documentação',       padrao: false },
-  { key: 'usuarios',    label: 'Usuários',           padrao: false },
 ];
 
 const MASTERS = ['angelobispofilho@gmail.com', 'mentoark@gmail.com'];
