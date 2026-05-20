@@ -80,6 +80,7 @@ const navGroups: NavGroup[] = [
       { title: "Galeria",       url: "/galeria",  icon: Images,     modulo: "galeria",  color: "text-pink-500"    },
       { title: "Documentação",  url: "/docs",     icon: BookOpen,   modulo: "docs",     color: "text-slate-400"   },
       { title: "Usuários",      url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600"   },
+      { title: "Segurança",     url: "/seguranca", icon: Lock,        modulo: "usuarios", color: "text-red-400"    },
     ],
   },
 ];
