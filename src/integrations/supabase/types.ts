@@ -588,6 +588,21 @@ export type Database = {
           },
         ]
       }
+      disparo_rate_limit: {
+        Row: {
+          last_disparo_at: string
+          user_id: string
+        }
+        Insert: {
+          last_disparo_at?: string
+          user_id: string
+        }
+        Update: {
+          last_disparo_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       disparos: {
         Row: {
           agendado_para: string | null
