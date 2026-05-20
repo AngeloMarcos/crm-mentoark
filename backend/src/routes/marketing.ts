@@ -99,9 +99,11 @@ export default function marketing(pool: Pool) {
       const url = `https://graph.facebook.com/v19.0/${conta.ad_account_id}/campaigns?` +
         `fields=id,name,status,objective,daily_budget,lifetime_budget,start_time,stop_time,` +
         `insights.date_preset(last_30d){impressions,reach,clicks,ctr,cpc,spend,actions}&` +
-        `effective_status=${status}&access_token=${conta.access_token}`;
+        `effective_status=${status}`;
 
-      const r = await fetch(url);
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${conta.access_token}` }
+      });
       const data: any = await r.json();
 
       if (data.error) {
