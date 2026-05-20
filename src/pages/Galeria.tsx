@@ -266,6 +266,26 @@ export default function GaleriaPage() {
   const [editando, setEditando]             = useState<GaleriaItem | null>(null);
   const [formEdit, setFormEdit]             = useState({ titulo: "", tags: "", descricao: "" });
   const [modalRemover, setModalRemover]     = useState(false);
+  const [buscaTeste, setBuscaTeste] = useState("");
+  const [resultadoTeste, setResultadoTeste] = useState<GaleriaItem | null | "vazio">(null);
+  const [buscando, setBuscando] = useState(false);
+
+  const testarBusca = async () => {
+    if (!buscaTeste.trim()) return;
+    setBuscando(true);
+    try {
+      const params = new URLSearchParams({ q: buscaTeste, limit: "1" });
+      const r = await fetch(`${API_BASE}/api/galeria?${params}`, {
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setResultadoTeste((d.images ?? []).length > 0 ? d.images[0] : "vazio");
+      }
+    } finally {
+      setBuscando(false);
+    }
+  };
 
   const carregar = useCallback(async () => {
     setLoading(true);
