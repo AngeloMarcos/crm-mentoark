@@ -97,7 +97,17 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
       return res.json({ count: parseInt(r.rows[0].count, 10), data: null });
     }
 
-    let sql = `SELECT * FROM ${tableName}${whereClause}`;
+    // Colunas permitidas: apenas letras, números e underscore
+    const selectParam = String(req.query.select || '').trim();
+    const selectCols = selectParam
+      ? selectParam
+          .split(',')
+          .map(c => c.trim())
+          .filter(c => /^[a-z_][a-z0-9_]*$/.test(c))
+          .join(', ')
+      : '*';
+
+    let sql = `SELECT ${selectCols || '*'} FROM ${tableName}${whereClause}`;
 
     const orderCol = String(req.query.order || '');
     if (orderCol && /^[a-z_]+$/.test(orderCol)) {
@@ -105,7 +115,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
       sql += ` ORDER BY ${orderCol} ${dir}`;
     }
 
-    const limit = Math.min(parseInt(String(req.query.limit || '1000'), 10) || 1000, 2000);
+    const limit = Math.min(parseInt(String(req.query.limit || '100'), 10) || 100, 500);
     const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
     const offset = (page - 1) * limit;
 
