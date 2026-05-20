@@ -26,6 +26,7 @@ import galeriaRouter from './routes/galeria';
 import modulosRouter from './routes/modulos';
 import whatsappRouter from './routes/whatsapp';
 import { mcpRouter } from './routes/mcp';
+import marketingRouter from './routes/marketing';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 
@@ -56,9 +57,11 @@ app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ── Public routes ───────────────────────────────────────────
+const marketing = marketingRouter(pool);
 app.use('/auth', authRouter);
 app.use('/webhook', webhookRouter(pool));
 app.use('/mcp', mcpRouter(pool));
+app.use('/api/marketing', marketing.public); // Public part of marketing (callback, webhook)
 
 // Endpoint do catálogo para n8n — protegido por segredo compartilhado
 app.get('/api/catalogo/n8n/:userId', async (req, res) => {
@@ -151,6 +154,7 @@ app.use('/api/elevenlabs', elevenLabsRouter(pool));
 app.use('/api/galeria',    galeriaRouter(pool));
 app.use('/api/modulos',   modulosRouter(pool));
 app.use('/api/whatsapp', whatsappRouter(pool));
+app.use('/api/marketing', marketing.protected); // Protected part of marketing (status, campaigns)
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));

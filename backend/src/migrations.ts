@@ -68,5 +68,53 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ON disparo_optouts (user_id, telefone, created_at DESC)
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS facebook_contas (
+      id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id         UUID NOT NULL UNIQUE,
+      ad_account_id   TEXT NOT NULL,
+      nome_conta      TEXT,
+      access_token    TEXT NOT NULL,
+      token_expira_em TIMESTAMPTZ,
+      criado_em       TIMESTAMPTZ DEFAULT NOW(),
+      atualizado_em   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS marketing_leads (
+      id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id         UUID,
+      meta_lead_id    TEXT UNIQUE,
+      nome            TEXT,
+      telefone        TEXT,
+      email           TEXT,
+      campanha        TEXT,
+      campanha_id     TEXT,
+      formulario_id   TEXT,
+      plataforma      TEXT DEFAULT 'facebook',
+      dados_extras    JSONB DEFAULT '{}',
+      status_crm      TEXT DEFAULT 'novo',
+      capturado_em    TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS facebook_campanhas (
+      id              TEXT PRIMARY KEY,
+      user_id         UUID,
+      nome            TEXT,
+      status          TEXT,
+      objetivo        TEXT,
+      plataforma      TEXT,
+      orcamento_diario NUMERIC,
+      orcamento_total  NUMERIC,
+      inicio          DATE,
+      fim             DATE,
+      metricas        JSONB DEFAULT '{}',
+      atualizado_em   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   console.log('[MIGRATIONS] OK');
 }
