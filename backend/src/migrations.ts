@@ -125,9 +125,14 @@ export async function runMigrations(pool: Pool): Promise<void> {
   `);
 
   await pool.query(`
+    ALTER TABLE webhook_mensagens_processadas
+      ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT NOW()
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_webhook_dedup_criado
     ON webhook_mensagens_processadas (criado_em)
-  `);
+  `).catch(() => {});
 
   // ── Sprint 3: Database Audit Fixes ─────────────────────────────────────────
 
