@@ -11,7 +11,7 @@ import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import ParticlesBackground from "@/components/ParticlesBackground";
 import logo from "@/assets/mentoark-logo.png";
-import Turnstile, { useTurnstile } from "@marsidev/react-turnstile";
+import { Turnstile } from "@marsidev/react-turnstile";
 
 export default function LoginPage() {
   const { toast } = useToast();
