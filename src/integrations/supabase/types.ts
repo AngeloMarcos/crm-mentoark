@@ -783,6 +783,84 @@ export type Database = {
         }
         Relationships: []
       }
+      facebook_campanhas: {
+        Row: {
+          atualizado_em: string | null
+          fim: string | null
+          id: string
+          inicio: string | null
+          metricas: Json | null
+          nome: string | null
+          objetivo: string | null
+          orcamento_diario: number | null
+          orcamento_total: number | null
+          plataforma: string | null
+          status: string | null
+          user_id: string | null
+        }
+        Insert: {
+          atualizado_em?: string | null
+          fim?: string | null
+          id: string
+          inicio?: string | null
+          metricas?: Json | null
+          nome?: string | null
+          objetivo?: string | null
+          orcamento_diario?: number | null
+          orcamento_total?: number | null
+          plataforma?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          atualizado_em?: string | null
+          fim?: string | null
+          id?: string
+          inicio?: string | null
+          metricas?: Json | null
+          nome?: string | null
+          objetivo?: string | null
+          orcamento_diario?: number | null
+          orcamento_total?: number | null
+          plataforma?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      facebook_contas: {
+        Row: {
+          access_token: string
+          ad_account_id: string
+          atualizado_em: string | null
+          criado_em: string | null
+          id: string
+          nome_conta: string | null
+          token_expira_em: string | null
+          user_id: string
+        }
+        Insert: {
+          access_token: string
+          ad_account_id: string
+          atualizado_em?: string | null
+          criado_em?: string | null
+          id?: string
+          nome_conta?: string | null
+          token_expira_em?: string | null
+          user_id: string
+        }
+        Update: {
+          access_token?: string
+          ad_account_id?: string
+          atualizado_em?: string | null
+          criado_em?: string | null
+          id?: string
+          nome_conta?: string | null
+          token_expira_em?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       follow_ups: {
         Row: {
           contato_id: string | null
@@ -959,6 +1037,54 @@ export type Database = {
           nome?: string
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      marketing_leads: {
+        Row: {
+          campanha: string | null
+          campanha_id: string | null
+          capturado_em: string | null
+          dados_extras: Json | null
+          email: string | null
+          formulario_id: string | null
+          id: string
+          meta_lead_id: string | null
+          nome: string | null
+          plataforma: string | null
+          status_crm: string | null
+          telefone: string | null
+          user_id: string | null
+        }
+        Insert: {
+          campanha?: string | null
+          campanha_id?: string | null
+          capturado_em?: string | null
+          dados_extras?: Json | null
+          email?: string | null
+          formulario_id?: string | null
+          id?: string
+          meta_lead_id?: string | null
+          nome?: string | null
+          plataforma?: string | null
+          status_crm?: string | null
+          telefone?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          campanha?: string | null
+          campanha_id?: string | null
+          capturado_em?: string | null
+          dados_extras?: Json | null
+          email?: string | null
+          formulario_id?: string | null
+          id?: string
+          meta_lead_id?: string | null
+          nome?: string | null
+          plataforma?: string | null
+          status_crm?: string | null
+          telefone?: string | null
+          user_id?: string | null
         }
         Relationships: []
       }
