@@ -62,7 +62,15 @@ export default function galeriaRouter(pool: Pool): Router {
         params.push(tag); idx++;
       }
       if (q) {
-        where += ` AND (titulo ILIKE $${idx} OR filename ILIKE $${idx})`;
+        where += ` AND (
+          titulo    ILIKE $${idx} OR
+          filename  ILIKE $${idx} OR
+          descricao ILIKE $${idx} OR
+          EXISTS (
+            SELECT 1 FROM unnest(tags) t(tag)
+            WHERE t.tag ILIKE $${idx}
+          )
+        )`;
         params.push(`%${q}%`); idx++;
       }
       if (tipo) {
