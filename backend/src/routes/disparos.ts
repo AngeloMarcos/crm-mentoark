@@ -3,10 +3,29 @@ import { Pool } from 'pg';
 import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
 
-// ── Rate limiting: 1 mensagem por segundo por user_id ─────────────────────────
-const lastSentAt = new Map<string, number>();
-// Exportado apenas para reset em testes
-export const _lastSentAt = lastSentAt;
+// ── Rate limiting persistente via banco ──────────────────────────────────────
+async function checkRateLimit(pool: Pool, userId: string): Promise<boolean> {
+  const r = await pool.query(`
+    SELECT last_disparo_at FROM disparo_rate_limit
+    WHERE user_id = $1
+    FOR UPDATE SKIP LOCKED
+  `, [userId]).catch(() => ({ rows: [] as any[] }));
+
+  const now = Date.now();
+  const lastAt = r.rows[0]?.last_disparo_at
+    ? new Date(r.rows[0].last_disparo_at).getTime()
+    : 0;
+
+  if (now - lastAt < 1000) return false; // bloqueado
+
+  await pool.query(`
+    INSERT INTO disparo_rate_limit (user_id, last_disparo_at)
+    VALUES ($1, NOW())
+    ON CONFLICT (user_id) DO UPDATE SET last_disparo_at = NOW()
+  `, [userId]).catch(() => {});
+
+  return true;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -116,11 +135,22 @@ export default function disparos(pool: Pool): Router {
       return res.status(403).json({ message: 'Contato optou por não receber mensagens' });
     }
 
-    // 7. Rate limiting: máx 1 msg/s por user_id
+    // 7. Rate limiting: máx 1 msg/s por user_id (via banco)
     const userId = req.userId!;
-    const now = Date.now();
-    const last = lastSentAt.get(userId) ?? 0;
-    if (now - last < 1000) {
+
+    // 7.1 Verificar que disparo_log e disparo pertencem ao mesmo user e são relacionados
+    const logCheck = await pool.query(
+      `SELECT id FROM disparo_logs
+       WHERE id = $1 AND disparo_id = $2 AND user_id = $3`,
+      [disparo_log_id, disparo_id, userId]
+    ).catch(() => ({ rows: [] as any[] }));
+
+    if (!logCheck.rows.length) {
+      return res.status(403).json({ message: 'disparo_log_id inválido para este disparo' });
+    }
+
+    const allowed = await checkRateLimit(pool, userId);
+    if (!allowed) {
       res.set('Retry-After', '1');
       return res.status(429).json({
         message: 'Limite de 1 mensagem por segundo atingido — tente novamente em instantes',
@@ -172,8 +202,8 @@ export default function disparos(pool: Pool): Router {
       const maxDelay = Math.floor(minDelay * 1.8);
       const typingDelay = Math.floor(Math.random() * (maxDelay - minDelay) + minDelay);
 
-      // Registra timestamp para rate limit antes de chamar a API externa
-      lastSentAt.set(userId, Date.now());
+      // O rate limit já foi registrado no checkRateLimit acima
+
 
       const resp = await fetch(`${baseUrl}/message/sendText/${instancia}`, {
         method: 'POST',
