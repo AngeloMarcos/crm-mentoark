@@ -159,6 +159,21 @@ app.use('/api/marketing', marketing.protected); // Protected part of marketing (
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
 
+// ── Security Panel endpoints ─────────────────────────────────
+app.get('/api/seguranca/status-chaves', authMiddleware, adminMiddleware, (_req, res) => {
+  const chaves = [
+    { chave: 'JWT_SECRET',            configurado: !!process.env.JWT_SECRET },
+    { chave: 'MCP_SECRET',            configurado: !!process.env.MCP_SECRET },
+    { chave: 'N8N_CATALOG_SECRET',    configurado: !!process.env.N8N_CATALOG_SECRET },
+    { chave: 'FACEBOOK_APP_ID',       configurado: !!process.env.FACEBOOK_APP_ID },
+    { chave: 'FACEBOOK_APP_SECRET',   configurado: !!process.env.FACEBOOK_APP_SECRET },
+    { chave: 'OPENAI_API_KEY',        configurado: !!process.env.OPENAI_API_KEY },
+    { chave: 'EVOLUTION_API_KEY',     configurado: !!process.env.EVOLUTION_API_KEY },
+    { chave: 'N8N_CRIS_WEBHOOK',      configurado: !!process.env.N8N_CRIS_WEBHOOK },
+  ];
+  res.json(chaves);
+});
+
 // ── Health check ─────────────────────────────────────────────
 app.get('/health', async (_req, res) => {
   try {
