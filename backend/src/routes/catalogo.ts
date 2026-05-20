@@ -194,6 +194,14 @@ export default function catalogoRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'produto_id e contatos[] são obrigatórios.' });
       }
 
+      // NOVO: cap de segurança
+      if (contatos.length > 100) {
+        return res.status(400).json({ message: 'Máximo de 100 contatos por envio. Use disparos para volumes maiores.' });
+      }
+
+      // Normalizar e validar intervalo_ms
+      const intervalMs = Math.max(2000, Math.min(30000, Number(intervalo_ms) || 3500));
+
       // Busca produto + imagem principal
       const pRes = await pool.query(
         `SELECT p.*, pi.url AS img_url
