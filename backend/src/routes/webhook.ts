@@ -1,6 +1,27 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
+import crypto from 'crypto';
 import { processarMensagem } from '../services/agentEngine';
+
+function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
+  const assinaturaRecebida = req.headers['x-evolution-hmac'] as string;
+  if (!assinaturaRecebida) return false;
+
+  const body = JSON.stringify(req.body);
+  const hmac = crypto
+    .createHmac('sha256', secret)
+    .update(body)
+    .digest('hex');
+
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(assinaturaRecebida, 'hex'),
+      Buffer.from(hmac, 'hex')
+    );
+  } catch (e) {
+    return false;
+  }
+}
 
 interface EvolutionPayload {
   event: string;
@@ -83,6 +104,15 @@ export default function webhookRouter(pool: Pool): Router {
   const processados = new Set<string>();
 
   router.post('/evolution', async (req: Request, res: Response) => {
+    // Verificar assinatura se EVOLUTION_WEBHOOK_SECRET estiver configurado
+    const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      if (!verificarAssinaturaEvolution(req, webhookSecret)) {
+        console.warn('[WEBHOOK] Assinatura inválida — requisição rejeitada');
+        return res.status(401).json({ error: 'Assinatura inválida' });
+      }
+    }
+
     res.status(200).json({ ok: true });
 
     try {
