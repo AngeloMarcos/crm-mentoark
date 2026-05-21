@@ -436,11 +436,18 @@ function StepReview({ form, onStart }: any) {
       let targetContacts: any[] = [];
       
       if (form.tags_selecionadas.length > 0) {
+        // Como o QueryBuilder customizado é limitado, buscamos todos e filtramos no cliente 
+        // ou usamos um filtro de string simples se possível.
         const { data } = await supabase
           .from("contatos")
-          .select("id, nome, telefone")
-          .filter("tags", "cs", `{"${form.tags_selecionadas.join('","')}"}`);
-        if (data) targetContacts = [...targetContacts, ...data];
+          .select("id, nome, telefone, tags");
+        
+        if (data) {
+          const filtered = data.filter((c: any) => 
+            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
+          );
+          targetContacts = [...targetContacts, ...filtered];
+        }
       }
       
       if (form.estagios_selecionados.length > 0) {
