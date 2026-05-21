@@ -1651,6 +1651,19 @@ export type Database = {
       }
     }
     Functions: {
+      get_next_disparo_batch: {
+        Args: { p_limit: number }
+        Returns: {
+          disparo_id: string
+          legenda_midia: string
+          log_id: string
+          mensagem: string
+          telefone: string
+          tipo_midia: string
+          url_midia: string
+          user_id: string
+        }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
