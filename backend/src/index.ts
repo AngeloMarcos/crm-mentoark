@@ -29,6 +29,7 @@ import { mcpRouter } from './routes/mcp';
 import marketingRouter from './routes/marketing';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
+import { processarDisparos } from './services/disparoProcessor';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 
