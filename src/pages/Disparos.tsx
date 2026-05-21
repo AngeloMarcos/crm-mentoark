@@ -429,35 +429,83 @@ function StepReview({ form, onStart }: any) {
   const [agendarAt, setAgendarAt] = useState("");
 
   const handleStart = async (now = true) => {
-    const payload: any = {
-      user_id: (await supabase.auth.getUser()).data.user?.id,
-      nome: form.nome || "Disparo em Massa " + new Date().toLocaleDateString(),
-      status: now ? 'em_andamento' : 'rascunho',
-      perfil_velocidade: form.perfil_velocidade,
-      horario_inicio: form.janela_inicio,
-      horario_fim: form.janela_fim,
-      instancias_ids: form.instancias_ids,
-      total_leads: 450, // Mock
-      mensagem_template: form.mensagem,
-      tipo_midia: form.tipo_midia,
-      url_midia: form.url_midia,
-      legenda_midia: form.legenda_midia,
-      agendado_para: now ? null : agendarAt,
-      pausa_fins_semana: form.pausa_fins_semana,
-      pausa_erros_consecutivos: form.pausa_erros_consecutivos,
-      limite_erros_consecutivos: form.limite_erros_consecutivos,
-      pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
-    };
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      // 1. Coletar contatos baseados nos filtros
+      let targetContacts: any[] = [];
+      
+      if (form.tags_selecionadas.length > 0) {
+        const { data } = await supabase
+          .from("contatos")
+          .select("id, nome, telefone")
+          .containedBy("tags", form.tags_selecionadas);
+        if (data) targetContacts = [...targetContacts, ...data];
+      }
+      
+      if (form.estagios_selecionados.length > 0) {
+        const { data } = await supabase
+          .from("contatos")
+          .select("id, nome, telefone")
+          .in("funil_estagio_id", form.estagios_selecionados);
+        if (data) targetContacts = [...targetContacts, ...data];
+      }
 
-    const { data, error } = await supabase.from("disparos").insert(payload as any).select().single();
+      // Remover duplicados (por telefone)
+      const uniqueContacts = Array.from(new Map(targetContacts.map(c => [c.telefone, c])).values());
 
-    if (error) {
-      toast.error("Erro ao salvar campanha: " + error.message);
-      return;
+      if (uniqueContacts.length === 0) {
+        toast.error("Nenhum contato encontrado com os filtros selecionados.");
+        return;
+      }
+
+      const payload: any = {
+        user_id: user?.id,
+        nome: form.nome || "Disparo em Massa " + new Date().toLocaleDateString(),
+        status: now ? 'em_andamento' : 'rascunho',
+        perfil_velocidade: form.perfil_velocidade,
+        horario_inicio: form.janela_inicio,
+        horario_fim: form.janela_fim,
+        instancias_ids: form.instancias_ids,
+        total_leads: uniqueContacts.length,
+        mensagem_template: form.mensagem,
+        tipo_midia: form.tipo_midia,
+        url_midia: form.url_midia,
+        legenda_midia: form.legenda_midia,
+        agendado_para: now ? null : agendarAt,
+        pausa_fins_semana: form.pausa_fins_semana,
+        pausa_erros_consecutivos: form.pausa_erros_consecutivos,
+        limite_erros_consecutivos: form.limite_erros_consecutivos,
+        pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
+      };
+
+      const { data: campaignData, error: campaignError } = await supabase
+        .from("disparos")
+        .insert(payload)
+        .select()
+        .single();
+
+      if (campaignError) throw campaignError;
+
+      // 2. Criar logs individuais (mensagens pendentes)
+      const logs = uniqueContacts.map(c => ({
+        disparo_id: campaignData.id,
+        user_id: user?.id,
+        contato_id: c.id,
+        telefone: c.telefone,
+        nome: c.nome,
+        mensagem_enviada: form.mensagem.replace('{{nome}}', c.nome || 'cliente').replace('{{primeiro_nome}}', (c.nome || 'cliente').split(' ')[0]),
+        status: 'pending'
+      }));
+
+      const { error: logsError } = await supabase.from("disparo_logs").insert(logs);
+      if (logsError) throw logsError;
+      
+      toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
+      if (now) onStart(campaignData);
+    } catch (err: any) {
+      toast.error("Erro ao iniciar campanha: " + err.message);
     }
-    
-    toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
-    if (now) onStart(data);
   };
 
   return (
