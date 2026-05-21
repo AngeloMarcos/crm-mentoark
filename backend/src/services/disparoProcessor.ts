@@ -1,5 +1,7 @@
 import { Pool } from 'pg';
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export async function processarDisparos(pool: Pool) {
   try {
     // 1. Buscar lote de mensagens pendentes usando a função SQL atômica
@@ -92,6 +94,8 @@ export async function processarDisparos(pool: Pool) {
           [disparo_id]
         );
       }
+      // Delay entre mensagens do lote para não sobrecarregar
+      await sleep(1500);
     }
   } catch (err: any) {
     console.error('[DISPARO] Erro crítico no motor de processamento:', err.message);
