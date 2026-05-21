@@ -24,10 +24,14 @@ const FILES_FRONTEND = [
 
 const FILES_BACKEND = [
   'backend/src/index.ts',
+  'backend/src/db.ts',
   'backend/src/routes/modulos.ts',
   'backend/src/routes/galeria.ts',
   'backend/src/routes/elevenlabs.ts',
   'backend/src/routes/catalogo.ts',
+  'backend/src/routes/disparos.ts',
+  'backend/src/routes/contatos.ts',
+  'backend/src/services/disparoProcessor.ts',
 ];
 
 const FILES_MIGRATIONS = [
@@ -98,16 +102,20 @@ function sshSendFile(localPath, remotePath) {
 
 const backendFiles = [
   { local: path.join(PROJECT, 'backend/src/index.ts'),              remote: '/opt/crm/backend/src/index.ts' },
+  { local: path.join(PROJECT, 'backend/src/db.ts'),                 remote: '/opt/crm/backend/src/db.ts' },
   { local: path.join(PROJECT, 'backend/src/routes/modulos.ts'),     remote: '/opt/crm/backend/src/routes/modulos.ts' },
   { local: path.join(PROJECT, 'backend/src/routes/galeria.ts'),     remote: '/opt/crm/backend/src/routes/galeria.ts' },
   { local: path.join(PROJECT, 'backend/src/routes/elevenlabs.ts'),  remote: '/opt/crm/backend/src/routes/elevenlabs.ts' },
   { local: path.join(PROJECT, 'backend/src/routes/catalogo.ts'),    remote: '/opt/crm/backend/src/routes/catalogo.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/disparos.ts'),    remote: '/opt/crm/backend/src/routes/disparos.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/contatos.ts'),    remote: '/opt/crm/backend/src/routes/contatos.ts' },
+  { local: path.join(PROJECT, 'backend/src/services/disparoProcessor.ts'), remote: '/opt/crm/backend/src/services/disparoProcessor.ts' },
 ];
 
 (async () => {
   try {
     // Garante que os diretórios existem
-    await sshRun(['mkdir -p /opt/crm/backend/src/routes']);
+    await sshRun(['mkdir -p /opt/crm/backend/src/routes /opt/crm/backend/src/services']);
 
     // Envia arquivos
     for (const f of backendFiles) {
