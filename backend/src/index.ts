@@ -29,6 +29,7 @@ import { mcpRouter } from './routes/mcp';
 import marketingRouter from './routes/marketing';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
+import { processarDisparos } from './services/disparoProcessor';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 
@@ -218,6 +219,11 @@ runMigrations(pool).catch(err => console.error('[MIGRATIONS] Erro:', err));
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`API running on port ${PORT}`);
   initCronJobs();
+  
+  // Motor de disparos: verifica mensagens pendentes a cada 2 segundos
+  setInterval(() => {
+    processarDisparos(pool);
+  }, 2000);
 });
 
 export default app;

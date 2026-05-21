@@ -429,35 +429,90 @@ function StepReview({ form, onStart }: any) {
   const [agendarAt, setAgendarAt] = useState("");
 
   const handleStart = async (now = true) => {
-    const payload: any = {
-      user_id: (await supabase.auth.getUser()).data.user?.id,
-      nome: form.nome || "Disparo em Massa " + new Date().toLocaleDateString(),
-      status: now ? 'em_andamento' : 'rascunho',
-      perfil_velocidade: form.perfil_velocidade,
-      horario_inicio: form.janela_inicio,
-      horario_fim: form.janela_fim,
-      instancias_ids: form.instancias_ids,
-      total_leads: 450, // Mock
-      mensagem_template: form.mensagem,
-      tipo_midia: form.tipo_midia,
-      url_midia: form.url_midia,
-      legenda_midia: form.legenda_midia,
-      agendado_para: now ? null : agendarAt,
-      pausa_fins_semana: form.pausa_fins_semana,
-      pausa_erros_consecutivos: form.pausa_erros_consecutivos,
-      limite_erros_consecutivos: form.limite_erros_consecutivos,
-      pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
-    };
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      // 1. Coletar contatos baseados nos filtros
+      let targetContacts: any[] = [];
+      
+      if (form.tags_selecionadas.length > 0) {
+        // Como o QueryBuilder customizado é limitado, buscamos todos e filtramos no cliente 
+        // ou usamos um filtro de string simples se possível.
+        const { data } = await supabase
+          .from("contatos")
+          .select("id, nome, telefone, tags");
+        
+        if (data) {
+          const filtered = data.filter((c: any) => 
+            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
+          );
+          targetContacts = [...targetContacts, ...filtered];
+        }
+      }
+      
+      if (form.estagios_selecionados.length > 0) {
+        const { data } = await supabase
+          .from("contatos")
+          .select("id, nome, telefone")
+          .in("funil_estagio_id", form.estagios_selecionados);
+        if (data) targetContacts = [...targetContacts, ...data];
+      }
 
-    const { data, error } = await supabase.from("disparos").insert(payload as any).select().single();
+      // Remover duplicados (por telefone)
+      const uniqueContacts = Array.from(new Map(targetContacts.map(c => [c.telefone, c])).values());
 
-    if (error) {
-      toast.error("Erro ao salvar campanha: " + error.message);
-      return;
+      if (uniqueContacts.length === 0) {
+        toast.error("Nenhum contato encontrado com os filtros selecionados.");
+        return;
+      }
+
+      const payload: any = {
+        user_id: user?.id,
+        nome: form.nome || "Disparo em Massa " + new Date().toLocaleDateString(),
+        status: now ? 'em_andamento' : 'rascunho',
+        perfil_velocidade: form.perfil_velocidade,
+        horario_inicio: form.janela_inicio,
+        horario_fim: form.janela_fim,
+        instancias_ids: form.instancias_ids,
+        total_leads: uniqueContacts.length,
+        mensagem_template: form.mensagem,
+        tipo_midia: form.tipo_midia,
+        url_midia: form.url_midia,
+        legenda_midia: form.legenda_midia,
+        agendado_para: now ? null : agendarAt,
+        pausa_fins_semana: form.pausa_fins_semana,
+        pausa_erros_consecutivos: form.pausa_erros_consecutivos,
+        limite_erros_consecutivos: form.limite_erros_consecutivos,
+        pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
+      };
+
+      const { data: campaignData, error: campaignError } = await supabase
+        .from("disparos")
+        .insert(payload)
+        .select()
+        .single();
+
+      if (campaignError) throw campaignError;
+
+      // 2. Criar logs individuais (mensagens pendentes)
+      const logs = uniqueContacts.map(c => ({
+        disparo_id: campaignData.id,
+        user_id: user?.id,
+        contato_id: c.id,
+        telefone: c.telefone,
+        nome: c.nome,
+        mensagem_enviada: form.mensagem.replace('{{nome}}', c.nome || 'cliente').replace('{{primeiro_nome}}', (c.nome || 'cliente').split(' ')[0]),
+        status: 'pending'
+      }));
+
+      const { error: logsError } = await supabase.from("disparo_logs").insert(logs);
+      if (logsError) throw logsError;
+      
+      toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
+      if (now) onStart(campaignData);
+    } catch (err: any) {
+      toast.error("Erro ao iniciar campanha: " + err.message);
     }
-    
-    toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
-    if (now) onStart(data);
   };
 
   return (
@@ -543,14 +598,62 @@ function StepReview({ form, onStart }: any) {
 }
 
 function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: () => void }) {
+  const [currentCampaign, setCurrentCampaign] = useState(campaign);
+  const [logs, setLogs] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchProgress = async () => {
+      // 1. Atualizar dados da campanha
+      const { data: campaignData } = await supabase
+        .from("disparos")
+        .select("*")
+        .eq("id", campaign.id)
+        .single();
+      
+      if (campaignData) {
+        setCurrentCampaign(campaignData);
+      }
+
+      // 2. Buscar logs recentes
+      const { data: logsData } = await supabase
+        .from("disparo_logs")
+        .select("*")
+        .eq("disparo_id", campaign.id)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      
+      if (logsData) {
+        setLogs(logsData);
+      }
+    };
+
+    fetchProgress();
+    const timer = setInterval(fetchProgress, 3000);
+    return () => clearInterval(timer);
+  }, [campaign.id]);
+
   const stats = [
-    { label: "Enviados", val: campaign.enviados || 124, total: campaign.total_contatos || 450, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10" },
-    { label: "Entregues", val: campaign.entregues || 112, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10" },
-    { label: "Respondidos", val: campaign.respondidos || 30, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10" },
-    { label: "Falhas", val: campaign.falhas || 2, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
+    { label: "Enviados", val: currentCampaign.enviados || 0, total: currentCampaign.total_leads || 0, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10" },
+    { label: "Entregues", val: currentCampaign.entregues || 0, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10" },
+    { label: "Respondidos", val: currentCampaign.respondidos || 0, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10" },
+    { label: "Falhas", val: currentCampaign.falhas || 0, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
   ];
 
-  const failureRate = ((campaign.falhas || 2) / (campaign.enviados || 124)) * 100;
+  const failureRate = currentCampaign.enviados > 0 ? (currentCampaign.falhas / (currentCampaign.enviados + currentCampaign.falhas)) * 100 : 0;
+
+  const handleStatusChange = async (newStatus: string) => {
+    const { error } = await supabase
+      .from("disparos")
+      .update({ status: newStatus })
+      .eq("id", campaign.id);
+    
+    if (error) {
+      toast.error("Erro ao alterar status: " + error.message);
+    } else {
+      toast.success(`Campanha ${newStatus === 'pausado' ? 'pausada' : 'cancelada'}!`);
+      if (newStatus === 'cancelado') onCancel();
+    }
+  };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in zoom-in duration-300">
@@ -558,13 +661,19 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
         <div>
           <h2 className="text-2xl font-bold flex items-center gap-2">
             <Activity className="h-6 w-6 text-primary animate-pulse" />
-            Monitoramento: {campaign.nome}
+            Monitoramento: {currentCampaign.nome}
           </h2>
-          <Badge className="mt-1 bg-emerald-500/20 text-emerald-600 border-emerald-500/30">EM ANDAMENTO</Badge>
+          <Badge className={`mt-1 ${currentCampaign.status === 'em_andamento' ? 'bg-emerald-500/20 text-emerald-600' : 'bg-yellow-500/20 text-yellow-600'}`}>
+            {currentCampaign.status.toUpperCase()}
+          </Badge>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline"><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
-          <Button variant="destructive" onClick={onCancel}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
+          {currentCampaign.status === 'em_andamento' ? (
+            <Button variant="outline" onClick={() => handleStatusChange('pausado')}><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
+          ) : (
+            <Button variant="outline" onClick={() => handleStatusChange('em_andamento')}><Play className="w-4 h-4 mr-2" /> Retomar</Button>
+          )}
+          <Button variant="destructive" onClick={() => handleStatusChange('cancelado')}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
         </div>
       </div>
 
@@ -580,7 +689,6 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
         </Alert>
       )}
 
-      
       <div className="grid grid-cols-4 gap-4">
         {stats.map(s => (
           <Card key={s.label} className="p-5 border-none shadow-sm overflow-hidden relative group">
@@ -590,10 +698,14 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
             <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">{s.label}</p>
             <div className="flex items-baseline gap-1">
               <span className={`text-3xl font-black ${s.color}`}>{s.val}</span>
-              {s.total && <span className="text-sm text-muted-foreground font-bold">/ {s.total}</span>}
+              {s.total !== null && <span className="text-sm text-muted-foreground font-bold">/ {s.total}</span>}
             </div>
-            {s.total && <Progress value={(s.val/s.total)*100} className={`h-1.5 mt-3 ${s.bg}`} />}
-            {s.label === "Respondidos" && <p className="text-[10px] text-purple-600 font-bold mt-2">Conversão: 24.2%</p>}
+            {s.total !== null && <Progress value={(s.val/s.total)*100} className={`h-1.5 mt-3 ${s.bg}`} />}
+            {s.label === "Respondidos" && s.val > 0 && (
+              <p className="text-[10px] text-purple-600 font-bold mt-2">
+                Conversão: {((s.val / currentCampaign.enviados) * 100).toFixed(1)}%
+              </p>
+            )}
           </Card>
         ))}
       </div>
@@ -601,43 +713,50 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
       <Card className="border-none shadow-sm overflow-hidden">
         <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
           <h3 className="font-bold text-sm flex items-center gap-2"><TableIcon className="h-4 w-4" /> Log de Envios (Tempo Real)</h3>
-          <Badge variant="outline" className="text-[10px]">Atualizando a cada 5s</Badge>
+          <Badge variant="outline" className="text-[10px]">Atualizando a cada 3s</Badge>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/10">
-                <th className="p-3 text-left font-bold">Contato</th>
+                <th className="p-3 text-left font-bold">Nome</th>
                 <th className="p-3 text-left font-bold">Número</th>
                 <th className="p-3 text-left font-bold">Status</th>
-                <th className="p-3 text-left font-bold">Instância</th>
+                <th className="p-3 text-left font-bold">Erro</th>
                 <th className="p-3 text-left font-bold">Horário</th>
               </tr>
             </thead>
             <tbody className="divide-y">
-              {[
-                { name: "Maria Oliveira", phone: "5511999999999", status: "Respondido", instance: "Instância 01", time: "10:48" },
-                { name: "Carlos Souza", phone: "5511888888888", status: "Entregue", instance: "Instância 02", time: "10:47" },
-                { name: "Ana Santos", phone: "5511777777777", status: "Enviado", instance: "Instância 01", time: "10:47" },
-                { name: "Felipe Lima", phone: "5511666666666", status: "Falha", instance: "Instância 03", time: "10:46" },
-                { name: "Julia Melo", phone: "5511555555555", status: "Pulado", instance: "N/A", time: "10:45" },
-              ].map((log, i) => (
-                <tr key={i} className="hover:bg-muted/5 transition-colors">
-                  <td className="p-3 font-medium">{log.name}</td>
-                  <td className="p-3 text-xs font-mono">{log.phone}</td>
+              {logs.map((log, i) => (
+                <tr key={log.id} className="hover:bg-muted/5 transition-colors">
+                  <td className="p-3 font-medium">{log.nome || "Contato"}</td>
+                  <td className="p-3 text-xs font-mono">{log.telefone}</td>
                   <td className="p-3">
                     <Badge variant={
-                      log.status === 'Respondido' ? 'default' : 
-                      log.status === 'Entregue' ? 'secondary' :
-                      log.status === 'Falha' ? 'destructive' : 'outline'
+                      log.status === 'sent' ? 'secondary' : 
+                      log.status === 'failed' ? 'destructive' :
+                      log.status === 'sending' ? 'default' : 'outline'
                     } className="text-[10px] px-2 py-0">
-                      {log.status}
+                      {log.status === 'sent' ? 'Enviado' : 
+                       log.status === 'failed' ? 'Falha' :
+                       log.status === 'sending' ? 'Enviando...' : 'Pendente'}
                     </Badge>
                   </td>
-                  <td className="p-3 text-xs">{log.instance}</td>
-                  <td className="p-3 text-xs text-muted-foreground">{log.time}</td>
+                  <td className="p-3 text-xs text-red-500 max-w-[200px] truncate" title={log.erro}>
+                    {log.erro || "-"}
+                  </td>
+                  <td className="p-3 text-xs text-muted-foreground">
+                    {new Date(log.enviado_at || log.created_at).toLocaleTimeString()}
+                  </td>
                 </tr>
               ))}
+              {logs.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="p-8 text-center text-muted-foreground italic">
+                    Nenhum envio registrado ainda.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -645,4 +764,5 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
     </div>
   );
 }
+
 
