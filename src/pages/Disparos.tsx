@@ -439,7 +439,7 @@ function StepReview({ form, onStart }: any) {
         const { data } = await supabase
           .from("contatos")
           .select("id, nome, telefone")
-          .containedBy("tags", form.tags_selecionadas);
+          .filter("tags", "cs", `{"${form.tags_selecionadas.join('","')}"}`);
         if (data) targetContacts = [...targetContacts, ...data];
       }
       
