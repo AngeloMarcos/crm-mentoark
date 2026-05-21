@@ -4,11 +4,12 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/postgres'
+  connectionString: process.env.DATABASE_URL,
+  ssl: false
 });
 
 async function test() {
-  console.log('Iniciando processamento manual...');
+  console.log('Iniciando processamento manual (SSL=false)...');
   await processarDisparos(pool);
   console.log('Processamento concluído.');
   await pool.end();
