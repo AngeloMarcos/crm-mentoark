@@ -47,6 +47,7 @@ export default function DisparosPage() {
     estagios_selecionados: [] as string[],
     url_midia: "",
     legenda_midia: "",
+    humanizar_ia: true,
   });
 
 
@@ -412,6 +413,22 @@ function StepAntiBan({ form, setForm }: any) {
             </div>
           </div>
         </Card>
+
+        {/* Humanização IA */}
+        <Card className="p-4 space-y-3 border-primary/30 bg-primary/5">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="font-bold">Humanizar com IA</Label>
+              <p className="text-[11px] text-muted-foreground">
+                Reescreve cada mensagem com leve variação para reduzir risco de bloqueio pela Meta.
+              </p>
+            </div>
+            <Switch
+              checked={form.humanizar_ia}
+              onCheckedChange={v => setForm({...form, humanizar_ia: v})}
+            />
+          </div>
+        </Card>
       </div>
     </div>
   );
@@ -489,6 +506,7 @@ function StepReview({ form, onStart }: any) {
         pausa_erros_consecutivos: form.pausa_erros_consecutivos,
         limite_erros_consecutivos: form.limite_erros_consecutivos,
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
+        humanizar_ia: form.humanizar_ia,
       };
 
 
