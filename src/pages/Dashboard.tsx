@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/integrations/database/client";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -133,8 +132,8 @@ export default function DashboardPage() {
       const amanha = new Date(hoje);
       amanha.setDate(amanha.getDate() + 1);
 
-      const { data, error } = await supabase
-        .from("follow_ups" as any)
+      const { data, error } = await api
+        .from("follow_ups")
         .select("*, contatos:contato_id(nomewpp, telefone)")
         .eq("status", "pendente")
         .gte("data_retorno", hoje.toISOString())
