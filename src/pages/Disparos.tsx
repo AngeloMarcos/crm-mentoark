@@ -506,6 +506,7 @@ function StepReview({ form, onStart }: any) {
         pausa_erros_consecutivos: form.pausa_erros_consecutivos,
         limite_erros_consecutivos: form.limite_erros_consecutivos,
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
+        humanizar_ia: form.humanizar_ia,
       };
 
 
