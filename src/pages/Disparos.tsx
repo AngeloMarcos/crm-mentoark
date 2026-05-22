@@ -47,6 +47,7 @@ export default function DisparosPage() {
     estagios_selecionados: [] as string[],
     url_midia: "",
     legenda_midia: "",
+    humanizar_ia: true,
   });
 
 
@@ -410,6 +411,22 @@ function StepAntiBan({ form, setForm }: any) {
               <span className="text-[10px] uppercase text-muted-foreground">Falhas seguidas para pausar</span>
               <Input type="number" value={form.limite_erros_consecutivos} onChange={e => setForm({...form, limite_erros_consecutivos: parseInt(e.target.value)})} className="h-8" />
             </div>
+          </div>
+        </Card>
+
+        {/* Humanização IA */}
+        <Card className="p-4 space-y-3 border-primary/30 bg-primary/5">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="font-bold">Humanizar com IA</Label>
+              <p className="text-[11px] text-muted-foreground">
+                Reescreve cada mensagem com leve variação para reduzir risco de bloqueio pela Meta.
+              </p>
+            </div>
+            <Switch
+              checked={form.humanizar_ia}
+              onCheckedChange={v => setForm({...form, humanizar_ia: v})}
+            />
           </div>
         </Card>
       </div>

@@ -1,6 +1,21 @@
 import { Pool } from 'pg';
+import { humanizarMensagem } from './humanizationService';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Cache flag humanizar_ia por disparo_id (evita query por mensagem)
+const humanizarCache = new Map<string, boolean>();
+
+async function deveHumanizar(pool: Pool, disparoId: string): Promise<boolean> {
+  if (humanizarCache.has(disparoId)) return humanizarCache.get(disparoId)!;
+  const r = await pool.query(
+    `SELECT COALESCE(humanizar_ia, false) AS h FROM disparos WHERE id = $1`,
+    [disparoId]
+  ).catch(() => ({ rows: [] as any[] }));
+  const flag = r.rows[0]?.h === true;
+  humanizarCache.set(disparoId, flag);
+  return flag;
+}
 
 export async function processarDisparos(pool: Pool) {
   try {
@@ -50,10 +65,21 @@ export async function processarDisparos(pool: Pool) {
 
         // 3. Normalizar telefone
         const digits = telefone.replace(/\D/g, '');
-        
+
+        // 3.1. Humanizar mensagem via Claude se a campanha tiver a flag ligada
+        let textoFinal: string = mensagem;
+        let legendaFinal: string = legenda_midia || mensagem;
+        if (await deveHumanizar(pool, disparo_id)) {
+          if (tipo_midia === 'texto' || !tipo_midia) {
+            textoFinal = await humanizarMensagem(mensagem);
+          } else if (legenda_midia) {
+            legendaFinal = await humanizarMensagem(legenda_midia);
+          }
+        }
+
         // 4. Enviar mensagem
         let endpoint = `${baseUrl}/message/sendText/${instancia}`;
-        let body: any = { number: digits, text: mensagem };
+        let body: any = { number: digits, text: textoFinal };
 
         if (tipo_midia === 'imagem' && url_midia) {
           endpoint = `${baseUrl}/message/sendMedia/${instancia}`;
@@ -61,7 +87,7 @@ export async function processarDisparos(pool: Pool) {
             number: digits, 
             media: url_midia, 
             mediatype: 'image', 
-            caption: legenda_midia || mensagem 
+            caption: legendaFinal 
           };
         } else if (tipo_midia === 'audio' && url_midia) {
           endpoint = `${baseUrl}/message/sendWhatsAppAudio/${instancia}`;
@@ -72,7 +98,7 @@ export async function processarDisparos(pool: Pool) {
             number: digits, 
             media: url_midia, 
             mediatype: 'document', 
-            fileName: legenda_midia || 'documento' 
+            fileName: legendaFinal || 'documento' 
           };
         }
 
