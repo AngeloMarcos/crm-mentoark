@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -89,8 +89,8 @@ const TagsFunilPage = () => {
   const { data: tags = [], isLoading: loadingTags } = useQuery({
     queryKey: ["tags-management-data"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("tags" as any)
+      const { data, error } = await api
+        .from("tags")
         .select("*")
         .order("created_at", { ascending: false });
       
@@ -112,8 +112,8 @@ const TagsFunilPage = () => {
   const { data: stages = [], isLoading: loadingStages } = useQuery({
     queryKey: ["funil-estagios-config-data"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("funil_estagios" as any)
+      const { data, error } = await api
+        .from("funil_estagios")
         .select("*")
         .order("ordem", { ascending: true });
       if (error) throw error;
@@ -139,7 +139,7 @@ const TagsFunilPage = () => {
   // Mutations
   const createTagMutation = useMutation({
     mutationFn: async (newTag: { nome: string; cor: string }) => {
-      const { error } = await supabase.from("tags" as any).insert([{ ...newTag, user_id: user?.id }]);
+      const { error } = await api.from("tags").insert([{ ...newTag, user_id: user?.id }]);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -151,7 +151,7 @@ const TagsFunilPage = () => {
 
   const createStageMutation = useMutation({
     mutationFn: async (newStage: { nome: string; cor: string }) => {
-      const { error } = await supabase.from("funil_estagios" as any).insert([{
+      const { error } = await api.from("funil_estagios").insert([{
         ...newStage,
         user_id: user?.id,
         ordem: stages.length
@@ -167,7 +167,7 @@ const TagsFunilPage = () => {
 
   const deleteStageMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("funil_estagios" as any).delete().eq("id", id);
+      const { error } = await api.from("funil_estagios").delete().eq("id", id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -185,7 +185,7 @@ const TagsFunilPage = () => {
         nome: s.nome,
         cor: s.cor
       }));
-      const { error } = await supabase.from("funil_estagios" as any).upsert(updates);
+      const { error } = await api.from("funil_estagios").upsert(updates);
       if (error) throw error;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["funil-estagios-config-data"] })

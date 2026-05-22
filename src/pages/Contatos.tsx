@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/select";
 import { Search, Loader2, Phone, User, Calendar, Bot, ChevronLeft, ChevronRight, Check, Trash2, Clock, ExternalLink } from "lucide-react";
 import { api } from "@/integrations/database/client";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -74,8 +73,8 @@ export default function ContatosPage() {
   useEffect(() => {
     const fetchContatos = async () => {
       setLoading(true);
-      const { data, error } = await supabase
-        .from("contatos" as any)
+      const { data, error } = await api
+        .from("contatos")
         .select("*")
         .order("created_at", { ascending: false });
       if (error) {
@@ -92,8 +91,8 @@ export default function ContatosPage() {
   const { data: followUps = [], isLoading: loadingFollowUps } = useQuery({
     queryKey: ["follow-ups-list"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("follow_ups" as any)
+      const { data, error } = await api
+        .from("follow_ups")
         .select("*, contatos:contato_id(nomewpp, telefone)")
         .order("data_retorno", { ascending: true });
       if (error) throw error;
@@ -104,8 +103,8 @@ export default function ContatosPage() {
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const { error } = await supabase
-        .from("follow_ups" as any)
+      const { error } = await api
+        .from("follow_ups")
         .update({ status })
         .eq("id", id);
       if (error) throw error;
@@ -118,8 +117,8 @@ export default function ContatosPage() {
 
   const deleteFollowUpMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from("follow_ups" as any)
+      const { error } = await api
+        .from("follow_ups")
         .delete()
         .eq("id", id);
       if (error) throw error;

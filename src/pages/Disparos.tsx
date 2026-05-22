@@ -18,7 +18,7 @@ import {
   Table as TableIcon, Send, XCircle, Activity, AlertCircle
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
 
@@ -95,8 +95,8 @@ function StepContacts({ form, setForm }: any) {
 
   useEffect(() => {
     const fetchTargets = async () => {
-      const { data: tagsData } = await supabase.from("tags").select("*");
-      const { data: estagiosData } = await supabase.from("funil_estagios").select("*");
+      const { data: tagsData } = await api.from("tags").select("*");
+      const { data: estagiosData } = await api.from("funil_estagios").select("*");
       setTags(tagsData || []);
       setEstagios(estagiosData || []);
     };
@@ -296,7 +296,7 @@ function StepAntiBan({ form, setForm }: any) {
 
   useEffect(() => {
     const fetchInstancias = async () => {
-      const { data } = await supabase.from("agentes").select("*").not("evolution_instancia", "is", null);
+      const { data } = await api.from("agentes").select("*").not("evolution_instancia", "is", null);
       setInstancias(data || []);
       setLoading(false);
     };
