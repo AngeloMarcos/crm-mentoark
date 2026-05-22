@@ -430,7 +430,7 @@ function StepReview({ form, onStart }: any) {
 
   const handleStart = async (now = true) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await api.auth.getUser();
       
       // 1. Coletar contatos baseados nos filtros
       let targetContacts: any[] = [];
@@ -438,7 +438,7 @@ function StepReview({ form, onStart }: any) {
       if (form.tags_selecionadas.length > 0) {
         // Como o QueryBuilder customizado é limitado, buscamos todos e filtramos no cliente 
         // ou usamos um filtro de string simples se possível.
-        const { data } = await supabase
+        const { data } = await api
           .from("contatos")
           .select("id, nome, telefone, tags");
         
@@ -451,7 +451,7 @@ function StepReview({ form, onStart }: any) {
       }
       
       if (form.estagios_selecionados.length > 0) {
-        const { data } = await supabase
+        const { data } = await api
           .from("contatos")
           .select("id, nome, telefone")
           .in("funil_estagio_id", form.estagios_selecionados);
@@ -486,7 +486,7 @@ function StepReview({ form, onStart }: any) {
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
       };
 
-      const { data: campaignData, error: campaignError } = await supabase
+      const { data: campaignData, error: campaignError } = await api
         .from("disparos")
         .insert(payload)
         .select()
@@ -505,7 +505,7 @@ function StepReview({ form, onStart }: any) {
         status: 'pending'
       }));
 
-      const { error: logsError } = await supabase.from("disparo_logs").insert(logs);
+      const { error: logsError } = await api.from("disparo_logs").insert(logs);
       if (logsError) throw logsError;
       
       toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
@@ -604,7 +604,7 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
   useEffect(() => {
     const fetchProgress = async () => {
       // 1. Atualizar dados da campanha
-      const { data: campaignData } = await supabase
+      const { data: campaignData } = await api
         .from("disparos")
         .select("*")
         .eq("id", campaign.id)
@@ -615,7 +615,7 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
       }
 
       // 2. Buscar logs recentes
-      const { data: logsData } = await supabase
+      const { data: logsData } = await api
         .from("disparo_logs")
         .select("*")
         .eq("disparo_id", campaign.id)
@@ -642,7 +642,7 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
   const failureRate = currentCampaign.enviados > 0 ? (currentCampaign.falhas / (currentCampaign.enviados + currentCampaign.falhas)) * 100 : 0;
 
   const handleStatusChange = async (newStatus: string) => {
-    const { error } = await supabase
+    const { error } = await api
       .from("disparos")
       .update({ status: newStatus })
       .eq("id", campaign.id);
