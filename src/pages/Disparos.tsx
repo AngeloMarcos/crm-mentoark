@@ -74,7 +74,7 @@ export default function DisparosPage() {
           {step === 0 && <StepContacts />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
-          {step === 3 && <StepReview form={form} onStart={() => setActiveCampaign({ nome: form.nome })} />}
+          {step === 3 && <StepReview form={form} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
         </div>
 
         <div className="flex justify-between pt-6 border-t">
@@ -419,8 +419,41 @@ function StepAntiBan({ form, setForm }: any) {
 
 
 function StepReview({ form, onStart }: any) {
+  const [targetContacts, setTargetContacts] = useState<any[]>([]);
+  const [loadingContacts, setLoadingContacts] = useState(false);
+
+  useEffect(() => {
+    const fetchCount = async () => {
+      setLoadingContacts(true);
+      let list: any[] = [];
+      
+      if (form.tags_selecionadas.length > 0) {
+        const { data } = await api.from("contatos").select("id, nome, telefone, tags");
+        if (data) {
+          const filtered = data.filter((c: any) => 
+            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
+          );
+          list = [...list, ...filtered];
+        }
+      }
+      
+      if (form.estagios_selecionados.length > 0) {
+        const { data } = await api
+          .from("contatos")
+          .select("id, nome, telefone")
+          .in("funil_estagio_id", form.estagios_selecionados);
+        if (data) list = [...list, ...data];
+      }
+
+      const unique = Array.from(new Map(list.map(c => [c.telefone, c])).values());
+      setTargetContacts(unique);
+      setLoadingContacts(false);
+    };
+    fetchCount();
+  }, [form.tags_selecionadas, form.estagios_selecionados]);
+
   const estimateTotalTime = () => {
-    const total = 450; // Mock total
+    const total = targetContacts.length || 1;
     const msgsPerHour = form.perfil_velocidade === 'safe' ? 60 : form.perfil_velocidade === 'moderate' ? 120 : 240;
     const hours = Math.ceil(total / msgsPerHour);
     return `${hours}h ${Math.floor((total % msgsPerHour) / (msgsPerHour/60))}m`;
@@ -430,41 +463,13 @@ function StepReview({ form, onStart }: any) {
 
   const handleStart = async (now = true) => {
     try {
-      const { data: { user } } = await api.auth.getUser();
-      
-      // 1. Coletar contatos baseados nos filtros
-      let targetContacts: any[] = [];
-      
-      if (form.tags_selecionadas.length > 0) {
-        // Como o QueryBuilder customizado é limitado, buscamos todos e filtramos no cliente 
-        // ou usamos um filtro de string simples se possível.
-        const { data } = await api
-          .from("contatos")
-          .select("id, nome, telefone, tags");
-        
-        if (data) {
-          const filtered = data.filter((c: any) => 
-            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
-          );
-          targetContacts = [...targetContacts, ...filtered];
-        }
-      }
-      
-      if (form.estagios_selecionados.length > 0) {
-        const { data } = await api
-          .from("contatos")
-          .select("id, nome, telefone")
-          .in("funil_estagio_id", form.estagios_selecionados);
-        if (data) targetContacts = [...targetContacts, ...data];
-      }
-
-      // Remover duplicados (por telefone)
-      const uniqueContacts = Array.from(new Map(targetContacts.map(c => [c.telefone, c])).values());
-
-      if (uniqueContacts.length === 0) {
+      if (targetContacts.length === 0) {
         toast.error("Nenhum contato encontrado com os filtros selecionados.");
         return;
       }
+
+      const { data: { user } } = await api.auth.getUser();
+
 
       const payload: any = {
         user_id: user?.id,
@@ -474,7 +479,7 @@ function StepReview({ form, onStart }: any) {
         horario_inicio: form.janela_inicio,
         horario_fim: form.janela_fim,
         instancias_ids: form.instancias_ids,
-        total_leads: uniqueContacts.length,
+        total_leads: targetContacts.length,
         mensagem_template: form.mensagem,
         tipo_midia: form.tipo_midia,
         url_midia: form.url_midia,
@@ -486,6 +491,7 @@ function StepReview({ form, onStart }: any) {
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
       };
 
+
       const { data: campaignData, error: campaignError } = await api
         .from("disparos")
         .insert(payload)
@@ -495,7 +501,7 @@ function StepReview({ form, onStart }: any) {
       if (campaignError) throw campaignError;
 
       // 2. Criar logs individuais (mensagens pendentes)
-      const logs = uniqueContacts.map(c => ({
+      const logs = targetContacts.map(c => ({
         disparo_id: campaignData.id,
         user_id: user?.id,
         contato_id: c.id,
@@ -504,6 +510,7 @@ function StepReview({ form, onStart }: any) {
         mensagem_enviada: form.mensagem.replace('{{nome}}', c.nome || 'cliente').replace('{{primeiro_nome}}', (c.nome || 'cliente').split(' ')[0]),
         status: 'pending'
       }));
+
 
       const { error: logsError } = await api.from("disparo_logs").insert(logs);
       if (logsError) throw logsError;
@@ -526,7 +533,8 @@ function StepReview({ form, onStart }: any) {
               <p className="text-[10px] font-bold uppercase text-muted-foreground">Destinatários</p>
               <div className="flex items-center gap-2 mt-1">
                 <Users className="h-4 w-4 text-primary" />
-                <span className="text-xl font-bold">450 contatos</span>
+                <span className="text-xl font-bold">{loadingContacts ? "..." : targetContacts.length} contatos</span>
+
               </div>
               <p className="text-[10px] text-muted-foreground mt-1">12 duplicados removidos | 5 opt-outs excluídos</p>
             </div>

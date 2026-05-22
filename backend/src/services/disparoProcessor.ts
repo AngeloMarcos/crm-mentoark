@@ -15,20 +15,38 @@ export async function processarDisparos(pool: Pool) {
       const { log_id, disparo_id, user_id, telefone, mensagem, tipo_midia, url_midia, legenda_midia } = msg;
 
       try {
-        // 2. Buscar config da Evolution API do usuário
-        const evoRes = await pool.query(
+        // 2. Buscar config da Evolution API (primeiro em integracoes_config, depois em agentes, depois default)
+        let config: { url: string; api_key: string; instancia: string } | null = null;
+
+        const integracaoRes = await pool.query(
           `SELECT url, api_key, instancia FROM integracoes_config 
            WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado') 
            LIMIT 1`,
           [user_id]
         );
 
-        if (!evoRes.rows.length) {
-          throw new Error('Evolution API não configurada ou desconectada');
+        if (integracaoRes.rows.length) {
+          config = integracaoRes.rows[0];
+        } else {
+          const agenteRes = await pool.query(
+            `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
+             FROM agentes
+             WHERE user_id = $1 AND ativo = true
+             ORDER BY updated_at DESC LIMIT 1`,
+            [user_id]
+          );
+          if (agenteRes.rows.length && agenteRes.rows[0].url) {
+            config = agenteRes.rows[0];
+          }
         }
 
-        const { url, api_key, instancia } = evoRes.rows[0];
+        // Fallback para defaults do sistema
+        const url = config?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
+        const api_key = config?.api_key || process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
+        const instancia = config?.instancia || `crm_${String(user_id).slice(0, 8)}`;
+        
         const baseUrl = url.replace(/\/$/, '');
+
 
         // 3. Normalizar telefone
         const digits = telefone.replace(/\D/g, '');
