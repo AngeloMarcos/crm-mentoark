@@ -74,7 +74,7 @@ export default function DisparosPage() {
           {step === 0 && <StepContacts />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
-          {step === 3 && <StepReview form={form} onStart={() => setActiveCampaign({ nome: form.nome })} />}
+          {step === 3 && <StepReview form={form} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
         </div>
 
         <div className="flex justify-between pt-6 border-t">
