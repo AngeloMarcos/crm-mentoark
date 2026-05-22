@@ -145,26 +145,52 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
   router.post('/', wrap(async (req: AuthRequest, res: Response) => {
     const userId = userIdCol ? req.userId ?? null : null;
     const items: any[] = Array.isArray(req.body) ? req.body : [req.body];
-    const results: any[] = [];
+    if (!items.length) return res.status(201).json([]);
 
-    for (const raw of items) {
-      const item = { ...raw };
+    const results: any[] = [];
+    
+    // Se for apenas 1 item, usa o modo tradicional para manter compatibilidade com o retorno de objeto único
+    if (items.length === 1) {
+      const item = { ...items[0] };
       if (userIdCol && userId) item[userIdCol] = userId;
       if (!item[idCol]) delete item[idCol];
       delete item.created_at;
       delete item.updated_at;
 
       const cols = Object.keys(item).filter(k => /^[a-z_]+$/.test(k));
-      if (!cols.length) continue;
       const vals = cols.map(k => item[k]);
       const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ');
       const sql = `INSERT INTO ${tableName} (${cols.join(', ')}) VALUES (${placeholders}) RETURNING *`;
       const r = await pool.query(sql, vals);
-      results.push(r.rows[0]);
+      return res.status(201).json(r.rows[0]);
     }
 
-    return res.status(201).json(results.length === 1 ? results[0] : results);
+    // Para múltiplos itens, usa inserção em lote (bulk insert) eficiente
+    // Assume que todos os itens têm as mesmas colunas (padrão do app)
+    const first = { ...items[0] };
+    if (userIdCol && userId) first[userIdCol] = userId;
+    const cols = Object.keys(first).filter(k => /^[a-z_]+$/.test(k));
+    
+    const placeholders: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+
+    for (const raw of items) {
+      const item = { ...raw };
+      if (userIdCol && userId) item[userIdCol] = userId;
+      
+      const rowPlaceholders = cols.map(c => {
+        vals.push(item[c]);
+        return `$${idx++}`;
+      });
+      placeholders.push(`(${rowPlaceholders.join(', ')})`);
+    }
+
+    const sql = `INSERT INTO ${tableName} (${cols.join(', ')}) VALUES ${placeholders.join(', ')} RETURNING *`;
+    const r = await pool.query(sql, vals);
+    return res.status(201).json(r.rows);
   }));
+
 
   // PUT /:id (update by primary key)
   router.put('/:id', wrap(async (req: AuthRequest, res: Response) => {
