@@ -71,7 +71,7 @@ export default function DisparosPage() {
         </div>
 
         <div className="min-h-[400px]">
-          {step === 0 && <StepContacts />}
+          {step === 0 && <StepContacts form={form} setForm={setForm} />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
           {step === 3 && <StepReview form={form} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
