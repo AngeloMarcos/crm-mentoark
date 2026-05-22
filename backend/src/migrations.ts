@@ -403,5 +403,124 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_notificar_supervisor BOOLEAN DEFAULT false`).catch(() => {});
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sla_email_supervisor     TEXT`).catch(() => {});
 
+  // ── CRM: Disparos e Logs ──────────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS disparos (
+      id               UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id          UUID NOT NULL,
+      nome             TEXT NOT NULL,
+      status           TEXT DEFAULT 'rascunho',
+      perfil_velocidade TEXT DEFAULT 'safe',
+      horario_inicio   TEXT DEFAULT '08:00',
+      horario_fim      TEXT DEFAULT '21:00',
+      instancias_ids   TEXT[] DEFAULT '{}',
+      total_leads      INTEGER DEFAULT 0,
+      enviados         INTEGER DEFAULT 0,
+      entregues        INTEGER DEFAULT 0,
+      respondidos      INTEGER DEFAULT 0,
+      falhas           INTEGER DEFAULT 0,
+      mensagem_template TEXT,
+      tipo_midia       TEXT DEFAULT 'texto',
+      url_midia        TEXT,
+      legenda_midia    TEXT,
+      agendado_para    TIMESTAMPTZ,
+      pausa_fins_semana BOOLEAN DEFAULT true,
+      pausa_erros_consecutivos BOOLEAN DEFAULT true,
+      limite_erros_consecutivos INTEGER DEFAULT 5,
+      pausa_bloqueios_detectados BOOLEAN DEFAULT true,
+      created_at       TIMESTAMPTZ DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS disparo_logs (
+      id               UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      disparo_id       UUID REFERENCES disparos(id) ON DELETE CASCADE,
+      user_id          UUID NOT NULL,
+      contato_id       UUID,
+      telefone         TEXT NOT NULL,
+      nome             TEXT,
+      mensagem_enviada TEXT,
+      status           TEXT DEFAULT 'pending',
+      enviado_at       TIMESTAMPTZ,
+      tentativas       INTEGER DEFAULT 0,
+      erro             TEXT,
+      created_at       TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_disparo_logs_status
+    ON disparo_logs (status) WHERE status = 'pending'
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS disparo_rate_limit (
+      user_id         UUID PRIMARY KEY,
+      last_disparo_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  // ── Função get_next_disparo_batch para o processador ───────────────────────
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION get_next_disparo_batch(batch_size INTEGER)
+    RETURNS TABLE (
+      log_id UUID,
+      disparo_id UUID,
+      user_id UUID,
+      telefone TEXT,
+      mensagem TEXT,
+      tipo_midia TEXT,
+      url_midia TEXT,
+      legenda_midia TEXT
+    ) AS $$
+    BEGIN
+      RETURN QUERY
+      WITH next_msgs AS (
+        SELECT l.id, l.disparo_id, l.user_id, l.telefone, l.mensagem_enviada,
+               d.tipo_midia, d.url_midia, d.legenda_midia
+        FROM disparo_logs l
+        JOIN disparos d ON d.id = l.disparo_id
+        WHERE l.status = 'pending'
+          AND d.status = 'em_andamento'
+          AND (d.agendado_para IS NULL OR d.agendado_para <= NOW())
+        ORDER BY l.created_at ASC
+        LIMIT batch_size
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE disparo_logs
+      SET status = 'sending'
+      FROM next_msgs
+      WHERE disparo_logs.id = next_msgs.id
+      RETURNING 
+        next_msgs.id, next_msgs.disparo_id, next_msgs.user_id, next_msgs.telefone, 
+        next_msgs.mensagem_enviada, next_msgs.tipo_midia, next_msgs.url_midia, next_msgs.legenda_midia;
+    END;
+    $$ LANGUAGE plpgsql;
+  `).catch(err => console.error('[MIGRATIONS] Erro ao criar function get_next_disparo_batch:', err.message));
+
+  // Garantir tabela integracoes_config
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integracoes_config (
+      id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id    UUID NOT NULL,
+      tipo       TEXT NOT NULL,
+      url        TEXT,
+      api_key    TEXT,
+      instancia  TEXT,
+      token      TEXT,
+      status     TEXT DEFAULT 'ativo',
+      config     JSONB DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, tipo)
+    )
+  `).catch(() => {});
+
+  // Colunas de score em agentes
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS evolution_instancia TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS whatsapp_score INTEGER DEFAULT 100`).catch(() => {});
+
   console.log('[MIGRATIONS] OK');
 }
