@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import {
@@ -46,7 +46,7 @@ export const FollowUpModal = ({ isOpen, onClose, contatoId, contatoNome }: Follo
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from("follow_ups").insert([
+      const { error } = await api.from("follow_ups").insert([
         {
           user_id: user?.id,
           contato_id: contatoId,

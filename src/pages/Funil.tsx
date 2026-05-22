@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
-import { supabase } from "@/integrations/supabase/client";
+
 import { useAuth } from "@/hooks/useAuth";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -150,8 +150,8 @@ export default function FunilPage() {
     setLoading(true);
 
     // Carregar estágios do funil personalizados
-    const { data: stageData, error: stageError } = await supabase
-      .from("funil_estagios" as any)
+    const { data: stageData, error: stageError } = await api
+      .from("funil_estagios")
       .select("*")
       .order("ordem", { ascending: true });
 

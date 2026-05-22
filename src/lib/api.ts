@@ -1,7 +1,6 @@
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/database/client";
 
-const BASE = import.meta.env.VITE_SUPABASE_URL + '/functions/v1';
-const KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
+const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
 export interface CallOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
@@ -30,7 +29,7 @@ export async function callEdgeFunction<T = unknown>(
     authToken = (await getAuthToken()) || undefined;
   }
 
-  const url = new URL(`${BASE}/${name}`);
+  const url = new URL(`${API_BASE}/api/functions/${name}`);
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null && v !== '') {
@@ -40,7 +39,6 @@ export async function callEdgeFunction<T = unknown>(
   }
 
   const headers: Record<string, string> = {
-    'apikey': KEY || '',
     'Content-Type': 'application/json',
   };
 
@@ -70,7 +68,7 @@ export async function callEdgeFunction<T = unknown>(
 
 export async function getAuthToken(): Promise<string | null> {
   try {
-    const { data } = await supabase.auth.getSession();
+    const { data } = await api.auth.getSession();
     return data.session?.access_token || null;
   } catch {
     return null;
