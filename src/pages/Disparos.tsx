@@ -495,7 +495,7 @@ function StepReview({ form, onStart }: any) {
       if (campaignError) throw campaignError;
 
       // 2. Criar logs individuais (mensagens pendentes)
-      const logs = uniqueContacts.map(c => ({
+      const logs = targetContacts.map(c => ({
         disparo_id: campaignData.id,
         user_id: user?.id,
         contato_id: c.id,
@@ -504,6 +504,7 @@ function StepReview({ form, onStart }: any) {
         mensagem_enviada: form.mensagem.replace('{{nome}}', c.nome || 'cliente').replace('{{primeiro_nome}}', (c.nome || 'cliente').split(' ')[0]),
         status: 'pending'
       }));
+
 
       const { error: logsError } = await api.from("disparo_logs").insert(logs);
       if (logsError) throw logsError;
@@ -526,7 +527,8 @@ function StepReview({ form, onStart }: any) {
               <p className="text-[10px] font-bold uppercase text-muted-foreground">Destinatários</p>
               <div className="flex items-center gap-2 mt-1">
                 <Users className="h-4 w-4 text-primary" />
-                <span className="text-xl font-bold">450 contatos</span>
+                <span className="text-xl font-bold">{loadingContacts ? "..." : targetContacts.length} contatos</span>
+
               </div>
               <p className="text-[10px] text-muted-foreground mt-1">12 duplicados removidos | 5 opt-outs excluídos</p>
             </div>
