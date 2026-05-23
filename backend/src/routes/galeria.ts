@@ -378,6 +378,15 @@ export default function galeriaRouter(pool: Pool): Router {
       const { galeria_imagem_id, principal = false, ordem = 0, legenda } = req.body;
       if (!galeria_imagem_id) return res.status(400).json({ message: 'galeria_imagem_id é obrigatório.' });
 
+      // Verifica que o produto pertence ao usuário (anti escalada de privilégio)
+      const ownProd = await pool.query(
+        'SELECT id FROM produtos WHERE id = $1 AND user_id = $2',
+        [req.params.produtoId, req.userId]
+      );
+      if (!ownProd.rows.length) {
+        return res.status(403).json({ message: 'Produto não encontrado ou sem permissão.' });
+      }
+
       const gImg = await pool.query(
         'SELECT * FROM galeria_midias WHERE id = $1 AND user_id = $2',
         [galeria_imagem_id, req.userId]
