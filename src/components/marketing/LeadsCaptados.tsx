@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { getAuthToken } from "@/lib/api-token";
 
 // Ícones manuais para evitar erros de importação da lucide-react
 const Facebook = ({ className }: { className?: string }) => (
