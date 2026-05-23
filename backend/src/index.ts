@@ -1,6 +1,37 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// ============================================================
+// HANDLERS GLOBAIS DE ERRO — previne crash do processo Node
+// ============================================================
+process.on('uncaughtException', (error: Error) => {
+  console.error('[CRASH] uncaughtException:', {
+    message: error.message,
+    stack: error.stack,
+    timestamp: new Date().toISOString(),
+  });
+  // Não chama process.exit — deixa o orquestrador (Docker/PM2) decidir
+});
+
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[CRASH] unhandledRejection:', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+process.on('SIGTERM', () => {
+  console.log('[SHUTDOWN] SIGTERM recebido, encerrando graciosamente...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('[SHUTDOWN] SIGINT recebido, encerrando...');
+  process.exit(0);
+});
+// ============================================================
+
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
