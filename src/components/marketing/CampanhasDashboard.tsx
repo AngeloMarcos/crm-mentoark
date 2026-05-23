@@ -79,23 +79,21 @@ function CampanhaCard({ campanha, onPausar, onReativar }: {
             </p>
           </div>
           {/* Ações */}
-          {!isMock && (
-            <div className="flex gap-1 shrink-0">
-              {campanha.status === "ACTIVE" ? (
-                <Button size="icon" variant="ghost" className="h-7 w-7 hover:text-yellow-600"
-                  onClick={() => { onPausar(); toast.success("Campanha pausada."); }}
-                  title="Pausar">
-                  <Pause className="h-3.5 w-3.5" />
-                </Button>
-              ) : campanha.status === "PAUSED" ? (
-                <Button size="icon" variant="ghost" className="h-7 w-7 hover:text-green-600"
-                  onClick={() => { onReativar(); toast.success("Campanha reativada."); }}
-                  title="Reativar">
-                  <Play className="h-3.5 w-3.5" />
-                </Button>
-              ) : null}
-            </div>
-          )}
+          <div className="flex gap-1 shrink-0">
+            {campanha.status === "ACTIVE" ? (
+              <Button size="icon" variant="ghost" className="h-7 w-7 hover:text-yellow-600"
+                onClick={() => { onPausar(); toast.success("Campanha pausada."); }}
+                title="Pausar">
+                <Pause className="h-3.5 w-3.5" />
+              </Button>
+            ) : campanha.status === "PAUSED" ? (
+              <Button size="icon" variant="ghost" className="h-7 w-7 hover:text-green-600"
+                onClick={() => { onReativar(); toast.success("Campanha reativada."); }}
+                title="Reativar">
+                <Play className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {/* Métricas */}
@@ -160,20 +158,28 @@ function TotaisResumo({ campanhas }: { campanhas: Campanha[] }) {
 interface Props { metaConectado: boolean; }
 
 export function CampanhasDashboard({ metaConectado }: Props) {
-  const { campanhas, loading, isMock, filtroStatus, setFiltroStatus, recarregar, pausar, reativar } = useCampanhas(metaConectado);
+  const { campanhas, loading, erro, filtroStatus, setFiltroStatus, recarregar, pausar, reativar } = useCampanhas(metaConectado);
 
   const filtradas = filtroStatus === "ALL" ? campanhas : campanhas.filter((c) => c.status === filtroStatus);
 
   return (
     <div className="mt-6 space-y-4">
 
-      {/* Banner mock */}
-      {isMock && (
+      {/* Banner Meta não conectado */}
+      {!metaConectado && (
         <div className="flex items-start gap-2 rounded-lg border border-yellow-300 bg-yellow-50 dark:bg-yellow-950/20 p-3 text-sm text-yellow-800 dark:text-yellow-300">
           <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
           <div>
-            <strong>Dados de demonstração.</strong> Conecte sua conta Meta Ads na aba <strong>Conta Meta</strong> para ver campanhas reais.
+            <strong>Conta Meta não conectada.</strong> Acesse a aba <strong>Conta Meta</strong> para conectar e visualizar suas campanhas reais.
           </div>
+        </div>
+      )}
+
+      {/* Banner erro */}
+      {erro && metaConectado && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/20 p-3 text-sm text-red-800 dark:text-red-300">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div><strong>Falha ao carregar:</strong> {erro}</div>
         </div>
       )}
 
