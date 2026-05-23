@@ -1,59 +1,91 @@
-Sprints 8 e 9 são operações **na VPS de produção** (`147.93.9.172`), não no código deste repo Lovable. Plano de execução:
+Sprint 10 também é VPS-only. Vou gerar 2 arquivos em `scripts/`:
 
-## Sprint 8 — Monitoramento
+## 1. `scripts/sprint10-limpeza.sql`
 
-O script original usa `pm2`, mas seu stack é **Docker Compose** (sem PM2). Vou gerar `monitor-crm.sh` adaptado:
+Roda no Postgres `147.93.9.172/crm` via `docker exec crm-api psql $DATABASE_URL`. Dividido em **blocos comentados** — usuário descomenta o que quiser executar. Nada destrutivo roda por padrão.
 
-- ✅ RAM, CPU, disco (passos originais funcionam)
-- 🔄 PM2 → Docker: troca `pm2 list ... awk` por `docker ps --format '{{.Names}} {{.Status}}'` + `docker inspect` para detectar restarts dos containers `crm`, `crm-api`, `n8n`, `evolution`, `pgadmin`
-- ✅ Health: `curl -sk https://api.mentoark.com.br/health` (via Traefik) em vez de localhost:3000
-- ✅ Cron `*/5 * * * *`
-- ➕ Adiciono check de containers `unhealthy`/`exited`
-
-**Entrega:** `monitor-crm.sh` no repo (em `scripts/`). Você copia pra VPS com `scp` e roda `bash monitor-crm.sh` + cron.
-
-## Sprint 9 — Módulos dos 2 usuários
-
-**Análise:** Nada bate com o sprint:
-
-- ❌ Não existe tabela `users` com coluna `modulos` (PASSO 2A inválido)
-- ✅ Existe tabela `user_modulos (user_id, modulo, ativo)` (PASSO 2B é o caminho)
-- ⚠️ **Já existe fallback automático** no backend (`modulos.ts` linha 49-51): se um usuário tem 0 registros em `user_modulos`, retorna os 7 módulos `padrao` (`dashboard, leads, contatos, discagem, funil, whatsapp, disparos`) — exatamente os que o sprint quer setar.
-
-Ou seja: **provavelmente esses 2 usuários JÁ têm acesso** aos módulos padrão. Se mesmo assim eles relatam "não conseguem usar", o bug pode estar em outro lugar (role no JWT, frontend que ignora o fallback, RLS no Supabase, etc).
-
-**Antes de rodar o SQL eu preciso confirmar com você** (não tenho acesso ao Postgres da VPS daqui):
-
-1. Esses 2 emails realmente existem como users no Postgres da VPS? Quais são os IDs?
-2. Eles têm linhas em `user_modulos` com `ativo=false` (que silenciaria o fallback)? Ou estão zerados mesmo?
-3. Qual sintoma específico eles relatam — sidebar vazia? Erro 403? Tela em branco?
-
-### Entrega Sprint 9
-
-Vou gerar `scripts/sprint9-fix-modulos.sql` que:
-- Diagnostica: `SELECT user_id, count(*), bool_or(ativo) FROM user_modulos WHERE user_id IN (...) GROUP BY user_id`
-- Aplica: `INSERT ... ON CONFLICT (user_id, modulo) DO UPDATE SET ativo=true` para os 7 módulos padrão
-- Usa subquery `(SELECT id FROM auth.users WHERE email IN (...))` ou — se `auth.users` não existe no Postgres da VPS — você passa os UUIDs direto
-
-Você roda via `psql` na VPS ou no `pgadmin.mentoark.com.br`.
-
-## O que eu vou criar (em build mode)
-
-1. `scripts/monitor-crm.sh` — script de monitoramento adaptado pra Docker
-2. `scripts/sprint9-fix-modulos.sql` — SQL de diagnóstico + correção dos módulos
-3. `scripts/README.md` — instruções de uso (SSH, cron, psql)
-
-## Perguntas antes de implementar
-
-**a)** OK em criar uma pasta `scripts/` no repo pra esses utilitários de VPS? (não interfere com build do frontend)
-
-**b)** Pro Sprint 9 — você consegue me passar (rodando no pgAdmin):
+### Bloco A — Diagnóstico `dados_cliente` (read-only)
 ```sql
-SELECT u.id, u.email, count(um.modulo) total, count(*) FILTER (WHERE um.ativo) ativos
-FROM auth.users u LEFT JOIN public.user_modulos um ON um.user_id = u.id
-WHERE u.email IN ('gkl15.working@gmail.com','grotheraphael@gmail.com')
-GROUP BY u.id, u.email;
-```
-Sem esse output, vou gerar o SQL "às cegas" assumindo que os emails existem em `auth.users`.
+SELECT COUNT(*) FROM dados_cliente;
+SELECT COUNT(*) FROM contatos;
 
-**c)** O fragmento "Sprint 10" no fim da sua mensagem ficou cortado. Quer que eu espere ou seguimos só com 8 e 9?
+-- Registros em dados_cliente sem match em contatos (mesmo user_id + telefone)
+SELECT dc.user_id, dc.telefone, dc.nomewpp, dc."Setor"
+FROM dados_cliente dc
+LEFT JOIN contatos c
+  ON c.telefone = dc.telefone AND c.user_id = dc.user_id
+WHERE c.id IS NULL
+LIMIT 50;
+```
+
+### Bloco B — Backup + drop (COMENTADO)
+```sql
+-- CREATE TABLE dados_cliente_backup_2026 AS SELECT * FROM dados_cliente;
+-- DROP TABLE dados_cliente;
+```
+Usuário precisa descomentar **manualmente** depois de revisar o diagnóstico.
+
+### Bloco C — Jobs travados em `disparo_logs`
+Corrige nomes errados do sprint (`disparo_fila` → `disparo_logs`, `processando` → `sending`, `atualizado_em` → `updated_at`):
+```sql
+-- Diagnóstico
+SELECT id, disparo_id, status, tentativas, updated_at
+FROM disparo_logs
+WHERE status = 'sending' AND updated_at < now() - interval '1 hour'
+LIMIT 50;
+
+-- Recolocar na fila
+UPDATE disparo_logs
+SET status = 'pending', tentativas = tentativas + 1, updated_at = now()
+WHERE status = 'sending' AND updated_at < now() - interval '1 hour';
+```
+
+### Bloco D — VACUUM ANALYZE (rodar fora de transação)
+Tabelas que **existem mesmo**:
+```sql
+VACUUM ANALYZE contatos;
+VACUUM ANALYZE marketing_leads;
+VACUUM ANALYZE whatsapp_messages;
+VACUUM ANALYZE disparo_logs;
+VACUUM ANALYZE n8n_chat_histories;
+VACUUM ANALYZE documents;
+```
+Documento no comentário que `VACUUM` deve ser rodado via `psql -c` separado (sem `BEGIN`).
+
+### Bloco E — Estatísticas finais
+Tamanho de cada tabela top-10, contagem de linhas, índices não usados — pra confirmar saúde do banco.
+
+## 2. `scripts/sprint10-verificacao-final.sh`
+
+Substitui o PASSO 5 do sprint (que assume PM2 + localhost):
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+free -h
+df -h /
+curl -sk -o /dev/null -w "api.mentoark: HTTP %{http_code}\n" https://api.mentoark.com.br/health
+curl -sk -o /dev/null -w "n8n: HTTP %{http_code}\n" https://n8n.mentoark.com.br/healthz
+curl -sk -o /dev/null -w "crm: HTTP %{http_code}\n" https://crm.mentoark.com.br
+docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'
+echo "Sistema OK — Sprints 0-10 concluídas"
+```
+
+## 3. Atualizar `scripts/README.md`
+
+Adicionar seção "Sprint 10" com como rodar:
+```bash
+# Diagnóstico (seguro)
+docker exec -i crm-api psql "$DATABASE_URL" < scripts/sprint10-limpeza.sql
+
+# Verificação final (na VPS)
+bash scripts/sprint10-verificacao-final.sh
+```
+
+## O que NÃO vou fazer
+
+- **Não dropo `dados_cliente`** automaticamente. Deixo comentado e instruo o usuário a confirmar primeiro com o diagnóstico.
+- **Não rodo o SQL agora** — só gero arquivos; usuário aplica na VPS.
+- Não toco no schema do Supabase Cloud (sprint é sobre o Postgres da VPS).
+
+## Confirma?
+
+Posso seguir com esses 3 arquivos, ou prefere ajustar algo (ex: incluir o DROP descomentado, adicionar outras tabelas no VACUUM, etc)?
