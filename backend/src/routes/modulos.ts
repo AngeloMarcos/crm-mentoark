@@ -17,7 +17,15 @@ export const TODOS_MODULOS = [
   { key: 'docs',        label: 'Documentação',       padrao: false },
 ];
 
-const MASTERS = ['angelobispofilho@gmail.com', 'mentoark@gmail.com'];
+// MASTERS: carregado de variável de ambiente (MASTER_EMAILS=email1,email2)
+// Fallback para os emails legados garante compatibilidade caso a env não seja setada.
+const MASTERS: string[] = (process.env.MASTER_EMAILS || 'angelobispofilho@gmail.com,mentoark@gmail.com')
+  .split(',')
+  .map(e => e.trim().toLowerCase())
+  .filter(Boolean);
+
+const isMaster = (email?: string | null): boolean =>
+  !!email && MASTERS.includes(email.toLowerCase());
 
 export default function modulosRouter(pool: Pool): Router {
   const router = Router();
@@ -28,7 +36,7 @@ export default function modulosRouter(pool: Pool): Router {
   router.get('/', async (req: AuthRequest, res: Response) => {
     try {
       // Masters: retorna tudo sem consultar a tabela
-      if (req.userRole === 'admin' || MASTERS.includes(req.userEmail ?? '')) {
+      if (req.userRole === 'admin' || isMaster(req.userEmail)) {
         return res.json(TODOS_MODULOS.map(m => m.key));
       }
 
