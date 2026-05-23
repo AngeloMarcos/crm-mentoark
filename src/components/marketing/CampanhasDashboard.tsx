@@ -56,8 +56,8 @@ const PLATAFORMA_ICON = {
   ambos: <span className="text-xs">FB+IG</span>,
 };
 
-function CampanhaCard({ campanha, isMock, onPausar, onReativar }: {
-  campanha: Campanha; isMock: boolean;
+function CampanhaCard({ campanha, onPausar, onReativar }: {
+  campanha: Campanha;
   onPausar: () => void; onReativar: () => void;
 }) {
   const cfg = STATUS_CONFIG[campanha.status];
