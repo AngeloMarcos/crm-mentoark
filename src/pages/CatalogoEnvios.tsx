@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +10,7 @@ import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-const token = () => localStorage.getItem("access_token") || "";
+const token = () => getAuthToken();
 
 interface Log {
   id: string;

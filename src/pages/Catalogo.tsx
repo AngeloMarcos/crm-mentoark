@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { useNavigate } from "react-router-dom";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
@@ -40,7 +41,7 @@ export default function CatalogoPage() {
     
     try {
       const res = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/history?limit=5`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+        headers: { Authorization: `Bearer ${getAuthToken()}` }
       });
       if (res.ok) setLogs(await res.json());
     } catch (e) {}

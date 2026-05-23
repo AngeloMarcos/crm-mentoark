@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -261,7 +262,7 @@ export default function IntegracoesPage() {
     setTestando(true);
     try {
       if (template.tipo === "elevenlabs") {
-        const token = localStorage.getItem("access_token");
+        const token = getAuthToken();
         const apiUrl = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
         const res = await fetch(`${apiUrl}/api/elevenlabs/voices`, {
           headers: { Authorization: `Bearer ${token}` },

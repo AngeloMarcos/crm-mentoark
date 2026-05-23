@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -146,7 +147,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
     setDisparoAberto(false);
 
     try {
-      const token = localStorage.getItem("access_token");
+      const token = getAuthToken();
       const res = await fetch(`${API_BASE}/api/leads/buscar`, {
         method: "POST",
         headers: {

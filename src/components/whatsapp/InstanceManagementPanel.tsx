@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Card } from "@/components/ui/card";
@@ -127,7 +128,7 @@ export function InstanceManagementPanel() {
     // Reusa endpoint global (uma única instância ativa por usuário no fluxo atual)
     try {
       const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-      const t = localStorage.getItem("access_token");
+      const t = getAuthToken();
       const res = await fetch(`${API_BASE}/api/whatsapp/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },

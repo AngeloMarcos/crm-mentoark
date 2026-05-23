@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
-const token = () => localStorage.getItem("access_token") || "";
+const token = () => getAuthToken();
 
 interface UserRow {
   user_id: string;
