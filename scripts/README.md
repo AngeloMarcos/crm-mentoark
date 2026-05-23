@@ -94,3 +94,54 @@ sshpass -p 'Mentoark@2025' ssh root@147.93.9.172 \
 
 Cada usuário deve ter `modulos_ativos = {contatos, dashboard, discagem,
 disparos, funil, leads, whatsapp}`.
+
+---
+
+## sprint10-limpeza.sql (Sprint 10)
+
+Limpeza de dados legacy, jobs travados e VACUUM ANALYZE no Postgres.
+**Nada destrutivo roda por padrão** — o `DROP TABLE dados_cliente` está
+comentado no Bloco B e exige descomentar manualmente.
+
+### Como rodar
+
+```bash
+# Diagnóstico + reenfileiramento + VACUUM (Blocos A, C, D, E)
+sshpass -p 'Mentoark@2025' ssh root@147.93.9.172 \
+  'docker exec -i crm-api sh -c "psql \$DATABASE_URL"' \
+  < scripts/sprint10-limpeza.sql
+```
+
+Ou cole bloco a bloco no pgAdmin. Sequência recomendada:
+
+1. **Bloco A** — confere se `dados_cliente` tem registros únicos
+2. **Bloco B** — só descomente se Bloco A retornou 0 linhas únicas
+3. **Bloco C** — reenfileira jobs travados em `disparo_logs`
+4. **Bloco D** — VACUUM (no pgAdmin rode linha a linha, **fora de transação**)
+5. **Bloco E** — estatísticas de tamanho e índices não usados
+
+### Correções aplicadas vs. sprint original
+
+- `disparo_fila` → `disparo_logs` (tabela real)
+- `processando` → `sending`, `aguardando` → `pending` (status reais)
+- `atualizado_em` → `updated_at`
+- `leads` removido do VACUUM (não existe como tabela própria —
+  substituído por `marketing_leads` + `contatos`)
+
+---
+
+## sprint10-verificacao-final.sh (Sprint 10)
+
+Substitui o PASSO 5 do sprint original (que assumia PM2 + localhost).
+Adaptado pro stack Docker + Traefik.
+
+```bash
+sshpass -p 'Mentoark@2025' scp scripts/sprint10-verificacao-final.sh \
+  root@147.93.9.172:/root/
+
+sshpass -p 'Mentoark@2025' ssh root@147.93.9.172 \
+  'chmod +x /root/sprint10-verificacao-final.sh && bash /root/sprint10-verificacao-final.sh'
+```
+
+Checa: containers, RAM/CPU/disco, health HTTPS de todos os domínios,
+conexões ativas no Postgres.
