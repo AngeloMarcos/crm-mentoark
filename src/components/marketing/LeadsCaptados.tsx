@@ -57,23 +57,10 @@ interface LeadAds {
   plataforma: "facebook" | "instagram";
   capturado_em: string;
   status_crm: "novo" | "no_crm" | "cris_ativada" | "em_atendimento";
-  origem: "real" | "mock";
+  origem: "real";
 }
 
-const MOCK_LEADS: LeadAds[] = [
-  { id: "l1", nome: "Ana Paula Souza", telefone: "5511991234567", email: "ana@email.com",
-    campanha: "Lançamento Imóveis Junho", campanha_id: "mock-1", plataforma: "facebook",
-    capturado_em: new Date(Date.now() - 2 * 60 * 60000).toISOString(), status_crm: "cris_ativada", origem: "mock" },
-  { id: "l2", nome: "Carlos Mendes", telefone: "5511982345678",
-    campanha: "WhatsApp Click-to-Chat", campanha_id: "mock-2", plataforma: "facebook",
-    capturado_em: new Date(Date.now() - 5 * 60 * 60000).toISOString(), status_crm: "no_crm", origem: "mock" },
-  { id: "l3", nome: "Fernanda Lima", telefone: "5511973456789", email: "fer@email.com",
-    campanha: "Lançamento Imóveis Junho", campanha_id: "mock-1", plataforma: "instagram",
-    capturado_em: new Date(Date.now() - 12 * 60 * 60000).toISOString(), status_crm: "novo", origem: "mock" },
-  { id: "l4", nome: "Roberto Dias", telefone: "5511964567890",
-    campanha: "WhatsApp Click-to-Chat", campanha_id: "mock-2", plataforma: "facebook",
-    capturado_em: new Date(Date.now() - 24 * 60 * 60000).toISOString(), status_crm: "em_atendimento", origem: "mock" },
-];
+// Mocks removidos — agora mostramos empty state honesto quando Meta não está conectado.
 
 const STATUS_CONFIG: Record<LeadAds["status_crm"], { cor: string; label: string; icon: React.ElementType }> = {
   novo:           { cor: "bg-yellow-100 text-yellow-700 border-yellow-300", label: "Novo", icon: Clock },
