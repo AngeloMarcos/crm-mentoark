@@ -466,6 +466,17 @@ export default function catalogoRouter(pool: Pool): Router {
     try {
       const file = (req as any).file;
       if (!file) return res.status(400).json({ message: 'Nenhuma imagem enviada' });
+
+      // Verifica que o produto pertence ao usuário antes de qualquer escrita
+      const own = await pool.query(
+        'SELECT id FROM produtos WHERE id = $1 AND user_id = $2',
+        [req.params.produtoId, req.userId]
+      );
+      if (!own.rows.length) {
+        await fs.promises.unlink(file.path).catch(() => {});
+        return res.status(403).json({ message: 'Produto não encontrado ou sem permissão' });
+      }
+
       const { legenda, principal = false, ordem = 0 } = req.body;
       const url = `${BASE_URL}/uploads/${file.filename}`;
 

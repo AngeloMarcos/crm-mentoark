@@ -176,7 +176,8 @@ const SIMPLE_TABLES = [
   'integracoes_config',
   'catalogos',
   'produtos',
-  'produto_imagens',
+  // 'produto_imagens' removido: só pode ser gravado via rotas especializadas
+  // (catalogo.ts / galeria.ts) que validam propriedade do produto.
   'dados_cliente',
   'chat_messages',
   'chats',
