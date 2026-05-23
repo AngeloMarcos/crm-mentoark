@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +10,7 @@ import { Search, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-const token = () => localStorage.getItem("access_token") || "";
+const token = () => getAuthToken();
 
 interface Contato {
   id: string;

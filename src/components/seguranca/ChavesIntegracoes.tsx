@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -6,7 +7,7 @@ import { Key, Plug, Bot, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { api } from "@/integrations/database/client";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
-const token = () => localStorage.getItem("access_token") || "";
+const token = () => getAuthToken();
 
 interface ChaveStatus {
   chave: string;

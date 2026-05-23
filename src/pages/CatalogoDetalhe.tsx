@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { useParams, useNavigate } from "react-router-dom";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api, uploadImagem } from "@/integrations/database/client";
@@ -77,7 +78,7 @@ export default function CatalogoDetalhePage() {
     setLoading(true);
     try {
       const res = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+        headers: { Authorization: `Bearer ${getAuthToken()}` }
       });
       if (!res.ok) throw new Error("Erro ao carregar catálogo");
       const dataFull = await res.json();
@@ -92,7 +93,7 @@ export default function CatalogoDetalhePage() {
   const carregarGaleria = async () => {
     try {
       const r = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/galeria?limit=40&q=${pickerSearch}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+        headers: { Authorization: `Bearer ${getAuthToken()}` }
       });
       const d = await r.json();
       setGaleriaImagens(d.images || []);
@@ -128,7 +129,7 @@ export default function CatalogoDetalhePage() {
         method: editingProduto ? "PUT" : "POST",
         headers: { 
           "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("access_token")}` 
+          Authorization: `Bearer ${getAuthToken()}` 
         },
         body: JSON.stringify(payload)
       });
@@ -151,7 +152,7 @@ export default function CatalogoDetalhePage() {
       toast.success("Upload concluído");
       carregar();
       const updatedRes = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+        headers: { Authorization: `Bearer ${getAuthToken()}` }
       });
       const updatedData = await updatedRes.json();
       const updatedP = updatedData.produtos.find((p: any) => p.id === activeProduto.id);
@@ -168,7 +169,7 @@ export default function CatalogoDetalhePage() {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("access_token")}` 
+          Authorization: `Bearer ${getAuthToken()}` 
         },
         body: JSON.stringify({ galeria_imagem_id: galeriaId })
       });
@@ -177,7 +178,7 @@ export default function CatalogoDetalhePage() {
         setModalPicker(false);
         carregar();
         const updatedRes = await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` }
+          headers: { Authorization: `Bearer ${getAuthToken()}` }
         });
         const updatedData = await updatedRes.json();
         const updatedP = updatedData.produtos.find((p: any) => p.id === activeProduto.id);
@@ -202,7 +203,7 @@ export default function CatalogoDetalhePage() {
           method: "PUT",
           headers: { 
             "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("access_token")}` 
+            Authorization: `Bearer ${getAuthToken()}` 
           },
           body: JSON.stringify({ ordem: newIndex })
         });
@@ -230,7 +231,7 @@ export default function CatalogoDetalhePage() {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("access_token")}` 
+            Authorization: `Bearer ${getAuthToken()}` 
           },
           body: JSON.stringify(payload)
         });
@@ -307,7 +308,7 @@ export default function CatalogoDetalhePage() {
                       }); 
                       setModalProduto(true); 
                     }}
-                    onDelete={async () => { if(confirm("Remover produto?")) { await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}/produtos/${p.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` } }); carregar(); } }}
+                    onDelete={async () => { if(confirm("Remover produto?")) { await fetch(`${(import.meta.env.VITE_API_URL as string) || "http://localhost:3000"}/api/catalogo/${id}/produtos/${p.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${getAuthToken()}` } }); carregar(); } }}
                   />
                 ))}
               </div>

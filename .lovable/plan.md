@@ -1,91 +1,57 @@
-Sprint 10 também é VPS-only. Vou gerar 2 arquivos em `scripts/`:
+Varri todas as 31 páginas + componentes. Encontrei 4 módulos com gaps reais + 1 bug crítico de auth espalhado pelo código.
 
-## 1. `scripts/sprint10-limpeza.sql`
+## Bug crítico (afeta vários módulos)
 
-Roda no Postgres `147.93.9.172/crm` via `docker exec crm-api psql $DATABASE_URL`. Dividido em **blocos comentados** — usuário descomenta o que quiser executar. Nada destrutivo roda por padrão.
+**Token storage inconsistente** — `useAuth`/ApiClient salvam em `crm_access_token`, mas 19 arquivos fazem `fetch` direto usando `localStorage.getItem("access_token")` (chave errada). Esses requests vão sem `Authorization` válido e dependem de o backend ter modo compat ou estão retornando 401 silenciosamente.
 
-### Bloco A — Diagnóstico `dados_cliente` (read-only)
-```sql
-SELECT COUNT(*) FROM dados_cliente;
-SELECT COUNT(*) FROM contatos;
+Arquivos afetados: `Usuarios.tsx`, `CentralBI.tsx`, `CatalogoEnvios.tsx`, `Integracoes.tsx`, `Galeria.tsx`, `InstanceManagementPanel.tsx`, `UsuariosAcessos.tsx`, `BuscarLeadsModal.tsx`, `ChavesIntegracoes.tsx`, `Catalogo.tsx`, `SendWhatsAppModal.tsx`, `CatalogoDetalhe.tsx` (8 ocorrências).
 
--- Registros em dados_cliente sem match em contatos (mesmo user_id + telefone)
-SELECT dc.user_id, dc.telefone, dc.nomewpp, dc."Setor"
-FROM dados_cliente dc
-LEFT JOIN contatos c
-  ON c.telefone = dc.telefone AND c.user_id = dc.user_id
-WHERE c.id IS NULL
-LIMIT 50;
-```
+**Fix**: criar um helper `src/lib/api-token.ts` com `getAuthToken()` que lê `crm_access_token` (com fallback pra `access_token` durante transição) e substituir todas as 19 chamadas.
 
-### Bloco B — Backup + drop (COMENTADO)
-```sql
--- CREATE TABLE dados_cliente_backup_2026 AS SELECT * FROM dados_cliente;
--- DROP TABLE dados_cliente;
-```
-Usuário precisa descomentar **manualmente** depois de revisar o diagnóstico.
+---
 
-### Bloco C — Jobs travados em `disparo_logs`
-Corrige nomes errados do sprint (`disparo_fila` → `disparo_logs`, `processando` → `sending`, `atualizado_em` → `updated_at`):
-```sql
--- Diagnóstico
-SELECT id, disparo_id, status, tentativas, updated_at
-FROM disparo_logs
-WHERE status = 'sending' AND updated_at < now() - interval '1 hour'
-LIMIT 50;
+## Módulos incompletos
 
--- Recolocar na fila
-UPDATE disparo_logs
-SET status = 'pending', tentativas = tentativas + 1, updated_at = now()
-WHERE status = 'sending' AND updated_at < now() - interval '1 hour';
-```
+### 1. Workflows (`/workflows`) — 30% pronto
+- Builder visual funciona (drag-and-drop, paleta, canvas)
+- Botão **Salvar** só persiste em `localStorage` (não no banco)
+- Botão **Executar** só mostra `toast.info("Execução via n8n — configure o webhook em Integrações")` — nada acontece
+- **Faltam**: tabela `workflows` no Postgres VPS, rota CRUD em `backend/src/routes/workflows.ts`, integração com endpoint `/webhook` do n8n pra disparar execução
 
-### Bloco D — VACUUM ANALYZE (rodar fora de transação)
-Tabelas que **existem mesmo**:
-```sql
-VACUUM ANALYZE contatos;
-VACUUM ANALYZE marketing_leads;
-VACUUM ANALYZE whatsapp_messages;
-VACUUM ANALYZE disparo_logs;
-VACUUM ANALYZE n8n_chat_histories;
-VACUUM ANALYZE documents;
-```
-Documento no comentário que `VACUUM` deve ser rodado via `psql -c` separado (sem `BEGIN`).
+### 2. Marketing Digital / Campanhas Meta (`/marketing-digital`) — 60% pronto
+- OAuth Facebook implementado, métricas vêm da Meta API
+- **Mas**: sem conexão Meta, mostra 3 campanhas MOCK fixas (`MOCK_CAMPANHAS` em `useCampanhas.ts` + `MOCK_LEADS` em `LeadsCaptados.tsx`)
+- Pausar/reativar campanha são no-ops em modo mock
+- **Faltam**: remover mocks (mostrar empty state "Conecte sua conta Meta"), validar que OAuth callback grava token corretamente, testar fluxo end-to-end
 
-### Bloco E — Estatísticas finais
-Tamanho de cada tabela top-10, contagem de linhas, índices não usados — pra confirmar saúde do banco.
+### 3. Segurança (`/seguranca`) — 50% pronto
+- Tab **Usuários & Acessos**: real, conectada ao backend ✅
+- Tab **Chaves & Integrações**: real ✅
+- Tab **Banco & Multi-tenant**: lista de tabelas **hardcoded** no JSX. Inclui `leads` (não existe) e está desatualizada
+- Tab **Logins & Sessões**: checklist e config **100% hardcoded** ("Última auditoria: hoje às 14:32" é string literal, botão "Rodar Auditoria" não faz nada, botão "Ver Logs Supabase Audit" não navega)
+- **Faltam**: rota `GET /api/seguranca/tabelas` (lista dinâmica via `pg_catalog`), rota `GET /api/seguranca/auditoria` (corre os checks de verdade), conectar botões aos endpoints
 
-## 2. `scripts/sprint10-verificacao-final.sh`
+### 4. CatálogoEnvios (`/catalogo/envios`) — 95% pronto
+- Funciona, mas usa `access_token` (bug acima)
+- **Faltam**: filtros (status, tipo, período), paginação (hoje hardcoded em `limit=100`), reenviar item com erro
 
-Substitui o PASSO 5 do sprint (que assume PM2 + localhost):
-```bash
-docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-free -h
-df -h /
-curl -sk -o /dev/null -w "api.mentoark: HTTP %{http_code}\n" https://api.mentoark.com.br/health
-curl -sk -o /dev/null -w "n8n: HTTP %{http_code}\n" https://n8n.mentoark.com.br/healthz
-curl -sk -o /dev/null -w "crm: HTTP %{http_code}\n" https://crm.mentoark.com.br
-docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'
-echo "Sistema OK — Sprints 0-10 concluídas"
-```
+---
 
-## 3. Atualizar `scripts/README.md`
+## Plano de execução (ordem sugerida)
 
-Adicionar seção "Sprint 10" com como rodar:
-```bash
-# Diagnóstico (seguro)
-docker exec -i crm-api psql "$DATABASE_URL" < scripts/sprint10-limpeza.sql
+| # | Tarefa | Esforço | Impacto |
+|---|--------|---------|---------|
+| 1 | Helper `getAuthToken()` + refatorar 19 fetches | 30 min | 🔴 Alto — destrava chamadas que estão silenciosamente quebradas |
+| 2 | Segurança — tornar tabs Banco e Logins reais (2 rotas backend + refactor componentes) | 2h | 🟠 Médio — página parece pronta mas é fake |
+| 3 | Marketing — remover mocks, mostrar empty state honesto | 1h | 🟡 Médio — UX confusa hoje |
+| 4 | Workflows — persistência no banco (tabela + rota CRUD + UI de listagem) | 3h | 🟠 Médio — feature visível mas sem efeito |
+| 5 | Workflows — execução real via n8n webhook | 2h | 🟢 Baixo — depende de #4 |
+| 6 | CatalogoEnvios — filtros + paginação + reenviar | 1h | 🟢 Baixo — incremental |
 
-# Verificação final (na VPS)
-bash scripts/sprint10-verificacao-final.sh
-```
+Total: ~9h para fechar tudo. Posso começar pelo #1 (rápido e libera o resto), ou você prefere atacar primeiro um módulo específico?
 
-## O que NÃO vou fazer
+## Perguntas
 
-- **Não dropo `dados_cliente`** automaticamente. Deixo comentado e instruo o usuário a confirmar primeiro com o diagnóstico.
-- **Não rodo o SQL agora** — só gero arquivos; usuário aplica na VPS.
-- Não toco no schema do Supabase Cloud (sprint é sobre o Postgres da VPS).
-
-## Confirma?
-
-Posso seguir com esses 3 arquivos, ou prefere ajustar algo (ex: incluir o DROP descomentado, adicionar outras tabelas no VACUUM, etc)?
+a) Quer que eu execute na ordem acima, ou prioriza algum? (ex: só Workflows + bug do token)
+b) Para Workflows backend, ok criar tabela `workflows (id, user_id, nome, nodes jsonb, edges jsonb, ativo, ...)` no Postgres VPS? Eu gero o SQL pra você rodar no pgAdmin.
+c) Para Segurança tab "Logins", o que você quer no botão "Ver Logs de Autenticação"? Listar logins recentes da tabela `auth.users` / `refresh_tokens`, ou abrir o pgAdmin?

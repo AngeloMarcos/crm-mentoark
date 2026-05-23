@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { getAuthToken } from "@/lib/api-token";
 
 // Ícones manuais para evitar erros de importação da lucide-react
 const Facebook = ({ className }: { className?: string }) => (
@@ -57,23 +58,10 @@ interface LeadAds {
   plataforma: "facebook" | "instagram";
   capturado_em: string;
   status_crm: "novo" | "no_crm" | "cris_ativada" | "em_atendimento";
-  origem: "real" | "mock";
+  origem: "real";
 }
 
-const MOCK_LEADS: LeadAds[] = [
-  { id: "l1", nome: "Ana Paula Souza", telefone: "5511991234567", email: "ana@email.com",
-    campanha: "Lançamento Imóveis Junho", campanha_id: "mock-1", plataforma: "facebook",
-    capturado_em: new Date(Date.now() - 2 * 60 * 60000).toISOString(), status_crm: "cris_ativada", origem: "mock" },
-  { id: "l2", nome: "Carlos Mendes", telefone: "5511982345678",
-    campanha: "WhatsApp Click-to-Chat", campanha_id: "mock-2", plataforma: "facebook",
-    capturado_em: new Date(Date.now() - 5 * 60 * 60000).toISOString(), status_crm: "no_crm", origem: "mock" },
-  { id: "l3", nome: "Fernanda Lima", telefone: "5511973456789", email: "fer@email.com",
-    campanha: "Lançamento Imóveis Junho", campanha_id: "mock-1", plataforma: "instagram",
-    capturado_em: new Date(Date.now() - 12 * 60 * 60000).toISOString(), status_crm: "novo", origem: "mock" },
-  { id: "l4", nome: "Roberto Dias", telefone: "5511964567890",
-    campanha: "WhatsApp Click-to-Chat", campanha_id: "mock-2", plataforma: "facebook",
-    capturado_em: new Date(Date.now() - 24 * 60 * 60000).toISOString(), status_crm: "em_atendimento", origem: "mock" },
-];
+// Mocks removidos — agora mostramos empty state honesto quando Meta não está conectado.
 
 const STATUS_CONFIG: Record<LeadAds["status_crm"], { cor: string; label: string; icon: React.ElementType }> = {
   novo:           { cor: "bg-yellow-100 text-yellow-700 border-yellow-300", label: "Novo", icon: Clock },
@@ -96,30 +84,27 @@ interface Props { metaConectado: boolean; }
 export function LeadsCaptados({ metaConectado }: Props) {
   const [leads, setLeads] = useState<LeadAds[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isMock, setIsMock] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
   const [ativando, setAtivando] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
+    setErro(null);
     if (!metaConectado) {
-      await new Promise((r) => setTimeout(r, 500));
-      setLeads(MOCK_LEADS);
-      setIsMock(true);
+      setLeads([]);
       setLoading(false);
       return;
     }
     try {
-      const token = localStorage.getItem("crm_access_token") || "";
       const r = await fetch(`${BASE}/api/marketing/leads?limit=50`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
       });
-      if (!r.ok) throw new Error();
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setLeads(data.leads ?? []);
-      setIsMock(false);
-    } catch {
-      setLeads(MOCK_LEADS);
-      setIsMock(true);
+    } catch (e: any) {
+      setLeads([]);
+      setErro(e?.message || "Falha ao carregar leads");
     } finally {
       setLoading(false);
     }
@@ -128,16 +113,11 @@ export function LeadsCaptados({ metaConectado }: Props) {
   useEffect(() => { carregar(); }, [carregar]);
 
   const ativarCris = async (lead: LeadAds) => {
-    if (isMock) {
-      toast.info("Conecte a conta Meta e o CRM para ativar a Cris com leads reais.");
-      return;
-    }
     setAtivando(lead.id);
     try {
-      const token = localStorage.getItem("crm_access_token") || "";
       const r = await fetch(`${BASE}/api/marketing/leads/${lead.id}/ativar-cris`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAuthToken()}` },
         body: JSON.stringify({ telefone: lead.telefone, nome: lead.nome, campanha: lead.campanha }),
       });
       if (!r.ok) throw new Error();
@@ -152,12 +132,19 @@ export function LeadsCaptados({ metaConectado }: Props) {
 
   return (
     <div className="mt-6 space-y-4">
-      {isMock && (
+      {!metaConectado && (
         <div className="flex items-start gap-2 rounded-lg border border-yellow-300 bg-yellow-50 dark:bg-yellow-950/20 p-3 text-sm text-yellow-800 dark:text-yellow-300">
           <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
           <div>
-            <strong>Leads de demonstração.</strong> Conecte Meta Ads na aba <strong>Conta Meta</strong> e configure o webhook de Lead Ads para receber leads reais.
+            <strong>Conta Meta não conectada.</strong> Acesse a aba <strong>Conta Meta</strong> e configure o webhook de Lead Ads para receber leads reais.
           </div>
+        </div>
+      )}
+
+      {erro && metaConectado && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/20 p-3 text-sm text-red-800 dark:text-red-300">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div><strong>Falha ao carregar leads:</strong> {erro}</div>
         </div>
       )}
 

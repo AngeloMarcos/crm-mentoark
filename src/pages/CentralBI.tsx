@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { getAuthToken } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -174,7 +175,7 @@ export default function CentralBIPage() {
         aba_atual: tab,
       };
       const prompt = `Você é um analista de BI sênior. Com base nos dados a seguir do CRM, gere 3 insights curtos, acionáveis e diretos (em pt-BR), priorizando a aba "${tab}". Use no máximo 350 caracteres no total. Não use markdown. Separe por " • ".\n\nDados: ${JSON.stringify(ctx)}`;
-      const token = localStorage.getItem("access_token");
+      const token = getAuthToken();
       const apiUrl = (import.meta.env.VITE_API_URL as string) || "";
       const res = await fetch(`${apiUrl}/api/ai/chat`, {
         method: "POST",
