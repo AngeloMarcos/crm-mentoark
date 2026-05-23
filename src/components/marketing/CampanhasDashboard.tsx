@@ -214,7 +214,7 @@ export function CampanhasDashboard({ metaConectado }: Props) {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filtradas.map((c) => (
-            <CampanhaCard key={c.id} campanha={c} isMock={isMock}
+            <CampanhaCard key={c.id} campanha={c}
               onPausar={() => pausar(c.id)} onReativar={() => reativar(c.id)} />
           ))}
         </div>
