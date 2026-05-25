@@ -185,10 +185,11 @@ export default function DisparosPage() {
   );
 }
 
-function StepContacts({ form, setForm }: any) {
+function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
   const [tags, setTags] = useState<any[]>([]);
   const [estagios, setEstagios] = useState<any[]>([]);
   const [csvPreview, setCsvPreview] = useState<any[]>([]);
+  const [tagSearch, setTagSearch] = useState("");
 
   useEffect(() => {
     const fetchTargets = async () => {
@@ -211,71 +212,144 @@ function StepContacts({ form, setForm }: any) {
       const ws = wb.Sheets[wsname];
       const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
       setCsvPreview(data.slice(0, 5));
-      // Map columns logic here...
       toast.success("CSV importado com sucesso!");
     };
     reader.readAsBinaryString(file);
   };
 
+  const filteredTags = tags.filter(t => t.nome?.toLowerCase().includes(tagSearch.toLowerCase()));
+  const allTagsSelected = filteredTags.length > 0 && filteredTags.every(t => form.tags_selecionadas.includes(t.nome));
+  const allEstagiosSelected = estagios.length > 0 && estagios.every(s => form.estagios_selecionados.includes(s.id));
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-1">
-        <Label>Nome da Campanha</Label>
-        <Input placeholder="Ex: Campanha Black Friday" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} />
+      <div className="grid sm:grid-cols-[1fr_auto] gap-3 items-end">
+        <div className="flex flex-col gap-1">
+          <Label>Nome da Campanha</Label>
+          <Input placeholder="Ex: Campanha Black Friday" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} />
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] uppercase text-muted-foreground font-bold">Selecionados</p>
+          <p className="text-2xl font-bold text-primary">
+            {loadingCount ? "..." : liveCount}
+            <span className="text-sm text-muted-foreground font-normal ml-1">contatos</span>
+          </p>
+        </div>
       </div>
 
       <Tabs defaultValue="tags" className="w-full">
         <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="tags">Por Tag</TabsTrigger>
-          <TabsTrigger value="estagio">Por Estágio</TabsTrigger>
+          <TabsTrigger value="tags">Por Tag {form.tags_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.tags_selecionadas.length}</Badge>}</TabsTrigger>
+          <TabsTrigger value="estagio">Por Estágio {form.estagios_selecionados.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.estagios_selecionados.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="csv">Importar CSV</TabsTrigger>
         </TabsList>
-        
+
         <TabsContent value="tags" className="p-4 border rounded-lg bg-card space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium">Selecione as tags:</p>
-            <div className="flex gap-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <Input
+              placeholder="Buscar tag..."
+              value={tagSearch}
+              onChange={e => setTagSearch(e.target.value)}
+              className="h-8 max-w-xs"
+            />
+            <div className="flex items-center gap-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  const names = filteredTags.map(t => t.nome);
+                  setForm({
+                    ...form,
+                    tags_selecionadas: allTagsSelected
+                      ? form.tags_selecionadas.filter((n: string) => !names.includes(n))
+                      : Array.from(new Set([...form.tags_selecionadas, ...names])),
+                  });
+                }}
+              >
+                {allTagsSelected ? "Limpar" : "Selecionar todas"}
+              </Button>
               <div className="flex items-center gap-2">
                 <Switch checked />
                 <span className="text-xs">Excluir Opt-outs</span>
               </div>
-              <div className="flex items-center gap-2">
-                <Switch checked disabled />
-                <span className="text-xs">Excluir Blacklist</span>
-              </div>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            {tags.map(t => (
-              <div key={t.id} className="flex items-center space-x-2 p-2 border rounded hover:bg-muted/50">
-                <input type="checkbox" id={t.id} className="h-4 w-4" onChange={(e) => {
-                  const newTags = e.target.checked 
-                    ? [...form.tags_selecionadas, t.nome]
-                    : form.tags_selecionadas.filter((st: string) => st !== t.nome);
-                  setForm({...form, tags_selecionadas: newTags});
-                }} />
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: t.cor }} />
-                <label htmlFor={t.id} className="text-sm cursor-pointer">{t.nome}</label>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-64 overflow-y-auto">
+            {filteredTags.map(t => {
+              const checked = form.tags_selecionadas.includes(t.nome);
+              return (
+                <label
+                  key={t.id}
+                  htmlFor={t.id}
+                  className={`flex items-center space-x-2 p-2 border rounded cursor-pointer transition-colors ${checked ? "bg-primary/10 border-primary/40" : "hover:bg-muted/50"}`}
+                >
+                  <input
+                    type="checkbox"
+                    id={t.id}
+                    checked={checked}
+                    className="h-4 w-4"
+                    onChange={(e) => {
+                      const newTags = e.target.checked
+                        ? [...form.tags_selecionadas, t.nome]
+                        : form.tags_selecionadas.filter((st: string) => st !== t.nome);
+                      setForm({...form, tags_selecionadas: newTags});
+                    }}
+                  />
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: t.cor }} />
+                  <span className="text-sm">{t.nome}</span>
+                </label>
+              );
+            })}
+            {filteredTags.length === 0 && (
+              <p className="text-xs text-muted-foreground col-span-full text-center py-4">Nenhuma tag encontrada</p>
+            )}
           </div>
         </TabsContent>
 
         <TabsContent value="estagio" className="p-4 border rounded-lg bg-card space-y-4">
-          <p className="text-sm font-medium">Selecione os estágios do funil:</p>
-          <div className="grid grid-cols-2 gap-3">
-            {estagios.map(s => (
-              <div key={s.id} className="flex items-center space-x-2 p-2 border rounded hover:bg-muted/50">
-                <input type="checkbox" id={s.id} className="h-4 w-4" onChange={(e) => {
-                  const newEstagios = e.target.checked 
-                    ? [...form.estagios_selecionados, s.id]
-                    : form.estagios_selecionados.filter((se: string) => se !== s.id);
-                  setForm({...form, estagios_selecionados: newEstagios});
-                }} />
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: s.cor }} />
-                <label htmlFor={s.id} className="text-sm cursor-pointer">{s.nome}</label>
-              </div>
-            ))}
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Selecione os estágios do funil:</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                setForm({
+                  ...form,
+                  estagios_selecionados: allEstagiosSelected ? [] : estagios.map(s => s.id),
+                });
+              }}
+            >
+              {allEstagiosSelected ? "Limpar" : "Selecionar todos"}
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {estagios.map(s => {
+              const checked = form.estagios_selecionados.includes(s.id);
+              return (
+                <label
+                  key={s.id}
+                  htmlFor={s.id}
+                  className={`flex items-center space-x-2 p-2 border rounded cursor-pointer transition-colors ${checked ? "bg-primary/10 border-primary/40" : "hover:bg-muted/50"}`}
+                >
+                  <input
+                    type="checkbox"
+                    id={s.id}
+                    checked={checked}
+                    className="h-4 w-4"
+                    onChange={(e) => {
+                      const newEstagios = e.target.checked
+                        ? [...form.estagios_selecionados, s.id]
+                        : form.estagios_selecionados.filter((se: string) => se !== s.id);
+                      setForm({...form, estagios_selecionados: newEstagios});
+                    }}
+                  />
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: s.cor }} />
+                  <span className="text-sm">{s.nome}</span>
+                </label>
+              );
+            })}
           </div>
         </TabsContent>
 
