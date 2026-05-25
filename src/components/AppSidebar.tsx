@@ -255,16 +255,16 @@ function NavSubgroupSection({
                       end={item.url === "/dashboard"}
                       className={`group relative flex items-center gap-2.5 px-2.5 py-2 rounded-md transition-all duration-200 ${
                         active
-                          ? "gradient-brand-subtle font-medium"
-                          : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5"
+                          ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(262_83%_58%/0.14),0_0_14px_hsl(262_83%_58%/0.10)]"
+                          : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(262_83%_58%/0.04)]"
                       }`}
                     >
                       {active && (
-                        <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_8px_hsl(262_83%_58%/0.6)]" />
+                        <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(262_83%_58%/0.7)]" />
                       )}
                       <item.icon
                         className={`h-4 w-4 shrink-0 transition-all duration-300 ${
-                          active ? item.color + " scale-110" : "text-muted-foreground group-hover:" + item.color
+                          active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(262_83%_58%/0.3)]" : "text-muted-foreground group-hover:" + item.color
                         }`}
                       />
                       <span className={`text-[13px] ${active ? "gradient-brand-text" : ""}`}>{item.title}</span>
