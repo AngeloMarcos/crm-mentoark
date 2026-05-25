@@ -4,47 +4,47 @@
 
 @layer base {
   :root {
-    /* Backgrounds */
-    --background: 230 40% 97%;
-    --foreground: 230 45% 8%;
+    /* Backgrounds — paleta clara neutra estilo Smart POS */
+    --background: 210 17% 98%;        /* #F8F9FA */
+    --foreground: 240 25% 14%;        /* #1A1A2E */
 
-    --card: 0 0% 100%;
-    --card-foreground: 230 45% 8%;
+    --card: 0 0% 100%;                /* branco puro */
+    --card-foreground: 240 25% 14%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 230 45% 8%;
+    --popover-foreground: 240 25% 14%;
 
-    /* Primary — azul vibrante mais saturado */
+    /* Primary — azul vibrante da marca CRM (mantido) */
     --primary: 226 95% 55%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 230 30% 94%;
-    --secondary-foreground: 230 35% 15%;
+    --secondary: 210 16% 95%;
+    --secondary-foreground: 240 20% 22%;
 
-    --muted: 230 25% 95%;
-    --muted-foreground: 230 15% 45%;
+    --muted: 210 16% 96%;
+    --muted-foreground: 210 10% 38%;  /* #495057 */
 
-    /* Accent — roxo neon */
+    /* Accent — roxo neon (mantido) */
     --accent: 265 90% 60%;
     --accent-foreground: 0 0% 100%;
 
     --destructive: 0 90% 62%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 230 25% 90%;
-    --input: 230 25% 90%;
+    --border: 210 14% 91%;            /* #E9ECEF */
+    --input: 210 14% 83%;             /* #CED4DA */
     --ring: 226 95% 55%;
 
     --radius: 0.75rem;
 
-    /* Sidebar claro */
-    --sidebar-background: 230 30% 98%;
-    --sidebar-foreground: 230 25% 25%;
+    /* Sidebar claro — cinza levemente mais escuro que o fundo */
+    --sidebar-background: 210 14% 96%; /* #F1F3F5 */
+    --sidebar-foreground: 240 20% 22%;
     --sidebar-primary: 226 85% 52%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 230 25% 93%;
-    --sidebar-accent-foreground: 230 25% 20%;
-    --sidebar-border: 230 20% 90%;
+    --sidebar-accent: 210 16% 92%;
+    --sidebar-accent-foreground: 240 25% 14%;
+    --sidebar-border: 210 14% 88%;
     --sidebar-ring: 226 85% 52%;
 
     /* Semânticas */
@@ -129,9 +129,9 @@
     z-index: 0;
     pointer-events: none;
     background:
-      radial-gradient(600px circle at 8% 12%, hsl(226 85% 52% / 0.10), transparent 60%),
-      radial-gradient(700px circle at 92% 88%, hsl(262 83% 58% / 0.10), transparent 60%),
-      radial-gradient(500px circle at 55% 50%, hsl(245 80% 55% / 0.05), transparent 70%);
+      radial-gradient(600px circle at 8% 12%, hsl(226 85% 52% / 0.04), transparent 60%),
+      radial-gradient(700px circle at 92% 88%, hsl(262 83% 58% / 0.04), transparent 60%),
+      radial-gradient(500px circle at 55% 50%, hsl(245 80% 55% / 0.02), transparent 70%);
     animation: aurora 22s ease-in-out infinite alternate;
   }
   .dark body::before {
