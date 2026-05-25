@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Edit2, Copy, Trash2, Info, Zap } from "lucide-react";
+import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
