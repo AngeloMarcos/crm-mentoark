@@ -461,6 +461,8 @@ export default function ContatoDetalhePage() {
                 </div>
               </CardContent>
             </Card>
+
+            <ControleIA contatoId={contato.id} />
           </div>
 
           {/* Coluna Histórico de Mensagens */}
