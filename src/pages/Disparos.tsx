@@ -709,7 +709,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
                 <span className="text-xl font-bold">{loadingContacts ? "..." : targetContacts.length} contatos</span>
 
               </div>
-              <p className="text-[10px] text-muted-foreground mt-1">12 duplicados removidos | 5 opt-outs excluídos</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Duplicados removidos automaticamente</p>
             </div>
             
             <div>
