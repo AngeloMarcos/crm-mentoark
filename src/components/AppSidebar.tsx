@@ -4,7 +4,7 @@ import {
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox,
-  Library, Settings as SettingsIcon,
+  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -98,6 +98,15 @@ const navGroups: NavGroup[] = [
         color: "text-emerald-500",
         items: [
           { title: "Discagem", url: "/discagem", icon: PhoneCall, modulo: "discagem", color: "text-emerald-500" },
+        ],
+      },
+      {
+        label: "Utilitários",
+        icon: Wrench,
+        color: "text-purple-400",
+        items: [
+          { title: "Chat da Equipe",        url: "/chat-equipe",  icon: UsersIcon, modulo: "whatsapp", color: "text-purple-400" },
+          { title: "Smart Links & QR Code", url: "/smart-links",  icon: Link2,     modulo: "whatsapp", color: "text-fuchsia-400" },
         ],
       },
     ],
