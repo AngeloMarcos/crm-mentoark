@@ -57,6 +57,7 @@ export type Database = {
           max_tokens: number
           mensagem_boas_vindas: string | null
           modelo: string
+          n8n_webhook_url: string | null
           nome: string
           objetivo: string | null
           persona: string | null
@@ -90,6 +91,7 @@ export type Database = {
           max_tokens?: number
           mensagem_boas_vindas?: string | null
           modelo?: string
+          n8n_webhook_url?: string | null
           nome: string
           objetivo?: string | null
           persona?: string | null
@@ -123,6 +125,7 @@ export type Database = {
           max_tokens?: number
           mensagem_boas_vindas?: string | null
           modelo?: string
+          n8n_webhook_url?: string | null
           nome?: string
           objetivo?: string | null
           persona?: string | null

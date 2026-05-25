@@ -39,6 +39,7 @@ import {
   MessageCircle,
   Brain,
   Database,
+  Webhook,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -59,6 +60,7 @@ interface Agente {
   evolution_instancia: string | null;
   evolution_api_key: string | null;
   evolution_server_url: string | null;
+  n8n_webhook_url: string | null;
   rag_ativo: boolean | null;
   rag_threshold: number | null;
   rag_resultados: number | null;
@@ -85,6 +87,7 @@ const formInicial = {
   evolution_server_url: "",
   evolution_api_key: "",
   evolution_instancia: "",
+  n8n_webhook_url: "",
   rag_ativo: true,
   rag_threshold: 0.7,
   rag_resultados: 5,
@@ -158,6 +161,7 @@ export default function AgentesPage() {
       evolution_server_url: a.evolution_server_url ?? "",
       evolution_api_key: a.evolution_api_key ?? "",
       evolution_instancia: a.evolution_instancia ?? "",
+      n8n_webhook_url: a.n8n_webhook_url ?? "",
       rag_ativo: a.rag_ativo ?? true,
       rag_threshold: a.rag_threshold ?? 0.7,
       rag_resultados: a.rag_resultados ?? 5,
@@ -189,6 +193,7 @@ export default function AgentesPage() {
       evolution_server_url: form.evolution_server_url.trim() || null,
       evolution_api_key: form.evolution_api_key.trim() || null,
       evolution_instancia: form.evolution_instancia.trim() || null,
+      n8n_webhook_url: form.n8n_webhook_url.trim() || null,
       rag_ativo: form.rag_ativo,
       rag_threshold: form.rag_threshold,
       rag_resultados: form.rag_resultados,
@@ -330,6 +335,15 @@ export default function AgentesPage() {
                     >
                       {a.ativo ? "Ativo" : "Inativo"}
                     </Badge>
+                    <Badge
+                      className={`text-xs border-1 ${
+                        a.n8n_webhook_url
+                          ? "bg-primary/15 text-primary border-primary/30"
+                          : "bg-muted text-muted-foreground border-muted-foreground/20"
+                      }`}
+                    >
+                      {a.n8n_webhook_url ? "Via n8n" : "IA Interna"}
+                    </Badge>
                   </div>
 
                   <div className="flex gap-2">
@@ -377,11 +391,12 @@ export default function AgentesPage() {
           </DialogHeader>
 
           <Tabs defaultValue="identidade">
-            <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full">
+            <TabsList className="grid grid-cols-2 sm:grid-cols-6 w-full">
               <TabsTrigger value="identidade">Identidade</TabsTrigger>
               <TabsTrigger value="comportamento">Comportamento</TabsTrigger>
               <TabsTrigger value="conhecimento">Conhecimento</TabsTrigger>
               <TabsTrigger value="whatsapp">WhatsApp</TabsTrigger>
+              <TabsTrigger value="integracao">Integração</TabsTrigger>
               <TabsTrigger value="status">Status</TabsTrigger>
             </TabsList>
 
@@ -643,6 +658,22 @@ export default function AgentesPage() {
                 )}
                 Testar conexão
               </Button>
+            </TabsContent>
+
+            <TabsContent value="integracao" className="space-y-4 pt-4">
+              <div className="space-y-1.5">
+                <Label>URL do Webhook n8n</Label>
+                <Input
+                  value={form.n8n_webhook_url}
+                  onChange={(e) =>
+                    setForm({ ...form, n8n_webhook_url: e.target.value })
+                  }
+                  placeholder="https://seu-n8n.com/webhook/..."
+                />
+                <p className="text-xs text-muted-foreground">
+                  Quando preenchido, as mensagens serão processadas pelo n8n em vez da IA interna.
+                </p>
+              </div>
             </TabsContent>
 
             <TabsContent value="status" className="space-y-4 pt-4">
