@@ -834,7 +834,7 @@ export default function CerebroPage() {
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-3">
               <Brain className="h-8 w-8 text-primary" />
-              Cérebro do Agente
+              Configuração da IA
             </h1>
             <p className="text-muted-foreground mt-1">Base de conhecimento que alimenta a IA via N8N</p>
           </div>
