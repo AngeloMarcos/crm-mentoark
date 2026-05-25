@@ -203,14 +203,16 @@ function NavSubgroupSection({
           return (
             <SidebarMenuItem key={item.title}>
               <SidebarMenuButton asChild>
-                <NavLink
-                  to={item.url}
-                  end={item.url === "/dashboard"}
-                  title={item.title}
-                  className={`group relative flex items-center justify-center px-2 py-2 rounded-lg transition-all ${
-                    active ? "gradient-brand-subtle" : "hover:bg-sidebar-accent"
-                  }`}
-                >
+                  <NavLink
+                    to={item.url}
+                    end={item.url === "/dashboard"}
+                    title={item.title}
+                    className={`group relative flex items-center justify-center px-2 py-2 rounded-lg transition-all ${
+                      active
+                        ? "gradient-brand-subtle shadow-[inset_0_0_0_1px_hsl(262_83%_58%/0.18),0_0_12px_hsl(262_83%_58%/0.12)]"
+                        : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(262_83%_58%/0.05)]"
+                    }`}
+                  >
                   <item.icon className={`h-5 w-5 ${active ? item.color : "text-muted-foreground"}`} />
                 </NavLink>
               </SidebarMenuButton>
