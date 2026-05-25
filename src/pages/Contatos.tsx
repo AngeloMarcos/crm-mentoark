@@ -24,8 +24,19 @@ interface DadoCliente {
   nomewpp: string | null;
   telefone: string | null;
   Setor: string | null;
-  atendimento_ia: boolean | null;
+  atendimento_ia: boolean | string | null;
   created_at: string;
+}
+
+type IaStatus = "ativa" | "pausada" | null;
+function getIaStatus(v: boolean | string | null | undefined): IaStatus {
+  if (v === null || v === undefined || v === "") return null;
+  if (v === true) return "ativa";
+  if (v === false) return "pausada";
+  const s = String(v).toLowerCase().trim();
+  if (s === "ativo" || s === "ativa" || s === "reativada" || s === "true") return "ativa";
+  if (s === "pause" || s === "pausada" || s === "pausado" || s === "false") return "pausada";
+  return null;
 }
 
 interface FollowUp {
@@ -155,8 +166,8 @@ export default function ContatosPage() {
       result = result.filter(d => (d.Setor || "").trim().toUpperCase() === setorFilter);
     }
     if (iaFilter !== "TODOS") {
-      const active = iaFilter === "ATIVA";
-      result = result.filter(d => d.atendimento_ia === active);
+      const wanted = iaFilter === "ATIVA" ? "ativa" : "pausada";
+      result = result.filter(d => getIaStatus(d.atendimento_ia) === wanted);
     }
     return result;
   }, [data, query, setorFilter, iaFilter]);
@@ -239,7 +250,7 @@ export default function ContatosPage() {
           <>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {paginatedData.map((c) => {
-                const iaAtiva = c.atendimento_ia === true;
+                const iaStatus = getIaStatus(c.atendimento_ia);
                 return (
                   <Card 
                     key={c.id} 
@@ -252,7 +263,25 @@ export default function ContatosPage() {
                           <User className="h-5 w-5 text-primary" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <h3 className="font-semibold truncate">{c.nomewpp || "Sem nome"}</h3>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-semibold truncate">{c.nomewpp || "Sem nome"}</h3>
+                            {iaStatus === "ativa" && (
+                              <span
+                                title="IA Ativa"
+                                className="inline-flex items-center gap-1 text-[10px] font-medium text-success bg-success/10 border border-success/20 rounded-full px-1.5 py-0.5 shrink-0"
+                              >
+                                🤖
+                              </span>
+                            )}
+                            {iaStatus === "pausada" && (
+                              <span
+                                title="IA Pausada"
+                                className="inline-flex items-center gap-1 text-[10px] font-medium text-warning bg-warning/10 border border-warning/20 rounded-full px-1.5 py-0.5 shrink-0"
+                              >
+                                ⏸️
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
                             <Phone className="h-3 w-3" />
                             <span className="truncate">{c.telefone || "—"}</span>
@@ -263,17 +292,6 @@ export default function ContatosPage() {
                       <div className="flex flex-wrap gap-2">
                         <Badge variant="outline" className={setorBadgeClass(c.Setor)}>
                           {c.Setor?.trim() || "Sem setor"}
-                        </Badge>
-                        <Badge
-                          variant="outline"
-                          className={
-                            iaAtiva
-                              ? "bg-success/15 text-success border-success/30"
-                              : "bg-destructive/15 text-destructive border-destructive/30"
-                          }
-                        >
-                          <Bot className="h-3 w-3 mr-1" />
-                          IA {iaAtiva ? "ativa" : "pause"}
                         </Badge>
                       </div>
 
