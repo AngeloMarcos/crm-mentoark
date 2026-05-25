@@ -1,15 +1,36 @@
-import { Moon, Sun, Bell } from "lucide-react";
+import { Moon, Sun, Bell, ChevronDown, User as UserIcon, Home, Shield, LogOut } from "lucide-react";
 import { useTheme } from "@/components/ThemeProvider";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useAuth } from "@/hooks/useAuth";
 import ParticlesBackground from "@/components/ParticlesBackground";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useNavigate } from "react-router-dom";
 
 export function AppHeader() {
   const { theme, toggleTheme } = useTheme();
-  const { user } = useAuth();
+  const { user, isAdmin, signOut } = useAuth();
+  const navigate = useNavigate();
 
-  const initials = user?.email ? user.email.slice(0, 2).toUpperCase() : "U";
+  const displayName =
+    (user as any)?.user_metadata?.full_name ||
+    (user as any)?.user_metadata?.name ||
+    user?.email?.split("@")[0] ||
+    "Usuário";
+  const initials = displayName.slice(0, 2).toUpperCase();
+  const roleLabel = isAdmin ? "Administrador" : "Usuário";
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate("/login");
+  };
 
   return (
     <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20 overflow-hidden shadow-[0_4px_30px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
@@ -21,7 +42,6 @@ export function AppHeader() {
           connectionDistance={110}
         />
       </div>
-
 
       <div className="absolute bottom-0 left-0 right-0 h-[2px] pointer-events-none overflow-hidden">
         <div
@@ -56,12 +76,49 @@ export function AppHeader() {
           {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
         </Button>
 
-        {/* Avatar com anel degradê */}
-        <div className="ring-gradient glow-primary ml-1">
-          <div className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-semibold gradient-brand-text">
-            {initials}
-          </div>
-        </div>
+        {/* Menu do usuário */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex items-center gap-2 ml-1 pl-1 pr-2 py-1 rounded-full hover:bg-muted/60 transition-colors group">
+              <div className="ring-gradient glow-primary">
+                <div className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-semibold gradient-brand-text">
+                  {initials}
+                </div>
+              </div>
+              <div className="hidden sm:flex flex-col items-start leading-tight">
+                <span className="text-sm font-semibold text-foreground capitalize">{displayName}</span>
+                <span className="text-[10px] text-muted-foreground">{roleLabel}</span>
+              </div>
+              <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel className="flex flex-col">
+              <span className="capitalize">{displayName}</span>
+              <span className="text-xs font-normal text-muted-foreground">{user?.email}</span>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => navigate("/perfil")}>
+              <UserIcon className="mr-2 h-4 w-4" />
+              Perfil
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate("/dashboard")}>
+              <Home className="mr-2 h-4 w-4" />
+              Home
+            </DropdownMenuItem>
+            {isAdmin && (
+              <DropdownMenuItem onClick={() => navigate("/usuarios")}>
+                <Shield className="mr-2 h-4 w-4" />
+                Painel Admin
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
+              <LogOut className="mr-2 h-4 w-4" />
+              Deslogar
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );
