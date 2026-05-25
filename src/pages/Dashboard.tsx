@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -13,63 +12,99 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Users,
   MessageCircle,
-  Activity,
   RefreshCw,
-  Bot,
-  CirclePause,
-  ExternalLink,
+  Megaphone,
+  TrendingUp,
   Clock,
   CheckCircle2,
   CalendarDays,
+  ArrowUpRight,
+  Sparkles,
+  ExternalLink,
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from "recharts";
 
 interface DashboardStats {
-  totalContatos: number;
-  iaAtiva: number;
-  iaPausada: number;
-  conversasHoje: number;
-  recentes: any[];
+  totalLeads: number;
+  novosLeads7d: number;
+  leadsGanhos: number;
+  taxaConversao: number;
+  campanhasAtivas: number;
+  campanhasTotal: number;
+  mensagensHoje: number;
+  mensagens7dSerie: { dia: string; total: number }[];
+  leadsRecentes: any[];
 }
 
-const initialStats: DashboardStats = {
-  totalContatos: 0,
-  iaAtiva: 0,
-  iaPausada: 0,
-  conversasHoje: 0,
-  recentes: [],
+const empty: DashboardStats = {
+  totalLeads: 0,
+  novosLeads7d: 0,
+  leadsGanhos: 0,
+  taxaConversao: 0,
+  campanhasAtivas: 0,
+  campanhasTotal: 0,
+  mensagensHoje: 0,
+  mensagens7dSerie: [],
+  leadsRecentes: [],
 };
 
 function KpiCard({
   title,
   value,
+  hint,
   icon: Icon,
-  accent,
+  trend,
+  tone = "primary",
   loading,
 }: {
   title: string;
   value: string | number;
+  hint?: string;
   icon: any;
-  accent?: boolean;
+  trend?: string;
+  tone?: "primary" | "success" | "info" | "accent";
   loading?: boolean;
 }) {
+  const toneStyles: Record<string, string> = {
+    primary: "from-primary/15 to-primary/5 text-primary",
+    success: "from-success/15 to-success/5 text-success",
+    info: "from-info/15 to-info/5 text-info",
+    accent: "from-accent/15 to-accent/5 text-accent",
+  };
   return (
-    <Card className={`${accent ? "glow-primary border-primary/30" : ""}`}>
-      <CardContent className="flex items-center gap-4 p-5">
-        <div
-          className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
-            accent ? "gradient-brand text-white shadow-sm" : "bg-muted text-muted-foreground"
-          }`}
-        >
-          <Icon className="h-6 w-6" />
-        </div>
-        <div className="flex-1">
-          <p className="text-sm text-muted-foreground">{title}</p>
-          {loading ? (
-            <Skeleton className="h-7 w-16 mt-1" />
-          ) : (
-            <p className="text-2xl font-bold tracking-tight">{value}</p>
+    <Card className="overflow-hidden relative group hover:shadow-md transition-all">
+      <div
+        className={`absolute inset-0 bg-gradient-to-br ${toneStyles[tone]} opacity-60 pointer-events-none`}
+      />
+      <CardContent className="relative p-5">
+        <div className="flex items-start justify-between mb-3">
+          <div
+            className={`w-10 h-10 rounded-xl bg-card border flex items-center justify-center ${toneStyles[tone].split(" ").pop()}`}
+          >
+            <Icon className="h-5 w-5" />
+          </div>
+          {trend && (
+            <Badge variant="secondary" className="text-[10px] gap-1 bg-card">
+              <ArrowUpRight className="h-3 w-3" />
+              {trend}
+            </Badge>
           )}
         </div>
+        <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">{title}</p>
+        {loading ? (
+          <Skeleton className="h-8 w-20" />
+        ) : (
+          <p className="text-3xl font-bold tracking-tight">{value}</p>
+        )}
+        {hint && !loading && <p className="text-xs text-muted-foreground mt-1">{hint}</p>}
       </CardContent>
     </Card>
   );
@@ -78,7 +113,7 @@ function KpiCard({
 export default function DashboardPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [stats, setStats] = useState<DashboardStats>(initialStats);
+  const [stats, setStats] = useState<DashboardStats>(empty);
   const [loadingDash, setLoadingDash] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -89,32 +124,66 @@ export default function DashboardPage() {
       const hoje = new Date();
       hoje.setHours(0, 0, 0, 0);
       const hojeIso = hoje.toISOString();
+      const sete = new Date(hoje);
+      sete.setDate(sete.getDate() - 6);
+      const seteIso = sete.toISOString();
 
       const [
-        totalRes,
-        iaAtivaRes,
-        iaPausadaRes,
+        leadsRes,
+        novos7Res,
+        ganhosRes,
+        campAtivasRes,
+        campTotalRes,
         msgHojeRes,
-        recentesRes
+        msg7dRes,
+        recentesRes,
       ] = await Promise.all([
-        api.from("dados_cliente").select("id", { count: "exact", head: true }),
-        api.from("dados_cliente").select("id", { count: "exact", head: true }).eq("atendimento_ia", true),
-        api.from("dados_cliente").select("id", { count: "exact", head: true }).eq("atendimento_ia", false),
+        api.from("leads").select("id", { count: "exact", head: true }),
+        api.from("leads").select("id", { count: "exact", head: true }).gte("created_at", seteIso),
+        api.from("leads").select("id", { count: "exact", head: true }).eq("status", "ganho"),
+        api.from("campanhas").select("id", { count: "exact", head: true }).eq("status", "ativa"),
+        api.from("campanhas").select("id", { count: "exact", head: true }),
         api.from("chat_messages").select("id", { count: "exact", head: true }).gte("created_at", hojeIso),
-        api.from("dados_cliente").select("*").order("created_at", { ascending: false }).limit(5)
+        api.from("chat_messages").select("created_at").gte("created_at", seteIso),
+        api.from("leads").select("*").order("created_at", { ascending: false }).limit(6),
       ]);
 
+      const totalLeads = leadsRes.count || 0;
+      const leadsGanhos = ganhosRes.count || 0;
+      const taxa = totalLeads > 0 ? (leadsGanhos / totalLeads) * 100 : 0;
+
+      // serializa 7 dias
+      const dias: Record<string, number> = {};
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(hoje);
+        d.setDate(d.getDate() - (6 - i));
+        const k = d.toISOString().slice(0, 10);
+        dias[k] = 0;
+      }
+      (msg7dRes.data || []).forEach((m: any) => {
+        const k = (m.created_at || "").slice(0, 10);
+        if (k in dias) dias[k]++;
+      });
+      const serie = Object.entries(dias).map(([k, total]) => ({
+        dia: new Date(k).toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", ""),
+        total,
+      }));
+
       setStats({
-        totalContatos: totalRes.count || 0,
-        iaAtiva: iaAtivaRes.count || 0,
-        iaPausada: iaPausadaRes.count || 0,
-        conversasHoje: msgHojeRes.count || 0,
-        recentes: recentesRes.data || [],
+        totalLeads,
+        novosLeads7d: novos7Res.count || 0,
+        leadsGanhos,
+        taxaConversao: Math.round(taxa * 10) / 10,
+        campanhasAtivas: campAtivasRes.count || 0,
+        campanhasTotal: campTotalRes.count || 0,
+        mensagensHoje: msgHojeRes.count || 0,
+        mensagens7dSerie: serie,
+        leadsRecentes: recentesRes.data || [],
       });
       setLastUpdated(new Date());
-    } catch (error) {
+    } catch (error: any) {
       console.error("Dashboard error:", error);
-      toast.error("Erro ao carregar indicadores");
+      toast.error("Erro ao carregar indicadores", { description: error?.message });
     } finally {
       setLoadingDash(false);
     }
@@ -139,11 +208,11 @@ export default function DashboardPage() {
         .gte("data_retorno", hoje.toISOString())
         .lt("data_retorno", amanha.toISOString())
         .order("data_retorno", { ascending: true });
-      
+
       if (error) throw error;
       return data as any[];
     },
-    enabled: !!user?.id
+    enabled: !!user?.id,
   });
 
   const handleRefresh = async () => {
@@ -153,140 +222,159 @@ export default function DashboardPage() {
     toast.success("Dados atualizados");
   };
 
+  const statusColor: Record<string, string> = {
+    novo: "bg-info/15 text-info border-info/30",
+    qualificado: "bg-warning/15 text-warning border-warning/30",
+    ganho: "bg-success/15 text-success border-success/30",
+    perdido: "bg-destructive/15 text-destructive border-destructive/30",
+  };
+
   return (
     <CRMLayout>
       <div className="space-y-6">
+        {/* Header */}
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Dashboard</h1>
-            <p className="text-muted-foreground text-sm">
-              Indicadores de atendimento e contatos
+            <h1 className="text-3xl font-bold tracking-tight gradient-brand-text inline-block">
+              Dashboard
+            </h1>
+            <p className="text-muted-foreground text-sm mt-1">
+              Visão geral de leads, conversão, campanhas e WhatsApp
             </p>
           </div>
           <div className="flex items-center gap-3">
             {lastUpdated && (
-              <span className="text-xs text-muted-foreground hidden sm:block">
-                Atualizado às{" "}
+              <span className="text-xs text-muted-foreground hidden sm:flex items-center gap-1">
+                <Sparkles className="h-3 w-3" />
+                Atualizado{" "}
                 {lastUpdated.toLocaleTimeString("pt-BR", {
                   hour: "2-digit",
                   minute: "2-digit",
                 })}
               </span>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={refreshing}
-            >
-              <RefreshCw
-                className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`}
-              />
+            <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
+              <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
               Atualizar
             </Button>
           </div>
         </div>
 
+        {/* KPIs principais */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <KpiCard
-            title="Total de Contatos"
-            value={stats.totalContatos}
+            title="Total de Leads"
+            value={stats.totalLeads}
+            hint={`+${stats.novosLeads7d} nos últimos 7 dias`}
             icon={Users}
-            accent
+            tone="primary"
             loading={loadingDash}
           />
           <KpiCard
-            title="IA Ativa"
-            value={stats.iaAtiva}
-            icon={Bot}
+            title="Taxa de Conversão"
+            value={`${stats.taxaConversao}%`}
+            hint={`${stats.leadsGanhos} leads ganhos`}
+            icon={TrendingUp}
+            tone="success"
             loading={loadingDash}
           />
           <KpiCard
-            title="IA Pausada"
-            value={stats.iaPausada}
-            icon={CirclePause}
+            title="Campanhas Ativas"
+            value={stats.campanhasAtivas}
+            hint={`de ${stats.campanhasTotal} no total`}
+            icon={Megaphone}
+            tone="accent"
             loading={loadingDash}
           />
           <KpiCard
-            title="Conversas Hoje"
-            value={stats.conversasHoje}
+            title="Mensagens Hoje"
+            value={stats.mensagensHoje}
+            hint="WhatsApp + IA"
             icon={MessageCircle}
+            tone="info"
             loading={loadingDash}
           />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card className="card-gradient-border">
+        {/* Gráfico + Follow-ups */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Card className="lg:col-span-2">
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-semibold flex items-center gap-2">
-                  <Activity className="h-5 w-5 text-primary" />
-                  Contatos Recentes
+                <CardTitle className="text-base font-semibold flex items-center gap-2">
+                  <MessageCircle className="h-4 w-4 text-info" />
+                  Mensagens WhatsApp — últimos 7 dias
                 </CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => navigate("/contatos")} className="text-xs">
-                  Ver todos
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => navigate("/whatsapp")}
+                >
+                  Abrir WhatsApp <ExternalLink className="h-3 w-3 ml-1" />
                 </Button>
               </div>
             </CardHeader>
             <CardContent>
               {loadingDash ? (
-                <div className="space-y-2">
-                  {[1, 2, 3, 4, 5].map((i) => (
-                    <Skeleton key={i} className="h-12 w-full" />
-                  ))}
-                </div>
-              ) : stats.recentes.length === 0 ? (
-                <div className="text-center py-10 text-muted-foreground">
-                  Nenhum contato cadastrado ainda.
-                </div>
+                <Skeleton className="h-[220px] w-full" />
               ) : (
-                <div className="relative overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Nome</TableHead>
-                        <TableHead>Setor</TableHead>
-                        <TableHead className="text-right">Ação</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {stats.recentes.map((c) => (
-                        <TableRow key={c.id}>
-                          <TableCell className="font-medium truncate max-w-[150px]">
-                            {c.nomewpp || "Sem nome"}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="text-[10px] uppercase">
-                              {c.Setor || "N/A"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              onClick={() => navigate(`/contatos/${c.id}`)}
-                            >
-                              <ExternalLink className="h-4 w-4" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                <div className="h-[220px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={stats.mensagens7dSerie}>
+                      <defs>
+                        <linearGradient id="msgGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.4} />
+                          <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                      <XAxis
+                        dataKey="dia"
+                        stroke="hsl(var(--muted-foreground))"
+                        fontSize={11}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="hsl(var(--muted-foreground))"
+                        fontSize={11}
+                        tickLine={false}
+                        axisLine={false}
+                        width={28}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          background: "hsl(var(--card))",
+                          border: "1px solid hsl(var(--border))",
+                          borderRadius: 8,
+                          fontSize: 12,
+                        }}
+                        labelStyle={{ color: "hsl(var(--foreground))" }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="total"
+                        stroke="hsl(var(--primary))"
+                        strokeWidth={2}
+                        fill="url(#msgGradient)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
                 </div>
               )}
             </CardContent>
           </Card>
 
-          <Card className="card-gradient-border border-yellow-500/20">
+          <Card className="border-warning/20">
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-semibold flex items-center gap-2 text-yellow-600 dark:text-yellow-500">
-                  <Clock className="h-5 w-5" />
+                <CardTitle className="text-base font-semibold flex items-center gap-2 text-warning">
+                  <Clock className="h-4 w-4" />
                   Follow-ups de Hoje
                 </CardTitle>
-                <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600">
-                  {followUpsHoje.length} pendentes
+                <Badge variant="secondary" className="bg-warning/10 text-warning border-warning/20">
+                  {followUpsHoje.length}
                 </Badge>
               </div>
             </CardHeader>
@@ -297,32 +385,35 @@ export default function DashboardPage() {
                   <Skeleton className="h-16 w-full" />
                 </div>
               ) : followUpsHoje.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
+                <div className="text-center py-10 text-muted-foreground">
                   <CheckCircle2 className="h-8 w-8 mx-auto mb-2 opacity-20" />
                   <p className="text-sm">Tudo em dia para hoje!</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2 max-h-[220px] overflow-auto">
                   {followUpsHoje.map((fu) => (
-                    <div 
-                      key={fu.id} 
+                    <div
+                      key={fu.id}
                       className="flex items-center justify-between p-3 rounded-lg border bg-card/50 hover:bg-card transition-colors cursor-pointer group"
                       onClick={() => navigate(`/contatos/${fu.contato_id}`)}
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-yellow-500/10 flex items-center justify-center">
-                          <Clock className="w-4 h-4 text-yellow-600" />
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-full bg-warning/10 flex items-center justify-center shrink-0">
+                          <Clock className="w-4 h-4 text-warning" />
                         </div>
-                        <div>
-                          <p className="text-sm font-medium">{fu.contatos?.nomewpp || "Contato"}</p>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">
+                            {fu.contatos?.nomewpp || "Contato"}
+                          </p>
                           <p className="text-[10px] text-muted-foreground flex items-center gap-1">
                             <CalendarDays className="w-3 h-3" />
-                            {new Date(fu.data_retorno).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
-                            • {fu.motivo}
+                            {new Date(fu.data_retorno).toLocaleTimeString("pt-BR", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
                           </p>
                         </div>
                       </div>
-                      <ExternalLink className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                     </div>
                   ))}
                 </div>
@@ -330,6 +421,73 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Leads recentes */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <Users className="h-4 w-4 text-primary" />
+                Leads Recentes
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => navigate("/leads")} className="text-xs">
+                Ver todos <ExternalLink className="h-3 w-3 ml-1" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {loadingDash ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <Skeleton key={i} className="h-20 w-full" />
+                ))}
+              </div>
+            ) : stats.leadsRecentes.length === 0 ? (
+              <div className="text-center py-10 text-muted-foreground">
+                <Users className="h-8 w-8 mx-auto mb-2 opacity-20" />
+                <p className="text-sm">Nenhum lead cadastrado ainda.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => navigate("/leads")}
+                >
+                  Criar primeiro lead
+                </Button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {stats.leadsRecentes.map((l) => (
+                  <div
+                    key={l.id}
+                    className="p-3 rounded-lg border bg-card/50 hover:bg-card hover:border-primary/30 transition-all cursor-pointer group"
+                    onClick={() => navigate(`/leads`)}
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <p className="font-medium text-sm truncate flex-1">
+                        {l.nome || l.nomewpp || "Sem nome"}
+                      </p>
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] uppercase ${statusColor[l.status] || ""}`}
+                      >
+                        {l.status || "novo"}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {l.telefone || l.email || "—"}
+                    </p>
+                    {l.origem && (
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        via {l.origem}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </CRMLayout>
   );
