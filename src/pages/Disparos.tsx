@@ -29,6 +29,8 @@ export default function DisparosPage() {
   const { user } = useAuth();
   const [step, setStep] = useState(0);
   const [activeCampaign, setActiveCampaign] = useState<any>(null);
+  const [targetContacts, setTargetContacts] = useState<any[]>([]);
+  const [loadingCount, setLoadingCount] = useState(false);
 
   const [form, setForm] = useState({
     nome: "",
@@ -50,6 +52,59 @@ export default function DisparosPage() {
     humanizar_ia: true,
   });
 
+  // Live contact count — recalcula sempre que os filtros mudam
+  useEffect(() => {
+    const fetchCount = async () => {
+      if (form.tags_selecionadas.length === 0 && form.estagios_selecionados.length === 0) {
+        setTargetContacts([]);
+        return;
+      }
+      setLoadingCount(true);
+      let list: any[] = [];
+      if (form.tags_selecionadas.length > 0) {
+        const { data } = await api.from("contatos").select("id, nome, telefone, tags");
+        if (data) {
+          const filtered = data.filter((c: any) =>
+            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
+          );
+          list = [...list, ...filtered];
+        }
+      }
+      if (form.estagios_selecionados.length > 0) {
+        const { data } = await api
+          .from("contatos")
+          .select("id, nome, telefone")
+          .in("funil_estagio_id", form.estagios_selecionados);
+        if (data) list = [...list, ...data];
+      }
+      const unique = Array.from(new Map(list.map(c => [c.telefone, c])).values());
+      setTargetContacts(unique);
+      setLoadingCount(false);
+    };
+    fetchCount();
+  }, [form.tags_selecionadas, form.estagios_selecionados]);
+
+  // Validação por etapa — habilita "Próximo" só quando OK
+  const stepValid = useMemo(() => {
+    if (step === 0) return form.nome.trim().length > 0 && targetContacts.length > 0;
+    if (step === 1) {
+      if (form.tipo_midia === "texto") return form.mensagem.trim().length > 0;
+      return form.url_midia.trim().length > 0;
+    }
+    if (step === 2) return form.instancias_ids.length > 0;
+    return true;
+  }, [step, form, targetContacts.length]);
+
+  const stepHint = useMemo(() => {
+    if (stepValid) return null;
+    if (step === 0) {
+      if (!form.nome.trim()) return "Informe o nome da campanha";
+      return "Selecione ao menos uma tag, estágio ou importe um CSV";
+    }
+    if (step === 1) return form.tipo_midia === "texto" ? "Escreva a mensagem" : "Informe a URL do arquivo";
+    if (step === 2) return "Selecione ao menos uma instância";
+    return null;
+  }, [stepValid, step, form]);
 
   if (activeCampaign) {
     return <MonitoringDashboard campaign={activeCampaign} onCancel={() => setActiveCampaign(null)} />;
@@ -58,32 +113,73 @@ export default function DisparosPage() {
   return (
     <CRMLayout>
       <div className="max-w-6xl mx-auto space-y-6">
-        <h1 className="text-2xl font-bold">Novo Disparo em Massa</h1>
-        
-        <div className="flex gap-4 mb-8">
-          {Steps.map((s, i) => (
-            <div key={s} className={`flex items-center gap-2 ${i <= step ? "text-primary" : "text-muted-foreground"}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center border ${i <= step ? "bg-primary text-primary-foreground" : ""}`}>
-                {i + 1}
-              </div>
-              <span className="text-sm font-medium">{s}</span>
-            </div>
-          ))}
+        <div className="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold">Novo Disparo em Massa</h1>
+            <p className="text-sm text-muted-foreground">Configure em 4 passos rápidos</p>
+          </div>
+          {/* Resumo ao vivo — sempre visível */}
+          <div className="flex flex-wrap gap-2 text-xs">
+            <Badge variant="outline" className="gap-1 py-1.5 px-3">
+              <Users className="h-3 w-3" />
+              {loadingCount ? "..." : targetContacts.length} contato{targetContacts.length === 1 ? "" : "s"}
+            </Badge>
+            <Badge variant="outline" className="gap-1 py-1.5 px-3">
+              <Send className="h-3 w-3" />
+              {form.instancias_ids.length} instância{form.instancias_ids.length === 1 ? "" : "s"}
+            </Badge>
+            <Badge variant="outline" className="gap-1 py-1.5 px-3 capitalize">
+              <ShieldCheck className="h-3 w-3" />
+              {form.perfil_velocidade}
+            </Badge>
+          </div>
+        </div>
+
+        {/* Stepper clicável (só permite voltar) */}
+        <div className="flex gap-2 sm:gap-4 mb-2 flex-wrap">
+          {Steps.map((s, i) => {
+            const clickable = i < step;
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => clickable && setStep(i)}
+                disabled={!clickable && i !== step}
+                className={`flex items-center gap-2 transition-opacity ${i <= step ? "text-primary" : "text-muted-foreground"} ${clickable ? "hover:opacity-80 cursor-pointer" : i === step ? "" : "cursor-not-allowed"}`}
+              >
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center border ${i < step ? "bg-primary/80 text-primary-foreground" : i === step ? "bg-primary text-primary-foreground" : ""}`}>
+                  {i < step ? <CheckCircle2 className="h-4 w-4" /> : i + 1}
+                </div>
+                <span className="text-sm font-medium hidden sm:inline">{s}</span>
+              </button>
+            );
+          })}
         </div>
 
         <div className="min-h-[400px]">
-          {step === 0 && <StepContacts form={form} setForm={setForm} />}
+          {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
-          {step === 3 && <StepReview form={form} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
+          {step === 3 && <StepReview form={form} targetContacts={targetContacts} loadingContacts={loadingCount} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
         </div>
 
-        <div className="flex justify-between pt-6 border-t">
-          <Button variant="outline" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}>Voltar</Button>
-          <Button onClick={() => step === 3 ? setActiveCampaign({ nome: form.nome }) : setStep(Math.min(3, step + 1))}>
-            {step === 3 ? "Iniciar Disparo" : "Próximo"}
-          </Button>
-        </div>
+        {/* Footer: na revisão escondemos para evitar duplicidade com os CTAs internos */}
+        {step < 3 && (
+          <div className="flex justify-between items-center pt-6 border-t gap-4">
+            <Button variant="outline" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}>Voltar</Button>
+            <div className="flex items-center gap-3">
+              {stepHint && <span className="text-xs text-muted-foreground hidden sm:inline">{stepHint}</span>}
+              <Button onClick={() => setStep(Math.min(3, step + 1))} disabled={!stepValid}>
+                Próximo
+              </Button>
+            </div>
+          </div>
+        )}
+        {step === 3 && (
+          <div className="flex justify-start pt-6 border-t">
+            <Button variant="outline" onClick={() => setStep(2)}>Voltar</Button>
+          </div>
+        )}
       </div>
     </CRMLayout>
   );
