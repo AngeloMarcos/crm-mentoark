@@ -86,7 +86,7 @@ const navGroups: NavGroup[] = [
           { title: "Caixa de Entrada",  url: "/whatsapp?tab=caixa", icon: Inbox,        modulo: "whatsapp",    color: "text-emerald-500" },
           { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap,           modulo: "whatsapp",    color: "text-amber-500"   },
           { title: "SLA / Gestão",      url: "/sla",               icon: Timer,         modulo: "whatsapp",    color: "text-yellow-500"  },
-          { title: "Cérebro do Agente", url: "/cerebro",           icon: Brain,         modulo: "cerebro",     color: "text-purple-400", adminOnly: true },
+          { title: "Configuração da IA", url: "/cerebro",           icon: Brain,         modulo: "cerebro",     color: "text-purple-400", adminOnly: true },
           { title: "Agentes",           url: "/agentes",           icon: Bot,           modulo: "agentes",     color: "text-teal-500",   adminOnly: true },
           { title: "Workflows",         url: "/workflows",         icon: GitBranch,     modulo: "workflows",   color: "text-violet-500", adminOnly: true },
           { title: "Integrações",       url: "/integracoes",       icon: Plug,          modulo: "integracoes", color: "text-amber-500",  adminOnly: true },

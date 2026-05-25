@@ -536,10 +536,10 @@ export default function AgentesPage() {
               <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
                 <div className="flex items-center gap-2 text-primary">
                   <Brain className="h-5 w-5" />
-                  <h3 className="font-semibold">Cérebro do Agente (RAG)</h3>
+                  <h3 className="font-semibold">Configuração da IA (RAG)</h3>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  O Cérebro permite que o agente consulte informações específicas sobre seu negócio, FAQ e scripts em tempo real.
+                  A Configuração da IA permite que o agente consulte informações específicas sobre seu negócio, FAQ e scripts em tempo real.
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
