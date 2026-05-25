@@ -24,8 +24,19 @@ interface DadoCliente {
   nomewpp: string | null;
   telefone: string | null;
   Setor: string | null;
-  atendimento_ia: boolean | null;
+  atendimento_ia: boolean | string | null;
   created_at: string;
+}
+
+type IaStatus = "ativa" | "pausada" | null;
+function getIaStatus(v: boolean | string | null | undefined): IaStatus {
+  if (v === null || v === undefined || v === "") return null;
+  if (v === true) return "ativa";
+  if (v === false) return "pausada";
+  const s = String(v).toLowerCase().trim();
+  if (s === "ativo" || s === "ativa" || s === "reativada" || s === "true") return "ativa";
+  if (s === "pause" || s === "pausada" || s === "pausado" || s === "false") return "pausada";
+  return null;
 }
 
 interface FollowUp {
