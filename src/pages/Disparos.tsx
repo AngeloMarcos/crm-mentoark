@@ -29,6 +29,8 @@ export default function DisparosPage() {
   const { user } = useAuth();
   const [step, setStep] = useState(0);
   const [activeCampaign, setActiveCampaign] = useState<any>(null);
+  const [targetContacts, setTargetContacts] = useState<any[]>([]);
+  const [loadingCount, setLoadingCount] = useState(false);
 
   const [form, setForm] = useState({
     nome: "",
@@ -50,6 +52,59 @@ export default function DisparosPage() {
     humanizar_ia: true,
   });
 
+  // Live contact count — recalcula sempre que os filtros mudam
+  useEffect(() => {
+    const fetchCount = async () => {
+      if (form.tags_selecionadas.length === 0 && form.estagios_selecionados.length === 0) {
+        setTargetContacts([]);
+        return;
+      }
+      setLoadingCount(true);
+      let list: any[] = [];
+      if (form.tags_selecionadas.length > 0) {
+        const { data } = await api.from("contatos").select("id, nome, telefone, tags");
+        if (data) {
+          const filtered = data.filter((c: any) =>
+            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
+          );
+          list = [...list, ...filtered];
+        }
+      }
+      if (form.estagios_selecionados.length > 0) {
+        const { data } = await api
+          .from("contatos")
+          .select("id, nome, telefone")
+          .in("funil_estagio_id", form.estagios_selecionados);
+        if (data) list = [...list, ...data];
+      }
+      const unique = Array.from(new Map(list.map(c => [c.telefone, c])).values());
+      setTargetContacts(unique);
+      setLoadingCount(false);
+    };
+    fetchCount();
+  }, [form.tags_selecionadas, form.estagios_selecionados]);
+
+  // Validação por etapa — habilita "Próximo" só quando OK
+  const stepValid = useMemo(() => {
+    if (step === 0) return form.nome.trim().length > 0 && targetContacts.length > 0;
+    if (step === 1) {
+      if (form.tipo_midia === "texto") return form.mensagem.trim().length > 0;
+      return form.url_midia.trim().length > 0;
+    }
+    if (step === 2) return form.instancias_ids.length > 0;
+    return true;
+  }, [step, form, targetContacts.length]);
+
+  const stepHint = useMemo(() => {
+    if (stepValid) return null;
+    if (step === 0) {
+      if (!form.nome.trim()) return "Informe o nome da campanha";
+      return "Selecione ao menos uma tag, estágio ou importe um CSV";
+    }
+    if (step === 1) return form.tipo_midia === "texto" ? "Escreva a mensagem" : "Informe a URL do arquivo";
+    if (step === 2) return "Selecione ao menos uma instância";
+    return null;
+  }, [stepValid, step, form]);
 
   if (activeCampaign) {
     return <MonitoringDashboard campaign={activeCampaign} onCancel={() => setActiveCampaign(null)} />;
@@ -58,41 +113,83 @@ export default function DisparosPage() {
   return (
     <CRMLayout>
       <div className="max-w-6xl mx-auto space-y-6">
-        <h1 className="text-2xl font-bold">Novo Disparo em Massa</h1>
-        
-        <div className="flex gap-4 mb-8">
-          {Steps.map((s, i) => (
-            <div key={s} className={`flex items-center gap-2 ${i <= step ? "text-primary" : "text-muted-foreground"}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center border ${i <= step ? "bg-primary text-primary-foreground" : ""}`}>
-                {i + 1}
-              </div>
-              <span className="text-sm font-medium">{s}</span>
-            </div>
-          ))}
+        <div className="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold">Novo Disparo em Massa</h1>
+            <p className="text-sm text-muted-foreground">Configure em 4 passos rápidos</p>
+          </div>
+          {/* Resumo ao vivo — sempre visível */}
+          <div className="flex flex-wrap gap-2 text-xs">
+            <Badge variant="outline" className="gap-1 py-1.5 px-3">
+              <Users className="h-3 w-3" />
+              {loadingCount ? "..." : targetContacts.length} contato{targetContacts.length === 1 ? "" : "s"}
+            </Badge>
+            <Badge variant="outline" className="gap-1 py-1.5 px-3">
+              <Send className="h-3 w-3" />
+              {form.instancias_ids.length} instância{form.instancias_ids.length === 1 ? "" : "s"}
+            </Badge>
+            <Badge variant="outline" className="gap-1 py-1.5 px-3 capitalize">
+              <ShieldCheck className="h-3 w-3" />
+              {form.perfil_velocidade}
+            </Badge>
+          </div>
+        </div>
+
+        {/* Stepper clicável (só permite voltar) */}
+        <div className="flex gap-2 sm:gap-4 mb-2 flex-wrap">
+          {Steps.map((s, i) => {
+            const clickable = i < step;
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => clickable && setStep(i)}
+                disabled={!clickable && i !== step}
+                className={`flex items-center gap-2 transition-opacity ${i <= step ? "text-primary" : "text-muted-foreground"} ${clickable ? "hover:opacity-80 cursor-pointer" : i === step ? "" : "cursor-not-allowed"}`}
+              >
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center border ${i < step ? "bg-primary/80 text-primary-foreground" : i === step ? "bg-primary text-primary-foreground" : ""}`}>
+                  {i < step ? <CheckCircle2 className="h-4 w-4" /> : i + 1}
+                </div>
+                <span className="text-sm font-medium hidden sm:inline">{s}</span>
+              </button>
+            );
+          })}
         </div>
 
         <div className="min-h-[400px]">
-          {step === 0 && <StepContacts form={form} setForm={setForm} />}
+          {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
-          {step === 3 && <StepReview form={form} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
+          {step === 3 && <StepReview form={form} targetContacts={targetContacts} loadingContacts={loadingCount} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
         </div>
 
-        <div className="flex justify-between pt-6 border-t">
-          <Button variant="outline" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}>Voltar</Button>
-          <Button onClick={() => step === 3 ? setActiveCampaign({ nome: form.nome }) : setStep(Math.min(3, step + 1))}>
-            {step === 3 ? "Iniciar Disparo" : "Próximo"}
-          </Button>
-        </div>
+        {/* Footer: na revisão escondemos para evitar duplicidade com os CTAs internos */}
+        {step < 3 && (
+          <div className="flex justify-between items-center pt-6 border-t gap-4">
+            <Button variant="outline" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}>Voltar</Button>
+            <div className="flex items-center gap-3">
+              {stepHint && <span className="text-xs text-muted-foreground hidden sm:inline">{stepHint}</span>}
+              <Button onClick={() => setStep(Math.min(3, step + 1))} disabled={!stepValid}>
+                Próximo
+              </Button>
+            </div>
+          </div>
+        )}
+        {step === 3 && (
+          <div className="flex justify-start pt-6 border-t">
+            <Button variant="outline" onClick={() => setStep(2)}>Voltar</Button>
+          </div>
+        )}
       </div>
     </CRMLayout>
   );
 }
 
-function StepContacts({ form, setForm }: any) {
+function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
   const [tags, setTags] = useState<any[]>([]);
   const [estagios, setEstagios] = useState<any[]>([]);
   const [csvPreview, setCsvPreview] = useState<any[]>([]);
+  const [tagSearch, setTagSearch] = useState("");
 
   useEffect(() => {
     const fetchTargets = async () => {
@@ -115,71 +212,144 @@ function StepContacts({ form, setForm }: any) {
       const ws = wb.Sheets[wsname];
       const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
       setCsvPreview(data.slice(0, 5));
-      // Map columns logic here...
       toast.success("CSV importado com sucesso!");
     };
     reader.readAsBinaryString(file);
   };
 
+  const filteredTags = tags.filter(t => t.nome?.toLowerCase().includes(tagSearch.toLowerCase()));
+  const allTagsSelected = filteredTags.length > 0 && filteredTags.every(t => form.tags_selecionadas.includes(t.nome));
+  const allEstagiosSelected = estagios.length > 0 && estagios.every(s => form.estagios_selecionados.includes(s.id));
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-1">
-        <Label>Nome da Campanha</Label>
-        <Input placeholder="Ex: Campanha Black Friday" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} />
+      <div className="grid sm:grid-cols-[1fr_auto] gap-3 items-end">
+        <div className="flex flex-col gap-1">
+          <Label>Nome da Campanha</Label>
+          <Input placeholder="Ex: Campanha Black Friday" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} />
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] uppercase text-muted-foreground font-bold">Selecionados</p>
+          <p className="text-2xl font-bold text-primary">
+            {loadingCount ? "..." : liveCount}
+            <span className="text-sm text-muted-foreground font-normal ml-1">contatos</span>
+          </p>
+        </div>
       </div>
 
       <Tabs defaultValue="tags" className="w-full">
         <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="tags">Por Tag</TabsTrigger>
-          <TabsTrigger value="estagio">Por Estágio</TabsTrigger>
+          <TabsTrigger value="tags">Por Tag {form.tags_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.tags_selecionadas.length}</Badge>}</TabsTrigger>
+          <TabsTrigger value="estagio">Por Estágio {form.estagios_selecionados.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.estagios_selecionados.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="csv">Importar CSV</TabsTrigger>
         </TabsList>
-        
+
         <TabsContent value="tags" className="p-4 border rounded-lg bg-card space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium">Selecione as tags:</p>
-            <div className="flex gap-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <Input
+              placeholder="Buscar tag..."
+              value={tagSearch}
+              onChange={e => setTagSearch(e.target.value)}
+              className="h-8 max-w-xs"
+            />
+            <div className="flex items-center gap-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  const names = filteredTags.map(t => t.nome);
+                  setForm({
+                    ...form,
+                    tags_selecionadas: allTagsSelected
+                      ? form.tags_selecionadas.filter((n: string) => !names.includes(n))
+                      : Array.from(new Set([...form.tags_selecionadas, ...names])),
+                  });
+                }}
+              >
+                {allTagsSelected ? "Limpar" : "Selecionar todas"}
+              </Button>
               <div className="flex items-center gap-2">
                 <Switch checked />
                 <span className="text-xs">Excluir Opt-outs</span>
               </div>
-              <div className="flex items-center gap-2">
-                <Switch checked disabled />
-                <span className="text-xs">Excluir Blacklist</span>
-              </div>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            {tags.map(t => (
-              <div key={t.id} className="flex items-center space-x-2 p-2 border rounded hover:bg-muted/50">
-                <input type="checkbox" id={t.id} className="h-4 w-4" onChange={(e) => {
-                  const newTags = e.target.checked 
-                    ? [...form.tags_selecionadas, t.nome]
-                    : form.tags_selecionadas.filter((st: string) => st !== t.nome);
-                  setForm({...form, tags_selecionadas: newTags});
-                }} />
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: t.cor }} />
-                <label htmlFor={t.id} className="text-sm cursor-pointer">{t.nome}</label>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-64 overflow-y-auto">
+            {filteredTags.map(t => {
+              const checked = form.tags_selecionadas.includes(t.nome);
+              return (
+                <label
+                  key={t.id}
+                  htmlFor={t.id}
+                  className={`flex items-center space-x-2 p-2 border rounded cursor-pointer transition-colors ${checked ? "bg-primary/10 border-primary/40" : "hover:bg-muted/50"}`}
+                >
+                  <input
+                    type="checkbox"
+                    id={t.id}
+                    checked={checked}
+                    className="h-4 w-4"
+                    onChange={(e) => {
+                      const newTags = e.target.checked
+                        ? [...form.tags_selecionadas, t.nome]
+                        : form.tags_selecionadas.filter((st: string) => st !== t.nome);
+                      setForm({...form, tags_selecionadas: newTags});
+                    }}
+                  />
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: t.cor }} />
+                  <span className="text-sm">{t.nome}</span>
+                </label>
+              );
+            })}
+            {filteredTags.length === 0 && (
+              <p className="text-xs text-muted-foreground col-span-full text-center py-4">Nenhuma tag encontrada</p>
+            )}
           </div>
         </TabsContent>
 
         <TabsContent value="estagio" className="p-4 border rounded-lg bg-card space-y-4">
-          <p className="text-sm font-medium">Selecione os estágios do funil:</p>
-          <div className="grid grid-cols-2 gap-3">
-            {estagios.map(s => (
-              <div key={s.id} className="flex items-center space-x-2 p-2 border rounded hover:bg-muted/50">
-                <input type="checkbox" id={s.id} className="h-4 w-4" onChange={(e) => {
-                  const newEstagios = e.target.checked 
-                    ? [...form.estagios_selecionados, s.id]
-                    : form.estagios_selecionados.filter((se: string) => se !== s.id);
-                  setForm({...form, estagios_selecionados: newEstagios});
-                }} />
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: s.cor }} />
-                <label htmlFor={s.id} className="text-sm cursor-pointer">{s.nome}</label>
-              </div>
-            ))}
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Selecione os estágios do funil:</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                setForm({
+                  ...form,
+                  estagios_selecionados: allEstagiosSelected ? [] : estagios.map(s => s.id),
+                });
+              }}
+            >
+              {allEstagiosSelected ? "Limpar" : "Selecionar todos"}
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {estagios.map(s => {
+              const checked = form.estagios_selecionados.includes(s.id);
+              return (
+                <label
+                  key={s.id}
+                  htmlFor={s.id}
+                  className={`flex items-center space-x-2 p-2 border rounded cursor-pointer transition-colors ${checked ? "bg-primary/10 border-primary/40" : "hover:bg-muted/50"}`}
+                >
+                  <input
+                    type="checkbox"
+                    id={s.id}
+                    checked={checked}
+                    className="h-4 w-4"
+                    onChange={(e) => {
+                      const newEstagios = e.target.checked
+                        ? [...form.estagios_selecionados, s.id]
+                        : form.estagios_selecionados.filter((se: string) => se !== s.id);
+                      setForm({...form, estagios_selecionados: newEstagios});
+                    }}
+                  />
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: s.cor }} />
+                  <span className="text-sm">{s.nome}</span>
+                </label>
+              );
+            })}
           </div>
         </TabsContent>
 
@@ -253,7 +423,7 @@ function StepMessage({ form, setForm }: any) {
         <div className="space-y-2">
           <div className="flex justify-between items-end">
             <Label>{form.tipo_midia === 'texto' ? 'Mensagem' : 'Legenda (opcional)'}</Label>
-            <span className="text-[10px] text-muted-foreground">{form.mensagem.length}/1024</span>
+            <span className={`text-[10px] ${form.mensagem.length > 4096 ? "text-destructive font-bold" : "text-muted-foreground"}`}>{form.mensagem.length}/4096</span>
           </div>
           <Textarea 
             className="min-h-[150px] font-mono text-sm" 
@@ -314,11 +484,25 @@ function StepAntiBan({ form, setForm }: any) {
     <div className="space-y-6">
       {/* Instances Selection */}
       <Card className="p-4">
-        <div className="flex items-center justify-between mb-4">
-          <Label className="font-bold">Instâncias para Disparar</Label>
-          <div className="flex items-center gap-2">
-            <Switch />
-            <span className="text-xs">Apenas saudáveis (&gt;70)</span>
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+          <Label className="font-bold">Instâncias para Disparar {form.instancias_ids.length > 0 && <Badge variant="secondary" className="ml-2">{form.instancias_ids.length}</Badge>}</Label>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                const available = instancias.filter(i => (i.whatsapp_score || 0) >= 40).map(i => i.id);
+                const allSelected = available.length > 0 && available.every(id => form.instancias_ids.includes(id));
+                setForm({ ...form, instancias_ids: allSelected ? [] : available });
+              }}
+            >
+              Selecionar todas
+            </Button>
+            <div className="flex items-center gap-2">
+              <Switch />
+              <span className="text-xs">Apenas saudáveis (&gt;70)</span>
+            </div>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -435,46 +619,17 @@ function StepAntiBan({ form, setForm }: any) {
 }
 
 
-function StepReview({ form, onStart }: any) {
-  const [targetContacts, setTargetContacts] = useState<any[]>([]);
-  const [loadingContacts, setLoadingContacts] = useState(false);
-
-  useEffect(() => {
-    const fetchCount = async () => {
-      setLoadingContacts(true);
-      let list: any[] = [];
-      
-      if (form.tags_selecionadas.length > 0) {
-        const { data } = await api.from("contatos").select("id, nome, telefone, tags");
-        if (data) {
-          const filtered = data.filter((c: any) => 
-            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
-          );
-          list = [...list, ...filtered];
-        }
-      }
-      
-      if (form.estagios_selecionados.length > 0) {
-        const { data } = await api
-          .from("contatos")
-          .select("id, nome, telefone")
-          .in("funil_estagio_id", form.estagios_selecionados);
-        if (data) list = [...list, ...data];
-      }
-
-      const unique = Array.from(new Map(list.map(c => [c.telefone, c])).values());
-      setTargetContacts(unique);
-      setLoadingContacts(false);
-    };
-    fetchCount();
-  }, [form.tags_selecionadas, form.estagios_selecionados]);
-
-  const estimateTotalTime = () => {
-    const total = targetContacts.length || 1;
+function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
+  const estimate = useMemo(() => {
+    const total = targetContacts.length || 0;
     const msgsPerHour = form.perfil_velocidade === 'safe' ? 60 : form.perfil_velocidade === 'moderate' ? 120 : 240;
-    const hours = Math.ceil(total / msgsPerHour);
-    return `${hours}h ${Math.floor((total % msgsPerHour) / (msgsPerHour/60))}m`;
-  };
+    const totalMinutes = Math.ceil((total / msgsPerHour) * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    const endDate = new Date(Date.now() + totalMinutes * 60_000);
+    const endStr = endDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return { label: total === 0 ? "—" : `${h}h ${m}m`, end: total === 0 ? "—" : endStr };
+  }, [targetContacts.length, form.perfil_velocidade]);
 
   const [agendarAt, setAgendarAt] = useState("");
 
@@ -554,7 +709,7 @@ function StepReview({ form, onStart }: any) {
                 <span className="text-xl font-bold">{loadingContacts ? "..." : targetContacts.length} contatos</span>
 
               </div>
-              <p className="text-[10px] text-muted-foreground mt-1">12 duplicados removidos | 5 opt-outs excluídos</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Duplicados removidos automaticamente</p>
             </div>
             
             <div>
@@ -574,9 +729,9 @@ function StepReview({ form, onStart }: any) {
               <p className="text-[10px] font-bold uppercase text-muted-foreground">Tempo Estimado</p>
               <div className="flex items-center gap-2 mt-1">
                 <Clock className="h-4 w-4 text-primary" />
-                <span className="text-xl font-bold">{estimateTotalTime()}</span>
+                <span className="text-xl font-bold">{estimate.label}</span>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-1">Término previsto: Hoje, 15:30</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Término previsto: {estimate.end}</p>
             </div>
 
             <div>
