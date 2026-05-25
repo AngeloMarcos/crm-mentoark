@@ -86,6 +86,7 @@ const formInicial = {
   evolution_server_url: "",
   evolution_api_key: "",
   evolution_instancia: "",
+  n8n_webhook_url: "",
   rag_ativo: true,
   rag_threshold: 0.7,
   rag_resultados: 5,
