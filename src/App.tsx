@@ -81,6 +81,9 @@ const App = () => (
               <Route path="/docs"         element={<ProtectedRoute requireModulo="docs">        <DocsPage /></ProtectedRoute>} />
               <Route path="/usuarios"     element={<ProtectedRoute requireAdmin>               <UsuariosPage /></ProtectedRoute>} />
               <Route path="/seguranca"    element={<ProtectedRoute requireAdmin>               <SegurancaPage /></ProtectedRoute>} />
+              <Route path="/chat-equipe"  element={<ProtectedRoute requireModulo="whatsapp">   <ChatEquipePage /></ProtectedRoute>} />
+              <Route path="/smart-links"  element={<ProtectedRoute requireModulo="whatsapp">   <SmartLinksPage /></ProtectedRoute>} />
+
 
               <Route path="*" element={<NotFound />} />
             </Routes>
