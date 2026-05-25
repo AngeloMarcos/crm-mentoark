@@ -260,6 +260,35 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* Hero card — resumo do dia */}
+        <Card className="relative overflow-hidden border-primary/15">
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              background:
+                "linear-gradient(135deg, hsl(var(--primary) / 0.18) 0%, hsl(var(--accent) / 0.14) 60%, hsl(var(--card)) 100%)",
+            }}
+          />
+          <CardContent className="relative p-6 flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-card border border-primary/20 flex items-center justify-center shadow-sm">
+                <Sparkles className="h-6 w-6 text-primary" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold tracking-tight">Resumo do dia</h2>
+                <p className="text-sm text-muted-foreground">
+                  {stats.novosLeads7d > 0
+                    ? `${stats.novosLeads7d} novos leads esta semana · ${stats.mensagensHoje} mensagens hoje`
+                    : "Acompanhe leads, conversão e WhatsApp em tempo real"}
+                </p>
+              </div>
+            </div>
+            <Button onClick={() => navigate("/funil")} className="gradient-brand text-white shadow-md">
+              Abrir Funil <ArrowUpRight className="h-4 w-4 ml-1" />
+            </Button>
+          </CardContent>
+        </Card>
+
         {/* KPIs principais */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <KpiCard

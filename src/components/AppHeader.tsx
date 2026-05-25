@@ -13,8 +13,8 @@ export function AppHeader() {
 
   return (
     <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20 overflow-hidden shadow-[0_4px_30px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
-      {/* Background Particles */}
-      <div className="absolute inset-0 pointer-events-none opacity-80">
+      {/* Background Particles — apenas no dark mode */}
+      <div className="absolute inset-0 pointer-events-none opacity-80 hidden dark:block">
         <ParticlesBackground 
           className="block w-full h-full" 
           count={75} 
