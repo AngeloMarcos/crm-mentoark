@@ -37,14 +37,14 @@
 
     --radius: 0.75rem;
 
-    /* Sidebar — um tom abaixo do fundo */
-    --sidebar-background: 220 13% 90%;
-    --sidebar-foreground: 240 20% 22%;
+    /* Sidebar — roxo suave degradê */
+    --sidebar-background: 262 55% 96%;
+    --sidebar-foreground: 260 30% 18%;
     --sidebar-primary: 262 83% 58%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 13% 85%;
-    --sidebar-accent-foreground: 240 25% 14%;
-    --sidebar-border: 220 12% 81%;
+    --sidebar-accent: 262 50% 90%;
+    --sidebar-accent-foreground: 260 30% 18%;
+    --sidebar-border: 262 40% 86%;
     --sidebar-ring: 262 83% 58%;
 
     /* Semânticas */
@@ -217,9 +217,51 @@
       hsl(var(--card));
   }
 
-  /* Sidebar degradê escuro vertical azul → roxo */
-  .sidebar-gradient {
+  /* Sidebar degradê — claro: roxo suave | escuro: azul profundo */
+  .sidebar-gradient,
+  .sidebar-gradient [data-sidebar="sidebar"] {
+    background: linear-gradient(180deg, hsl(262 55% 96%) 2%, hsl(270 50% 94%) 45%, hsl(280 45% 92%) 100%);
+  }
+  .dark .sidebar-gradient,
+  .dark .sidebar-gradient [data-sidebar="sidebar"] {
     background: linear-gradient(180deg, hsl(232 40% 5%) 0%, hsl(248 38% 7%) 50%, hsl(260 40% 8%) 100%);
+  }
+
+  /* Borda direita degradê sutil */
+  .sidebar-gradient::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 1px;
+    height: 100%;
+    background: linear-gradient(180deg, transparent 5%, hsl(262 83% 58% / 0.22) 50%, transparent 95%);
+    pointer-events: none;
+    z-index: 20;
+  }
+  .dark .sidebar-gradient::after {
+    background: linear-gradient(180deg, transparent 5%, hsl(226 90% 62% / 0.18) 50%, transparent 95%);
+  }
+
+  /* Glow ambiente no sidebar */
+  .sidebar-gradient [data-sidebar="sidebar"] {
+    position: relative;
+    overflow: hidden;
+  }
+  .sidebar-gradient [data-sidebar="sidebar"]::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(350px circle at 15% 8%, hsl(262 80% 65% / 0.10), transparent 65%),
+      radial-gradient(400px circle at 85% 90%, hsl(282 70% 60% / 0.07), transparent 65%);
+    z-index: 0;
+  }
+  .dark .sidebar-gradient [data-sidebar="sidebar"]::before {
+    background:
+      radial-gradient(350px circle at 15% 8%, hsl(226 90% 62% / 1.12), transparent 65%),
+      radial-gradient(400px circle at 85% 90%, hsl(262 85% 65% / 0.08), transparent 65%);
   }
 
   /* Glows */
