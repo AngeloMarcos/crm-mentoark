@@ -204,6 +204,12 @@ function formatarData(iso: string | null) {
   });
 }
 
+interface AgenteN8n {
+  id: string;
+  nome: string;
+  n8n_webhook_url: string | null;
+}
+
 export default function IntegracoesPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState<IntegRow[]>([]);
@@ -222,6 +228,13 @@ export default function IntegracoesPage() {
     status: "inativo" as IntegStatus,
   });
 
+  // n8n section
+  const [n8nSecret, setN8nSecret] = useState("");
+  const [n8nShowSecret, setN8nShowSecret] = useState(false);
+  const [n8nSavingSecret, setN8nSavingSecret] = useState(false);
+  const [n8nExistingId, setN8nExistingId] = useState<string | null>(null);
+  const [agentesN8n, setAgentesN8n] = useState<AgenteN8n[]>([]);
+
   const carregar = async () => {
     if (!user) return;
     setLoading(true);
@@ -232,8 +245,25 @@ export default function IntegracoesPage() {
     if (error) {
       toast.error(`Erro ao carregar integrações: ${error.message}`);
     } else {
-      setRows((data ?? []) as IntegRow[]);
+      const list = (data ?? []) as IntegRow[];
+      setRows(list);
+      const n8n = list.find((r) => r.tipo === "n8n");
+      setN8nExistingId(n8n?.id ?? null);
+      setN8nSecret(n8n?.api_key ?? "");
     }
+
+    // Carrega agentes com webhook n8n
+    const { data: agentes, error: agErr } = await api
+      .from("agentes")
+      .select("id, nome, n8n_webhook_url")
+      .eq("user_id", user.id);
+    if (!agErr) {
+      const filtrados = ((agentes ?? []) as AgenteN8n[]).filter(
+        (a) => !!a.n8n_webhook_url && a.n8n_webhook_url.trim() !== ""
+      );
+      setAgentesN8n(filtrados);
+    }
+
     setLoading(false);
   };
 
@@ -241,6 +271,40 @@ export default function IntegracoesPage() {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+
+  const salvarN8nSecret = async () => {
+    if (!user) return;
+    setN8nSavingSecret(true);
+    const payload: any = {
+      user_id: user.id,
+      tipo: "n8n",
+      nome: "n8n",
+      api_key: n8nSecret.trim() || null,
+      status: n8nSecret.trim() ? ("conectado" as IntegStatus) : ("inativo" as IntegStatus),
+    };
+    if (n8nExistingId) payload.id = n8nExistingId;
+    const { error } = await api.from("integracoes_config").upsert(payload);
+    setN8nSavingSecret(false);
+    if (error) {
+      toast.error(`Erro ao salvar segredo: ${error.message}`);
+      return;
+    }
+    toast.success("Segredo n8n salvo!");
+    carregar();
+  };
+
+  const n8nBaseUrl = (() => {
+    const first = agentesN8n[0]?.n8n_webhook_url;
+    if (!first) return "";
+    try {
+      return new URL(first).origin;
+    } catch {
+      return "";
+    }
+  })();
+
+  const truncate = (s: string, n = 50) => (s.length > n ? s.slice(0, n) + "…" : s);
+
 
   const abrirConfig = (tpl: Template, row: IntegRow | null) => {
     setTemplate(tpl);
