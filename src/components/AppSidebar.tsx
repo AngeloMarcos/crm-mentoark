@@ -4,7 +4,7 @@ import {
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox,
-  Library, Settings as SettingsIcon,
+  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
