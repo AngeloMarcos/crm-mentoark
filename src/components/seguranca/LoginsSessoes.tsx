@@ -1,115 +1,212 @@
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { 
-  CheckCircle2, AlertTriangle, XCircle, ShieldCheck, 
-  Settings, Clock, Mail, Key, UserCheck 
-} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  ShieldCheck,
+  Clock,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  RefreshCcw,
+  CheckCircle2,
+  XCircle,
+} from "lucide-react";
+import { authHeader } from "@/lib/api-token";
+import { toast } from "sonner";
+
+const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
+const PAGE_SIZE = 10;
+
+interface LoginRow {
+  user_id: string;
+  email: string | null;
+  created_at: string;
+  expires_at: string;
+  revoked: boolean;
+}
+
+function formatDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function statusFor(row: LoginRow): { label: string; tone: "ok" | "expired" | "revoked" } {
+  if (row.revoked) return { label: "Revogado", tone: "revoked" };
+  if (new Date(row.expires_at) < new Date()) return { label: "Expirado", tone: "expired" };
+  return { label: "Ativo", tone: "ok" };
+}
 
 export function LoginsSessoes() {
-  const checklist = [
-    { label: "JWT verificado em todos os endpoints /api/*", status: "ok" },
-    { label: "user_id extraído do token (não do body)", status: "ok" },
-    { label: "Multi-tenant enforçado no CRUD factory", status: "ok" },
-    { label: "Admin role verificado via adminMiddleware", status: "ok" },
-    { label: "CORS restrito a domínios conhecidos", status: "ok" },
-    { label: "MCP protegido por chave separada (x-mcp-key)", status: "ok" },
-    { label: "Bulk delete requer pelo menos 1 filtro", status: "ok" },
-    { label: "Uploads servidos sem autenticação (qualquer URL é pública)", status: "warn" },
-    { label: "Emails admin hardcoded em modulos.ts (MASTERS array)", status: "warn" },
-    { label: "Rate limiting não configurado na API", status: "warn" },
-    { label: "Páginas admin-only protegidas por requireAdmin (Segurança, Usuários, Integrações, Agentes, Cérebro, Workflows)", status: "ok" },
-    { label: "Sidebar oculta itens admin para usuários comuns", status: "ok" },
-    { label: "Módulos admin-only removidos dos toggles de delegação", status: "ok" },
-  ];
+  const [rows, setRows] = useState<LoginRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
 
-  const configAuth = [
-    { label: "Provider", valor: "Supabase Auth", sub: "Email + Senha", icon: Mail },
-    { label: "JWT Secret", valor: "Configurado", sub: "Lido via env.JWT_SECRET", icon: Key },
-    { label: "Expiração", valor: "1h (Access)", sub: "7d (Refresh Token)", icon: Clock },
-    { label: "Role Management", valor: "App Metadata", sub: "user_roles table sync", icon: UserCheck },
-  ];
+  const carregar = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/seguranca/logins-recentes`, {
+        headers: authHeader(),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setRows(Array.isArray(data) ? data : []);
+      setPage(1);
+    } catch (e: any) {
+      toast.error("Erro ao carregar logins recentes", { description: e.message });
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    carregar();
+  }, []);
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const paginated = useMemo(
+    () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [rows, page]
+  );
+
+  const stats = useMemo(() => {
+    const ativos = rows.filter((r) => statusFor(r).tone === "ok").length;
+    const revogados = rows.filter((r) => r.revoked).length;
+    const expirados = rows.filter((r) => statusFor(r).tone === "expired").length;
+    return { ativos, revogados, expirados, total: rows.length };
+  }, [rows]);
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Checklist de Segurança */}
-        <Card className="bg-white/5 border-white/10">
-          <CardHeader className="pb-3 border-b border-white/5">
-            <CardTitle className="text-base font-semibold flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-emerald-500" />
-              Checklist de Segurança do Sistema
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 space-y-3">
-            {checklist.map((item, idx) => (
-              <div key={idx} className="flex items-start gap-3 p-2 rounded hover:bg-white/[0.02] transition-colors">
-                {item.status === "ok" ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
-                ) : item.status === "warn" ? (
-                  <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
-                ) : (
-                  <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
-                )}
-                <span className={`text-xs ${
-                  item.status === "error" ? "text-red-400" : 
-                  item.status === "warn" ? "text-white/70" : "text-white/80"
-                }`}>
-                  {item.label}
-                </span>
+      {/* KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: "Total (últimos 50)", value: stats.total, icon: ShieldCheck, color: "text-primary" },
+          { label: "Sessões ativas", value: stats.ativos, icon: CheckCircle2, color: "text-success" },
+          { label: "Expirados", value: stats.expirados, icon: Clock, color: "text-warning" },
+          { label: "Revogados", value: stats.revogados, icon: XCircle, color: "text-destructive" },
+        ].map((k) => (
+          <Card key={k.label}>
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className={`h-9 w-9 rounded-lg bg-muted flex items-center justify-center ${k.color}`}>
+                <k.icon className="h-4 w-4" />
               </div>
-            ))}
-            
-            <div className="pt-4 border-t border-white/5 flex justify-between items-center">
-              <p className="text-[10px] text-muted-foreground italic">
-                Última auditoria automática: hoje às 14:32
-              </p>
-              <Button variant="ghost" size="sm" className="h-7 text-[10px] text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10">
-                Rodar Auditoria
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="space-y-6">
-          {/* Configuração de Auth */}
-          <Card className="bg-white/5 border-white/10">
-            <CardHeader className="pb-3 border-b border-white/5">
-              <CardTitle className="text-base font-semibold flex items-center gap-2">
-                <Settings className="h-4 w-4 text-blue-500" />
-                Arquitetura de Autenticação
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4">
-              <div className="grid grid-cols-2 gap-4">
-                {configAuth.map((item) => (
-                  <div key={item.label} className="p-3 rounded-lg border border-white/5 bg-white/[0.02]">
-                    <div className="flex items-center gap-2 mb-2">
-                      <item.icon className="h-3.5 w-3.5 text-blue-400 opacity-70" />
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{item.label}</p>
-                    </div>
-                    <p className="text-sm font-semibold text-white">{item.valor}</p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">{item.sub}</p>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-6 flex flex-col gap-3">
-                <div className="p-3 rounded-lg border border-white/5 bg-black/20">
-                  <p className="text-xs font-medium text-white/80 mb-1">Admins Master (Hardcoded)</p>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary" className="bg-white/5 text-xs font-normal">angelobispofilho@gmail.com</Badge>
-                    <Badge variant="secondary" className="bg-white/5 text-xs font-normal">mentoark@gmail.com</Badge>
-                  </div>
-                </div>
-                <Button variant="outline" className="w-full bg-white/5 border-white/10 text-xs gap-2">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  Ver Logs de Autenticação (Supabase Audit)
-                </Button>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{k.label}</p>
+                <p className="text-xl font-bold">{k.value}</p>
               </div>
             </CardContent>
           </Card>
-        </div>
+        ))}
       </div>
+
+      <Card>
+        <CardHeader className="pb-3 flex flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-base font-semibold flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            Logins Recentes
+          </CardTitle>
+          <Button variant="outline" size="sm" onClick={carregar} disabled={loading} className="gap-2">
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+            Atualizar
+          </Button>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex justify-center items-center py-16">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="py-16 text-center text-sm text-muted-foreground">
+              Nenhum login registrado ainda.
+            </div>
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Usuário</TableHead>
+                    <TableHead>Login em</TableHead>
+                    <TableHead>Expira em</TableHead>
+                    <TableHead className="text-right">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {paginated.map((r, idx) => {
+                    const s = statusFor(r);
+                    return (
+                      <TableRow key={`${r.user_id}-${r.created_at}-${idx}`}>
+                        <TableCell className="font-medium">
+                          {r.email || <span className="text-muted-foreground italic">sem email</span>}
+                          <div className="text-[10px] text-muted-foreground font-mono">{r.user_id.slice(0, 8)}…</div>
+                        </TableCell>
+                        <TableCell className="text-sm">{formatDate(r.created_at)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{formatDate(r.expires_at)}</TableCell>
+                        <TableCell className="text-right">
+                          <Badge
+                            variant={s.tone === "ok" ? "default" : "secondary"}
+                            className={
+                              s.tone === "ok"
+                                ? "bg-success/15 text-success border-success/20"
+                                : s.tone === "revoked"
+                                ? "bg-destructive/15 text-destructive border-destructive/20"
+                                : "bg-warning/15 text-warning border-warning/20"
+                            }
+                          >
+                            {s.label}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+
+              <div className="flex items-center justify-between p-3 border-t">
+                <p className="text-xs text-muted-foreground">
+                  Página {page} de {totalPages} · {rows.length} registros
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page === 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
