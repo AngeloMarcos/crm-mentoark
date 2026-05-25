@@ -13,14 +13,15 @@ export function AppHeader() {
 
   return (
     <header className="relative h-14 border-b border-border/40 flex items-center justify-between px-4 glass-strong z-20 overflow-hidden shadow-[0_4px_30px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
-      {/* Background Particles — apenas no dark mode */}
-      <div className="absolute inset-0 pointer-events-none opacity-80">
-        <ParticlesBackground 
-          className="block w-full h-full" 
-          count={75} 
-          connectionDistance={170} 
+      {/* Background Particles — sutis e elegantes */}
+      <div className="absolute inset-0 pointer-events-none opacity-40 dark:opacity-60 [mask-image:linear-gradient(90deg,transparent,black_20%,black_80%,transparent)]">
+        <ParticlesBackground
+          className="block w-full h-full"
+          count={28}
+          connectionDistance={110}
         />
       </div>
+
 
       <div className="absolute bottom-0 left-0 right-0 h-[2px] pointer-events-none overflow-hidden">
         <div
