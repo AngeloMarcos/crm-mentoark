@@ -204,6 +204,12 @@ function formatarData(iso: string | null) {
   });
 }
 
+interface AgenteN8n {
+  id: string;
+  nome: string;
+  n8n_webhook_url: string | null;
+}
+
 export default function IntegracoesPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState<IntegRow[]>([]);
@@ -222,6 +228,13 @@ export default function IntegracoesPage() {
     status: "inativo" as IntegStatus,
   });
 
+  // n8n section
+  const [n8nSecret, setN8nSecret] = useState("");
+  const [n8nShowSecret, setN8nShowSecret] = useState(false);
+  const [n8nSavingSecret, setN8nSavingSecret] = useState(false);
+  const [n8nExistingId, setN8nExistingId] = useState<string | null>(null);
+  const [agentesN8n, setAgentesN8n] = useState<AgenteN8n[]>([]);
+
   const carregar = async () => {
     if (!user) return;
     setLoading(true);
@@ -232,8 +245,25 @@ export default function IntegracoesPage() {
     if (error) {
       toast.error(`Erro ao carregar integrações: ${error.message}`);
     } else {
-      setRows((data ?? []) as IntegRow[]);
+      const list = (data ?? []) as IntegRow[];
+      setRows(list);
+      const n8n = list.find((r) => r.tipo === "n8n");
+      setN8nExistingId(n8n?.id ?? null);
+      setN8nSecret(n8n?.api_key ?? "");
     }
+
+    // Carrega agentes com webhook n8n
+    const { data: agentes, error: agErr } = await api
+      .from("agentes")
+      .select("id, nome, n8n_webhook_url")
+      .eq("user_id", user.id);
+    if (!agErr) {
+      const filtrados = ((agentes ?? []) as AgenteN8n[]).filter(
+        (a) => !!a.n8n_webhook_url && a.n8n_webhook_url.trim() !== ""
+      );
+      setAgentesN8n(filtrados);
+    }
+
     setLoading(false);
   };
 
@@ -241,6 +271,40 @@ export default function IntegracoesPage() {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+
+  const salvarN8nSecret = async () => {
+    if (!user) return;
+    setN8nSavingSecret(true);
+    const payload: any = {
+      user_id: user.id,
+      tipo: "n8n",
+      nome: "n8n",
+      api_key: n8nSecret.trim() || null,
+      status: n8nSecret.trim() ? ("conectado" as IntegStatus) : ("inativo" as IntegStatus),
+    };
+    if (n8nExistingId) payload.id = n8nExistingId;
+    const { error } = await api.from("integracoes_config").upsert(payload);
+    setN8nSavingSecret(false);
+    if (error) {
+      toast.error(`Erro ao salvar segredo: ${error.message}`);
+      return;
+    }
+    toast.success("Segredo n8n salvo!");
+    carregar();
+  };
+
+  const n8nBaseUrl = (() => {
+    const first = agentesN8n[0]?.n8n_webhook_url;
+    if (!first) return "";
+    try {
+      return new URL(first).origin;
+    } catch {
+      return "";
+    }
+  })();
+
+  const truncate = (s: string, n = 50) => (s.length > n ? s.slice(0, n) + "…" : s);
+
 
   const abrirConfig = (tpl: Template, row: IntegRow | null) => {
     setTemplate(tpl);
@@ -364,6 +428,89 @@ export default function IntegracoesPage() {
           </div>
         ) : (
           <>
+            {/* Seção Integração n8n */}
+            <Card>
+              <CardContent className="p-5 space-y-5">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                    <Workflow className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1">
+                    <h2 className="font-semibold">Integração n8n</h2>
+                    <p className="text-xs text-muted-foreground">
+                      Configure o segredo compartilhado e veja os agentes roteando para o n8n.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Segredo compartilhado (x-n8n-secret)</Label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Input
+                          type={n8nShowSecret ? "text" : "password"}
+                          value={n8nSecret}
+                          onChange={(e) => setN8nSecret(e.target.value)}
+                          placeholder="••••••••••••"
+                          className="pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setN8nShowSecret((v) => !v)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          {n8nShowSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                      <Button onClick={salvarN8nSecret} disabled={n8nSavingSecret}>
+                        {n8nSavingSecret && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                        Salvar
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label>URL base do seu n8n</Label>
+                    <Input value={n8nBaseUrl} readOnly placeholder="—" className="bg-muted/40" />
+                    <p className="text-xs text-muted-foreground">
+                      Configure em cada agente individualmente a URL completa do webhook.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="border-t border-border/50 pt-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Webhook className="h-4 w-4 text-primary" />
+                    <h3 className="font-medium text-sm">Agentes conectados ao n8n</h3>
+                    <Badge variant="outline" className="text-xs">
+                      {agentesN8n.length}
+                    </Badge>
+                  </div>
+                  {agentesN8n.length === 0 ? (
+                    <p className="text-sm text-muted-foreground italic">
+                      Nenhum agente usando n8n ainda.
+                    </p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {agentesN8n.map((a) => (
+                        <li
+                          key={a.id}
+                          className="flex items-center justify-between gap-3 p-2.5 rounded-md bg-muted/30 border border-border/50"
+                        >
+                          <span className="font-medium text-sm truncate">{a.nome}</span>
+                          <code className="text-xs text-muted-foreground truncate max-w-[60%]">
+                            {truncate(a.n8n_webhook_url || "")}
+                          </code>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+
             {!algumaConfigurada && (
               <Card className="border-dashed">
                 <CardContent className="flex flex-col items-center text-center py-10 gap-3">
