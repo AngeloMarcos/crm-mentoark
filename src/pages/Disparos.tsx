@@ -484,11 +484,25 @@ function StepAntiBan({ form, setForm }: any) {
     <div className="space-y-6">
       {/* Instances Selection */}
       <Card className="p-4">
-        <div className="flex items-center justify-between mb-4">
-          <Label className="font-bold">Instâncias para Disparar</Label>
-          <div className="flex items-center gap-2">
-            <Switch />
-            <span className="text-xs">Apenas saudáveis (&gt;70)</span>
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+          <Label className="font-bold">Instâncias para Disparar {form.instancias_ids.length > 0 && <Badge variant="secondary" className="ml-2">{form.instancias_ids.length}</Badge>}</Label>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                const available = instancias.filter(i => (i.whatsapp_score || 0) >= 40).map(i => i.id);
+                const allSelected = available.length > 0 && available.every(id => form.instancias_ids.includes(id));
+                setForm({ ...form, instancias_ids: allSelected ? [] : available });
+              }}
+            >
+              Selecionar todas
+            </Button>
+            <div className="flex items-center gap-2">
+              <Switch />
+              <span className="text-xs">Apenas saudáveis (&gt;70)</span>
+            </div>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
