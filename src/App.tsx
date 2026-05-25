@@ -35,6 +35,8 @@ import DocsPage from "./pages/Docs";
 import CentralBIPage from "./pages/CentralBI";
 import MarketingDigitalPage from "./pages/MarketingDigital";
 import SegurancaPage from "./pages/Seguranca";
+import ChatEquipePage from "./pages/ChatEquipe";
+import SmartLinksPage from "./pages/SmartLinks";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
