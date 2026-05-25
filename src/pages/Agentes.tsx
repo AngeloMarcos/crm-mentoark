@@ -39,6 +39,7 @@ import {
   MessageCircle,
   Brain,
   Database,
+  Webhook,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -333,6 +334,15 @@ export default function AgentesPage() {
                       }`}
                     >
                       {a.ativo ? "Ativo" : "Inativo"}
+                    </Badge>
+                    <Badge
+                      className={`text-xs border-1 ${
+                        a.n8n_webhook_url
+                          ? "bg-primary/15 text-primary border-primary/30"
+                          : "bg-muted text-muted-foreground border-muted-foreground/20"
+                      }`}
+                    >
+                      {a.n8n_webhook_url ? "Via n8n" : "IA Interna"}
                     </Badge>
                   </div>
 
