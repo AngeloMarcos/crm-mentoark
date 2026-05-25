@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Edit2, Copy, Trash2, Info, Zap } from "lucide-react";
+import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -151,6 +152,7 @@ const RespostasRapidas = () => {
   };
 
   return (
+    <CRMLayout>
     <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -294,6 +296,7 @@ const RespostasRapidas = () => {
         </DialogContent>
       </Dialog>
     </div>
+    </CRMLayout>
   );
 };
 
