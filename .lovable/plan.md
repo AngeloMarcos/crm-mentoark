@@ -1,39 +1,84 @@
-## Diagnóstico
-A tela está "muito branca" porque:
-1. `--background` está em 98% de luminosidade (quase branco) e `--card` em 100% (branco puro). Os dois praticamente se fundem — não há respiro visual entre fundo e cards.
-2. A faixa decorativa de partículas no topo do header (vista no screenshot) está com aspecto pesado/quebrado sobre o fundo claro.
-3. O cabeçalho da página não tem nenhuma faixa/banner como o "Nova Venda" do Smart POS, então o topo fica visualmente vazio.
 
-Comparando com o Smart POS light: lá o fundo é cinza-claro real (#F8F9FA com leve azul), os cards ficam brancos puros e há um **hero card lavanda/pêssego** no topo dando peso visual. Quem segura a composição é o hero, não as superfícies.
+# Reorganizar sidebar com subgrupos colapsáveis
 
-## O que ajustar (apenas tokens e header, sem mexer em lógica)
+## Objetivo
 
-### 1. Dessaturar o branco — `src/index.css`
-- `--background`: 210 17% 98% → **220 16% 95%** (cinza-azulado mais perceptível, padrão Smart POS de fundo)
-- `--card`: 0 0% 100% → **0 0% 100%** (mantém branco puro — agora destaca do fundo)
-- `--secondary`: 210 16% 95% → **220 14% 92%**
-- `--muted`: 210 16% 96% → **220 14% 93%**
-- `--border`: 210 14% 91% → **220 13% 87%** (bordas levemente mais visíveis)
-- `--sidebar-background`: 210 14% 96% → **220 15% 93%** (sidebar acompanha)
-- `--sidebar-accent`: → **220 14% 88%**
+Transformar o sidebar de 2 níveis (categoria → item) para **3 níveis** (categoria → subgrupo expansível → itens), no estilo da imagem de referência. Criar uma seção grande "WhatsApp Chat" que centraliza tudo relacionado a atendimento e à IA do chat, todos fechados por padrão.
 
-Resultado: o fundo passa a ser claramente cinza, cards continuam brancos puros, sidebar fica um tom abaixo do fundo — exatamente a hierarquia do Smart POS.
+## Nova estrutura do sidebar
 
-### 2. Aurora ambiente mais visível mas suave
-Subir levemente a opacidade dos blobs no light para 0.07/0.06/0.04 (estavam 0.05/0.04/0.03). Em cima do fundo agora mais escuro, isso vira uma sutil aura roxo-pêssego que dá vida sem poluir.
+```text
+VISÃO GERAL
+  • Dashboard
+  • Central de BI
 
-### 3. Particles do header
-A faixa de partículas em `AppHeader` está incomodando no light mode. Vou ocultá-la apenas no light (`dark:block hidden` ou desligar opacity no light) — no dark continua intacta.
+CLIENTES & VENDAS
+  • Leads
+  • Tags e Funil
+  • Contatos
+  • Funil de Vendas
 
-### 4. Hero card no Dashboard (opcional, recomendado)
-Adicionar acima dos 4 KPIs um card hero compacto estilo Smart POS: gradiente lavanda→pêssego (`gradient-brand-subtle` ou similar), ícone à esquerda, título "Resumo do dia" + subtítulo, e botão "Ver Funil" à direita. Isso ancora visualmente o topo e remove a sensação de "vazio claro".
+CHAT
+  ▸ WhatsApp Chat              (fechado por padrão)
+      • WhatsApp
+      • Caixa de Entrada       (nova aba dentro de /whatsapp)
+      • Respostas Rápidas
+      • SLA / Gestão
+      • Cérebro do Agente
+      • Agentes
+      • Workflows
+      • Integrações
+  ▸ Telefonia                  (fechado por padrão)
+      • Discagem
+
+COMUNICAÇÃO
+  ▸ Campanhas & Disparos
+      • Disparos
+      • Campanhas
+      • Marketing Digital
+
+CONTEÚDO
+  ▸ Biblioteca
+      • Catálogo
+      • Galeria
+      • Documentação
+
+ADMINISTRAÇÃO  (admin only)
+  ▸ Acessos
+      • Usuários
+      • Segurança
+```
+
+Todos os subgrupos iniciam **fechados**. O usuário expande manualmente.
+
+## Mudanças visuais (estilo da imagem)
+
+- Linha do subgrupo: ícone à esquerda, título, chevron à direita; fundo levemente destacado quando ativo (gradiente da marca).
+- Quando aberto, mostra uma **guia vertical** (border-l) à esquerda dos sub-itens com indentação extra (~pl-8).
+- Sub-itens com ícone menor + texto, hover sutil; item ativo recebe a barra vertical gradiente já existente.
 
 ## Arquivos afetados
-- `src/index.css` — tokens light + opacidade aurora (~10 linhas)
-- `src/components/AppHeader.tsx` — esconder particles no light (1 linha)
-- `src/pages/Dashboard.tsx` — adicionar hero card acima dos KPIs (~15 linhas)
 
-Nada de backend, nada de lógica, dark mode preservado.
+### `src/components/AppSidebar.tsx`
+- Adicionar tipo `NavSubgroup { label, icon, items, defaultOpen? }` e ajustar `NavGroup` para aceitar **`subgroups`** ao invés de (ou além de) `items` planos.
+- Reescrever `navGroups` na nova estrutura acima.
+- Criar `NavSubgroupSection` (item colapsável com ícone + chevron) reaproveitando o estilo dos botões atuais.
+- Em `NavGroupSection`, renderizar a lista de subgrupos; a categoria continua sendo só o label (CHAT, COMUNICAÇÃO, etc.).
+- Estado `open` dos subgrupos inicializa em `false` (todos fechados); apenas o subgrupo que contém a rota ativa abre automaticamente na primeira renderização.
+- Modo `collapsed` (sidebar mini): subgrupo vira só o ícone com tooltip; ao clicar, abre um popover/flyout — para simplificar, no colapsado os subgrupos ficam sempre "achatados" mostrando os ícones dos sub-itens diretamente.
 
-## Pergunta opcional
-Posso adicionar o hero card no Dashboard, ou prefere só ajustar a paleta e manter o layout atual?
+### `src/pages/WhatsApp.tsx`
+- Adicionar uma terceira aba **"Caixa de Entrada"** ao lado de "Conversas" e "Instâncias".
+- Reusa `WhatsAppInterface` (mesma UI das conversas) ou um filtro de "não lidas"; nesta passada, "Caixa de Entrada" exibirá `<WhatsAppInterface />` (mesmo componente — apenas título/ícone diferentes). Ajuste fino fica para um próximo prompt.
+
+## Fora de escopo
+
+- Nenhuma mudança no backend, banco, ou rotas Express.
+- Sem novas rotas no React Router; "Caixa de Entrada" é uma aba dentro de `/whatsapp`.
+- Não mexer em tokens de cor nem no layout das páginas internas.
+
+## Detalhes técnicos
+
+- A persistência do estado aberto/fechado fica em memória (`useState` local). Sem `localStorage` nesta passada.
+- `adminOnly` continua suportado por subgrupo e por item (cascateia). Workflows / Agentes / Cérebro / Integrações mantêm `adminOnly: true`.
+- Manter `hasModulo` em todos os itens; subgrupo só renderiza se tiver pelo menos um item visível.
