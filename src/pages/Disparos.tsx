@@ -423,7 +423,7 @@ function StepMessage({ form, setForm }: any) {
         <div className="space-y-2">
           <div className="flex justify-between items-end">
             <Label>{form.tipo_midia === 'texto' ? 'Mensagem' : 'Legenda (opcional)'}</Label>
-            <span className="text-[10px] text-muted-foreground">{form.mensagem.length}/1024</span>
+            <span className={`text-[10px] ${form.mensagem.length > 4096 ? "text-destructive font-bold" : "text-muted-foreground"}`}>{form.mensagem.length}/4096</span>
           </div>
           <Textarea 
             className="min-h-[150px] font-mono text-sm" 
