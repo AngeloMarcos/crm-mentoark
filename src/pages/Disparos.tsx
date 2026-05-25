@@ -619,46 +619,17 @@ function StepAntiBan({ form, setForm }: any) {
 }
 
 
-function StepReview({ form, onStart }: any) {
-  const [targetContacts, setTargetContacts] = useState<any[]>([]);
-  const [loadingContacts, setLoadingContacts] = useState(false);
-
-  useEffect(() => {
-    const fetchCount = async () => {
-      setLoadingContacts(true);
-      let list: any[] = [];
-      
-      if (form.tags_selecionadas.length > 0) {
-        const { data } = await api.from("contatos").select("id, nome, telefone, tags");
-        if (data) {
-          const filtered = data.filter((c: any) => 
-            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
-          );
-          list = [...list, ...filtered];
-        }
-      }
-      
-      if (form.estagios_selecionados.length > 0) {
-        const { data } = await api
-          .from("contatos")
-          .select("id, nome, telefone")
-          .in("funil_estagio_id", form.estagios_selecionados);
-        if (data) list = [...list, ...data];
-      }
-
-      const unique = Array.from(new Map(list.map(c => [c.telefone, c])).values());
-      setTargetContacts(unique);
-      setLoadingContacts(false);
-    };
-    fetchCount();
-  }, [form.tags_selecionadas, form.estagios_selecionados]);
-
-  const estimateTotalTime = () => {
-    const total = targetContacts.length || 1;
+function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
+  const estimate = useMemo(() => {
+    const total = targetContacts.length || 0;
     const msgsPerHour = form.perfil_velocidade === 'safe' ? 60 : form.perfil_velocidade === 'moderate' ? 120 : 240;
-    const hours = Math.ceil(total / msgsPerHour);
-    return `${hours}h ${Math.floor((total % msgsPerHour) / (msgsPerHour/60))}m`;
-  };
+    const totalMinutes = Math.ceil((total / msgsPerHour) * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    const endDate = new Date(Date.now() + totalMinutes * 60_000);
+    const endStr = endDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return { label: total === 0 ? "—" : `${h}h ${m}m`, end: total === 0 ? "—" : endStr };
+  }, [targetContacts.length, form.perfil_velocidade]);
 
   const [agendarAt, setAgendarAt] = useState("");
 
