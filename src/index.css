@@ -37,14 +37,14 @@
 
     --radius: 0.75rem;
 
-    /* Sidebar — um tom abaixo do fundo */
-    --sidebar-background: 220 13% 90%;
-    --sidebar-foreground: 240 20% 22%;
+    /* Sidebar — roxo suave degradê */
+    --sidebar-background: 262 55% 96%;
+    --sidebar-foreground: 260 30% 18%;
     --sidebar-primary: 262 83% 58%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 13% 85%;
-    --sidebar-accent-foreground: 240 25% 14%;
-    --sidebar-border: 220 12% 81%;
+    --sidebar-accent: 262 50% 90%;
+    --sidebar-accent-foreground: 260 30% 18%;
+    --sidebar-border: 262 40% 86%;
     --sidebar-ring: 262 83% 58%;
 
     /* Semânticas */
