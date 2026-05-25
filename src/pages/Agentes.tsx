@@ -59,6 +59,7 @@ interface Agente {
   evolution_instancia: string | null;
   evolution_api_key: string | null;
   evolution_server_url: string | null;
+  n8n_webhook_url: string | null;
   rag_ativo: boolean | null;
   rag_threshold: number | null;
   rag_resultados: number | null;
