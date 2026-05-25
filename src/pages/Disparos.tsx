@@ -729,9 +729,9 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
               <p className="text-[10px] font-bold uppercase text-muted-foreground">Tempo Estimado</p>
               <div className="flex items-center gap-2 mt-1">
                 <Clock className="h-4 w-4 text-primary" />
-                <span className="text-xl font-bold">{estimateTotalTime()}</span>
+                <span className="text-xl font-bold">{estimate.label}</span>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-1">Término previsto: Hoje, 15:30</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Término previsto: {estimate.end}</p>
             </div>
 
             <div>
