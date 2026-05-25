@@ -296,6 +296,7 @@ const RespostasRapidas = () => {
         </DialogContent>
       </Dialog>
     </div>
+    </CRMLayout>
   );
 };
 
