@@ -166,8 +166,8 @@ export default function ContatosPage() {
       result = result.filter(d => (d.Setor || "").trim().toUpperCase() === setorFilter);
     }
     if (iaFilter !== "TODOS") {
-      const active = iaFilter === "ATIVA";
-      result = result.filter(d => d.atendimento_ia === active);
+      const wanted = iaFilter === "ATIVA" ? "ativa" : "pausada";
+      result = result.filter(d => getIaStatus(d.atendimento_ia) === wanted);
     }
     return result;
   }, [data, query, setorFilter, iaFilter]);
