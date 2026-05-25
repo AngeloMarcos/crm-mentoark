@@ -20,6 +20,186 @@ import { FollowUpModal } from "@/components/FollowUpModal";
 import { api } from "@/integrations/database/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+
+const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+
+interface PausaStatus {
+  pausada: boolean;
+  segundosRestantes: number | null;
+  atendimento_ia: string;
+}
+
+function ControleIA({ contatoId }: { contatoId: number }) {
+  const { toast } = useToast();
+  const [status, setStatus] = useState<PausaStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [acting, setActing] = useState(false);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [segundos, setSegundos] = useState<number | null>(null);
+
+  const authHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem("access_token");
+    return {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
+
+  const fetchStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/contatos/${contatoId}/pausa-status`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: PausaStatus = await res.json();
+      setStatus(data);
+      setSegundos(data.segundosRestantes);
+    } catch (e: any) {
+      toast({ title: "Erro ao buscar status da IA", description: e.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contatoId]);
+
+  // Countdown
+  useEffect(() => {
+    if (!status?.pausada || segundos === null || segundos <= 0) return;
+    const t = setInterval(() => {
+      setSegundos((s) => {
+        if (s === null) return s;
+        if (s <= 1) {
+          clearInterval(t);
+          fetchStatus();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.pausada]);
+
+  const pausar = async (duracaoMinutos: number) => {
+    setActing(true);
+    setPopoverOpen(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/contatos/${contatoId}/pausa-ia`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ acao: "pausar", duracaoMinutos }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast({ title: "IA Pausada" });
+      await fetchStatus();
+    } catch (e: any) {
+      toast({ title: "Erro ao pausar IA", description: e.message, variant: "destructive" });
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const reativar = async () => {
+    setActing(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/contatos/${contatoId}/pausa-ia`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ acao: "reativar" }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast({ title: "IA Reativada" });
+      await fetchStatus();
+    } catch (e: any) {
+      toast({ title: "Erro ao reativar IA", description: e.message, variant: "destructive" });
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const formatCountdown = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  };
+
+  return (
+    <Card className="card-gradient-border">
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <Bot className="h-5 w-5 text-primary" />
+          Controle da IA
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : !status ? (
+          <p className="text-sm text-muted-foreground">Não foi possível carregar o status.</p>
+        ) : status.pausada ? (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-warning flex items-center gap-2">
+                <Pause className="h-4 w-4" /> IA Pausada
+              </span>
+              {segundos !== null && segundos > 0 && (
+                <span className="text-sm font-mono text-warning tabular-nums">
+                  {formatCountdown(segundos)}
+                </span>
+              )}
+            </div>
+            <Button
+              onClick={reativar}
+              disabled={acting}
+              size="sm"
+              className="w-full gap-2 bg-success hover:bg-success/90 text-white"
+            >
+              {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Reativar IA
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="h-2 w-2 rounded-full bg-success" />
+              <span className="text-success font-medium">IA Ativa</span>
+            </div>
+            <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  disabled={acting}
+                  size="sm"
+                  className="w-full gap-2 bg-warning hover:bg-warning/90 text-white"
+                >
+                  {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
+                  Pausar IA
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-56 p-2" align="end">
+                <p className="text-xs text-muted-foreground px-2 py-1.5 font-medium">
+                  Por quanto tempo?
+                </p>
+                <div className="flex flex-col gap-1">
+                  <Button variant="ghost" size="sm" className="justify-start" onClick={() => pausar(15)}>15 min</Button>
+                  <Button variant="ghost" size="sm" className="justify-start" onClick={() => pausar(30)}>30 min</Button>
+                  <Button variant="ghost" size="sm" className="justify-start" onClick={() => pausar(60)}>1 hora</Button>
+                  <Button variant="ghost" size="sm" className="justify-start" onClick={() => pausar(9999)}>Até eu reativar</Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 interface DadoCliente {
   id: number;
@@ -281,6 +461,8 @@ export default function ContatoDetalhePage() {
                 </div>
               </CardContent>
             </Card>
+
+            <ControleIA contatoId={contato.id} />
           </div>
 
           {/* Coluna Histórico de Mensagens */}
