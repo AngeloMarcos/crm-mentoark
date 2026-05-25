@@ -1,0 +1,1 @@
+ALTER TABLE public.agentes ADD COLUMN IF NOT EXISTS n8n_webhook_url TEXT;
