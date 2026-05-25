@@ -660,6 +660,22 @@ export default function AgentesPage() {
               </Button>
             </TabsContent>
 
+            <TabsContent value="integracao" className="space-y-4 pt-4">
+              <div className="space-y-1.5">
+                <Label>URL do Webhook n8n</Label>
+                <Input
+                  value={form.n8n_webhook_url}
+                  onChange={(e) =>
+                    setForm({ ...form, n8n_webhook_url: e.target.value })
+                  }
+                  placeholder="https://seu-n8n.com/webhook/..."
+                />
+                <p className="text-xs text-muted-foreground">
+                  Quando preenchido, as mensagens serão processadas pelo n8n em vez da IA interna.
+                </p>
+              </div>
+            </TabsContent>
+
             <TabsContent value="status" className="space-y-4 pt-4">
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div>
