@@ -333,9 +333,14 @@ export function InstanceManagementPanel() {
               Gerencie o comportamento, automação e saúde de cada número conectado.
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={carregar}>
-            <RefreshCw className="h-4 w-4 mr-2" /> Atualizar
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={carregar}>
+              <RefreshCw className="h-4 w-4 mr-2" /> Atualizar
+            </Button>
+            <Button size="sm" onClick={() => setShowConnectModal(true)} className="bg-green-600 hover:bg-green-700 text-white">
+              <Plus className="h-4 w-4 mr-2" /> Conectar nova
+            </Button>
+          </div>
         </div>
 
         {loading && (
