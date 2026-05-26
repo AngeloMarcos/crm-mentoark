@@ -1,4 +1,4 @@
-import { Moon, Sun, Bell, ChevronDown, User as UserIcon, Home, Shield, LogOut } from "lucide-react";
+import { Moon, Sun, Bell, ChevronDown, User as UserIcon, Home, Shield, LogOut, Clock } from "lucide-react";
 import { useTheme } from "@/components/ThemeProvider";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -13,11 +13,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useNavigate } from "react-router-dom";
+import { usePausaNotificacoes } from "@/hooks/usePausaNotificacoes";
+import { Badge } from "@/components/ui/badge";
 
 export function AppHeader() {
   const { theme, toggleTheme } = useTheme();
   const { user, isAdmin, signOut } = useAuth();
   const navigate = useNavigate();
+  const { expirando } = usePausaNotificacoes();
 
   const displayName =
     (user as any)?.user_metadata?.full_name ||
@@ -61,10 +64,52 @@ export function AppHeader() {
 
       <div className="flex items-center gap-2">
         {/* Notificações */}
-        <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground relative">
-          <Bell className="h-5 w-5" />
-          <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full gradient-brand pulse-gradient" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground relative">
+              <Bell className="h-5 w-5" />
+              {expirando.length > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 h-4 w-4 flex items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white pulse-gradient">
+                  {expirando.length}
+                </span>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-80">
+            <DropdownMenuLabel className="flex items-center justify-between">
+              Notificações
+              {expirando.length > 0 && (
+                <Badge variant="destructive" className="ml-2">
+                  {expirando.length} expirando
+                </Badge>
+              )}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {expirando.length === 0 ? (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                Nenhuma notificação importante
+              </div>
+            ) : (
+              expirando.map((contato) => (
+                <DropdownMenuItem 
+                  key={contato.id} 
+                  onClick={() => navigate(`/contatos/${contato.id}`)}
+                  className="flex flex-col items-start gap-1 p-3 cursor-pointer"
+                >
+                  <div className="flex items-center justify-between w-full">
+                    <span className="font-semibold text-sm truncate">
+                      {contato.nomewpp || contato.telefone}
+                    </span>
+                    <Clock className="h-3 w-3 text-orange-500" />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    IA reativa em menos de 5 minutos
+                  </p>
+                </DropdownMenuItem>
+              ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Toggle tema */}
         <Button
