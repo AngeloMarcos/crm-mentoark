@@ -325,15 +325,19 @@ export default function whatsappRouter(pool: Pool): Router {
         const qrRaw = connectData?.base64 || connectData?.qrcode?.base64 || connectData?.code || null;
         if (qrRaw) {
           await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+          await registrarWebhook(base, cfg.api_key, cfg.instancia);
           return res.json({
             state: 'connecting',
             qrCode: normalizeQr(qrRaw),
+            pairingCode: connectData?.pairingCode || connectData?.code || null,
+            instanceName: cfg.instancia,
             instancia: cfg.instancia,
           });
         }
       }
 
-      // 3. Cria nova instância
+      // 3. Cria nova instância (webhook embutido — Evolution v2)
+      const phoneNumber = (req.body?.phoneNumber as string | undefined)?.replace(/\D/g, '') || undefined;
       const createRes = await fetch(`${base}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
@@ -346,6 +350,8 @@ export default function whatsappRouter(pool: Pool): Router {
           alwaysOnline: false,
           readMessages: false,
           readStatus: false,
+          ...(phoneNumber ? { number: phoneNumber } : {}),
+          webhook: webhookPayload(),
         }),
       });
 
@@ -360,20 +366,29 @@ export default function whatsappRouter(pool: Pool): Router {
           const rcData: any = await reconnectRes.json();
           const qrRaw = rcData?.base64 || rcData?.qrcode?.base64 || rcData?.code || null;
           await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+          await registrarWebhook(base, cfg.api_key, cfg.instancia);
           return res.json({
             state: 'connecting',
             qrCode: normalizeQr(qrRaw),
+            pairingCode: rcData?.pairingCode || rcData?.code || null,
+            instanceName: cfg.instancia,
             instancia: cfg.instancia,
           });
         }
       }
 
       const qrCode = created?.qrcode?.base64 || created?.hash?.qrcode || created?.code || null;
+      const pairingCode =
+        created?.qrcode?.pairingCode || created?.pairingCode || created?.hash?.pairingCode || null;
       await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+      // Garante webhook configurado mesmo se o create inline foi ignorado
+      await registrarWebhook(base, cfg.api_key, cfg.instancia);
 
       return res.json({
         state: created?.instance?.state || 'connecting',
         qrCode: normalizeQr(qrCode),
+        pairingCode,
+        instanceName: cfg.instancia,
         instancia: cfg.instancia,
       });
     } catch (err: any) {
