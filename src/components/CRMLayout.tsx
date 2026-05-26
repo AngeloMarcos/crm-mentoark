@@ -2,6 +2,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { AppHeader } from "@/components/AppHeader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { HealthCheck } from "./HealthCheck";
 
 export function CRMLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -22,6 +23,7 @@ export function CRMLayout({ children }: { children: React.ReactNode }) {
           <main className="flex-1 overflow-auto p-4 md:p-6">
             <ErrorBoundary>{children}</ErrorBoundary>
           </main>
+          <HealthCheck />
         </div>
       </div>
     </SidebarProvider>
