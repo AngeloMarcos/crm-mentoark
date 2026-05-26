@@ -227,7 +227,7 @@ export default function IntegracoesPage() {
   const [n8nShowSecret, setN8nShowSecret] = useState(false);
   const [n8nSavingSecret, setN8nSavingSecret] = useState(false);
   const [n8nExistingId, setN8nExistingId] = useState<string | null>(null);
-  const [agentesN8n, setAgentesN8n] = useState<AgenteN8n[]>([]);
+  const [agentesN8n, setAgentesN8n] = useState<{ nome: string; n8n_webhook_url: string }[]>([]);
 
   const carregar = async () => {
     if (!user) return;
