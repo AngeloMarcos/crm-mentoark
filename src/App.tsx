@@ -85,6 +85,9 @@ const App = () => (
               <Route path="/chat-equipe"  element={<ProtectedRoute requireModulo="whatsapp">   <ChatEquipePage /></ProtectedRoute>} />
               <Route path="/smart-links"  element={<ProtectedRoute requireModulo="whatsapp">   <SmartLinksPage /></ProtectedRoute>} />
 
+              {import.meta.env.DEV && (
+                <Route path="/dev/testes-pausa" element={<TestesPausa />} />
+              )}
 
               <Route path="*" element={<NotFound />} />
             </Routes>
