@@ -271,6 +271,8 @@ function IADashboardSection() {
         </Card>
       )}
     </div>
+  );
+}
 
 export default function DashboardPage() {
   const { user } = useAuth();
