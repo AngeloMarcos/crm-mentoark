@@ -200,6 +200,8 @@ export default function DisparosPage() {
 function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
   const [tags, setTags] = useState<any[]>([]);
   const [estagios, setEstagios] = useState<any[]>([]);
+  const [listas, setListas] = useState<any[]>([]);
+  const [listasCounts, setListasCounts] = useState<Record<string, number>>({});
   const [csvPreview, setCsvPreview] = useState<any[]>([]);
   const [tagSearch, setTagSearch] = useState("");
 
@@ -207,8 +209,22 @@ function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
     const fetchTargets = async () => {
       const { data: tagsData } = await api.from("tags").select("*");
       const { data: estagiosData } = await api.from("funil_estagios").select("*");
+      const { data: listasData } = await api.from("listas").select("*").order("nome", { ascending: true });
       setTags(tagsData || []);
       setEstagios(estagiosData || []);
+      setListas(listasData || []);
+
+      // Buscar contagem de contatos por lista (em paralelo)
+      if (listasData && listasData.length) {
+        const counts: Record<string, number> = {};
+        await Promise.all(
+          listasData.map(async (l: any) => {
+            const { count } = await api.from("contatos").select("id", { count: "exact", head: true }).eq("lista_id", l.id);
+            counts[l.id] = count || 0;
+          })
+        );
+        setListasCounts(counts);
+      }
     };
     fetchTargets();
   }, []);
