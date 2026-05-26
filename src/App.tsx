@@ -41,6 +41,7 @@ import NotFound from "./pages/NotFound";
 import TestesPausa from "./pages/TestesPausa";
 import SimuladorWebhook from "./pages/SimuladorWebhook";
 import TesteConversas from "./pages/TesteConversas";
+import MonitorWhatsApp from "./pages/MonitorWhatsApp";
 
 const queryClient = new QueryClient();
 
@@ -69,6 +70,7 @@ const App = () => (
               <Route path="/funil"        element={<ProtectedRoute requireModulo="funil">       <FunilPage /></ProtectedRoute>} />
               <Route path="/whatsapp"     element={<ProtectedRoute requireModulo="whatsapp">    <WhatsAppPage /></ProtectedRoute>} />
               <Route path="/sla"          element={<ProtectedRoute requireModulo="whatsapp">    <SLAPage /></ProtectedRoute>} />
+              <Route path="/monitor-whatsapp" element={<ProtectedRoute requireModulo="whatsapp"> <MonitorWhatsApp /></ProtectedRoute>} />
               <Route path="/respostas-rapidas" element={<ProtectedRoute requireModulo="whatsapp"> <RespostasRapidasPage /></ProtectedRoute>} />
               <Route path="/disparos"     element={<ProtectedRoute requireModulo="disparos">    <DisparosPage /></ProtectedRoute>} />
               <Route path="/campanhas"    element={<ProtectedRoute requireModulo="campanhas">   <CampanhasPage /></ProtectedRoute>} />
