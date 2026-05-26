@@ -38,6 +38,7 @@ import SegurancaPage from "./pages/Seguranca";
 import ChatEquipePage from "./pages/ChatEquipe";
 import SmartLinksPage from "./pages/SmartLinks";
 import NotFound from "./pages/NotFound";
+import TestesPausa from "./pages/TestesPausa";
 
 const queryClient = new QueryClient();
 
