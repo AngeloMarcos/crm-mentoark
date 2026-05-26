@@ -230,8 +230,8 @@ function NavSubgroupSection({
         onClick={() => setOpen((v) => !v)}
         className={`flex items-center w-full gap-2.5 px-2.5 py-2 rounded-lg transition-all duration-200 ${
           hasActive
-            ? "gradient-brand-subtle shadow-[inset_0_1px_0_hsl(262_83%_58%/0.08),0_0_12px_hsl(262_83%_58%/0.10),inset_0_0_0_1px_hsl(262_83%_58%/0.14)]"
-            : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_1px_hsl(262_83%_58%/0.03)]"
+            ? "gradient-brand-subtle shadow-[inset_0_1px_0_hsl(217_91%_45%/0.08),0_0_12px_hsl(217_91%_45%/0.10),inset_0_0_0_1px_hsl(217_91%_45%/0.14)]"
+            : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_1px_hsl(217_91%_45%/0.03)]"
         }`}
       >
         <Icon className={`h-[18px] w-[18px] shrink-0 transition-all duration-300 ${hasActive ? subgroup.color + " drop-shadow-[0_0_4px_hsl(217_91%_45%/0.25)] scale-105" : "text-muted-foreground"}`} />
@@ -256,8 +256,8 @@ function NavSubgroupSection({
                       end={item.url === "/dashboard"}
                       className={`group relative flex items-center gap-2.5 px-2.5 py-2 rounded-md transition-all duration-200 ${
                         active
-                          ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(262_83%_58%/0.14),0_0_14px_hsl(262_83%_58%/0.10)]"
-                          : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(262_83%_58%/0.04)]"
+                          ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.14),0_0_14px_hsl(217_91%_45%/0.10)]"
+                          : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.04)]"
                       }`}
                     >
                       {active && (
