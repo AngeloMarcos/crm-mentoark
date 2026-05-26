@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getAuthToken } from "@/lib/api-token";
+import { getAuthToken, authHeader } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -204,12 +204,6 @@ function formatarData(iso: string | null) {
   });
 }
 
-interface AgenteN8n {
-  id: string;
-  nome: string;
-  n8n_webhook_url: string | null;
-}
-
 export default function IntegracoesPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState<IntegRow[]>([]);
@@ -233,7 +227,7 @@ export default function IntegracoesPage() {
   const [n8nShowSecret, setN8nShowSecret] = useState(false);
   const [n8nSavingSecret, setN8nSavingSecret] = useState(false);
   const [n8nExistingId, setN8nExistingId] = useState<string | null>(null);
-  const [agentesN8n, setAgentesN8n] = useState<AgenteN8n[]>([]);
+  const [agentesN8n, setAgentesN8n] = useState<{ nome: string; n8n_webhook_url: string }[]>([]);
 
   const carregar = async () => {
     if (!user) return;
@@ -253,22 +247,24 @@ export default function IntegracoesPage() {
     }
 
     // Carrega agentes com webhook n8n
-    const { data: agentes, error: agErr } = await api
-      .from("agentes")
-      .select("id, nome, n8n_webhook_url")
-      .eq("user_id", user.id);
-    if (!agErr) {
-      const filtrados = ((agentes ?? []) as AgenteN8n[]).filter(
-        (a) => !!a.n8n_webhook_url && a.n8n_webhook_url.trim() !== ""
-      );
-      setAgentesN8n(filtrados);
-    }
-
     setLoading(false);
+  };
+
+  const carregarAgentesN8n = async () => {
+    const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
+    const res = await fetch(`${API_URL}/api/agentes`, { headers: authHeader() });
+    if (!res.ok) return;
+    const todos = await res.json();
+    setAgentesN8n(
+      todos
+        .filter((a: any) => a.n8n_webhook_url)
+        .map((a: any) => ({ nome: a.nome, n8n_webhook_url: a.n8n_webhook_url }))
+    );
   };
 
   useEffect(() => {
     carregar();
+    carregarAgentesN8n();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
@@ -480,31 +476,24 @@ export default function IntegracoesPage() {
                 </div>
 
                 <div className="border-t border-border/50 pt-4">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Webhook className="h-4 w-4 text-primary" />
-                    <h3 className="font-medium text-sm">Agentes conectados ao n8n</h3>
-                    <Badge variant="outline" className="text-xs">
-                      {agentesN8n.length}
-                    </Badge>
-                  </div>
-                  {agentesN8n.length === 0 ? (
-                    <p className="text-sm text-muted-foreground italic">
-                      Nenhum agente usando n8n ainda.
-                    </p>
-                  ) : (
-                    <ul className="space-y-2">
-                      {agentesN8n.map((a) => (
-                        <li
-                          key={a.id}
-                          className="flex items-center justify-between gap-3 p-2.5 rounded-md bg-muted/30 border border-border/50"
-                        >
-                          <span className="font-medium text-sm truncate">{a.nome}</span>
-                          <code className="text-xs text-muted-foreground truncate max-w-[60%]">
-                            {truncate(a.n8n_webhook_url || "")}
-                          </code>
-                        </li>
+                  {agentesN8n.length > 0 ? (
+                    <div className="mt-3 space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        Agentes roteando para n8n
+                      </p>
+                      {agentesN8n.map(a => (
+                        <div key={a.nome} className="flex items-center justify-between text-sm bg-blue-50 border border-blue-100 rounded px-3 py-1.5">
+                          <span className="font-medium">{a.nome}</span>
+                          <span className="text-xs text-muted-foreground truncate max-w-[180px]">
+                            {a.n8n_webhook_url}
+                          </span>
+                        </div>
                       ))}
-                    </ul>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground mt-3">
+                      Nenhum agente usando n8n ainda. Configure em <strong>Agentes</strong>.
+                    </p>
                   )}
                 </div>
               </CardContent>
