@@ -381,6 +381,9 @@ export default function ContatoDetalhePage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Histórico de IA */}
+            <IAHistorico contatoId={contato.id} telefone={contato.telefone || ""} />
           </div>
 
 
