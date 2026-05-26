@@ -76,6 +76,7 @@ const TAG_COLORS: Record<string, string> = {
 
 
 export function WhatsAppInterface() {
+  const navigate = useNavigate();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
   const [searchTerm, setSearchTerm] = useState("");
@@ -773,8 +774,8 @@ export function WhatsAppInterface() {
               </p>
             </div>
             {!isConnected && !loadingStatus && (
-              <Button onClick={handleConnect} disabled={connecting} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 gap-2 font-bold px-8">
-                {connecting ? <Loader2 className="h-5 w-5 animate-spin" /> : <QrCode className="h-5 w-5" />}
+              <Button onClick={() => navigate("/whatsapp?tab=instancias")} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 gap-2 font-bold px-8">
+                <QrCode className="h-5 w-5" />
                 Conectar WhatsApp
               </Button>
             )}
