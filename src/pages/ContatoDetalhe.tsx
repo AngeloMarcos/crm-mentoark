@@ -21,8 +21,9 @@ import { api } from "@/integrations/database/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { authHeader } from "@/lib/api-token";
 
-const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
 interface PausaStatus {
   pausada: boolean;
@@ -206,7 +207,7 @@ interface DadoCliente {
   nomewpp: string | null;
   telefone: string | null;
   Setor: string | null;
-  atendimento_ia: boolean | null;
+  atendimento_ia: string | null;
   created_at: string;
 }
 
@@ -311,23 +312,23 @@ export default function ContatoDetalhePage() {
     if (!contato) return;
     setUpdatingIa(true);
     try {
-      const { error } = await api
-        .from("dados_cliente")
-        .update({ atendimento_ia: active })
-        .eq("id", contato.id);
-
-      if (error) throw error;
-
-      setContato({ ...contato, atendimento_ia: active });
-      toast({ 
-        title: active ? "IA Reativada" : "IA Pausada", 
-        description: `O atendimento automático foi ${active ? "reativado" : "pausado"} para este contato.` 
+      const res = await fetch(`${API_BASE}/api/contatos/${contato.id}/pausa-ia`, {
+        method: "PATCH",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ acao: active ? "reativar" : "pausar", duracaoMinutos: 30 }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setContato({ ...contato, atendimento_ia: data.atendimento_ia });
+      toast({
+        title: active ? "IA Reativada" : "IA Pausada",
+        description: `O atendimento automático foi ${active ? "reativado" : "pausado"} para este contato.`
       });
     } catch (error: any) {
-      toast({ 
-        title: "Erro ao atualizar IA", 
-        description: error.message, 
-        variant: "destructive" 
+      toast({
+        title: "Erro ao atualizar IA",
+        description: error.message,
+        variant: "destructive"
       });
     } finally {
       setUpdatingIa(false);
@@ -357,7 +358,7 @@ export default function ContatoDetalhePage() {
     );
   }
 
-  const iaAtiva = contato.atendimento_ia === true;
+  const iaAtiva = contato.atendimento_ia === 'ativo' || contato.atendimento_ia === 'reativada';
 
   return (
     <CRMLayout>
