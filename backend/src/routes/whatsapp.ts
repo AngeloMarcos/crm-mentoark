@@ -5,6 +5,40 @@ import { AuthRequest } from '../middleware';
 // Default Evolution server (VPS local — disparo.mentoark.com.br)
 const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
+const WEBHOOK_URL =
+  process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
+const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+
+function webhookPayload() {
+  return {
+    url: WEBHOOK_URL,
+    byEvents: false,
+    base64: true,
+    events: WEBHOOK_EVENTS,
+  };
+}
+
+// Registra (ou atualiza) o webhook da instância no Evolution.
+// Idempotente — pode ser chamado várias vezes sem efeito colateral.
+async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
+  try {
+    const res = await fetch(`${base}/webhook/set/${instancia}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      body: JSON.stringify({ webhook: webhookPayload() }),
+    });
+    if (!res.ok) {
+      // Algumas versões aceitam payload flat em vez de aninhado
+      await fetch(`${base}/webhook/set/${instancia}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: apiKey },
+        body: JSON.stringify(webhookPayload()),
+      }).catch(() => null);
+    }
+  } catch (err) {
+    console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
+  }
+}
 
 function normalizeQr(raw: string | null | undefined): string | null {
   if (!raw) return null;
