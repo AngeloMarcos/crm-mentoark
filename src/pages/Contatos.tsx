@@ -24,7 +24,7 @@ interface DadoCliente {
   nomewpp: string | null;
   telefone: string | null;
   Setor: string | null;
-  atendimento_ia: boolean | string | null;
+  atendimento_ia: string | null;
   created_at: string;
 }
 
