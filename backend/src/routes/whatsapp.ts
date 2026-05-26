@@ -426,5 +426,114 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // POST /api/whatsapp/sync-history — importa chats + mensagens da Evolution para whatsapp_messages
+  router.post('/sync-history', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const instanciaParam = (req.body?.instancia as string | undefined)?.trim();
+      const cfg = await getEvolutionConfig(userId);
+      const instancia = instanciaParam || cfg.instancia;
+      const base = cfg.url.replace(/\/$/, '');
+
+      // 1. Buscar todos os chats
+      const chatsRes = await fetch(`${base}/chat/findChats/${instancia}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+        body: JSON.stringify({}),
+      });
+      if (!chatsRes.ok) {
+        const t = await chatsRes.text().catch(() => '');
+        return res.status(502).json({ message: `Evolution chats ${chatsRes.status}: ${t.slice(0, 200)}` });
+      }
+      const chats: any[] = await chatsRes.json();
+
+      // 2. Buscar mensagens em lote único (Evolution aceita filtro por chat)
+      const msgsRes = await fetch(`${base}/chat/findMessages/${instancia}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+        body: JSON.stringify({ where: {}, limit: 5000 }),
+      });
+      if (!msgsRes.ok) {
+        const t = await msgsRes.text().catch(() => '');
+        return res.status(502).json({ message: `Evolution messages ${msgsRes.status}: ${t.slice(0, 200)}` });
+      }
+      const msgsJson: any = await msgsRes.json();
+      const messages: any[] = msgsJson?.messages?.records || msgsJson?.records || msgsJson || [];
+
+      let inseridos = 0;
+      for (const m of messages) {
+        try {
+          const key = m.key || {};
+          const remoteJid: string = key.remoteJid || m.remoteJid || '';
+          if (!remoteJid || remoteJid.endsWith('@g.us')) continue; // ignora grupos
+          const sessionId = remoteJid.split('@')[0];
+          const msgId = key.id || m.id || `${remoteJid}_${m.messageTimestamp}`;
+          const fromMe = !!key.fromMe;
+          const pushName = m.pushName || null;
+          const ts = Number(m.messageTimestamp || Math.floor(Date.now() / 1000));
+          const msgContent = m.message || {};
+          const texto =
+            msgContent.conversation ||
+            msgContent.extendedTextMessage?.text ||
+            msgContent.imageMessage?.caption ||
+            msgContent.videoMessage?.caption ||
+            msgContent.documentMessage?.caption ||
+            '';
+          const tipo = msgContent.imageMessage ? 'image'
+            : msgContent.audioMessage ? 'audio'
+            : msgContent.videoMessage ? 'video'
+            : msgContent.documentMessage ? 'document'
+            : msgContent.stickerMessage ? 'sticker'
+            : 'text';
+
+          const result = await pool.query(
+            `INSERT INTO whatsapp_messages
+               (id, user_id, instancia, session_id, remote_jid, from_me, push_name, tipo, conteudo, status, timestamp_unix, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, to_timestamp($11))
+             ON CONFLICT (id) DO NOTHING`,
+            [msgId, userId, instancia, sessionId, remoteJid, fromMe, pushName, tipo, texto, fromMe ? 'sent' : 'received', ts]
+          );
+          if (result.rowCount && result.rowCount > 0) inseridos++;
+        } catch (err: any) {
+          console.warn('[SYNC] msg skip:', err.message);
+        }
+      }
+
+      return res.json({ chats: chats.length, messages: messages.length, inseridos });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // DELETE /api/whatsapp/instances/:name — remove instância na Evolution e desvincula do agente
+  router.delete('/instances/:name', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const name = req.params.name;
+      const cfg = await getEvolutionConfig(userId);
+      const base = cfg.url.replace(/\/$/, '');
+
+      await fetch(`${base}/instance/logout/${name}`, {
+        method: 'DELETE',
+        headers: { apikey: cfg.api_key },
+      }).catch(() => null);
+
+      await fetch(`${base}/instance/delete/${name}`, {
+        method: 'DELETE',
+        headers: { apikey: cfg.api_key },
+      }).catch(() => null);
+
+      await pool.query(
+        `UPDATE agentes SET evolution_instancia=NULL WHERE user_id=$1 AND evolution_instancia=$2`,
+        [userId, name]
+      );
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   return router;
 }
+
