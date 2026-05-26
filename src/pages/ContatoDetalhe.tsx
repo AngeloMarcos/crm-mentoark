@@ -358,7 +358,7 @@ export default function ContatoDetalhePage() {
     );
   }
 
-  const iaAtiva = contato.atendimento_ia === true;
+  const iaAtiva = contato.atendimento_ia === 'ativo' || contato.atendimento_ia === 'reativada';
 
   return (
     <CRMLayout>
