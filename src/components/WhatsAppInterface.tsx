@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 import {
   Dialog,
   DialogContent,
@@ -21,11 +22,12 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { getAuthToken } from "@/lib/api-token";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 function apiHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
-  const t = localStorage.getItem('access_token');
+  const t = getAuthToken();
   if (t) h['Authorization'] = `Bearer ${t}`;
   return h;
 }
@@ -74,6 +76,7 @@ const TAG_COLORS: Record<string, string> = {
 
 
 export function WhatsAppInterface() {
+  const navigate = useNavigate();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
   const [searchTerm, setSearchTerm] = useState("");
@@ -771,8 +774,8 @@ export function WhatsAppInterface() {
               </p>
             </div>
             {!isConnected && !loadingStatus && (
-              <Button onClick={handleConnect} disabled={connecting} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 gap-2 font-bold px-8">
-                {connecting ? <Loader2 className="h-5 w-5 animate-spin" /> : <QrCode className="h-5 w-5" />}
+              <Button onClick={() => navigate("/whatsapp?tab=instancias")} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 gap-2 font-bold px-8">
+                <QrCode className="h-5 w-5" />
                 Conectar WhatsApp
               </Button>
             )}

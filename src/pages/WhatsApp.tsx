@@ -4,11 +4,28 @@ import { InstanceManagementPanel } from "@/components/whatsapp/InstanceManagemen
 import { TesteInstancias } from "@/components/whatsapp/TesteInstancias";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Inbox, MessageSquare, Smartphone, FlaskConical } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+
+const VALID_TABS = ["conversas", "caixa", "instancias", "diagnostico"] as const;
+type TabValue = (typeof VALID_TABS)[number];
 
 export default function WhatsAppPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab") as TabValue | null;
+  const activeTab: TabValue = tabParam && VALID_TABS.includes(tabParam) ? tabParam : "conversas";
+
+  const handleTabChange = (value: string) => {
+    if (value === "conversas") {
+      searchParams.delete("tab");
+    } else {
+      searchParams.set("tab", value);
+    }
+    setSearchParams(searchParams, { replace: true });
+  };
+
   return (
     <CRMLayout>
-      <Tabs defaultValue="conversas" className="w-full">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
         <TabsList className="mb-4">
           <TabsTrigger value="conversas" className="gap-2">
             <MessageSquare className="h-4 w-4" /> Conversas

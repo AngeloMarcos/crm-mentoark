@@ -5,6 +5,40 @@ import { AuthRequest } from '../middleware';
 // Default Evolution server (VPS local — disparo.mentoark.com.br)
 const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
+const WEBHOOK_URL =
+  process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
+const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+
+function webhookPayload() {
+  return {
+    url: WEBHOOK_URL,
+    byEvents: false,
+    base64: true,
+    events: WEBHOOK_EVENTS,
+  };
+}
+
+// Registra (ou atualiza) o webhook da instância no Evolution.
+// Idempotente — pode ser chamado várias vezes sem efeito colateral.
+async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
+  try {
+    const res = await fetch(`${base}/webhook/set/${instancia}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      body: JSON.stringify({ webhook: webhookPayload() }),
+    });
+    if (!res.ok) {
+      // Algumas versões aceitam payload flat em vez de aninhado
+      await fetch(`${base}/webhook/set/${instancia}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: apiKey },
+        body: JSON.stringify(webhookPayload()),
+      }).catch(() => null);
+    }
+  } catch (err) {
+    console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
+  }
+}
 
 function normalizeQr(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -291,15 +325,19 @@ export default function whatsappRouter(pool: Pool): Router {
         const qrRaw = connectData?.base64 || connectData?.qrcode?.base64 || connectData?.code || null;
         if (qrRaw) {
           await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+          await registrarWebhook(base, cfg.api_key, cfg.instancia);
           return res.json({
             state: 'connecting',
             qrCode: normalizeQr(qrRaw),
+            pairingCode: connectData?.pairingCode || connectData?.code || null,
+            instanceName: cfg.instancia,
             instancia: cfg.instancia,
           });
         }
       }
 
-      // 3. Cria nova instância
+      // 3. Cria nova instância (webhook embutido — Evolution v2)
+      const phoneNumber = (req.body?.phoneNumber as string | undefined)?.replace(/\D/g, '') || undefined;
       const createRes = await fetch(`${base}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
@@ -312,6 +350,8 @@ export default function whatsappRouter(pool: Pool): Router {
           alwaysOnline: false,
           readMessages: false,
           readStatus: false,
+          ...(phoneNumber ? { number: phoneNumber } : {}),
+          webhook: webhookPayload(),
         }),
       });
 
@@ -326,20 +366,29 @@ export default function whatsappRouter(pool: Pool): Router {
           const rcData: any = await reconnectRes.json();
           const qrRaw = rcData?.base64 || rcData?.qrcode?.base64 || rcData?.code || null;
           await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+          await registrarWebhook(base, cfg.api_key, cfg.instancia);
           return res.json({
             state: 'connecting',
             qrCode: normalizeQr(qrRaw),
+            pairingCode: rcData?.pairingCode || rcData?.code || null,
+            instanceName: cfg.instancia,
             instancia: cfg.instancia,
           });
         }
       }
 
       const qrCode = created?.qrcode?.base64 || created?.hash?.qrcode || created?.code || null;
+      const pairingCode =
+        created?.qrcode?.pairingCode || created?.pairingCode || created?.hash?.pairingCode || null;
       await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+      // Garante webhook configurado mesmo se o create inline foi ignorado
+      await registrarWebhook(base, cfg.api_key, cfg.instancia);
 
       return res.json({
         state: created?.instance?.state || 'connecting',
         qrCode: normalizeQr(qrCode),
+        pairingCode,
+        instanceName: cfg.instancia,
         instancia: cfg.instancia,
       });
     } catch (err: any) {

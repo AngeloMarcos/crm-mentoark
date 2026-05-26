@@ -44,9 +44,18 @@ import {
   WifiOff,
   RefreshCw,
   AlertOctagon,
+  Plus,
+  QrCode,
+  Power,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
+import {
+  createInstance,
+  fetchConnectionStatus,
+  disconnectInstance,
+  type CreateInstanceResult,
+} from "@/services/evolutionService";
 
 interface ScoreFatores {
   volume_diario: number;
@@ -103,6 +112,93 @@ export function InstanceManagementPanel() {
   const [editing, setEditing] = useState<Agente | null>(null);
   const [saving, setSaving] = useState(false);
   const [calculating, setCalculating] = useState<string | null>(null);
+
+  // ─── Conectar nova instância ───
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [newInstanceName, setNewInstanceName] = useState("");
+  const [newInstancePhone, setNewInstancePhone] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
+  const [pollingConnect, setPollingConnect] = useState(false);
+
+  const startConnect = async () => {
+    if (!newInstanceName.trim()) {
+      toast.error("Informe um nome para a instância");
+      return;
+    }
+    try {
+      setConnecting(true);
+      const phoneDigits = newInstancePhone.replace(/\D/g, "");
+      const res = await createInstance(newInstanceName.trim(), phoneDigits || undefined);
+      setQrData(res);
+      setShowConnectModal(false);
+      setShowQrModal(true);
+      if (res.state === "open") {
+        toast.success("WhatsApp já está conectado!");
+        setShowQrModal(false);
+        carregar();
+      } else if (res.qrCode || res.pairingCode) {
+        toast.info("Escaneie o QR Code ou use o código de pareamento");
+        pollUntilConnected();
+      } else {
+        toast.error("Evolution não retornou QR Code");
+      }
+    } catch (err: any) {
+      toast.error(`Erro: ${err.message}`);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const pollUntilConnected = async () => {
+    setPollingConnect(true);
+    const start = Date.now();
+    const TIMEOUT = 2 * 60 * 1000; // 2 min
+    while (Date.now() - start < TIMEOUT) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const st = await fetchConnectionStatus();
+        if (st.state === "open") {
+          setPollingConnect(false);
+          setShowQrModal(false);
+          setQrData(null);
+          setNewInstanceName("");
+          setNewInstancePhone("");
+          toast.success("✅ WhatsApp conectado com sucesso!");
+          carregar();
+          return;
+        }
+      } catch {}
+    }
+    setPollingConnect(false);
+  };
+
+  const refreshQr = async () => {
+    try {
+      setConnecting(true);
+      const phoneDigits = newInstancePhone.replace(/\D/g, "");
+      const res = await createInstance(newInstanceName.trim(), phoneDigits || undefined);
+      setQrData(res);
+      toast.success("Códigos atualizados!");
+    } catch (e: any) {
+      toast.error(`Erro: ${e.message}`);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async (a: Agente) => {
+    if (!confirm(`Desconectar a instância "${a.nome}"? Você precisará escanear o QR Code novamente para reconectar.`)) return;
+    try {
+      await disconnectInstance();
+      toast.success("Instância desconectada");
+      carregar();
+    } catch (e: any) {
+      toast.error(`Erro ao desconectar: ${e.message}`);
+    }
+  };
+
 
 
   const carregar = async () => {
@@ -237,9 +333,14 @@ export function InstanceManagementPanel() {
               Gerencie o comportamento, automação e saúde de cada número conectado.
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={carregar}>
-            <RefreshCw className="h-4 w-4 mr-2" /> Atualizar
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={carregar}>
+              <RefreshCw className="h-4 w-4 mr-2" /> Atualizar
+            </Button>
+            <Button size="sm" onClick={() => setShowConnectModal(true)} className="bg-green-600 hover:bg-green-700 text-white">
+              <Plus className="h-4 w-4 mr-2" /> Conectar nova
+            </Button>
+          </div>
         </div>
 
         {loading && (
@@ -249,9 +350,15 @@ export function InstanceManagementPanel() {
         )}
 
         {!loading && instancias.length === 0 && (
-          <Card className="p-8 text-center text-sm text-muted-foreground border-dashed">
-            <Smartphone className="h-8 w-8 mx-auto mb-2 opacity-40" />
-            Nenhuma instância configurada. Conecte um WhatsApp na aba <strong>Conversas</strong>.
+          <Card className="p-10 text-center border-dashed">
+            <Smartphone className="h-10 w-10 mx-auto mb-3 opacity-40" />
+            <h3 className="text-base font-bold mb-1">Nenhuma instância conectada</h3>
+            <p className="text-sm text-muted-foreground mb-5">
+              Conecte um número de WhatsApp para começar a receber e enviar mensagens.
+            </p>
+            <Button onClick={() => setShowConnectModal(true)} className="bg-green-600 hover:bg-green-700 text-white">
+              <Plus className="h-4 w-4 mr-2" /> Conectar primeiro WhatsApp
+            </Button>
           </Card>
         )}
 
@@ -297,6 +404,15 @@ export function InstanceManagementPanel() {
                       title="Configurar instância"
                     >
                       <Settings2 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                      onClick={() => handleDisconnect(a)}
+                      title="Desconectar instância"
+                    >
+                      <Power className="h-4 w-4" />
                     </Button>
                   </div>
                 </div>
@@ -492,6 +608,142 @@ export function InstanceManagementPanel() {
               <Button onClick={handleSave} disabled={saving}>
                 {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Salvar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ─── Modal: Conectar nova instância ─── */}
+        <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
+          <DialogContent className="sm:max-w-[480px]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Smartphone className="h-5 w-5 text-green-600" />
+                Conectar nova instância WhatsApp
+              </DialogTitle>
+              <DialogDescription>
+                Dê um nome para identificar este número. Opcionalmente informe o telefone para receber código de pareamento.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-2">
+              <div className="space-y-1.5">
+                <Label>Nome da instância <span className="text-red-500">*</span></Label>
+                <Input
+                  placeholder="Ex: Vendas Matriz, Suporte SP..."
+                  value={newInstanceName}
+                  onChange={(e) => setNewInstanceName(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Telefone (opcional)</Label>
+                <Input
+                  placeholder="Ex: 5511999999999 (com DDI+DDD)"
+                  value={newInstancePhone}
+                  onChange={(e) => setNewInstancePhone(e.target.value)}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Se informar, você pode conectar por código de pareamento em vez do QR Code.
+                </p>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowConnectModal(false)} disabled={connecting}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={startConnect}
+                disabled={connecting || !newInstanceName.trim()}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                {connecting ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Gerando...</>
+                ) : (
+                  <><QrCode className="h-4 w-4 mr-2" /> Gerar QR Code</>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ─── Modal: QR Code + Pareamento ─── */}
+        <Dialog
+          open={showQrModal}
+          onOpenChange={(o) => {
+            setShowQrModal(o);
+            if (!o) {
+              setQrData(null);
+              setPollingConnect(false);
+              carregar();
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-[460px]">
+            <DialogHeader>
+              <DialogTitle>
+                Conectar: <span className="text-foreground">{qrData?.instanceName || newInstanceName}</span>
+              </DialogTitle>
+              <DialogDescription>
+                Escaneie o QR Code abaixo no seu WhatsApp para conectar este número.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {qrData?.pairingCode && (
+                <div className="rounded-xl border bg-card p-4 space-y-2">
+                  <p className="text-sm font-bold flex items-center gap-2">
+                    <Smartphone className="h-4 w-4 text-orange-500" />
+                    Código de Pareamento
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    WhatsApp → Aparelhos Conectados → Conectar com número de telefone
+                  </p>
+                  <div className="border border-dashed rounded-lg py-3 px-4 text-center bg-muted/20">
+                    <p
+                      className="text-lg font-mono font-bold tracking-[0.35em] cursor-pointer hover:text-primary"
+                      onClick={() => {
+                        navigator.clipboard.writeText(qrData.pairingCode!.replace(/\s/g, ""));
+                        toast.success("Código copiado!");
+                      }}
+                    >
+                      {qrData.pairingCode}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-xl border bg-card p-4 space-y-3">
+                <p className="text-sm font-bold text-center flex items-center justify-center gap-2">
+                  <QrCode className="h-4 w-4 text-green-600" /> QR Code
+                </p>
+                <div className="flex justify-center">
+                  {qrData?.qrCode?.startsWith("data:image") ? (
+                    <img src={qrData.qrCode} alt="QR Code" className="w-56 h-56" />
+                  ) : (
+                    <div className="w-56 h-56 flex items-center justify-center bg-muted/20 rounded-lg">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {pollingConnect && (
+                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground bg-muted/30 rounded-lg p-3">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Aguardando você escanear o código...
+                </div>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowQrModal(false)}>
+                Fechar
+              </Button>
+              <Button onClick={refreshQr} disabled={connecting} className="bg-orange-500 hover:bg-orange-600 text-white">
+                {connecting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                Atualizar QR
               </Button>
             </DialogFooter>
           </DialogContent>
