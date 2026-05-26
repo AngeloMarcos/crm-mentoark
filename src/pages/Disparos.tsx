@@ -47,6 +47,7 @@ export default function DisparosPage() {
     contatos: [] as any[],
     tags_selecionadas: [] as string[],
     estagios_selecionados: [] as string[],
+    listas_selecionadas: [] as string[],
     url_midia: "",
     legenda_midia: "",
     humanizar_ia: true,
@@ -55,7 +56,11 @@ export default function DisparosPage() {
   // Live contact count — recalcula sempre que os filtros mudam
   useEffect(() => {
     const fetchCount = async () => {
-      if (form.tags_selecionadas.length === 0 && form.estagios_selecionados.length === 0) {
+      if (
+        form.tags_selecionadas.length === 0 &&
+        form.estagios_selecionados.length === 0 &&
+        form.listas_selecionadas.length === 0
+      ) {
         setTargetContacts([]);
         return;
       }
@@ -77,12 +82,19 @@ export default function DisparosPage() {
           .in("funil_estagio_id", form.estagios_selecionados);
         if (data) list = [...list, ...data];
       }
+      if (form.listas_selecionadas.length > 0) {
+        const { data } = await api
+          .from("contatos")
+          .select("id, nome, telefone, lista_id")
+          .in("lista_id", form.listas_selecionadas);
+        if (data) list = [...list, ...data];
+      }
       const unique = Array.from(new Map(list.map(c => [c.telefone, c])).values());
       setTargetContacts(unique);
       setLoadingCount(false);
     };
     fetchCount();
-  }, [form.tags_selecionadas, form.estagios_selecionados]);
+  }, [form.tags_selecionadas, form.estagios_selecionados, form.listas_selecionadas]);
 
   // Validação por etapa — habilita "Próximo" só quando OK
   const stepValid = useMemo(() => {
@@ -99,7 +111,7 @@ export default function DisparosPage() {
     if (stepValid) return null;
     if (step === 0) {
       if (!form.nome.trim()) return "Informe o nome da campanha";
-      return "Selecione ao menos uma tag, estágio ou importe um CSV";
+      return "Selecione ao menos uma tag, lista, estágio ou importe um CSV";
     }
     if (step === 1) return form.tipo_midia === "texto" ? "Escreva a mensagem" : "Informe a URL do arquivo";
     if (step === 2) return "Selecione ao menos uma instância";
@@ -188,6 +200,8 @@ export default function DisparosPage() {
 function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
   const [tags, setTags] = useState<any[]>([]);
   const [estagios, setEstagios] = useState<any[]>([]);
+  const [listas, setListas] = useState<any[]>([]);
+  const [listasCounts, setListasCounts] = useState<Record<string, number>>({});
   const [csvPreview, setCsvPreview] = useState<any[]>([]);
   const [tagSearch, setTagSearch] = useState("");
 
@@ -195,8 +209,22 @@ function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
     const fetchTargets = async () => {
       const { data: tagsData } = await api.from("tags").select("*");
       const { data: estagiosData } = await api.from("funil_estagios").select("*");
+      const { data: listasData } = await api.from("listas").select("*").order("nome", { ascending: true });
       setTags(tagsData || []);
       setEstagios(estagiosData || []);
+      setListas(listasData || []);
+
+      // Buscar contagem de contatos por lista (em paralelo)
+      if (listasData && listasData.length) {
+        const counts: Record<string, number> = {};
+        await Promise.all(
+          listasData.map(async (l: any) => {
+            const { count } = await api.from("contatos").select("id", { count: "exact", head: true }).eq("lista_id", l.id);
+            counts[l.id] = count || 0;
+          })
+        );
+        setListasCounts(counts);
+      }
     };
     fetchTargets();
   }, []);
@@ -237,12 +265,68 @@ function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
         </div>
       </div>
 
-      <Tabs defaultValue="tags" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+      <Tabs defaultValue="lista" className="w-full">
+        <TabsList className="grid w-full grid-cols-4">
+          <TabsTrigger value="lista">Por Lista {form.listas_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.listas_selecionadas.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="tags">Por Tag {form.tags_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.tags_selecionadas.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="estagio">Por Estágio {form.estagios_selecionados.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.estagios_selecionados.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="csv">Importar CSV</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="lista" className="p-4 border rounded-lg bg-card space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Selecione uma ou mais listas de leads:</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                const allIds = listas.map(l => l.id);
+                const allSelected = listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id));
+                setForm({ ...form, listas_selecionadas: allSelected ? [] : allIds });
+              }}
+            >
+              {listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id)) ? "Limpar" : "Selecionar todas"}
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto">
+            {listas.map(l => {
+              const checked = form.listas_selecionadas.includes(l.id);
+              return (
+                <label
+                  key={l.id}
+                  htmlFor={`lista-${l.id}`}
+                  className={`flex items-center justify-between gap-2 p-2 border rounded cursor-pointer transition-colors ${checked ? "bg-primary/10 border-primary/40" : "hover:bg-muted/50"}`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <input
+                      type="checkbox"
+                      id={`lista-${l.id}`}
+                      checked={checked}
+                      className="h-4 w-4"
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...form.listas_selecionadas, l.id]
+                          : form.listas_selecionadas.filter((id: string) => id !== l.id);
+                        setForm({ ...form, listas_selecionadas: next });
+                      }}
+                    />
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: l.cor || "hsl(217 91% 45%)" }} />
+                    <span className="text-sm truncate">{l.nome}</span>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] flex-shrink-0">
+                    {listasCounts[l.id] ?? "..."}
+                  </Badge>
+                </label>
+              );
+            })}
+            {listas.length === 0 && (
+              <p className="text-xs text-muted-foreground col-span-full text-center py-4">
+                Nenhuma lista cadastrada. Crie listas em Contatos para usá-las aqui.
+              </p>
+            )}
+          </div>
+        </TabsContent>
 
         <TabsContent value="tags" className="p-4 border rounded-lg bg-card space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
