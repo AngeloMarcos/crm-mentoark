@@ -470,6 +470,50 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
           )}
         </TabsContent>
       </Tabs>
+
+      {/* Preview em tempo real dos contatos filtrados */}
+      {targetContacts.length > 0 && (
+        <div className="p-4 border rounded-lg bg-card space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <p className="text-sm font-medium">Contatos selecionados</p>
+              <p className="text-xs text-muted-foreground">
+                {filteredPreview.length} de {targetContacts.length} {previewSearch ? "(filtrados)" : "totais"}
+              </p>
+            </div>
+            <Input
+              placeholder="Buscar por nome ou telefone..."
+              value={previewSearch}
+              onChange={e => setPreviewSearch(e.target.value)}
+              className="h-8 max-w-xs"
+            />
+          </div>
+          <div className="max-h-72 overflow-y-auto border rounded">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 sticky top-0">
+                <tr className="text-left">
+                  <th className="px-3 py-2 font-medium text-xs">Nome</th>
+                  <th className="px-3 py-2 font-medium text-xs">Telefone</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredPreview.slice(0, 500).map((c: any, i: number) => (
+                  <tr key={c.id || c.telefone || i} className="border-t hover:bg-muted/30">
+                    <td className="px-3 py-1.5 truncate max-w-[200px]">{c.nome || "—"}</td>
+                    <td className="px-3 py-1.5 font-mono text-xs">{c.telefone || "—"}</td>
+                  </tr>
+                ))}
+                {filteredPreview.length === 0 && (
+                  <tr><td colSpan={2} className="px-3 py-4 text-center text-xs text-muted-foreground">Nenhum contato corresponde à busca.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {filteredPreview.length > 500 && (
+            <p className="text-[10px] text-muted-foreground text-center">Mostrando primeiros 500 de {filteredPreview.length}.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
