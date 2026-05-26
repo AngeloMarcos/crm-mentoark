@@ -113,6 +113,93 @@ export function InstanceManagementPanel() {
   const [saving, setSaving] = useState(false);
   const [calculating, setCalculating] = useState<string | null>(null);
 
+  // ─── Conectar nova instância ───
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [newInstanceName, setNewInstanceName] = useState("");
+  const [newInstancePhone, setNewInstancePhone] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
+  const [pollingConnect, setPollingConnect] = useState(false);
+
+  const startConnect = async () => {
+    if (!newInstanceName.trim()) {
+      toast.error("Informe um nome para a instância");
+      return;
+    }
+    try {
+      setConnecting(true);
+      const phoneDigits = newInstancePhone.replace(/\D/g, "");
+      const res = await createInstance(newInstanceName.trim(), phoneDigits || undefined);
+      setQrData(res);
+      setShowConnectModal(false);
+      setShowQrModal(true);
+      if (res.state === "open") {
+        toast.success("WhatsApp já está conectado!");
+        setShowQrModal(false);
+        carregar();
+      } else if (res.qrCode || res.pairingCode) {
+        toast.info("Escaneie o QR Code ou use o código de pareamento");
+        pollUntilConnected();
+      } else {
+        toast.error("Evolution não retornou QR Code");
+      }
+    } catch (err: any) {
+      toast.error(`Erro: ${err.message}`);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const pollUntilConnected = async () => {
+    setPollingConnect(true);
+    const start = Date.now();
+    const TIMEOUT = 2 * 60 * 1000; // 2 min
+    while (Date.now() - start < TIMEOUT) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const st = await fetchConnectionStatus();
+        if (st.state === "open") {
+          setPollingConnect(false);
+          setShowQrModal(false);
+          setQrData(null);
+          setNewInstanceName("");
+          setNewInstancePhone("");
+          toast.success("✅ WhatsApp conectado com sucesso!");
+          carregar();
+          return;
+        }
+      } catch {}
+    }
+    setPollingConnect(false);
+  };
+
+  const refreshQr = async () => {
+    try {
+      setConnecting(true);
+      const phoneDigits = newInstancePhone.replace(/\D/g, "");
+      const res = await createInstance(newInstanceName.trim(), phoneDigits || undefined);
+      setQrData(res);
+      toast.success("Códigos atualizados!");
+    } catch (e: any) {
+      toast.error(`Erro: ${e.message}`);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async (a: Agente) => {
+    if (!confirm(`Desconectar a instância "${a.nome}"? Você precisará escanear o QR Code novamente para reconectar.`)) return;
+    try {
+      await disconnectInstance();
+      toast.success("Instância desconectada");
+      carregar();
+    } catch (e: any) {
+      toast.error(`Erro ao desconectar: ${e.message}`);
+    }
+  };
+
+
 
   const carregar = async () => {
     if (!user) return;
