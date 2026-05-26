@@ -1,21 +1,21 @@
 // ============================================================
-// HUMANIZAÇÃO DE MENSAGENS COM CLAUDE (Haiku)
+// HUMANIZAÇÃO DE MENSAGENS COM CHATGPT (OpenAI)
 // Varia o texto de cada disparo para reduzir risco de bloqueio
 // ============================================================
 //
-// Requer ANTHROPIC_API_KEY no ambiente do backend.
+// Requer OPENAI_API_KEY no ambiente do backend.
 // Se a chave não estiver configurada, retorna o texto original.
+// Modelo padrão: gpt-4o-mini (rápido e barato). Override via OPENAI_MODEL.
 // ============================================================
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
+const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 // Cache em memória: chave = primeiros 100 chars da base, valor = variações já geradas
 const cache = new Map<string, string[]>();
 const CACHE_MAX = 20;
 
-function montarPrompt(mensagem: string): string {
-  return `Você é um assistente que reescreve mensagens de WhatsApp para parecerem digitadas naturalmente por uma pessoa diferente a cada envio, evitando padrões repetitivos que disparam filtros anti-spam da Meta.
+const SYSTEM_PROMPT = `Você é um assistente que reescreve mensagens de WhatsApp para parecerem digitadas naturalmente por uma pessoa diferente a cada envio, evitando padrões repetitivos que disparam filtros anti-spam da Meta.
 
 REGRAS:
 - Mantenha EXATAMENTE o mesmo significado, intenção e oferta da mensagem original.
@@ -24,14 +24,10 @@ REGRAS:
 - Mantenha o tom (formal/informal) da original.
 - NÃO adicione informações novas, NÃO remova informações.
 - NÃO use formatação markdown (sem **, ##, etc).
-- Responda APENAS com o texto reescrito, sem aspas, sem explicações.
-
-Mensagem original:
-${mensagem}`;
-}
+- Responda APENAS com o texto reescrito, sem aspas, sem explicações.`;
 
 export async function humanizarMensagem(mensagemBase: string): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || !mensagemBase?.trim()) return mensagemBase;
 
   const cacheKey = mensagemBase.trim().substring(0, 100);
@@ -43,28 +39,31 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
   }
 
   try {
-    const resp = await fetch(ANTHROPIC_API_URL, {
+    const resp = await fetch(OPENAI_API_URL, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
+        authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: MODEL,
+        temperature: 0.9,
         max_tokens: 512,
-        messages: [{ role: 'user', content: montarPrompt(mensagemBase) }],
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: `Mensagem original:\n${mensagemBase}` },
+        ],
       }),
     });
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
-      console.error('[HUMANIZACAO] Falha Claude', resp.status, errText.slice(0, 200));
+      console.error('[HUMANIZACAO] Falha OpenAI', resp.status, errText.slice(0, 200));
       return mensagemBase;
     }
 
     const data: any = await resp.json();
-    const texto = data?.content?.[0]?.text?.trim();
+    const texto = data?.choices?.[0]?.message?.content?.trim();
     if (!texto) return mensagemBase;
 
     // Atualiza cache
