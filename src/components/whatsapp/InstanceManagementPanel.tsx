@@ -44,9 +44,18 @@ import {
   WifiOff,
   RefreshCw,
   AlertOctagon,
+  Plus,
+  QrCode,
+  Power,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
+import {
+  createInstance,
+  fetchConnectionStatus,
+  disconnectInstance,
+  type CreateInstanceResult,
+} from "@/services/evolutionService";
 
 interface ScoreFatores {
   volume_diario: number;
