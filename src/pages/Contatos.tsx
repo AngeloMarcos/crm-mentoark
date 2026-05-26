@@ -263,22 +263,22 @@ export default function ContatosPage() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <h3 className="font-semibold truncate">{c.nomewpp || "Sem nome"}</h3>
-                            {iaStatus === "ativa" && (
-                              <span
-                                title="IA Ativa"
-                                className="inline-flex items-center gap-1 text-[10px] font-medium text-success bg-success/10 border border-success/20 rounded-full px-1.5 py-0.5 shrink-0"
-                              >
-                                🤖
-                              </span>
+                            {c.atendimento_ia === 'pause' && (
+                              <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs px-1.5">
+                                ⏸️ Pausada
+                              </Badge>
                             )}
-                            {iaStatus === "pausada" && (
-                              <span
-                                title="IA Pausada"
-                                className="inline-flex items-center gap-1 text-[10px] font-medium text-warning bg-warning/10 border border-warning/20 rounded-full px-1.5 py-0.5 shrink-0"
-                              >
-                                ⏸️
-                              </span>
+                            {(c.atendimento_ia === 'ativo' || c.atendimento_ia === 'reativada') && (
+                              <Badge className="bg-green-100 text-green-700 border-green-200 text-xs px-1.5">
+                                🤖 IA Ativa
+                              </Badge>
                             )}
+                            {!c.atendimento_ia && (
+                              <Badge variant="outline" className="text-gray-400 text-xs px-1.5">
+                                Sem IA
+                              </Badge>
+                            )}
+
                           </div>
                           <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
                             <Phone className="h-3 w-3" />
