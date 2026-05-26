@@ -350,9 +350,15 @@ export function InstanceManagementPanel() {
         )}
 
         {!loading && instancias.length === 0 && (
-          <Card className="p-8 text-center text-sm text-muted-foreground border-dashed">
-            <Smartphone className="h-8 w-8 mx-auto mb-2 opacity-40" />
-            Nenhuma instância configurada. Conecte um WhatsApp na aba <strong>Conversas</strong>.
+          <Card className="p-10 text-center border-dashed">
+            <Smartphone className="h-10 w-10 mx-auto mb-3 opacity-40" />
+            <h3 className="text-base font-bold mb-1">Nenhuma instância conectada</h3>
+            <p className="text-sm text-muted-foreground mb-5">
+              Conecte um número de WhatsApp para começar a receber e enviar mensagens.
+            </p>
+            <Button onClick={() => setShowConnectModal(true)} className="bg-green-600 hover:bg-green-700 text-white">
+              <Plus className="h-4 w-4 mr-2" /> Conectar primeiro WhatsApp
+            </Button>
           </Card>
         )}
 
