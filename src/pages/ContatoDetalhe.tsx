@@ -21,8 +21,9 @@ import { api } from "@/integrations/database/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { authHeader } from "@/lib/api-token";
 
-const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
 interface PausaStatus {
   pausada: boolean;
