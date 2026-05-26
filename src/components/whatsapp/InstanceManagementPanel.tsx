@@ -47,6 +47,8 @@ import {
   Plus,
   QrCode,
   Power,
+  Download,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
