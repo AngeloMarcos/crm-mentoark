@@ -476,31 +476,24 @@ export default function IntegracoesPage() {
                 </div>
 
                 <div className="border-t border-border/50 pt-4">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Webhook className="h-4 w-4 text-primary" />
-                    <h3 className="font-medium text-sm">Agentes conectados ao n8n</h3>
-                    <Badge variant="outline" className="text-xs">
-                      {agentesN8n.length}
-                    </Badge>
-                  </div>
-                  {agentesN8n.length === 0 ? (
-                    <p className="text-sm text-muted-foreground italic">
-                      Nenhum agente usando n8n ainda.
-                    </p>
-                  ) : (
-                    <ul className="space-y-2">
-                      {agentesN8n.map((a) => (
-                        <li
-                          key={a.id}
-                          className="flex items-center justify-between gap-3 p-2.5 rounded-md bg-muted/30 border border-border/50"
-                        >
-                          <span className="font-medium text-sm truncate">{a.nome}</span>
-                          <code className="text-xs text-muted-foreground truncate max-w-[60%]">
-                            {truncate(a.n8n_webhook_url || "")}
-                          </code>
-                        </li>
+                  {agentesN8n.length > 0 ? (
+                    <div className="mt-3 space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        Agentes roteando para n8n
+                      </p>
+                      {agentesN8n.map(a => (
+                        <div key={a.nome} className="flex items-center justify-between text-sm bg-blue-50 border border-blue-100 rounded px-3 py-1.5">
+                          <span className="font-medium">{a.nome}</span>
+                          <span className="text-xs text-muted-foreground truncate max-w-[180px]">
+                            {a.n8n_webhook_url}
+                          </span>
+                        </div>
                       ))}
-                    </ul>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground mt-3">
+                      Nenhum agente usando n8n ainda. Configure em <strong>Agentes</strong>.
+                    </p>
                   )}
                 </div>
               </CardContent>
