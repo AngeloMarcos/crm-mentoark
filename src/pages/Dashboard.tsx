@@ -112,6 +112,166 @@ function KpiCard({
   );
 }
 
+function IADashboardSection() {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<any[]>([]);
+  const navigate = useNavigate();
+
+  const carregarIA = async () => {
+    setLoading(true);
+    try {
+      const API_URL = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
+      const { authHeader } = await import("@/lib/api-token");
+      const res = await fetch(`${API_URL}/api/dados_cliente`, {
+        headers: authHeader(),
+      });
+      if (res.ok) {
+        setData(await res.json());
+      }
+    } catch (err) {
+      console.error("Erro carregar IA dashboard:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    carregarIA();
+  }, []);
+
+  const stats = useMemo(() => {
+    const ativos = data.filter((d) => d.atendimento_ia === "ativo" || d.atendimento_ia === "reativada").length;
+    const pausados = data.filter((d) => d.atendimento_ia === "pause");
+    const semIA = data.filter((d) => !d.atendimento_ia).length;
+    return { ativos, pausados, semIA };
+  }, [data]);
+
+  const formatarTempo = (timestamp: string) => {
+    try {
+      const diff = Date.now() - new Date(timestamp).getTime();
+      const min = Math.floor(diff / 60000);
+      if (min < 60) return `${min} min`;
+      const horas = Math.floor(min / 60);
+      if (horas < 24) return `${horas}h`;
+      return `${Math.floor(horas / 24)}d`;
+    } catch {
+      return "—";
+    }
+  };
+
+  const calcularExpira = (log: any) => {
+    if (log.pausa_duracao_min === 9999) return "Manual";
+    try {
+      const expira = new Date(log.pausa_timestamp).getTime() + log.pausa_duracao_min * 60000;
+      const diff = expira - Date.now();
+      if (diff <= 0) return "Expirando";
+      const min = Math.floor(diff / 60000);
+      return `em ${min} min`;
+    } catch {
+      return "—";
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+          <Bot className="h-4 w-4" />
+          Inteligência Artificial
+        </h3>
+        <Button variant="ghost" size="sm" onClick={carregarIA} disabled={loading} className="h-8 w-8 p-0">
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <KpiCard
+          title="IA Ativa"
+          value={stats.ativos}
+          hint="contatos sendo atendidos pela IA"
+          icon={Bot}
+          tone="success"
+          loading={loading}
+        />
+        <div className="relative">
+          <KpiCard
+            title="IA Pausada"
+            value={stats.pausados.length}
+            hint="atendimento humano em curso"
+            icon={Pause}
+            tone="accent"
+            loading={loading}
+          />
+          {stats.pausados.length > 0 && !loading && (
+            <Badge className="absolute top-2 right-2 animate-pulse bg-destructive text-destructive-foreground border-none text-[8px] px-1.5 h-4">
+              ATENÇÃO
+            </Badge>
+          )}
+        </div>
+        <KpiCard
+          title="Sem IA configurada"
+          value={stats.semIA}
+          hint="aguardando ativação"
+          icon={Bot}
+          tone="primary"
+          loading={loading}
+        />
+      </div>
+
+      {!loading && stats.pausados.length > 0 && (
+        <Card className="overflow-hidden border-accent/20">
+          <CardHeader className="py-3 bg-accent/5 border-b">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-xs font-bold flex items-center gap-2">
+                <Pause className="h-3 w-3 text-accent" />
+                CONTATOS PAUSADOS
+              </CardTitle>
+              <Button
+                variant="link"
+                size="sm"
+                className="text-[10px] h-auto p-0 text-accent hover:text-accent/80"
+                onClick={() => navigate("/contatos?filtro=pause")}
+              >
+                Ver todos <ArrowUpRight className="h-3 w-3 ml-0.5" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-muted/30 text-muted-foreground uppercase font-semibold">
+                  <tr>
+                    <th className="px-4 py-2">Nome</th>
+                    <th className="px-4 py-2">Telefone</th>
+                    <th className="px-4 py-2">Pausado há</th>
+                    <th className="px-4 py-2">Expira em</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {stats.pausados.slice(0, 5).map((contato: any) => (
+                    <tr
+                      key={contato.id}
+                      className="hover:bg-muted/30 cursor-pointer transition-colors"
+                      onClick={() => navigate(`/contatos/${contato.id}`)}
+                    >
+                      <td className="px-4 py-2 font-medium">{contato.nomewpp || "Sem nome"}</td>
+                      <td className="px-4 py-2 text-muted-foreground">{contato.telefone || "—"}</td>
+                      <td className="px-4 py-2">{formatarTempo(contato.pausa_timestamp)}</td>
+                      <td className="px-4 py-2">
+                        <Badge variant="outline" className="text-[10px] font-normal">
+                          {calcularExpira(contato)}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
