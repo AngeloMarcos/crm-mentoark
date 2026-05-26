@@ -4,7 +4,7 @@ import {
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox,
-  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2,
+  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -84,6 +84,7 @@ const navGroups: NavGroup[] = [
         items: [
           { title: "WhatsApp",          url: "/whatsapp",          icon: MessageCircle, modulo: "whatsapp",    color: "text-green-500"   },
           { title: "Caixa de Entrada",  url: "/whatsapp?tab=caixa", icon: Inbox,        modulo: "whatsapp",    color: "text-emerald-500" },
+          { title: "Monitor",           url: "/monitor-whatsapp",   icon: Monitor,      modulo: "whatsapp",    color: "text-blue-400"    },
           { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap,           modulo: "whatsapp",    color: "text-amber-500"   },
           { title: "SLA / Gestão",      url: "/sla",               icon: Timer,         modulo: "whatsapp",    color: "text-yellow-500"  },
           { title: "Configuração da IA", url: "/cerebro",           icon: Brain,         modulo: "cerebro",     color: "text-purple-400", adminOnly: true },
