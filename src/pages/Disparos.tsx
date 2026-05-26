@@ -197,7 +197,13 @@ export default function DisparosPage() {
   );
 }
 
-function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
+function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [] }: any) {
+  const [previewSearch, setPreviewSearch] = useState("");
+  const filteredPreview = targetContacts.filter((c: any) => {
+    if (!previewSearch.trim()) return true;
+    const q = previewSearch.toLowerCase();
+    return (c.nome || "").toLowerCase().includes(q) || (c.telefone || "").toLowerCase().includes(q);
+  });
   const [tags, setTags] = useState<any[]>([]);
   const [estagios, setEstagios] = useState<any[]>([]);
   const [listas, setListas] = useState<any[]>([]);
