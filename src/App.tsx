@@ -91,6 +91,7 @@ const App = () => (
                 <>
                   <Route path="/dev/testes-pausa" element={<TestesPausa />} />
                   <Route path="/dev/simulador-webhook" element={<SimuladorWebhook />} />
+                  <Route path="/dev/teste-conversas" element={<TesteConversas />} />
                 </>
               )}
 
