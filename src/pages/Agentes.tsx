@@ -335,16 +335,18 @@ export default function AgentesPage() {
                     >
                       {a.ativo ? "Ativo" : "Inativo"}
                     </Badge>
-                    <Badge
-                      className={`text-xs border-1 ${
-                        a.n8n_webhook_url
-                          ? "bg-primary/15 text-primary border-primary/30"
-                          : "bg-muted text-muted-foreground border-muted-foreground/20"
-                      }`}
-                    >
-                      {a.n8n_webhook_url ? "Via n8n" : "IA Interna"}
-                    </Badge>
+                    {a.n8n_webhook_url && (
+                      <Badge variant="outline" className="text-blue-600 border-blue-300 bg-blue-50 text-xs">
+                        Via n8n
+                      </Badge>
+                    )}
+                    {!a.n8n_webhook_url && (
+                      <Badge variant="outline" className="text-gray-500 text-xs">
+                        IA Interna
+                      </Badge>
+                    )}
                   </div>
+
 
                   <div className="flex gap-2">
                     <Button
@@ -645,6 +647,19 @@ export default function AgentesPage() {
                   placeholder="ex: mentoark-principal"
                 />
               </div>
+              <div className="space-y-2">
+                <Label>URL do Webhook n8n</Label>
+                <Input
+                  placeholder="https://seu-n8n.com/webhook/..."
+                  value={form.n8n_webhook_url}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, n8n_webhook_url: e.target.value }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  Quando preenchido, mensagens são processadas pelo n8n em vez da IA interna.
+                </p>
+              </div>
               <Button
                 variant="secondary"
                 className="w-full"
@@ -661,20 +676,17 @@ export default function AgentesPage() {
             </TabsContent>
 
             <TabsContent value="integracao" className="space-y-4 pt-4">
-              <div className="space-y-1.5">
-                <Label>URL do Webhook n8n</Label>
-                <Input
-                  value={form.n8n_webhook_url}
-                  onChange={(e) =>
-                    setForm({ ...form, n8n_webhook_url: e.target.value })
-                  }
-                  placeholder="https://seu-n8n.com/webhook/..."
-                />
-                <p className="text-xs text-muted-foreground">
-                  Quando preenchido, as mensagens serão processadas pelo n8n em vez da IA interna.
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
+                <div className="flex items-center gap-2 text-primary">
+                  <Webhook className="h-5 w-5" />
+                  <h3 className="font-semibold">Integrações externas</h3>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  O webhook n8n agora é configurado diretamente na aba <strong>WhatsApp</strong>, junto da instância Evolution.
                 </p>
               </div>
             </TabsContent>
+
 
             <TabsContent value="status" className="space-y-4 pt-4">
               <div className="flex items-center justify-between rounded-md border p-3">
