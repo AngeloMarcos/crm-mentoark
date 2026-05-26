@@ -312,23 +312,23 @@ export default function ContatoDetalhePage() {
     if (!contato) return;
     setUpdatingIa(true);
     try {
-      const { error } = await api
-        .from("dados_cliente")
-        .update({ atendimento_ia: active })
-        .eq("id", contato.id);
-
-      if (error) throw error;
-
-      setContato({ ...contato, atendimento_ia: active });
-      toast({ 
-        title: active ? "IA Reativada" : "IA Pausada", 
-        description: `O atendimento automático foi ${active ? "reativado" : "pausado"} para este contato.` 
+      const res = await fetch(`${API_BASE}/api/contatos/${contato.id}/pausa-ia`, {
+        method: "PATCH",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ acao: active ? "reativar" : "pausar", duracaoMinutos: 30 }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setContato({ ...contato, atendimento_ia: data.atendimento_ia });
+      toast({
+        title: active ? "IA Reativada" : "IA Pausada",
+        description: `O atendimento automático foi ${active ? "reativado" : "pausado"} para este contato.`
       });
     } catch (error: any) {
-      toast({ 
-        title: "Erro ao atualizar IA", 
-        description: error.message, 
-        variant: "destructive" 
+      toast({
+        title: "Erro ao atualizar IA",
+        description: error.message,
+        variant: "destructive"
       });
     } finally {
       setUpdatingIa(false);
