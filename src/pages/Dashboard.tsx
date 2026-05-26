@@ -327,6 +327,9 @@ export default function DashboardPage() {
           />
         </div>
 
+        {/* Seção Inteligência Artificial */}
+        <IADashboardSection />
+
         {/* Gráfico + Follow-ups */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <Card className="lg:col-span-2">
