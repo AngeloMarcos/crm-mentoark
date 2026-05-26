@@ -377,7 +377,7 @@ export function AppSidebar() {
       <SidebarFooter className="relative border-t border-sidebar-border/50 p-3 before:content-[''] before:absolute before:top-0 before:left-3 before:right-3 before:h-px before:gradient-brand before:opacity-40">
         <SidebarMenuButton
           onClick={handleLogout}
-          className="flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(262_83%_58%/0.04)] transition-all duration-200"
+          className="flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.04)] transition-all duration-200"
         >
           <LogOut className="h-5 w-5 shrink-0" />
           {!collapsed && <span>Sair</span>}
