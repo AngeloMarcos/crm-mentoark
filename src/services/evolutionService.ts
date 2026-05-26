@@ -1,8 +1,10 @@
+import { getAuthToken } from "@/lib/api-token";
+
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 
 function authHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
-  const t = localStorage.getItem('access_token');
+  const t = getAuthToken();
   if (t) h['Authorization'] = `Bearer ${t}`;
   return h;
 }
