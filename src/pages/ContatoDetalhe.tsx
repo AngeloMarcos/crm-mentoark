@@ -17,6 +17,7 @@ import {
   Clock,
 } from "lucide-react";
 import { FollowUpModal } from "@/components/FollowUpModal";
+import { IAHistorico } from "@/components/IAHistorico";
 import { api } from "@/integrations/database/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -380,6 +381,9 @@ export default function ContatoDetalhePage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Histórico de IA */}
+            <IAHistorico contatoId={contato.id} telefone={contato.telefone || ""} />
           </div>
 
 
