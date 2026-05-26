@@ -265,7 +265,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
         </div>
       </div>
 
-      <Tabs defaultValue="tags" className="w-full">
+      <Tabs defaultValue="lista" className="w-full">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="lista">Por Lista {form.listas_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.listas_selecionadas.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="tags">Por Tag {form.tags_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.tags_selecionadas.length}</Badge>}</TabsTrigger>
