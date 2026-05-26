@@ -264,6 +264,7 @@ export default function IntegracoesPage() {
 
   useEffect(() => {
     carregar();
+    carregarAgentesN8n();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
