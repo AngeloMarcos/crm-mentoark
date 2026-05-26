@@ -405,6 +405,15 @@ export function InstanceManagementPanel() {
                     >
                       <Settings2 className="h-4 w-4" />
                     </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                      onClick={() => handleDisconnect(a)}
+                      title="Desconectar instância"
+                    >
+                      <Power className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
 
