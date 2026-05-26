@@ -71,6 +71,53 @@ export default function ContatoDetalhePage() {
   const [loading, setLoading] = useState(true);
   const [updatingIa, setUpdatingIa] = useState(false);
   const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
+  const [duracaoSelecionada, setDuracaoSelecionada] = useState(30);
+  const [pausaStatus, setPausaStatus] = useState<{
+    pausada: boolean;
+    segundosRestantes: number | null;
+    pausa_ia_ate: string | null;
+  } | null>(null);
+  const [loadingPausaStatus, setLoadingPausaStatus] = useState(false);
+
+  const carregarPausaStatus = async (contatoId?: number) => {
+    const cid = contatoId ?? contato?.id;
+    if (!cid) return;
+    setLoadingPausaStatus(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/contatos/${cid}/pausa-status`, {
+        headers: authHeader(),
+      });
+      if (res.ok) setPausaStatus(await res.json());
+    } catch {
+      // ignore
+    } finally {
+      setLoadingPausaStatus(false);
+    }
+  };
+
+  const formatarContagem = (s: number) => {
+    const m = Math.floor(s / 60).toString().padStart(2, "0");
+    const seg = (s % 60).toString().padStart(2, "0");
+    return `${m}:${seg}`;
+  };
+
+  // Countdown da pausa
+  useEffect(() => {
+    if (!pausaStatus?.segundosRestantes) return;
+    const interval = setInterval(() => {
+      setPausaStatus((prev) => {
+        if (!prev?.segundosRestantes || prev.segundosRestantes <= 1) {
+          clearInterval(interval);
+          carregarPausaStatus();
+          return prev;
+        }
+        return { ...prev, segundosRestantes: prev.segundosRestantes - 1 };
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pausaStatus?.pausa_ia_ate]);
+
 
   useEffect(() => {
     if (!id) return;
@@ -87,6 +134,8 @@ export default function ContatoDetalhePage() {
 
         if (contactError) throw contactError;
         setContato(contactData);
+        if (contactData?.id) carregarPausaStatus(contactData.id);
+
 
         // Busca histórico de mensagens se tiver telefone
         if (contactData?.telefone) {
@@ -141,15 +190,17 @@ export default function ContatoDetalhePage() {
       const res = await fetch(`${API_BASE}/api/contatos/${contato.id}/pausa-ia`, {
         method: "PATCH",
         headers: { ...authHeader(), "Content-Type": "application/json" },
-        body: JSON.stringify({ acao: active ? "reativar" : "pausar", duracaoMinutos: 30 }),
+        body: JSON.stringify({ acao: active ? "reativar" : "pausar", duracaoMinutos: duracaoSelecionada }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setContato({ ...contato, atendimento_ia: data.atendimento_ia });
+      carregarPausaStatus(contato.id);
       toast({
         title: active ? "IA Reativada" : "IA Pausada",
         description: `O atendimento automático foi ${active ? "reativado" : "pausado"} para este contato.`
       });
+
     } catch (error: any) {
       toast({
         title: "Erro ao atualizar IA",
@@ -203,29 +254,70 @@ export default function ContatoDetalhePage() {
               <Clock className="h-4 w-4" />
               Follow-up
             </Button>
-            {iaAtiva ? (
-              <Button 
-                variant="destructive" 
-                size="sm" 
-                onClick={() => toggleIA(false)} 
-                disabled={updatingIa}
-                className="gap-2"
-              >
-                {updatingIa ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
-                Pausar IA
-              </Button>
-            ) : (
-              <Button 
-                variant="default" 
-                size="sm" 
-                onClick={() => toggleIA(true)} 
-                disabled={updatingIa}
-                className="gap-2 bg-success hover:bg-success/90"
-              >
-                {updatingIa ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                Reativar IA
-              </Button>
-            )}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Bot className="h-4 w-4" />
+                <span className="font-medium text-sm">Controle da IA</span>
+                {loadingPausaStatus && <Loader2 className="h-3 w-3 animate-spin" />}
+              </div>
+
+              {(pausaStatus?.pausada || contato.atendimento_ia === 'pause') && (
+                <div className="flex flex-col gap-2 p-3 rounded-lg bg-orange-50 border border-orange-200 dark:bg-orange-950/20 dark:border-orange-900/40">
+                  <div className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
+                    <Pause className="h-4 w-4" />
+                    <span className="text-sm font-medium">IA Pausada</span>
+                    {pausaStatus?.segundosRestantes != null && pausaStatus.segundosRestantes > 0 && (
+                      <span className="text-xs bg-orange-100 dark:bg-orange-900/40 px-2 py-0.5 rounded font-mono">
+                        {formatarContagem(pausaStatus.segundosRestantes)}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => toggleIA(true)}
+                    disabled={updatingIa}
+                    className="border-green-300 text-green-700 hover:bg-green-50 dark:hover:bg-green-950/20 w-fit"
+                  >
+                    {updatingIa ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Play className="h-3 w-3 mr-1" />}
+                    Reativar IA
+                  </Button>
+                </div>
+              )}
+
+              {!pausaStatus?.pausada && contato.atendimento_ia !== 'pause' && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+                    <Play className="h-4 w-4" />
+                    <span className="text-sm font-medium">IA Ativa</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={duracaoSelecionada}
+                      onChange={(e) => setDuracaoSelecionada(Number(e.target.value))}
+                      className="text-sm border rounded px-2 py-1 bg-background"
+                    >
+                      <option value={15}>15 min</option>
+                      <option value={30}>30 min</option>
+                      <option value={60}>1 hora</option>
+                      <option value={120}>2 horas</option>
+                      <option value={9999}>Até reativar</option>
+                    </select>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => toggleIA(false)}
+                      disabled={updatingIa}
+                      className="border-orange-300 text-orange-700 hover:bg-orange-50 dark:hover:bg-orange-950/20"
+                    >
+                      {updatingIa ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Pause className="h-3 w-3 mr-1" />}
+                      Pausar IA
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
           </div>
         </div>
 
@@ -288,9 +380,8 @@ export default function ContatoDetalhePage() {
                 </div>
               </CardContent>
             </Card>
-
-            <ControleIA contatoId={contato.id} />
           </div>
+
 
           {/* Coluna Histórico de Mensagens */}
           <div className="lg:col-span-2">
