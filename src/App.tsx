@@ -87,8 +87,10 @@ const App = () => (
               <Route path="/smart-links"  element={<ProtectedRoute requireModulo="whatsapp">   <SmartLinksPage /></ProtectedRoute>} />
 
               {import.meta.env.DEV && (
-                <Route path="/dev/testes-pausa" element={<TestesPausa />} />
-                <Route path="/dev/simulador-webhook" element={<SimuladorWebhook />} />
+                <>
+                  <Route path="/dev/testes-pausa" element={<TestesPausa />} />
+                  <Route path="/dev/simulador-webhook" element={<SimuladorWebhook />} />
+                </>
               )}
 
               <Route path="*" element={<NotFound />} />
