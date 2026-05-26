@@ -247,18 +247,19 @@ export default function IntegracoesPage() {
     }
 
     // Carrega agentes com webhook n8n
-    const { data: agentes, error: agErr } = await api
-      .from("agentes")
-      .select("id, nome, n8n_webhook_url")
-      .eq("user_id", user.id);
-    if (!agErr) {
-      const filtrados = ((agentes ?? []) as AgenteN8n[]).filter(
-        (a) => !!a.n8n_webhook_url && a.n8n_webhook_url.trim() !== ""
-      );
-      setAgentesN8n(filtrados);
-    }
-
     setLoading(false);
+  };
+
+  const carregarAgentesN8n = async () => {
+    const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
+    const res = await fetch(`${API_URL}/api/agentes`, { headers: authHeader() });
+    if (!res.ok) return;
+    const todos = await res.json();
+    setAgentesN8n(
+      todos
+        .filter((a: any) => a.n8n_webhook_url)
+        .map((a: any) => ({ nome: a.nome, n8n_webhook_url: a.n8n_webhook_url }))
+    );
   };
 
   useEffect(() => {
