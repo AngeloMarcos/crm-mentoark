@@ -40,6 +40,7 @@ import SmartLinksPage from "./pages/SmartLinks";
 import NotFound from "./pages/NotFound";
 import TestesPausa from "./pages/TestesPausa";
 import SimuladorWebhook from "./pages/SimuladorWebhook";
+import TesteConversas from "./pages/TesteConversas";
 
 const queryClient = new QueryClient();
 
@@ -90,6 +91,7 @@ const App = () => (
                 <>
                   <Route path="/dev/testes-pausa" element={<TestesPausa />} />
                   <Route path="/dev/simulador-webhook" element={<SimuladorWebhook />} />
+                  <Route path="/dev/teste-conversas" element={<TesteConversas />} />
                 </>
               )}
 
