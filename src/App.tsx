@@ -39,6 +39,7 @@ import ChatEquipePage from "./pages/ChatEquipe";
 import SmartLinksPage from "./pages/SmartLinks";
 import NotFound from "./pages/NotFound";
 import TestesPausa from "./pages/TestesPausa";
+import SimuladorWebhook from "./pages/SimuladorWebhook";
 
 const queryClient = new QueryClient();
 
@@ -87,6 +88,7 @@ const App = () => (
 
               {import.meta.env.DEV && (
                 <Route path="/dev/testes-pausa" element={<TestesPausa />} />
+                <Route path="/dev/simulador-webhook" element={<SimuladorWebhook />} />
               )}
 
               <Route path="*" element={<NotFound />} />
