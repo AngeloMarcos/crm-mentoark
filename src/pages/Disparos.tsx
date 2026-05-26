@@ -111,7 +111,7 @@ export default function DisparosPage() {
     if (stepValid) return null;
     if (step === 0) {
       if (!form.nome.trim()) return "Informe o nome da campanha";
-      return "Selecione ao menos uma tag, estágio ou importe um CSV";
+      return "Selecione ao menos uma tag, lista, estágio ou importe um CSV";
     }
     if (step === 1) return form.tipo_midia === "texto" ? "Escreva a mensagem" : "Informe a URL do arquivo";
     if (step === 2) return "Selecione ao menos uma instância";
