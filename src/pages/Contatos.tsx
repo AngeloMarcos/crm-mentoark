@@ -29,13 +29,11 @@ interface DadoCliente {
 }
 
 type IaStatus = "ativa" | "pausada" | null;
-function getIaStatus(v: boolean | string | null | undefined): IaStatus {
+function getIaStatus(v: string | null | undefined): IaStatus {
   if (v === null || v === undefined || v === "") return null;
-  if (v === true) return "ativa";
-  if (v === false) return "pausada";
   const s = String(v).toLowerCase().trim();
-  if (s === "ativo" || s === "ativa" || s === "reativada" || s === "true") return "ativa";
-  if (s === "pause" || s === "pausada" || s === "pausado" || s === "false") return "pausada";
+  if (s === "ativo" || s === "ativa" || s === "reativada") return "ativa";
+  if (s === "pause" || s === "pausada" || s === "pausado") return "pausada";
   return null;
 }
 
