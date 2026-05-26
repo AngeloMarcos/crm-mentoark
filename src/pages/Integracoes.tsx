@@ -204,12 +204,6 @@ function formatarData(iso: string | null) {
   });
 }
 
-interface AgenteN8n {
-  id: string;
-  nome: string;
-  n8n_webhook_url: string | null;
-}
-
 export default function IntegracoesPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState<IntegRow[]>([]);
