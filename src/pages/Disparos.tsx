@@ -266,11 +266,67 @@ function StepContacts({ form, setForm, liveCount, loadingCount }: any) {
       </div>
 
       <Tabs defaultValue="tags" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
+          <TabsTrigger value="lista">Por Lista {form.listas_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.listas_selecionadas.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="tags">Por Tag {form.tags_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.tags_selecionadas.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="estagio">Por Estágio {form.estagios_selecionados.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.estagios_selecionados.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="csv">Importar CSV</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="lista" className="p-4 border rounded-lg bg-card space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Selecione uma ou mais listas de leads:</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                const allIds = listas.map(l => l.id);
+                const allSelected = listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id));
+                setForm({ ...form, listas_selecionadas: allSelected ? [] : allIds });
+              }}
+            >
+              {listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id)) ? "Limpar" : "Selecionar todas"}
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto">
+            {listas.map(l => {
+              const checked = form.listas_selecionadas.includes(l.id);
+              return (
+                <label
+                  key={l.id}
+                  htmlFor={`lista-${l.id}`}
+                  className={`flex items-center justify-between gap-2 p-2 border rounded cursor-pointer transition-colors ${checked ? "bg-primary/10 border-primary/40" : "hover:bg-muted/50"}`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <input
+                      type="checkbox"
+                      id={`lista-${l.id}`}
+                      checked={checked}
+                      className="h-4 w-4"
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...form.listas_selecionadas, l.id]
+                          : form.listas_selecionadas.filter((id: string) => id !== l.id);
+                        setForm({ ...form, listas_selecionadas: next });
+                      }}
+                    />
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: l.cor || "hsl(217 91% 45%)" }} />
+                    <span className="text-sm truncate">{l.nome}</span>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] flex-shrink-0">
+                    {listasCounts[l.id] ?? "..."}
+                  </Badge>
+                </label>
+              );
+            })}
+            {listas.length === 0 && (
+              <p className="text-xs text-muted-foreground col-span-full text-center py-4">
+                Nenhuma lista cadastrada. Crie listas em Contatos para usá-las aqui.
+              </p>
+            )}
+          </div>
+        </TabsContent>
 
         <TabsContent value="tags" className="p-4 border rounded-lg bg-card space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
