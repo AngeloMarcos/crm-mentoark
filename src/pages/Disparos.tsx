@@ -47,6 +47,7 @@ export default function DisparosPage() {
     contatos: [] as any[],
     tags_selecionadas: [] as string[],
     estagios_selecionados: [] as string[],
+    listas_selecionadas: [] as string[],
     url_midia: "",
     legenda_midia: "",
     humanizar_ia: true,
