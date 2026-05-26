@@ -1,92 +1,68 @@
 ## Diagnóstico
 
-Auditei toda a cadeia: botão → modal → backend `/api/whatsapp/connect` → Evolution API → webhook → tabela `whatsapp_messages` → tela de conversas. Quatro problemas independentes impedem o fluxo de funcionar:
+Verifiquei o estado real agora:
 
-1. **Aba "Instâncias" existe mas é invisível.** A página `/whatsapp` já tem a aba (`WhatsApp.tsx`), mas o sidebar só leva para `/whatsapp` (aba Conversas padrão) — não há entrada direta para Instâncias. O botão "Conectar WhatsApp" no empty state só abre um modal local, não leva à aba de gerenciamento.
+- Evolution tem 3 instâncias. A ativa é `crm_65aba552` (recém-conectada, **4060 mensagens / 302 chats**, número Mentoark).
+- **Webhook está `null`** nas 3 instâncias → Evolution não tem para onde mandar mensagens novas.
+- Banco: agente "teste" do user mentoark **continua com `evolution_instancia` vazio** e `whatsapp_messages` = 0.
+- A causa raiz é simples: no último deploy o arquivo `backend/src/routes/whatsapp.ts` **não foi enviado** (sua lista incluía contatos/modulos/usuarios/n8n, mas não whatsapp.ts). Portanto a VPS ainda roda a versão antiga, que não chama `registrarWebhook` nem `saveEvolutionConfig` ao conectar.
 
-2. **Token JWT errado na chamada do Evolution.** `evolutionService.ts` (linha 5) e `WhatsAppInterface.tsx` (linha 28) leem `localStorage.getItem('access_token')`, mas a chave real salva pelo login é `crm_access_token` (já há helper `getAuthToken()` em `src/lib/api-token.ts`). Resultado: `/api/whatsapp/status` e `/api/whatsapp/connect` recebem 401 silencioso → status sempre fica "close" → QR nunca aparece pra alguns usuários.
+## Plano para destravar o fluxo WhatsApp/conversas
 
-3. **Webhook nunca é registrado no Evolution.** Em `backend/src/routes/whatsapp.ts`, o `/api/whatsapp/connect` chama `/instance/create` sem passar `webhook`, e nunca chama `/webhook/set/:instance`. Sem isso o Evolution recebe as mensagens do WhatsApp mas não envia pra `https://api.mentoark.com.br/webhook/evolution` — por isso `whatsapp_messages` fica vazia mesmo com a instância conectada.
+### 1. Deploy do `whatsapp.ts` já corrigido
+O arquivo no repositório local já tem `registrarWebhook` + `saveEvolutionConfig` chamados em todos os caminhos de `/connect`. Basta copiar e rebuildar:
 
-4. **Painel "Instâncias" só lista, não cria.** `InstanceManagementPanel.tsx` só renderiza agentes que já têm `evolution_instancia`. Não tem botão "+ Nova instância", então mesmo achando a aba o usuário não consegue iniciar uma conexão por ali.
+```bash
+sshpass -p 'Mentoark@2025' scp -o StrictHostKeyChecking=no \
+  backend/src/routes/whatsapp.ts \
+  root@147.93.9.172:/opt/crm/backend/src/routes/whatsapp.ts
 
-## Fluxo desejado
-
-```text
-Sidebar → WhatsApp ▸ Instâncias
-       ↓
-[Tab Instâncias] → botão "+ Conectar nova"
-       ↓
-Modal (nome + país + telefone)
-       ↓
-POST /api/whatsapp/connect  (com Bearer correto)
-       ↓
-Backend: cria instância + REGISTRA WEBHOOK no Evolution
-       ↓
-Modal QR Code (polling a cada 3s no /api/whatsapp/status)
-       ↓
-state=open → toast "Conectado!" → fecha modal
-       ↓
-WhatsApp escaneado → Evolution envia messages.upsert
-       ↓
-/webhook/evolution grava em whatsapp_messages
-       ↓
-Tab Conversas mostra a conversa nova
+sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 \
+  'cd /opt/crm/backend && docker compose build --no-cache && docker compose up -d'
 ```
 
-## Alterações
+A partir daí, toda nova conexão registra webhook + vincula instância ao agente automaticamente.
 
-### Frontend
+### 2. Cura imediata da instância já conectada (`crm_65aba552`)
+A instância já está `open` mas órfã. Rodar uma vez:
 
-**`src/services/evolutionService.ts`**
-- Trocar `localStorage.getItem('access_token')` por `getAuthToken()` do `@/lib/api-token`.
+**a) Registrar webhook na Evolution:**
+```bash
+curl -X POST https://disparo.mentoark.com.br/webhook/set/crm_65aba552 \
+  -H "apikey: mentoark2025evolutionkey" \
+  -H "Content-Type: application/json" \
+  -d '{"webhook":{"url":"https://api.mentoark.com.br/webhook/evolution","enabled":true,"byEvents":false,"base64":true,"events":["MESSAGES_UPSERT","CONNECTION_UPDATE","QRCODE_UPDATED"]}}'
+```
 
-**`src/components/WhatsAppInterface.tsx`**
-- Mesma troca do token (linha 28).
-- No empty state, transformar o botão "Conectar WhatsApp" em link para `/whatsapp?tab=instancias` (mantendo o modal inline como atalho secundário).
+**b) Vincular instância ao agente do user mentoark:**
+```bash
+docker exec -i $(docker ps -qf name=postgres) psql -U mentoark -d crm -c \
+  "UPDATE agentes SET evolution_instancia='crm_65aba552', evolution_server_url='https://disparo.mentoark.com.br', evolution_api_key='mentoark2025evolutionkey' WHERE user_id='65aba552-7d7e-4bd5-8017-6d0679d48cf1';"
+```
 
-**`src/pages/WhatsApp.tsx`**
-- Ler `?tab=` via `useSearchParams` e usar como `value` controlado das tabs (sidebar já manda `/whatsapp?tab=caixa` — vai passar a funcionar de verdade).
-- Aceitar valores: `conversas`, `caixa`, `instancias`, `diagnostico`.
+Depois disso, qualquer mensagem nova chegando no WhatsApp Mentoark cai em `whatsapp_messages` em ~5s e aparece em `/whatsapp` no CRM.
 
-**`src/components/AppSidebar.tsx`**
-- Adicionar item "Instâncias" no subgrupo "WhatsApp Chat" apontando para `/whatsapp?tab=instancias` com ícone `Smartphone`.
+### 3. Backfill das 4060 mensagens históricas (opcional)
+A Evolution já tem 4060 mensagens e 302 chats armazenados, mas o CRM começa vazio. Para ver o histórico, crio um endpoint admin `POST /api/whatsapp/sync-history` que:
 
-**`src/components/whatsapp/InstanceManagementPanel.tsx`**
-- Adicionar botão "+ Conectar nova instância" no header.
-- Adicionar `<Dialog>` com formulário (nome + país + telefone opcional) que reusa `createInstance()` do `evolutionService`.
-- Adicionar `<Dialog>` para mostrar QR Code + Pairing Code com botão "Atualizar".
-- Após `createInstance`, iniciar polling a cada 3s em `fetchConnectionStatus()` até `state === 'open'` (timeout 2min); ao conectar, fechar modal, toast de sucesso e recarregar lista.
-- Adicionar botão "Desconectar" em cada card existente (chama `disconnectInstance`).
+- Chama `GET /chat/findChats/{instancia}` + `POST /chat/findMessages/{instancia}` na Evolution
+- Persiste cada mensagem em `whatsapp_messages` com `ON CONFLICT (id) DO NOTHING`
+- Faz paginação em lotes de 100 para não estourar memória
+- Retorna `{ chats: N, messages: N, inseridos: N }`
 
-### Backend
+E adiciono um botão **"Importar histórico"** no `InstanceManagementPanel.tsx` que chama esse endpoint e mostra progresso via toast.
 
-**`backend/src/routes/whatsapp.ts`** — função `/api/whatsapp/connect`:
-- Adicionar a env `EVOLUTION_WEBHOOK_URL` (default: `https://api.mentoark.com.br/webhook/evolution`).
-- No payload do `/instance/create`, incluir bloco `webhook` (Evolution API v2 aceita inline):
-  ```ts
-  webhook: {
-    url: WEBHOOK_URL,
-    byEvents: false,
-    base64: true,
-    events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'],
-  }
-  ```
-- Como fallback para Evolution que ignora webhook inline, chamar logo depois `POST {base}/webhook/set/{instancia}` com o mesmo payload (idempotente — pode rodar sempre).
-- Quando reaproveitar instância já existente (branch "already exists" + reconnect), também rodar `/webhook/set` para garantir que está configurado.
+### 4. Limpeza das instâncias antigas
+`crm_ee747a2d` (connecting há 11 dias, 0 msgs) e `crm_d7b74de0` (device_removed) são lixo. Adiciono botão "Excluir instância" no painel que chama `DELETE /instance/delete/{instancia}` na Evolution.
 
-**Sem migração de banco** — `whatsapp_messages`, `agentes` e `webhook_mensagens_processadas` já têm as colunas necessárias.
+### 5. Validação final
+- Mando uma mensagem real para o número Mentoark
+- Confirmo no log do backend `[WEBHOOK] MESSAGES_UPSERT crm_65aba552`
+- Confirmo `SELECT count(*) FROM whatsapp_messages` > 0
+- Confirmo que a conversa aparece em `/whatsapp` na UI
 
-## Validação após implementar
+## O que muda no código
 
-1. Login → sidebar mostra "WhatsApp ▸ Instâncias" → clica → cai direto na aba certa.
-2. Aba Instâncias vazia mostra botão "+ Conectar nova" no topo.
-3. Clicar → modal nome/país/telefone → "Gerar QR Code" → modal QR aparece.
-4. Escanear no celular → toast "Conectado!" em até ~10s, modal fecha, card aparece no painel com status verde.
-5. Mandar mensagem do celular pro número → após ~5s aparece em /whatsapp (aba Conversas).
-6. Conferir no Evolution (`disparo.mentoark.com.br`) que a instância está com webhook setado para `api.mentoark.com.br/webhook/evolution`.
-
-## Notas
-
-- O backend roda em produção (`api.mentoark.com.br`). As mudanças em `backend/src/routes/whatsapp.ts` precisam ser deployadas com o procedimento do `CLAUDE.md` (scp + docker rebuild) — isso fica fora do que o Lovable faz no preview. Aviso isso quando terminar.
-- Nada de mudar `supabase/client.ts`, criar tabelas novas, nem mexer no Postgres.
+- **Nenhum arquivo novo no Lovable** — `whatsapp.ts` já está correto, só falta deploy.
+- **Backend (VPS)**: nova rota `POST /api/whatsapp/sync-history` e `DELETE /api/whatsapp/instances/:name` em `whatsapp.ts`.
+- **Frontend**: dois botões em `src/components/whatsapp/InstanceManagementPanel.tsx` (Importar histórico, Excluir instância).
