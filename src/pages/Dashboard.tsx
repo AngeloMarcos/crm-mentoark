@@ -21,6 +21,8 @@ import {
   ArrowUpRight,
   Sparkles,
   ExternalLink,
+  Bot,
+  Pause,
 } from "lucide-react";
 import {
   ResponsiveContainer,
