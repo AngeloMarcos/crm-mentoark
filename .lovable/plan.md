@@ -1,29 +1,44 @@
-## Correção de 3 bugs em produção
+## Contexto
+O campo `n8n_webhook_url` já está declarado na interface `Agente`, no `formInicial`, na função `abrirEditar()` e no payload do `salvar()`. Faltam apenas dois ajustes visuais.
 
-### BUG 1 — Tipo `atendimento_ia` (boolean → string)
+## Alterações
 
-**src/pages/ContatoDetalhe.tsx**
-- Linha 209: `atendimento_ia: boolean | null` → `atendimento_ia: string | null`
-- Linha 360: `const iaAtiva = contato.atendimento_ia === true` → `const iaAtiva = contato.atendimento_ia === 'ativo' || contato.atendimento_ia === 'reativada'`
+### 1. Mover campo n8n_webhook_url para aba WhatsApp
+Atualmente o campo está na aba "Integração" (linha 663). O usuário pede para movê-lo para a aba "WhatsApp", logo após o campo "Nome da Instância" (~linha 647).
 
-**src/pages/Contatos.tsx**
-- Interface `DadoCliente.atendimento_ia` já está tipado como `boolean | string | null` — restringir para `string | null`.
-- O helper `getIaStatus` já trata strings corretamente, mas remover os ramos `=== true` / `=== false` por consistência com o novo schema.
+**Remover de:** `TabsContent value="integracao"` (linhas 663–677)
+**Adicionar em:** `TabsContent value="whatsapp"`, após o campo `evolution_instancia` (após linha 647)
 
-### BUG 2 — Tabela errada em `Contatos.tsx`
+Código a inserir:
+```tsx
+<div className="space-y-2">
+  <Label>URL do Webhook n8n</Label>
+  <Input
+    placeholder="https://seu-n8n.com/webhook/..."
+    value={form.n8n_webhook_url}
+    onChange={e => setForm(f => ({ ...f, n8n_webhook_url: e.target.value }))}
+  />
+  <p className="text-xs text-muted-foreground">
+    Quando preenchido, mensagens são processadas pelo n8n em vez da IA interna.
+  </p>
+</div>
+```
 
-**src/pages/Contatos.tsx** (linhas ~80-90, dentro de `fetchContatos`):
-- Trocar `api.from("contatos").select("*")` por `api.from("dados_cliente").select("id, user_id, nomewpp, telefone, \"Setor\", atendimento_ia, created_at")`.
-- Manter `navigate(\`/contatos/${c.id}\`)` (já está assim).
-- A query atual não filtra por `user_id` — manter como está (backend filtra via JWT, conforme regra do projeto).
+### 2. Atualizar badges de listagem (~linha 338)
+Substituir o badge atual de status n8n/IA Interna pelos estilos solicitados:
 
-### BUG 3 — `toggleIA` envia boolean para campo TEXT
+```tsx
+{a.n8n_webhook_url && (
+  <Badge variant="outline" className="text-blue-600 border-blue-300 bg-blue-50 text-xs">
+    Via n8n
+  </Badge>
+)}
+{!a.n8n_webhook_url && (
+  <Badge variant="outline" className="text-gray-500 text-xs">
+    IA Interna
+  </Badge>
+)}
+```
 
-**src/pages/ContatoDetalhe.tsx** (função `toggleIA`, linhas 310-335):
-- Remover o bloco `api.from("dados_cliente").update({ atendimento_ia: active })`.
-- Substituir por `fetch` PATCH para `/api/contatos/:id/pausa-ia` com body `{ acao: active ? "reativar" : "pausar", duracaoMinutos: 30 }`.
-- Importar `authHeader` de `@/lib/api-token` (ainda não importado).
-- Usar a constante `API_BASE` já definida na linha 25.
-- Após sucesso, atualizar `setContato({ ...contato, atendimento_ia: data.atendimento_ia })`.
-
-Nenhuma alteração de feature, apenas correção de tipos, tabela e endpoint.
+## Arquivo
+- `src/pages/Agentes.tsx`
