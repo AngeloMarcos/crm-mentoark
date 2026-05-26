@@ -56,7 +56,11 @@ export default function DisparosPage() {
   // Live contact count — recalcula sempre que os filtros mudam
   useEffect(() => {
     const fetchCount = async () => {
-      if (form.tags_selecionadas.length === 0 && form.estagios_selecionados.length === 0) {
+      if (
+        form.tags_selecionadas.length === 0 &&
+        form.estagios_selecionados.length === 0 &&
+        form.listas_selecionadas.length === 0
+      ) {
         setTargetContacts([]);
         return;
       }
@@ -78,12 +82,19 @@ export default function DisparosPage() {
           .in("funil_estagio_id", form.estagios_selecionados);
         if (data) list = [...list, ...data];
       }
+      if (form.listas_selecionadas.length > 0) {
+        const { data } = await api
+          .from("contatos")
+          .select("id, nome, telefone, lista_id")
+          .in("lista_id", form.listas_selecionadas);
+        if (data) list = [...list, ...data];
+      }
       const unique = Array.from(new Map(list.map(c => [c.telefone, c])).values());
       setTargetContacts(unique);
       setLoadingCount(false);
     };
     fetchCount();
-  }, [form.tags_selecionadas, form.estagios_selecionados]);
+  }, [form.tags_selecionadas, form.estagios_selecionados, form.listas_selecionadas]);
 
   // Validação por etapa — habilita "Próximo" só quando OK
   const stepValid = useMemo(() => {
