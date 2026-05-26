@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getAuthToken } from "@/lib/api-token";
+import { getAuthToken, authHeader } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
