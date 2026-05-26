@@ -201,6 +201,50 @@ export function InstanceManagementPanel() {
     }
   };
 
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const handleSyncHistory = async (a: Agente) => {
+    if (!a.evolution_instancia) return;
+    if (!confirm(`Importar histórico de mensagens da instância "${a.nome}"? Pode levar alguns segundos.`)) return;
+    try {
+      setSyncing(a.id);
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/sync-history`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+        body: JSON.stringify({ instancia: a.evolution_instancia }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Falha ao importar");
+      toast.success(`✅ ${json.inseridos} mensagens importadas (${json.chats} chats, ${json.messages} totais)`);
+    } catch (e: any) {
+      toast.error(`Erro ao importar: ${e.message}`);
+    } finally {
+      setSyncing(null);
+    }
+  };
+
+  const handleDeleteInstance = async (a: Agente) => {
+    if (!a.evolution_instancia) return;
+    if (!confirm(`Excluir definitivamente a instância "${a.evolution_instancia}" da Evolution? Esta ação é irreversível.`)) return;
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/instances/${encodeURIComponent(a.evolution_instancia)}`, {
+        method: "DELETE",
+        headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.message || "Falha ao excluir");
+      }
+      toast.success("Instância removida");
+      carregar();
+    } catch (e: any) {
+      toast.error(`Erro ao excluir: ${e.message}`);
+    }
+  };
+
 
 
   const carregar = async () => {
