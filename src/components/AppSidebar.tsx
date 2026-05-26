@@ -210,8 +210,8 @@ function NavSubgroupSection({
                     title={item.title}
                     className={`group relative flex items-center justify-center px-2 py-2 rounded-lg transition-all ${
                       active
-                        ? "gradient-brand-subtle shadow-[inset_0_0_0_1px_hsl(262_83%_58%/0.18),0_0_12px_hsl(262_83%_58%/0.12)]"
-                        : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(262_83%_58%/0.05)]"
+                        ? "gradient-brand-subtle shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.18),0_0_12px_hsl(217_91%_45%/0.12)]"
+                        : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.05)]"
                     }`}
                   >
                   <item.icon className={`h-5 w-5 ${active ? item.color : "text-muted-foreground"}`} />
@@ -234,7 +234,7 @@ function NavSubgroupSection({
             : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_1px_hsl(262_83%_58%/0.03)]"
         }`}
       >
-        <Icon className={`h-[18px] w-[18px] shrink-0 transition-all duration-300 ${hasActive ? subgroup.color + " drop-shadow-[0_0_4px_hsl(262_83%_58%/0.25)] scale-105" : "text-muted-foreground"}`} />
+        <Icon className={`h-[18px] w-[18px] shrink-0 transition-all duration-300 ${hasActive ? subgroup.color + " drop-shadow-[0_0_4px_hsl(217_91%_45%/0.25)] scale-105" : "text-muted-foreground"}`} />
         <span className={`flex-1 text-left text-sm font-medium ${hasActive ? "gradient-brand-text" : "text-sidebar-foreground"}`}>
           {subgroup.label}
         </span>
@@ -261,11 +261,11 @@ function NavSubgroupSection({
                       }`}
                     >
                       {active && (
-                        <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(262_83%_58%/0.7)]" />
+                        <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(217_91%_45%/0.7)]" />
                       )}
                       <item.icon
                         className={`h-4 w-4 shrink-0 transition-all duration-300 ${
-                          active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(262_83%_58%/0.3)]" : "text-muted-foreground group-hover:" + item.color
+                          active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(217_91%_45%/0.3)]" : "text-muted-foreground group-hover:" + item.color
                         }`}
                       />
                       <span className={`text-[13px] ${active ? "gradient-brand-text" : ""}`}>{item.title}</span>
