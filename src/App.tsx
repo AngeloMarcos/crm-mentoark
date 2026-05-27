@@ -42,6 +42,7 @@ import TestesPausa from "./pages/TestesPausa";
 import SimuladorWebhook from "./pages/SimuladorWebhook";
 import TesteConversas from "./pages/TesteConversas";
 import MonitorWhatsApp from "./pages/MonitorWhatsApp";
+import PerfilPage from "./pages/Perfil";
 
 const queryClient = new QueryClient();
 
