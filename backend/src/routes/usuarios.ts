@@ -1,8 +1,10 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
+import bcrypt from 'bcryptjs';
 import { AuthRequest, adminMiddleware } from '../middleware';
 
 export default function usuarios(pool: Pool): Router {
+
   const router = Router();
 
   // ----- Virtual table: profiles -----
