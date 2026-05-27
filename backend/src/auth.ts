@@ -213,6 +213,65 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// PATCH /auth/me — atualiza display_name, avatar_url e/ou senha do usuário logado
+router.patch('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { display_name, avatar_url, current_password, new_password } = req.body || {};
+
+    // Troca de senha (opcional)
+    if (new_password) {
+      if (!current_password) {
+        return res.status(400).json({ message: 'Senha atual é obrigatória para alterar a senha' });
+      }
+      if (String(new_password).length < 8) {
+        return res.status(400).json({ message: 'Nova senha deve ter pelo menos 8 caracteres' });
+      }
+      const check = await pool.query(
+        "SELECT crypt($1, password_hash) = password_hash AS ok FROM users WHERE id = $2",
+        [current_password, req.userId]
+      );
+      if (!check.rows[0]?.ok) {
+        return res.status(401).json({ message: 'Senha atual incorreta' });
+      }
+      const hash = await bcrypt.hash(String(new_password), 10);
+      await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.userId]);
+    }
+
+    // Validar avatar_url (aceita http(s) ou data URL de imagem, max ~600KB)
+    if (avatar_url !== undefined && avatar_url !== null && avatar_url !== '') {
+      const ok =
+        /^https?:\/\//i.test(String(avatar_url)) ||
+        /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(String(avatar_url));
+      if (!ok) {
+        return res.status(400).json({ message: 'avatar_url inválido (use URL ou data URL de imagem)' });
+      }
+      if (String(avatar_url).length > 800_000) {
+        return res.status(413).json({ message: 'Imagem muito grande — máximo ~600KB. Reduza antes de enviar.' });
+      }
+    }
+
+    const fields: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+    if (display_name !== undefined) { fields.push(`display_name = $${idx++}`); params.push(String(display_name).trim().slice(0, 120)); }
+    if (avatar_url   !== undefined) { fields.push(`avatar_url = $${idx++}`);   params.push(avatar_url || null); }
+
+    if (fields.length) {
+      params.push(req.userId);
+      await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id = $${idx}`, params);
+    }
+
+    const { rows } = await pool.query(
+      'SELECT id, email, display_name, avatar_url, role FROM users WHERE id = $1',
+      [req.userId]
+    );
+    return res.json(mapUser(rows[0]));
+  } catch (err: any) {
+    console.error('[PATCH /auth/me]', err.message);
+    return res.status(500).json({ message: 'Erro interno' });
+  }
+});
+
 // POST /auth/turnstile-verify
 // Verifica o token Turnstile gerado no frontend
 router.post('/turnstile-verify', async (req, res) => {
