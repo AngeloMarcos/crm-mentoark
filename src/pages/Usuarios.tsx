@@ -426,6 +426,64 @@ export default function UsuariosPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Confirmação de exclusão */}
+      <AlertDialog open={!!userExcluir} onOpenChange={(o) => !o && setUserExcluir(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir usuário?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação é permanente. O usuário <strong>{userExcluir?.email}</strong> e
+              todos os seus dados associados serão removidos.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={excluindo}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); confirmarExcluir(); }}
+              disabled={excluindo}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {excluindo ? <Loader2 className="h-4 w-4 animate-spin" /> : "Excluir"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reset de senha */}
+      <Dialog open={!!userResetar} onOpenChange={(o) => { if (!o) { setUserResetar(null); setNovaSenha(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-primary" />
+              Redefinir senha
+            </DialogTitle>
+            <DialogDescription>
+              Defina uma nova senha para <strong>{userResetar?.email}</strong>. O usuário
+              poderá usá-la imediatamente para entrar.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="nova-senha">Nova senha</Label>
+            <Input
+              id="nova-senha"
+              type="text"
+              value={novaSenha}
+              onChange={(e) => setNovaSenha(e.target.value)}
+              placeholder="Mínimo 6 caracteres"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setUserResetar(null); setNovaSenha(""); }} disabled={resetando}>
+              Cancelar
+            </Button>
+            <Button onClick={confirmarResetSenha} disabled={resetando || novaSenha.length < 6}>
+              {resetando ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar nova senha"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </CRMLayout>
   );
 }
