@@ -747,6 +747,97 @@ export type Database = {
         }
         Relationships: []
       }
+      equipe_chat: {
+        Row: {
+          conteudo: string
+          created_at: string
+          equipe_id: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          conteudo: string
+          created_at?: string
+          equipe_id: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          conteudo?: string
+          created_at?: string
+          equipe_id?: string
+          id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "equipe_chat_equipe_id_fkey"
+            columns: ["equipe_id"]
+            isOneToOne: false
+            referencedRelation: "equipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      equipe_membros: {
+        Row: {
+          convidado_por: string | null
+          equipe_id: string
+          id: string
+          joined_at: string
+          role: string
+          user_id: string
+        }
+        Insert: {
+          convidado_por?: string | null
+          equipe_id: string
+          id?: string
+          joined_at?: string
+          role?: string
+          user_id: string
+        }
+        Update: {
+          convidado_por?: string | null
+          equipe_id?: string
+          id?: string
+          joined_at?: string
+          role?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "equipe_membros_equipe_id_fkey"
+            columns: ["equipe_id"]
+            isOneToOne: false
+            referencedRelation: "equipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      equipes: {
+        Row: {
+          created_at: string
+          id: string
+          nome: string
+          owner_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          nome: string
+          owner_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          nome?: string
+          owner_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       evolution_instances: {
         Row: {
           api_response: Json | null
