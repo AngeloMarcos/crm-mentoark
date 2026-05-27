@@ -16,6 +16,17 @@ export default function leadsBuscarRouter(pool: Pool): Router {
   const router = Router();
 
   router.post('/buscar', async (req: AuthRequest, res) => {
+    const userId = req.userId!;
+    
+    // Bloqueia busca para membros
+    const equipeRes = await pool.query(
+      `SELECT role FROM equipe_membros WHERE user_id = $1 LIMIT 1`,
+      [userId]
+    );
+    if (equipeRes.rowCount > 0 && equipeRes.rows[0].role === 'membro') {
+      return res.status(403).json({ error: 'Membros não têm permissão para buscar novos leads' });
+    }
+
     const {
       segmento,
       cidade,

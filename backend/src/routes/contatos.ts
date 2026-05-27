@@ -9,10 +9,18 @@ export default function contatos(pool: Pool): Router {
   // Override GET / to support text search via ?search=
   router.get('/', async (req: AuthRequest, res: Response) => {
     try {
-      const userId = req.userId;
+      const userId = req.userId!;
+      
+      // Verifica se é membro
+      const equipeRes = await pool.query(
+        `SELECT role FROM equipe_membros WHERE user_id = $1 LIMIT 1`,
+        [userId]
+      );
+      const isMembro = equipeRes.rowCount > 0 && equipeRes.rows[0].role === 'membro';
+
       const params: any[] = [userId];
       let idx = 2;
-      const conditions: string[] = ['user_id = $1'];
+      const conditions: string[] = [isMembro ? 'atribuido_a = $1' : 'user_id = $1'];
 
       if (req.query.lista_id) {
         conditions.push(`lista_id = $${idx++}`);
