@@ -62,6 +62,7 @@ import teamRouter, { teamInvitePublicRouter } from './routes/team';
 import equipeRouter from './routes/equipe';
 import subPerfisRouter from './routes/subperfis';
 import kanbanRouter from './routes/kanban';
+import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -118,6 +119,41 @@ app.use('/mcp', (req, res, next) => {
   next();
 }, mcpRouter(pool));
 app.use('/api/marketing', marketing.public); // Public part of marketing (callback, webhook)
+
+// ── Rotas n8n (x-n8n-secret, sem JWT) ─────────────────────────────────────
+app.use('/api/n8n', n8nRouter(pool));
+
+// Alias item 1: GET /api/agentes/by-instancia/:instancia
+app.get('/api/agentes/by-instancia/:instancia', n8nSecretMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, user_id, nome, modelo, temperatura, max_tokens, n8n_webhook_url
+       FROM agentes WHERE evolution_instancia = $1 AND ativo = true LIMIT 1`,
+      [req.params.instancia]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Agente não encontrado' });
+    return res.json(r.rows[0]);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
+});
+
+// Alias item 2: GET /api/agent_prompts/ativo?user_id=xxx
+app.get('/api/agent_prompts/ativo', n8nSecretMiddleware, async (req, res) => {
+  const userId = req.query.user_id as string;
+  if (!userId) return res.status(400).json({ error: 'user_id é obrigatório' });
+  try {
+    const r = await pool.query(
+      `SELECT id, nome, conteudo, ativo FROM agent_prompts
+       WHERE user_id = $1 AND ativo = true LIMIT 1`,
+      [userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Prompt ativo não encontrado' });
+    return res.json(r.rows[0]);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
+});
 
 // Endpoint do catálogo para n8n — protegido por segredo compartilhado
 app.get('/api/catalogo/n8n/:userId', async (req, res) => {
@@ -190,6 +226,7 @@ const SIMPLE_TABLES = [
   'tags',
   'funil_estagios',
   'follow_ups',
+  'workflows',
 ];
 for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
@@ -225,6 +262,24 @@ app.use('/api/kanban', kanbanRouter(pool));
 app.use('/api', usuariosRouter(pool));
 
 // ── Security Panel endpoints ─────────────────────────────────
+
+// GET /api/seguranca/logins-recentes — refresh_tokens dos últimos 30 dias (admin)
+app.get('/api/seguranca/logins-recentes', authMiddleware, adminMiddleware, async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT rt.user_id, u.email, rt.created_at, rt.expires_at, rt.revoked
+       FROM refresh_tokens rt
+       LEFT JOIN users u ON u.id = rt.user_id
+       WHERE rt.created_at > NOW() - INTERVAL '30 days'
+       ORDER BY rt.created_at DESC
+       LIMIT 200`
+    );
+    res.json(r.rows);
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 app.get('/api/seguranca/status-chaves', authMiddleware, adminMiddleware, (_req, res) => {
   const chaves = [
     { chave: 'JWT_SECRET',            configurado: !!process.env.JWT_SECRET },

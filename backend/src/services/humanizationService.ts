@@ -1,17 +1,5 @@
-// ============================================================
-// HUMANIZAÇÃO DE MENSAGENS COM CHATGPT (OpenAI)
-// Varia o texto de cada disparo para reduzir risco de bloqueio
-// ============================================================
-//
-// Requer OPENAI_API_KEY no ambiente do backend.
-// Se a chave não estiver configurada, retorna o texto original.
-// Modelo padrão: gpt-4o-mini (rápido e barato). Override via OPENAI_MODEL.
-// ============================================================
-
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-
-// Cache em memória: chave = primeiros 100 chars da base, valor = variações já geradas
 const cache = new Map<string, string[]>();
 const CACHE_MAX = 20;
 
@@ -33,7 +21,6 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
   const cacheKey = mensagemBase.trim().substring(0, 100);
   const variacoes = cache.get(cacheKey) || [];
 
-  // Se já temos variações, retorna uma aleatória (economiza tokens em campanhas grandes)
   if (variacoes.length >= 5 && Math.random() < 0.7) {
     return variacoes[Math.floor(Math.random() * variacoes.length)];
   }
@@ -66,7 +53,6 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
     const texto = data?.choices?.[0]?.message?.content?.trim();
     if (!texto) return mensagemBase;
 
-    // Atualiza cache
     variacoes.push(texto);
     if (variacoes.length > CACHE_MAX) variacoes.shift();
     cache.set(cacheKey, variacoes);

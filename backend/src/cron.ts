@@ -64,5 +64,18 @@ export function initCronJobs() {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // A cada 5 minutos — reativar pausas de IA expiradas
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const r = await pool.query(`SELECT reativar_pausas_expiradas() AS reativados`);
+      const count = Number(r.rows[0]?.reativados ?? 0);
+      if (count > 0) {
+        console.log(`[CRON] ${count} pausa(s) de IA reativada(s) automaticamente`);
+      }
+    } catch (err: any) {
+      console.error('[CRON] Erro ao reativar pausas:', err.message);
+    }
+  });
+
   console.log('[CRON] Jobs de limpeza e retenção LGPD registrados');
 }

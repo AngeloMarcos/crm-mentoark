@@ -11,7 +11,24 @@
       "PowerShell(ssh -o StrictHostKeyChecking=no root@147.93.9.172 *)",
       "PowerShell(scp -o StrictHostKeyChecking=no *)",
       "PowerShell(Get-ChildItem *)",
-      "PowerShell(where.exe *)"
+      "PowerShell(where.exe *)",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh *)",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' scp *)",
+      "PowerShell(wsl -u root -- sshpass *)",
+      "PowerShell(wsl -u root -- apt-get *)",
+      "PowerShell(wsl which *)",
+      "PowerShell(wsl whoami *)",
+      "PowerShell(wsl id *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Get-Module *)",
+      "PowerShell(Install-Module *)",
+      "PowerShell(Import-Module *)",
+      "PowerShell(cd *)",
+      "PowerShell(git status *)",
+      "PowerShell(git diff *)",
+      "PowerShell(git log *)",
+      "PowerShell(git stash *)"
     ]
   },
   "hooks": {

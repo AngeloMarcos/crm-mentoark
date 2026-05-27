@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(wsl which sshpass)",
+      "PowerShell(wsl apt-get install -y sshpass)",
+      "PowerShell(wsl sudo apt-get install -y sshpass)",
+      "PowerShell(python --version)",
+      "PowerShell(python -c \"import paramiko; print\\('paramiko OK'\\)\" 2>$null)",
+      "PowerShell(wsl python3 --version)",
+      "PowerShell(wsl python3 -c \"import paramiko; print\\('paramiko OK'\\)\")",
+      "PowerShell(wsl pip3 install paramiko --quiet --break-system-packages)",
+      "PowerShell(wsl python3 -m pip install paramiko --quiet --break-system-packages)",
+      "PowerShell(wsl uv --version)",
+      "PowerShell(wsl pipx --version)",
+      "PowerShell(wsl whoami)",
+      "PowerShell(wsl id)",
+      "PowerShell(Install-Module Posh-SSH -Force -Scope CurrentUser -AllowClobber 2>&1 | Select-Object -Last 5)",
+      "PowerShell(Import-Module Posh-SSH; Get-Module Posh-SSH | Select-Object Name, Version)",
+      "PowerShell(wsl -u root -- apt-get install -y sshpass 2>&1)",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'echo \"SSH OK\" && cat /opt/crm/backend/.env | grep -v \"KEY\\\\|SECRET\\\\|PASS\\\\|TOKEN\" | head -20')",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'cat /opt/crm/backend/.env')",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'grep -c \"OPENAI_MODEL\\\\|N8N_SECRET\" /opt/crm/backend/.env')",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'grep \"OPENAI_MODEL\\\\|N8N_SECRET\" /opt/crm/backend/.env || echo \"NOT_FOUND\"')",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'grep -q \"^OPENAI_MODEL=\" /opt/crm/backend/.env || echo \"OPENAI_MODEL=gpt-4o-mini\" >> /opt/crm/backend/.env; grep -q \"^N8N_SECRET=\" /opt/crm/backend/.env || echo \"N8N_SECRET=44a7e8fb5b3f64bad08158179e43f94312da1c6b327f3c5a574d0d03fca96864\" >> /opt/crm/backend/.env; echo \"ENV_OK\"')",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'cd /opt/crm/backend && docker compose build --no-cache 2>&1 | tail -10 && docker compose up -d 2>&1 | tail -5')",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'cd /opt/crm && docker compose build --no-cache 2>&1 | tail -10 && docker compose up -d 2>&1 | tail -5')",
+      "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'docker logs crm-api --tail 30 2>&1')"
+    ]
+  }
+}

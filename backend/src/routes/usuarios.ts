@@ -81,6 +81,19 @@ export default function usuarios(pool: Pool): Router {
     }
   });
 
+  // ----- Virtual table: user_modulos -----
+  // GET /api/user_modulos — returns all user module assignments (admin only)
+  router.get('/user_modulos', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT user_id, modulo, ativo FROM user_modulos ORDER BY user_id, modulo`
+      );
+      return res.json(r.rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // DELETE /api/user_roles — remove admin (reset to 'user')
   router.delete('/user_roles', adminMiddleware, async (req: AuthRequest, res: Response) => {
     try {

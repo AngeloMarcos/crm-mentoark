@@ -84,14 +84,13 @@ export default function CentralBIPage() {
     if (!user) return;
     setRefreshing(true);
     try {
-      const [c, l, ca, co] = await Promise.all([
+      const [c, ca, co] = await Promise.all([
         api.from("contatos").select("*").eq("user_id", user.id),
-        api.from("leads").select("*").eq("user_id", user.id),
         api.from("campanhas").select("*").eq("user_id", user.id),
-        api.from("conversas").select("*").eq("user_id", user.id).limit(500),
+        api.from("chat_messages").select("*").eq("user_id", user.id).limit(500),
       ]);
       setContatos((c.data as any[]) || []);
-      setLeads((l.data as any[]) || []);
+      setLeads([]);
       setCampanhas((ca.data as any[]) || []);
       setConversas((co.data as any[]) || []);
     } catch (e: any) {

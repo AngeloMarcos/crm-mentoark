@@ -27,15 +27,14 @@ const MASTERS: string[] = (process.env.MASTER_EMAILS || 'angelobispofilho@gmail.
 const isMaster = (email?: string | null): boolean =>
   !!email && MASTERS.includes(email.toLowerCase());
 
+
 export default function modulosRouter(pool: Pool): Router {
   const router = Router();
 
   // ── GET /api/modulos ─────────────────────────────────────────────────────
-  // Retorna os módulos habilitados para o usuário autenticado.
-  // Admins (masters) recebem todos os módulos automaticamente.
   router.get('/', async (req: AuthRequest, res: Response) => {
     try {
-      // Masters: retorna tudo sem consultar a tabela
+      // Admins e masters têm acesso a todos os módulos
       if (req.userRole === 'admin' || isMaster(req.userEmail)) {
         return res.json(TODOS_MODULOS.map(m => m.key));
       }

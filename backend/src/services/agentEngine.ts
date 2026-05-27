@@ -156,6 +156,18 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
     return;
   }
 
+  // 2b. Verificar pausa de IA (atendimento humano ativo)
+  const pausaRes = await pool.query(
+    `SELECT atendimento_ia FROM dados_cliente
+     WHERE user_id = $1 AND telefone ILIKE $2
+     LIMIT 1`,
+    [agente.user_id, `%${entrada.telefone.slice(-11)}`]
+  ).catch(() => ({ rows: [] as any[] }));
+  if (pausaRes.rows[0]?.atendimento_ia === 'pause') {
+    console.log(`[AGT] IA pausada para ${entrada.telefone} — atendimento humano ativo`);
+    return;
+  }
+
   // 3. Carregar prompt ativo do agente
   const promptRes = await pool.query(
     `SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`,

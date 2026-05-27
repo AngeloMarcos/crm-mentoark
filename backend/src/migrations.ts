@@ -19,17 +19,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
       timestamp_unix BIGINT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
-  `);
+  `).catch(() => {});
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_wamsg_user_session
     ON whatsapp_messages (user_id, session_id, created_at DESC)
-  `);
+  `).catch(() => {});
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_wamsg_user_instancia
     ON whatsapp_messages (user_id, instancia, created_at DESC)
-  `);
+  `).catch(() => {});
 
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS push_name TEXT`);
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS profile_pic_url TEXT`);
@@ -462,6 +462,28 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
 
+  // Coluna para filtrar contatos por estágio do funil no disparo
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS funil_estagio_id UUID`).catch(() => {});
+
+  // Coluna humanizar_ia para disparos (humanização via Claude Haiku)
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS humanizar_ia BOOLEAN DEFAULT false`).catch(() => {});
+
+  // Tabela de permissões de módulos por usuário
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_modulos (
+      id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id    UUID NOT NULL,
+      modulo     TEXT NOT NULL,
+      ativo      BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, modulo)
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_modulos_user
+    ON user_modulos (user_id, ativo)
+  `).catch(() => {});
+
   // ── Função get_next_disparo_batch para o processador ───────────────────────
   await pool.query(`
     CREATE OR REPLACE FUNCTION get_next_disparo_batch(batch_size INTEGER)
@@ -521,6 +543,283 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // Colunas de score em agentes
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS evolution_instancia TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS whatsapp_score INTEGER DEFAULT 100`).catch(() => {});
+
+  // ── Tabela de Workflows ──────────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS workflows (
+      id          UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      nome        TEXT NOT NULL DEFAULT 'Novo Workflow',
+      descricao   TEXT,
+      ativo       BOOLEAN NOT NULL DEFAULT false,
+      nodes       JSONB NOT NULL DEFAULT '[]',
+      edges       JSONB NOT NULL DEFAULT '[]',
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_workflows_user
+    ON workflows (user_id, updated_at DESC)
+  `).catch(() => {});
+
+  // ── FKs faltantes para integridade referencial ───────────────────────────
+  // Idempotentes: falham silenciosamente se já existirem
+  const fksMissing = [
+    `ALTER TABLE follow_ups         ADD CONSTRAINT fk_follow_ups_user         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE funil_estagios     ADD CONSTRAINT fk_funil_estagios_user     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE tags               ADD CONSTRAINT fk_tags_user               FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE respostas_rapidas  ADD CONSTRAINT fk_respostas_rapidas_user  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE galeria_midias     ADD CONSTRAINT fk_galeria_midias_user     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE whatsapp_messages  ADD CONSTRAINT fk_whatsapp_messages_user  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE catalogos          ADD CONSTRAINT fk_catalogos_user          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE produtos           ADD CONSTRAINT fk_produtos_user           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE produto_imagens    ADD CONSTRAINT fk_produto_imagens_user    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE facebook_contas    ADD CONSTRAINT fk_facebook_contas_user    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE facebook_campanhas ADD CONSTRAINT fk_facebook_campanhas_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE marketing_leads    ADD CONSTRAINT fk_marketing_leads_user    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE disparo_optouts    ADD CONSTRAINT fk_disparo_optouts_user    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE disparo_rate_limit ADD CONSTRAINT fk_disparo_rate_limit_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE opt_out_contatos   ADD CONSTRAINT fk_opt_out_contatos_user   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+  ];
+  for (const sql of fksMissing) {
+    await pool.query(sql).catch(() => {}); // já existe → ignora
+  }
+
+  // ── Remover índices duplicados em users.email (se ainda existirem) ───────
+  await pool.query(`DROP INDEX IF EXISTS idx_users_email`).catch(() => {});
+  await pool.query(`DROP INDEX IF EXISTS idx_users_email_unique`).catch(() => {});
+
+  // ── Sprint CRM+n8n: Unificação de banco ──────────────────────────────────
+
+  // 1. Migrar dados_cliente.atendimento_ia de BOOLEAN → TEXT
+  {
+    const col = await pool.query(`
+      SELECT data_type FROM information_schema.columns
+      WHERE table_name = 'dados_cliente' AND column_name = 'atendimento_ia'
+    `).catch(() => ({ rows: [] as any[] }));
+    if (col.rows[0]?.data_type === 'boolean') {
+      await pool.query(`
+        ALTER TABLE dados_cliente
+          ALTER COLUMN atendimento_ia TYPE TEXT
+          USING (CASE WHEN atendimento_ia THEN 'pause' ELSE 'ativo' END)
+      `).catch(err => console.warn('[MIGRATIONS] atendimento_ia migration:', err.message));
+      await pool.query(`
+        ALTER TABLE dados_cliente
+          ALTER COLUMN atendimento_ia SET DEFAULT 'ativo'
+      `).catch(() => {});
+      console.log('[MIGRATIONS] atendimento_ia migrado de BOOLEAN → TEXT');
+    }
+  }
+
+  // 2. Colunas de pausa automática em dados_cliente
+  await pool.query(`ALTER TABLE dados_cliente ADD COLUMN IF NOT EXISTS pausa_timestamp    TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE dados_cliente ADD COLUMN IF NOT EXISTS pausa_duracao_min  INTEGER DEFAULT 30`).catch(() => {});
+  await pool.query(`ALTER TABLE dados_cliente ADD COLUMN IF NOT EXISTS pausa_atendente_id UUID`).catch(() => {});
+
+  // 3. Tabela de auditoria de pausas de IA
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ia_pausa_log (
+      id             UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id        UUID NOT NULL,
+      contato_id     UUID,
+      telefone       TEXT,
+      atendente_id   UUID,
+      acao           TEXT NOT NULL CHECK (acao IN ('pause', 'ativo', 'auto_reativado')),
+      duracao_min    INTEGER,
+      observacao     TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ia_pausa_log_user
+    ON ia_pausa_log (user_id, created_at DESC)
+  `).catch(() => {});
+
+  // 4. Colunas n8n/IA em agentes
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS modelo              TEXT    DEFAULT 'claude-haiku-4-5-20251001'`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS temperatura         NUMERIC DEFAULT 0.7`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS max_tokens          INTEGER DEFAULT 1024`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS rag_ativo           BOOLEAN DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS rag_threshold       NUMERIC DEFAULT 0.75`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS rag_resultados      INTEGER DEFAULT 3`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS evolution_api_key   TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS evolution_server_url TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ativo               BOOLEAN DEFAULT true`).catch(() => {});
+
+  // 5. Índice único em agentes.evolution_instancia (null não conflita)
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agentes_evolution_instancia
+    ON agentes (user_id, evolution_instancia)
+    WHERE evolution_instancia IS NOT NULL
+  `).catch(() => {});
+
+  // 6. Índice único em agent_prompts: um prompt ativo por usuário
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_prompts_user_ativo
+    ON agent_prompts (user_id)
+    WHERE ativo = true
+  `).catch(() => {});
+
+  // 7. Colunas e índices em n8n_chat_histories para multi-tenant
+  await pool.query(`ALTER TABLE n8n_chat_histories ADD COLUMN IF NOT EXISTS user_id   UUID`).catch(() => {});
+  await pool.query(`ALTER TABLE n8n_chat_histories ADD COLUMN IF NOT EXISTS instancia  TEXT`).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_n8n_chat_user_session
+    ON n8n_chat_histories (user_id, session_id, created_at DESC)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_n8n_chat_instancia
+    ON n8n_chat_histories (instancia, created_at DESC)
+  `).catch(() => {});
+
+  // 8. Função PostgreSQL para reativar pausas expiradas (chamada pelo cron)
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION reativar_pausas_expiradas()
+    RETURNS INTEGER AS $$
+    DECLARE
+      reativados INTEGER := 0;
+    BEGIN
+      WITH expirados AS (
+        UPDATE dados_cliente
+        SET atendimento_ia   = 'ativo',
+            pausa_timestamp  = NULL,
+            pausa_duracao_min = NULL,
+            pausa_atendente_id = NULL
+        WHERE atendimento_ia = 'pause'
+          AND pausa_timestamp IS NOT NULL
+          AND pausa_timestamp + (pausa_duracao_min * INTERVAL '1 minute') < NOW()
+        RETURNING id, user_id, telefone
+      )
+      INSERT INTO ia_pausa_log (user_id, telefone, acao, observacao)
+      SELECT user_id, telefone, 'auto_reativado', 'Pausa expirada automaticamente'
+      FROM expirados;
+
+      GET DIAGNOSTICS reativados = ROW_COUNT;
+      RETURN reativados;
+    END;
+    $$ LANGUAGE plpgsql;
+  `).catch(err => console.warn('[MIGRATIONS] reativar_pausas_expiradas:', err.message));
+
+  // 9. Índices de performance para n8n + FK de ia_pausa_log + unique dados_cliente(user_id, telefone)
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_dados_cliente_pausa_ativa
+    ON dados_cliente (user_id, pausa_timestamp)
+    WHERE atendimento_ia = 'pause'
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_n8n_chat_session_desc
+    ON n8n_chat_histories (session_id, created_at DESC)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dados_cliente_user_telefone
+    ON dados_cliente (user_id, telefone)
+    WHERE telefone IS NOT NULL
+  `).catch(() => {});
+  // FK de ia_pausa_log → users
+  await pool.query(`
+    ALTER TABLE ia_pausa_log
+      ADD CONSTRAINT fk_ia_pausa_log_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  `).catch(() => {});
+
+  console.log('[MIGRATIONS] Sprint CRM+n8n concluído');
+
+  // ── Migration 002: whatsapp_messages ────────────────────────────────────
+
+  // Detecta schema antigo (colunas em PT) e dropa para recriar
+  {
+    const oldSchema = await pool.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'whatsapp_messages' AND column_name = 'instancia'
+    `).catch(() => ({ rows: [] as any[] }));
+    if (oldSchema.rows.length > 0) {
+      await pool.query(`DROP TABLE IF EXISTS whatsapp_messages CASCADE`).catch(() => {});
+      console.log('[MIGRATIONS] whatsapp_messages schema antigo removido');
+    }
+  }
+
+  // Tabela principal
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_messages (
+      id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      instance_name   TEXT        NOT NULL,
+      remote_jid      TEXT        NOT NULL,
+      message_id      TEXT        NOT NULL,
+      from_me         BOOLEAN     NOT NULL DEFAULT false,
+      message_type    TEXT        NOT NULL DEFAULT 'text',
+      content         TEXT,
+      media_url       TEXT,
+      media_mimetype  TEXT,
+      quoted_id       TEXT,
+      status          TEXT        NOT NULL DEFAULT 'received',
+      agent_id        UUID        REFERENCES agentes(id) ON DELETE SET NULL,
+      metadata        JSONB       NOT NULL DEFAULT '{}',
+      timestamp_wa    TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT uq_whatsapp_message UNIQUE (message_id, instance_name)
+    )
+  `).catch(() => {});
+
+  // Índices
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_conversation ON whatsapp_messages (user_id, remote_jid, timestamp_wa DESC NULLS LAST)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_instance ON whatsapp_messages (user_id, instance_name, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_status_pending ON whatsapp_messages (user_id, status) WHERE status IN ('pending', 'failed')`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_content_fts ON whatsapp_messages USING gin(to_tsvector('portuguese', coalesce(content, '')))`).catch(() => {});
+
+  // Trigger updated_at
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER LANGUAGE plpgsql AS $$
+    BEGIN NEW.updated_at = now(); RETURN NEW; END; $$
+  `).catch(() => {});
+  await pool.query(`DROP TRIGGER IF EXISTS trg_wa_messages_updated_at ON whatsapp_messages`).catch(() => {});
+  await pool.query(`
+    CREATE TRIGGER trg_wa_messages_updated_at
+      BEFORE UPDATE ON whatsapp_messages
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
+  `).catch(() => {});
+
+  // View de última mensagem por conversa
+  await pool.query(`
+    CREATE OR REPLACE VIEW whatsapp_conversations AS
+    SELECT DISTINCT ON (user_id, instance_name, remote_jid)
+      id, user_id, instance_name, remote_jid,
+      content AS ultima_mensagem, from_me AS ultima_foi_minha,
+      message_type AS ultimo_tipo, status AS ultimo_status,
+      timestamp_wa AS ultimo_timestamp, created_at AS ultimo_created_at
+    FROM whatsapp_messages
+    ORDER BY user_id, instance_name, remote_jid, timestamp_wa DESC NULLS LAST
+  `).catch(err => console.warn('[MIGRATIONS] whatsapp_conversations view:', err.message));
+
+  // Função para IA buscar histórico
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION get_conversation_history(
+      p_user_id    UUID,
+      p_remote_jid TEXT,
+      p_instance   TEXT  DEFAULT NULL,
+      p_limit      INT   DEFAULT 20
+    )
+    RETURNS TABLE (role TEXT, content TEXT, timestamp_wa TIMESTAMPTZ, message_type TEXT)
+    LANGUAGE sql STABLE AS $$
+      SELECT
+        CASE WHEN from_me THEN 'assistant' ELSE 'user' END AS role,
+        coalesce(content, '[' || message_type || ']')       AS content,
+        timestamp_wa,
+        message_type
+      FROM whatsapp_messages
+      WHERE user_id    = p_user_id
+        AND remote_jid = p_remote_jid
+        AND (p_instance IS NULL OR instance_name = p_instance)
+        AND content    IS NOT NULL
+        AND message_type = 'text'
+      ORDER BY timestamp_wa ASC NULLS LAST
+      LIMIT p_limit;
+    $$
+  `).catch(err => console.warn('[MIGRATIONS] get_conversation_history fn:', err.message));
+
+  console.log('[MIGRATIONS] 002_whatsapp_messages OK');
 
   console.log('[MIGRATIONS] OK');
 }

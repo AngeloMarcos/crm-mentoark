@@ -87,5 +87,113 @@ export default function contatos(pool: Pool): Router {
     }
   });
 
+  // PATCH /:id/pausa-ia — ativa ou desativa pausa de atendimento humano
+  // Body: { ativo: boolean, duracao_min?: number }
+  router.patch('/:id/pausa-ia', async (req: AuthRequest, res: Response) => {
+    const { ativo, duracao_min } = req.body as { ativo: boolean; duracao_min?: number };
+    const userId = req.userId!;
+    if (typeof ativo !== 'boolean') {
+      return res.status(400).json({ message: 'Campo ativo (boolean) é obrigatório' });
+    }
+    try {
+      const contatoRes = await pool.query(
+        `SELECT telefone FROM contatos WHERE id = $1 AND user_id = $2`,
+        [req.params.id, userId]
+      );
+      if (!contatoRes.rows.length) {
+        return res.status(404).json({ message: 'Contato não encontrado' });
+      }
+      const { telefone } = contatoRes.rows[0];
+
+      if (ativo) {
+        const duracao = duracao_min ?? 30;
+        await pool.query(
+          `UPDATE dados_cliente
+           SET atendimento_ia = 'pause',
+               pausa_timestamp = NOW(),
+               pausa_duracao_min = $3,
+               pausa_atendente_id = $4
+           WHERE user_id = $1 AND telefone = $2`,
+          [userId, telefone, duracao, userId]
+        );
+        // Insere em dados_cliente se ainda não existe
+        await pool.query(
+          `INSERT INTO dados_cliente (user_id, telefone, atendimento_ia, pausa_timestamp, pausa_duracao_min, pausa_atendente_id)
+           VALUES ($1, $2, 'pause', NOW(), $3, $4)
+           ON CONFLICT (user_id, telefone) DO NOTHING`,
+          [userId, telefone, duracao, userId]
+        ).catch(() => {});
+        await pool.query(
+          `INSERT INTO ia_pausa_log (user_id, telefone, atendente_id, acao, duracao_min)
+           VALUES ($1, $2, $3, 'pause', $4)`,
+          [userId, telefone, userId, duracao]
+        );
+        return res.json({ ok: true, ativo: true, telefone, duracao_min: duracao });
+      } else {
+        await pool.query(
+          `UPDATE dados_cliente
+           SET atendimento_ia = 'ativo',
+               pausa_timestamp = NULL,
+               pausa_duracao_min = NULL,
+               pausa_atendente_id = NULL
+           WHERE user_id = $1 AND telefone = $2`,
+          [userId, telefone]
+        );
+        await pool.query(
+          `INSERT INTO ia_pausa_log (user_id, telefone, atendente_id, acao)
+           VALUES ($1, $2, $3, 'ativo')`,
+          [userId, telefone, userId]
+        );
+        return res.json({ ok: true, ativo: false, telefone });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /:id/pausa-status — retorna status atual da pausa de IA para um contato
+  router.get('/:id/pausa-status', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    try {
+      const contatoRes = await pool.query(
+        `SELECT telefone FROM contatos WHERE id = $1 AND user_id = $2`,
+        [req.params.id, userId]
+      );
+      if (!contatoRes.rows.length) {
+        return res.status(404).json({ message: 'Contato não encontrado' });
+      }
+      const { telefone } = contatoRes.rows[0];
+
+      const r = await pool.query(
+        `SELECT atendimento_ia, pausa_timestamp, pausa_duracao_min
+         FROM dados_cliente
+         WHERE user_id = $1 AND telefone = $2
+         LIMIT 1`,
+        [userId, telefone]
+      );
+
+      if (!r.rows.length) {
+        return res.json({ ativo: false, atendimento_ia: 'ativo', pausa_timestamp: null, tempo_restante_seg: 0 });
+      }
+
+      const dc = r.rows[0];
+      const pausaAtiva = dc.atendimento_ia === 'pause';
+      let tempoRestanteSeg = 0;
+      if (pausaAtiva && dc.pausa_timestamp && dc.pausa_duracao_min) {
+        const expiresAt = new Date(dc.pausa_timestamp).getTime() + dc.pausa_duracao_min * 60 * 1000;
+        tempoRestanteSeg = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      }
+
+      return res.json({
+        ativo: pausaAtiva,
+        atendimento_ia: dc.atendimento_ia,
+        pausa_timestamp: dc.pausa_timestamp,
+        tempo_restante_seg: tempoRestanteSeg,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   return router;
 }
