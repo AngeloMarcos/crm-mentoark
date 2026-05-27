@@ -53,6 +53,15 @@ export default function UsuariosPage() {
   const [salvandoModulo, setSalvandoModulo]     = useState<string | null>(null);
   const [modalModulos, setModalModulos]         = useState(false);
 
+  // Excluir / Resetar senha
+  const [userExcluir, setUserExcluir]   = useState<UserRow | null>(null);
+  const [excluindo, setExcluindo]       = useState(false);
+  const [userResetar, setUserResetar]   = useState<UserRow | null>(null);
+  const [novaSenha, setNovaSenha]       = useState("");
+  const [resetando, setResetando]       = useState(false);
+
+
+
   /* ── Carregar usuários ──────────────────────────────────────── */
   const load = async () => {
     setLoading(true);
