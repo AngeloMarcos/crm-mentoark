@@ -25,6 +25,7 @@ import CampanhasPage from "./pages/Campanhas";
 import IntegracoesPage from "./pages/Integracoes";
 import CerebroPage from "./pages/Cerebro";
 import AgentesPage from "./pages/Agentes";
+import UsoIAPage from "./pages/UsoIA";
 import UsuariosPage from "./pages/Usuarios";
 import CatalogoPage from "./pages/Catalogo";
 import CatalogoDetalhePage from "./pages/CatalogoDetalhe";
@@ -82,6 +83,7 @@ const App = () => (
               <Route path="/integracoes"  element={<ProtectedRoute requireAdmin> <IntegracoesPage /></ProtectedRoute>} />
               <Route path="/cerebro"      element={<ProtectedRoute requireAdmin>     <CerebroPage /></ProtectedRoute>} />
               <Route path="/agentes"      element={<ProtectedRoute requireAdmin>     <AgentesPage /></ProtectedRoute>} />
+              <Route path="/uso-ia"       element={<ProtectedRoute requireAdmin>     <UsoIAPage /></ProtectedRoute>} />
               <Route path="/catalogo"     element={<ProtectedRoute requireModulo="catalogo">    <CatalogoPage /></ProtectedRoute>} />
               <Route path="/catalogo/:id" element={<ProtectedRoute requireModulo="catalogo">    <CatalogoDetalhePage /></ProtectedRoute>} />
               <Route path="/catalogo/envios" element={<ProtectedRoute requireModulo="catalogo"> <CatalogoEnviosPage /></ProtectedRoute>} />

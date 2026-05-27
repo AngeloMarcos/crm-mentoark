@@ -40,6 +40,11 @@ import {
   Brain,
   Database,
   Webhook,
+  Cpu,
+  Mic,
+  Image as ImageIcon,
+  Video,
+  Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -67,10 +72,60 @@ interface Agente {
   ativo: boolean;
   created_at: string;
   updated_at: string;
+  // Motor de IA nativo (novo)
+  provider?: string | null;
+  modelo_id?: string | null;
+  modalidade_audio?: boolean | null;
+  modalidade_imagem?: boolean | null;
+  modalidade_video?: boolean | null;
+  mcp_tools?: string[] | null;
 }
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
-const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "claude-3-5-sonnet", "gemini-1.5-pro"];
+
+// Motor nativo — providers e modelos disponíveis
+export const PROVIDERS = [
+  {
+    id: "claude",
+    label: "Claude (Anthropic)",
+    modelos: [
+      { id: "claude-3-5-haiku-latest",  label: "Haiku — rápido e barato",  custo: "~$0.0002/msg" },
+      { id: "claude-3-5-sonnet-latest", label: "Sonnet — balanceado",      custo: "~$0.003/msg"  },
+      { id: "claude-3-opus-latest",     label: "Opus — máxima qualidade",  custo: "~$0.015/msg"  },
+    ],
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    modelos: [
+      { id: "gpt-4o",      label: "GPT-4o — multimodal",  custo: "~$0.005/msg"  },
+      { id: "gpt-4o-mini", label: "GPT-4o mini — barato", custo: "~$0.0001/msg" },
+    ],
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini",
+    modelos: [
+      { id: "gemini-1.5-flash", label: "Flash — ultra barato", custo: "~$0.00004/msg" },
+      { id: "gemini-1.5-pro",   label: "Pro — qualidade",      custo: "~$0.001/msg"   },
+    ],
+  },
+] as const;
+
+export const MCP_TOOLS = [
+  { id: "buscar_contato",      label: "Buscar contato"        },
+  { id: "criar_contato",       label: "Criar contato"         },
+  { id: "buscar_historico",    label: "Buscar histórico"      },
+  { id: "buscar_leads",        label: "Buscar leads"          },
+  { id: "criar_lead",          label: "Criar lead"            },
+  { id: "atualizar_lead",      label: "Atualizar lead"        },
+  { id: "buscar_produtos",     label: "Buscar produtos"       },
+  { id: "buscar_agendamentos", label: "Buscar agendamentos"   },
+  { id: "criar_agendamento",   label: "Criar agendamento"     },
+  { id: "registrar_pausa_ia",  label: "Pausar IA p/ humano"   },
+];
+
+const MCP_TOOLS_DEFAULT = MCP_TOOLS.map((t) => t.id);
 
 const formInicial = {
   nome: "",
@@ -92,6 +147,13 @@ const formInicial = {
   rag_threshold: 0.7,
   rag_resultados: 5,
   ativo: true,
+  // Motor nativo
+  provider: "claude",
+  modelo_id: "claude-3-5-sonnet-latest",
+  modalidade_audio: true,
+  modalidade_imagem: true,
+  modalidade_video: false,
+  mcp_tools: MCP_TOOLS_DEFAULT as string[],
 };
 
 function formatarData(iso: string) {
@@ -166,6 +228,12 @@ export default function AgentesPage() {
       rag_threshold: a.rag_threshold ?? 0.7,
       rag_resultados: a.rag_resultados ?? 5,
       ativo: a.ativo,
+      provider: a.provider ?? "claude",
+      modelo_id: a.modelo_id ?? a.modelo ?? "claude-3-5-sonnet-latest",
+      modalidade_audio: a.modalidade_audio ?? true,
+      modalidade_imagem: a.modalidade_imagem ?? true,
+      modalidade_video: a.modalidade_video ?? false,
+      mcp_tools: a.mcp_tools ?? MCP_TOOLS_DEFAULT,
     });
     setShowKey(false);
     setModal(true);
@@ -187,7 +255,7 @@ export default function AgentesPage() {
       objetivo: form.objetivo.trim() || null,
       mensagem_boas_vindas: form.mensagem_boas_vindas.trim() || null,
       regras: form.regras.trim() || null,
-      modelo: form.modelo,
+      modelo: form.modelo_id || form.modelo,
       temperatura: form.temperatura,
       max_tokens: form.max_tokens,
       evolution_server_url: form.evolution_server_url.trim() || null,
@@ -198,6 +266,13 @@ export default function AgentesPage() {
       rag_threshold: form.rag_threshold,
       rag_resultados: form.rag_resultados,
       ativo: form.ativo,
+      // Motor nativo
+      provider: form.provider,
+      modelo_id: form.modelo_id,
+      modalidade_audio: form.modalidade_audio,
+      modalidade_imagem: form.modalidade_imagem,
+      modalidade_video: form.modalidade_video,
+      mcp_tools: form.mcp_tools,
     };
 
     if (editing) {
@@ -393,9 +468,10 @@ export default function AgentesPage() {
           </DialogHeader>
 
           <Tabs defaultValue="identidade">
-            <TabsList className="grid grid-cols-2 sm:grid-cols-6 w-full">
+            <TabsList className="grid grid-cols-3 sm:grid-cols-7 w-full">
               <TabsTrigger value="identidade">Identidade</TabsTrigger>
               <TabsTrigger value="comportamento">Comportamento</TabsTrigger>
+              <TabsTrigger value="motor">Motor</TabsTrigger>
               <TabsTrigger value="conhecimento">Conhecimento</TabsTrigger>
               <TabsTrigger value="whatsapp">WhatsApp</TabsTrigger>
               <TabsTrigger value="integracao">Integração</TabsTrigger>
@@ -501,23 +577,9 @@ export default function AgentesPage() {
                   rows={3}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Modelo de IA</Label>
-                <Select
-                  value={form.modelo}
-                  onValueChange={(v) => setForm({ ...form, modelo: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MODELOS.map((m) => (
-                      <SelectItem key={m} value={m}>
-                        {m}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground bg-muted/30">
+                A escolha do <strong>provedor</strong> e do <strong>modelo</strong> agora fica na
+                aba <strong>Motor</strong>, junto com modalidades (áudio/imagem) e ferramentas MCP.
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -549,7 +611,171 @@ export default function AgentesPage() {
               </div>
             </TabsContent>
 
+            <TabsContent value="motor" className="space-y-5 pt-4">
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
+                <div className="flex items-center gap-2 text-primary">
+                  <Cpu className="h-5 w-5" />
+                  <h3 className="font-semibold">Provedor de IA</h3>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Define qual modelo executa as conversas. Você pode trocar de provedor sem perder
+                  os outros ajustes do agente.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Provedor</Label>
+                    <Select
+                      value={form.provider}
+                      onValueChange={(v) => {
+                        const p = PROVIDERS.find((x) => x.id === v);
+                        const novoModelo = p?.modelos[0]?.id ?? form.modelo_id;
+                        setForm({ ...form, provider: v, modelo_id: novoModelo });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PROVIDERS.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Modelo</Label>
+                    <Select
+                      value={form.modelo_id}
+                      onValueChange={(v) => setForm({ ...form, modelo_id: v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(PROVIDERS.find((p) => p.id === form.provider)?.modelos ?? []).map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {(() => {
+                  const m = PROVIDERS.find((p) => p.id === form.provider)?.modelos.find(
+                    (mm) => mm.id === form.modelo_id,
+                  );
+                  return m ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="text-xs">
+                        Custo estimado: {m.custo}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        ID: {m.id}
+                      </Badge>
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-3">
+                <div className="flex items-center gap-2 text-primary">
+                  <Mic className="h-5 w-5" />
+                  <h3 className="font-semibold">Modalidades suportadas</h3>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Quando ligado, o agente aceita mensagens nesse formato e processa via pipeline
+                  multimodal (transcrição/visão).
+                </p>
+
+                <div className="flex items-center justify-between rounded-md border p-3">
+                  <div className="flex items-center gap-2">
+                    <Mic className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">Áudio (transcrição via Whisper)</p>
+                      <p className="text-xs text-muted-foreground">
+                        Transcreve mensagens de voz do WhatsApp.
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={!!form.modalidade_audio}
+                    onCheckedChange={(v) => setForm({ ...form, modalidade_audio: v })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between rounded-md border p-3">
+                  <div className="flex items-center gap-2">
+                    <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">Imagem (visão)</p>
+                      <p className="text-xs text-muted-foreground">
+                        Modelo descreve e responde sobre fotos enviadas.
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={!!form.modalidade_imagem}
+                    onCheckedChange={(v) => setForm({ ...form, modalidade_imagem: v })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between rounded-md border p-3 opacity-60">
+                  <div className="flex items-center gap-2">
+                    <Video className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">
+                        Vídeo <Badge variant="outline" className="ml-1 text-[10px]">em breve</Badge>
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Extração de áudio + frames-chave.
+                      </p>
+                    </div>
+                  </div>
+                  <Switch checked={false} disabled />
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-3">
+                <div className="flex items-center gap-2 text-primary">
+                  <Wrench className="h-5 w-5" />
+                  <h3 className="font-semibold">Ferramentas MCP</h3>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Funções do CRM que o motor pode chamar durante uma conversa. Desligue as que esse
+                  agente não deve usar.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {MCP_TOOLS.map((t) => {
+                    const ativa = form.mcp_tools.includes(t.id);
+                    return (
+                      <label
+                        key={t.id}
+                        className="flex items-center justify-between rounded-md border p-2.5 cursor-pointer hover:bg-muted/40"
+                      >
+                        <span className="text-sm">{t.label}</span>
+                        <Switch
+                          checked={ativa}
+                          onCheckedChange={(v) => {
+                            setForm({
+                              ...form,
+                              mcp_tools: v
+                                ? Array.from(new Set([...form.mcp_tools, t.id]))
+                                : form.mcp_tools.filter((id) => id !== t.id),
+                            });
+                          }}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </TabsContent>
+
             <TabsContent value="conhecimento" className="space-y-4 pt-4">
+
               <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
                 <div className="flex items-center gap-2 text-primary">
                   <Brain className="h-5 w-5" />
