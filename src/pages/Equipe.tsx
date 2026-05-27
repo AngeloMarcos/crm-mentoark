@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare } from "lucide-react";
 import { useEquipe, type Membro } from "@/hooks/useEquipe";
 import { useAuth } from "@/hooks/useAuth";
+import { ChatEquipe } from "@/components/equipe/ChatEquipe";
 
 function iniciais(nome?: string, email?: string) {
   const base = (nome || email || "?").trim();
@@ -325,9 +326,7 @@ function Painel({
             <MessageSquare className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold">Chat da Equipe</h2>
           </div>
-          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-            Chat em breve
-          </div>
+          <ChatEquipe equipeId={equipe.id} />
         </Card>
       </div>
 
