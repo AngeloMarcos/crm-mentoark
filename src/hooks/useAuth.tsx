@@ -8,6 +8,7 @@ export interface AppUser {
   email: string;
   role?: string;
   display_name?: string;
+  avatar_url?: string | null;
   user_metadata?: { display_name?: string; [key: string]: any };
   app_metadata?: { role?: string; [key: string]: any };
   aud?: string;
