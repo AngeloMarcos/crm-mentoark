@@ -5,6 +5,7 @@ import {
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
+  Activity,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -103,6 +104,7 @@ const navGroups: NavGroup[] = [
           { title: "SLA / Gestão",      url: "/sla",               icon: Timer,         modulo: "whatsapp",    color: "text-yellow-500"  },
           { title: "Configuração da IA", url: "/cerebro",           icon: Brain,         modulo: "cerebro",     color: "text-purple-400", adminOnly: true },
           { title: "Agentes",           url: "/agentes",           icon: Bot,           modulo: "agentes",     color: "text-teal-500",   adminOnly: true },
+          { title: "Uso de IA",         url: "/uso-ia",            icon: Activity,      modulo: "agentes",     color: "text-pink-500",   adminOnly: true },
           { title: "Workflows",         url: "/workflows",         icon: GitBranch,     modulo: "workflows",   color: "text-violet-500", adminOnly: true },
           { title: "Integrações",       url: "/integracoes",       icon: Plug,          modulo: "integracoes", color: "text-amber-500",  adminOnly: true },
         ],
