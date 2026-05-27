@@ -43,6 +43,8 @@ import SimuladorWebhook from "./pages/SimuladorWebhook";
 import TesteConversas from "./pages/TesteConversas";
 import MonitorWhatsApp from "./pages/MonitorWhatsApp";
 import PerfilPage from "./pages/Perfil";
+import EquipePage from "./pages/Equipe";
+import AceitarConvitePage from "./pages/AceitarConvite";
 
 const queryClient = new QueryClient();
 
@@ -60,6 +62,7 @@ const App = () => (
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/termos" element={<TermsPage />} />
               <Route path="/privacidade" element={<PrivacyPage />} />
+              <Route path="/convite/:token" element={<AceitarConvitePage />} />
 
               <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
               <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />
@@ -90,6 +93,7 @@ const App = () => (
               <Route path="/chat-equipe"  element={<ProtectedRoute requireModulo="whatsapp">   <ChatEquipePage /></ProtectedRoute>} />
               <Route path="/smart-links"  element={<ProtectedRoute requireModulo="whatsapp">   <SmartLinksPage /></ProtectedRoute>} />
               <Route path="/perfil"       element={<ProtectedRoute><PerfilPage /></ProtectedRoute>} />
+              <Route path="/equipe"       element={<ProtectedRoute><EquipePage /></ProtectedRoute>} />
 
               {import.meta.env.DEV && (
                 <>
