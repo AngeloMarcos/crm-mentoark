@@ -250,7 +250,7 @@ export default function AgentesPage() {
       objetivo: form.objetivo.trim() || null,
       mensagem_boas_vindas: form.mensagem_boas_vindas.trim() || null,
       regras: form.regras.trim() || null,
-      modelo: form.modelo,
+      modelo: form.modelo_id || form.modelo,
       temperatura: form.temperatura,
       max_tokens: form.max_tokens,
       evolution_server_url: form.evolution_server_url.trim() || null,
@@ -261,6 +261,13 @@ export default function AgentesPage() {
       rag_threshold: form.rag_threshold,
       rag_resultados: form.rag_resultados,
       ativo: form.ativo,
+      // Motor nativo
+      provider: form.provider,
+      modelo_id: form.modelo_id,
+      modalidade_audio: form.modalidade_audio,
+      modalidade_imagem: form.modalidade_imagem,
+      modalidade_video: form.modalidade_video,
+      mcp_tools: form.mcp_tools,
     };
 
     if (editing) {
