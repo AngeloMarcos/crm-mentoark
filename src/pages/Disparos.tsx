@@ -213,6 +213,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
   const [estagios, setEstagios] = useState<any[]>([]);
   const [listas, setListas] = useState<any[]>([]);
   const [listasCounts, setListasCounts] = useState<Record<string, number>>({});
+  const [totalContatos, setTotalContatos] = useState<number>(0);
   const [csvPreview, setCsvPreview] = useState<any[]>([]);
   const [tagSearch, setTagSearch] = useState("");
 
@@ -224,6 +225,10 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
       setTags(tagsData || []);
       setEstagios(estagiosData || []);
       setListas(listasData || []);
+
+      // Total geral de contatos (usado pela opção "Todos os Leads")
+      const { count: totalCount } = await api.from("contatos").select("id", { count: "exact", head: true });
+      setTotalContatos(totalCount || 0);
 
       // Buscar contagem de contatos por lista (em paralelo)
       if (listasData && listasData.length) {
