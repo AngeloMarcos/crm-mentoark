@@ -571,23 +571,9 @@ export default function AgentesPage() {
                   rows={3}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Modelo de IA</Label>
-                <Select
-                  value={form.modelo}
-                  onValueChange={(v) => setForm({ ...form, modelo: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MODELOS.map((m) => (
-                      <SelectItem key={m} value={m}>
-                        {m}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground bg-muted/30">
+                A escolha do <strong>provedor</strong> e do <strong>modelo</strong> agora fica na
+                aba <strong>Motor</strong>, junto com modalidades (áudio/imagem) e ferramentas MCP.
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
