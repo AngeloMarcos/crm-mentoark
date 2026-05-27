@@ -223,6 +223,12 @@ export default function AgentesPage() {
       rag_threshold: a.rag_threshold ?? 0.7,
       rag_resultados: a.rag_resultados ?? 5,
       ativo: a.ativo,
+      provider: a.provider ?? "claude",
+      modelo_id: a.modelo_id ?? a.modelo ?? "claude-3-5-sonnet-latest",
+      modalidade_audio: a.modalidade_audio ?? true,
+      modalidade_imagem: a.modalidade_imagem ?? true,
+      modalidade_video: a.modalidade_video ?? false,
+      mcp_tools: a.mcp_tools ?? MCP_TOOLS_DEFAULT,
     });
     setShowKey(false);
     setModal(true);
