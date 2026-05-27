@@ -23,7 +23,8 @@ export default function LoginPage() {
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const hasTurnstile = !!import.meta.env.VITE_TURNSTILE_SITE_KEY;
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(hasTurnstile ? null : 'bypass');
   const [turnstileKey, setTurnstileKey] = useState(0); // força reset do widget
   const navigate = useNavigate();
   const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
@@ -86,7 +87,7 @@ export default function LoginPage() {
       }
     } catch (err: any) {
       // Reset do widget em caso de erro
-      setTurnstileToken(null);
+      setTurnstileToken(hasTurnstile ? null : 'bypass');
       setTurnstileKey(k => k + 1);
       toast({
         title: "Erro",
@@ -262,24 +263,22 @@ export default function LoginPage() {
                     </Label>
                   </div>
 
-                  <div className="flex justify-center my-2 scale-90">
-                    <Turnstile
-                      key={turnstileKey}
-                      siteKey={import.meta.env.VITE_TURNSTILE_SITE_KEY || "1x00000000000000000000AA"}
-                      onSuccess={(token) => setTurnstileToken(token)}
-                      onExpire={() => setTurnstileToken(null)}
-                      onError={() => {
-                        setTurnstileToken(null);
-                        toast({ title: "Erro de verificação", description: "Recarregue a página.", variant: "destructive" });
-                      }}
-                      options={{
-                        theme: "dark",
-                        language: "pt-BR",
-                        size: "normal",
-                      }}
-                      className="mx-auto"
-                    />
-                  </div>
+                  {hasTurnstile && (
+                    <div className="flex justify-center my-2 scale-90">
+                      <Turnstile
+                        key={turnstileKey}
+                        siteKey={import.meta.env.VITE_TURNSTILE_SITE_KEY!}
+                        onSuccess={(token) => setTurnstileToken(token)}
+                        onExpire={() => setTurnstileToken(null)}
+                        onError={() => {
+                          setTurnstileToken(null);
+                          toast({ title: "Erro de verificação", description: "Recarregue a página.", variant: "destructive" });
+                        }}
+                        options={{ theme: "dark", language: "pt-BR", size: "normal" }}
+                        className="mx-auto"
+                      />
+                    </div>
+                  )}
 
                   <Button 
                     type="submit" 
@@ -329,7 +328,7 @@ export default function LoginPage() {
                     type="button"
                     onClick={() => {
                       setIsLogin(!isLogin);
-                      setTurnstileToken(null);
+                      setTurnstileToken(hasTurnstile ? null : 'bypass');
                       setTurnstileKey(k => k + 1);
                     }}
                     className="text-sm text-purple-300 hover:text-white hover:underline transition-colors"
