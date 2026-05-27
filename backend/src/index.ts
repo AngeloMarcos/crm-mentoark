@@ -58,6 +58,7 @@ import modulosRouter from './routes/modulos';
 import whatsappRouter from './routes/whatsapp';
 import { mcpRouter } from './routes/mcp';
 import marketingRouter from './routes/marketing';
+import teamRouter, { teamInvitePublicRouter } from './routes/team';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -95,6 +96,7 @@ app.use('/uploads', (req, res, next) => {
 // ── Public routes ───────────────────────────────────────────
 const marketing = marketingRouter(pool);
 app.use('/auth', authRouter);
+app.use('/auth', teamInvitePublicRouter(pool)); // /auth/invite/:token + /auth/accept-invite
 app.use('/webhook', webhookRouter(pool));
 // ── MCP com CORS específico para n8n Cloud ─────────────────────────────────
 app.use('/mcp', (req, res, next) => {
@@ -211,6 +213,7 @@ app.use('/api/galeria',    galeriaRouter(pool));
 app.use('/api/modulos',   modulosRouter(pool));
 app.use('/api/whatsapp', whatsappRouter(pool));
 app.use('/api/marketing', marketing.protected); // Protected part of marketing (status, campaigns)
+app.use('/api/team', teamRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
