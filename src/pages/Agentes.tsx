@@ -40,6 +40,11 @@ import {
   Brain,
   Database,
   Webhook,
+  Cpu,
+  Mic,
+  Image as ImageIcon,
+  Video,
+  Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -606,7 +611,171 @@ export default function AgentesPage() {
               </div>
             </TabsContent>
 
+            <TabsContent value="motor" className="space-y-5 pt-4">
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
+                <div className="flex items-center gap-2 text-primary">
+                  <Cpu className="h-5 w-5" />
+                  <h3 className="font-semibold">Provedor de IA</h3>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Define qual modelo executa as conversas. Você pode trocar de provedor sem perder
+                  os outros ajustes do agente.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Provedor</Label>
+                    <Select
+                      value={form.provider}
+                      onValueChange={(v) => {
+                        const p = PROVIDERS.find((x) => x.id === v);
+                        const novoModelo = p?.modelos[0]?.id ?? form.modelo_id;
+                        setForm({ ...form, provider: v, modelo_id: novoModelo });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PROVIDERS.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Modelo</Label>
+                    <Select
+                      value={form.modelo_id}
+                      onValueChange={(v) => setForm({ ...form, modelo_id: v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(PROVIDERS.find((p) => p.id === form.provider)?.modelos ?? []).map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {(() => {
+                  const m = PROVIDERS.find((p) => p.id === form.provider)?.modelos.find(
+                    (mm) => mm.id === form.modelo_id,
+                  );
+                  return m ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="text-xs">
+                        Custo estimado: {m.custo}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        ID: {m.id}
+                      </Badge>
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-3">
+                <div className="flex items-center gap-2 text-primary">
+                  <Mic className="h-5 w-5" />
+                  <h3 className="font-semibold">Modalidades suportadas</h3>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Quando ligado, o agente aceita mensagens nesse formato e processa via pipeline
+                  multimodal (transcrição/visão).
+                </p>
+
+                <div className="flex items-center justify-between rounded-md border p-3">
+                  <div className="flex items-center gap-2">
+                    <Mic className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">Áudio (transcrição via Whisper)</p>
+                      <p className="text-xs text-muted-foreground">
+                        Transcreve mensagens de voz do WhatsApp.
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={!!form.modalidade_audio}
+                    onCheckedChange={(v) => setForm({ ...form, modalidade_audio: v })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between rounded-md border p-3">
+                  <div className="flex items-center gap-2">
+                    <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">Imagem (visão)</p>
+                      <p className="text-xs text-muted-foreground">
+                        Modelo descreve e responde sobre fotos enviadas.
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={!!form.modalidade_imagem}
+                    onCheckedChange={(v) => setForm({ ...form, modalidade_imagem: v })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between rounded-md border p-3 opacity-60">
+                  <div className="flex items-center gap-2">
+                    <Video className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">
+                        Vídeo <Badge variant="outline" className="ml-1 text-[10px]">em breve</Badge>
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Extração de áudio + frames-chave.
+                      </p>
+                    </div>
+                  </div>
+                  <Switch checked={false} disabled />
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-3">
+                <div className="flex items-center gap-2 text-primary">
+                  <Wrench className="h-5 w-5" />
+                  <h3 className="font-semibold">Ferramentas MCP</h3>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Funções do CRM que o motor pode chamar durante uma conversa. Desligue as que esse
+                  agente não deve usar.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {MCP_TOOLS.map((t) => {
+                    const ativa = form.mcp_tools.includes(t.id);
+                    return (
+                      <label
+                        key={t.id}
+                        className="flex items-center justify-between rounded-md border p-2.5 cursor-pointer hover:bg-muted/40"
+                      >
+                        <span className="text-sm">{t.label}</span>
+                        <Switch
+                          checked={ativa}
+                          onCheckedChange={(v) => {
+                            setForm({
+                              ...form,
+                              mcp_tools: v
+                                ? Array.from(new Set([...form.mcp_tools, t.id]))
+                                : form.mcp_tools.filter((id) => id !== t.id),
+                            });
+                          }}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </TabsContent>
+
             <TabsContent value="conhecimento" className="space-y-4 pt-4">
+
               <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
                 <div className="flex items-center gap-2 text-primary">
                   <Brain className="h-5 w-5" />
