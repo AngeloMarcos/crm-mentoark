@@ -305,24 +305,61 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
               {listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id)) ? "Limpar" : "Selecionar todas"}
             </Button>
           </div>
+
+          {/* Opção especial: Todos os Leads (ignora lista_id) */}
+          {(() => {
+            const checked = form.listas_selecionadas.includes("__all__");
+            return (
+              <label
+                htmlFor="lista-__all__"
+                className={`flex items-center justify-between gap-2 p-3 border-2 rounded cursor-pointer transition-colors ${checked ? "bg-primary/10 border-primary" : "border-dashed border-primary/40 hover:bg-muted/50"}`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <input
+                    type="checkbox"
+                    id="lista-__all__"
+                    checked={checked}
+                    className="h-4 w-4"
+                    onChange={(e) => {
+                      setForm({
+                        ...form,
+                        listas_selecionadas: e.target.checked ? ["__all__"] : [],
+                      });
+                    }}
+                  />
+                  <Users className="h-4 w-4 text-primary" />
+                  <div className="flex flex-col">
+                    <span className="text-sm font-semibold">Todos os Leads</span>
+                    <span className="text-[10px] text-muted-foreground">Puxa todos os contatos do módulo Leads, sem filtro de lista</span>
+                  </div>
+                </div>
+                <Badge variant="default" className="text-[10px] flex-shrink-0">
+                  {totalContatos}
+                </Badge>
+              </label>
+            );
+          })()}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto">
             {listas.map(l => {
               const checked = form.listas_selecionadas.includes(l.id);
+              const disabled = form.listas_selecionadas.includes("__all__");
               return (
                 <label
                   key={l.id}
                   htmlFor={`lista-${l.id}`}
-                  className={`flex items-center justify-between gap-2 p-2 border rounded cursor-pointer transition-colors ${checked ? "bg-primary/10 border-primary/40" : "hover:bg-muted/50"}`}
+                  className={`flex items-center justify-between gap-2 p-2 border rounded cursor-pointer transition-colors ${disabled ? "opacity-50 cursor-not-allowed" : ""} ${checked ? "bg-primary/10 border-primary/40" : "hover:bg-muted/50"}`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <input
                       type="checkbox"
                       id={`lista-${l.id}`}
                       checked={checked}
+                      disabled={disabled}
                       className="h-4 w-4"
                       onChange={(e) => {
                         const next = e.target.checked
-                          ? [...form.listas_selecionadas, l.id]
+                          ? [...form.listas_selecionadas.filter((id: string) => id !== "__all__"), l.id]
                           : form.listas_selecionadas.filter((id: string) => id !== l.id);
                         setForm({ ...form, listas_selecionadas: next });
                       }}
@@ -337,12 +374,14 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
               );
             })}
             {listas.length === 0 && (
-              <p className="text-xs text-muted-foreground col-span-full text-center py-4">
-                Nenhuma lista cadastrada. Crie listas em Contatos para usá-las aqui.
+              <p className="text-xs text-muted-foreground col-span-full text-center py-2">
+                Você ainda não criou listas. Use "Todos os Leads" acima ou crie listas no módulo Leads.
               </p>
             )}
           </div>
         </TabsContent>
+
+
 
         <TabsContent value="tags" className="p-4 border rounded-lg bg-card space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
