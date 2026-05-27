@@ -1,0 +1,186 @@
+import { Router, Response } from 'express';
+import { Pool } from 'pg';
+import { AuthRequest } from '../middleware';
+
+export default function equipeRouter(pool: Pool): Router {
+  const router = Router();
+
+  const wrap = (fn: Function) => async (req: AuthRequest, res: Response) => {
+    try {
+      await fn(req, res);
+    } catch (err: any) {
+      console.error('[equipe]', err.message);
+      res.status(500).json({ message: err.message });
+    }
+  };
+
+  // 1. GET /api/equipes/minha
+  router.get('/minha', wrap(async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    
+    // Busca se é owner ou membro de alguma equipe
+    const r = await pool.query(
+      `SELECT e.*, em.role as user_role
+       FROM equipes e
+       LEFT JOIN equipe_membros em ON em.equipe_id = e.id
+       WHERE e.owner_id = $1 OR em.user_id = $1
+       LIMIT 1`,
+      [userId]
+    );
+
+    res.json({ equipe: r.rows[0] || null });
+  }));
+
+  // 2. POST /api/equipes
+  router.post('/', wrap(async (req: AuthRequest, res: Response) => {
+    const { nome } = req.body;
+    const userId = req.userId!;
+
+    if (!nome) return res.status(400).json({ message: 'Nome é obrigatório' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      // Criar equipe
+      const resEquipe = await client.query(
+        `INSERT INTO equipes (nome, owner_id) VALUES ($1, $2) RETURNING *`,
+        [nome, userId]
+      );
+      const equipe = resEquipe.rows[0];
+
+      // Inserir criador como gerente
+      await client.query(
+        `INSERT INTO equipe_membros (equipe_id, user_id, role) VALUES ($1, $2, 'gerente')`,
+        [equipe.id, userId]
+      );
+
+      await client.query('COMMIT');
+      res.status(201).json(equipe);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }));
+
+  // Helper para validar se o usuário é membro/owner
+  const checkAccess = async (equipeId: string, userId: string) => {
+    const r = await pool.query(
+      `SELECT e.owner_id, em.role 
+       FROM equipes e
+       LEFT JOIN equipe_membros em ON em.equipe_id = e.id AND em.user_id = $2
+       WHERE e.id = $1`,
+      [equipeId, userId]
+    );
+    if (r.rowCount === 0) return null;
+    return {
+      isOwner: r.rows[0].owner_id === userId,
+      role: r.rows[0].role
+    };
+  };
+
+  // 3. GET /api/equipes/:id/membros
+  router.get('/:id/membros', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const userId = req.userId!;
+
+    const access = await checkAccess(equipeId, userId);
+    if (!access || (!access.isOwner && !access.role)) {
+      return res.status(403).json({ message: 'Acesso negado' });
+    }
+
+    const r = await pool.query(
+      `SELECT em.user_id, u.display_name as nome, u.email, em.role, em.joined_at
+       FROM equipe_membros em
+       JOIN users u ON u.id = em.user_id
+       WHERE em.equipe_id = $1
+       ORDER BY em.joined_at ASC`,
+      [equipeId]
+    );
+
+    res.json(r.rows);
+  }));
+
+  // 4. POST /api/equipes/:id/convidar
+  router.post('/:id/convidar', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const inviterId = req.userId!;
+    const { email, role } = req.body;
+
+    if (!email) return res.status(400).json({ message: 'Email é obrigatório' });
+
+    const access = await checkAccess(equipeId, inviterId);
+    if (!access || (!access.isOwner && access.role !== 'gerente')) {
+      return res.status(403).json({ message: 'Apenas proprietários ou gerentes podem convidar' });
+    }
+
+    // Busca usuário por email
+    const userRes = await pool.query(`SELECT id, display_name FROM users WHERE email = $1`, [email]);
+    if (userRes.rowCount === 0) {
+      return res.status(404).json({ message: 'Usuário não encontrado' });
+    }
+    const targetUser = userRes.rows[0];
+
+    await pool.query(
+      `INSERT INTO equipe_membros (equipe_id, user_id, role, convidado_por)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (equipe_id, user_id) DO NOTHING`,
+      [equipeId, targetUser.id, role || 'membro', inviterId]
+    );
+
+    res.json({ success: true, user_id: targetUser.id, nome: targetUser.display_name });
+  }));
+
+  // 5. DELETE /api/equipes/:id/membros/:userId
+  router.delete('/:id/membros/:userId', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const removerId = req.userId!;
+    const targetUserId = req.params.userId;
+
+    const access = await checkAccess(equipeId, removerId);
+    if (!access || (!access.isOwner && access.role !== 'gerente')) {
+      return res.status(403).json({ message: 'Sem permissão para remover membros' });
+    }
+
+    // Não pode remover o próprio owner
+    const equipeRes = await pool.query(`SELECT owner_id FROM equipes WHERE id = $1`, [equipeId]);
+    if (equipeRes.rows[0].owner_id === targetUserId) {
+      return res.status(400).json({ message: 'Não é possível remover o proprietário da equipe' });
+    }
+
+    await pool.query(
+      `DELETE FROM equipe_membros WHERE equipe_id = $1 AND user_id = $2`,
+      [equipeId, targetUserId]
+    );
+
+    res.status(204).send();
+  }));
+
+  // 6. PATCH /api/equipes/:id/membros/:userId
+  router.patch('/:id/membros/:userId', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const updaterId = req.userId!;
+    const targetUserId = req.params.userId;
+    const { role } = req.body;
+
+    if (!['membro', 'gerente'].includes(role)) {
+      return res.status(400).json({ message: 'Role inválida' });
+    }
+
+    const access = await checkAccess(equipeId, updaterId);
+    if (!access || !access.isOwner) {
+      return res.status(403).json({ message: 'Apenas o proprietário pode alterar papéis' });
+    }
+
+    await pool.query(
+      `UPDATE equipe_membros SET role = $1 WHERE equipe_id = $2 AND user_id = $3`,
+      [role, equipeId, targetUserId]
+    );
+
+    res.json({ success: true });
+  }));
+
+  return router;
+}
