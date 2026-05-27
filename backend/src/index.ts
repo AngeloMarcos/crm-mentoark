@@ -59,6 +59,7 @@ import whatsappRouter from './routes/whatsapp';
 import { mcpRouter } from './routes/mcp';
 import marketingRouter from './routes/marketing';
 import teamRouter, { teamInvitePublicRouter } from './routes/team';
+import equipeRouter from './routes/equipe';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -214,6 +215,7 @@ app.use('/api/modulos',   modulosRouter(pool));
 app.use('/api/whatsapp', whatsappRouter(pool));
 app.use('/api/marketing', marketing.protected); // Protected part of marketing (status, campaigns)
 app.use('/api/team', teamRouter(pool));
+app.use('/api/equipes', equipeRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
