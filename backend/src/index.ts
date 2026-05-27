@@ -70,6 +70,7 @@ import { processarDisparos } from './services/disparoProcessor';
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 
 const app = express();
+app.set('trust proxy', 1); // Traefik reverse proxy
 
 // ── Middleware ──────────────────────────────────────────────
 const staticOrigins = (process.env.CORS_ORIGIN || 'https://crm.mentoark.com.br')
