@@ -182,5 +182,62 @@ export default function equipeRouter(pool: Pool): Router {
     res.json({ success: true });
   }));
 
+  // 7. GET /api/equipes/:id/chat
+  router.get('/:id/chat', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const userId = req.userId!;
+
+    const access = await checkAccess(equipeId, userId);
+    if (!access || (!access.isOwner && !access.role)) {
+      return res.status(403).json({ message: 'Acesso negado' });
+    }
+
+    const r = await pool.query(
+      `SELECT ec.*, u.display_name as nome, u.email
+       FROM equipe_chat ec
+       JOIN users u ON u.id = ec.user_id
+       WHERE ec.equipe_id = $1
+       ORDER BY ec.created_at DESC
+       LIMIT 50`,
+      [equipeId]
+    );
+
+    // Retornar em ordem ASC para o chat
+    res.json(r.rows.reverse());
+  }));
+
+  // 8. POST /api/equipes/:id/chat
+  router.post('/:id/chat', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const userId = req.userId!;
+    const { conteudo } = req.body;
+
+    if (!conteudo || String(conteudo).trim().length === 0) {
+      return res.status(400).json({ message: 'Conteúdo não pode estar vazio' });
+    }
+    if (String(conteudo).length > 2000) {
+      return res.status(400).json({ message: 'Mensagem muito longa (máximo 2000 caracteres)' });
+    }
+
+    const access = await checkAccess(equipeId, userId);
+    if (!access || (!access.isOwner && !access.role)) {
+      return res.status(403).json({ message: 'Acesso negado' });
+    }
+
+    const r = await pool.query(
+      `WITH inserted AS (
+        INSERT INTO equipe_chat (equipe_id, user_id, conteudo)
+        VALUES ($1, $2, $3)
+        RETURNING *
+      )
+      SELECT i.*, u.display_name as nome, u.email
+      FROM inserted i
+      JOIN users u ON u.id = i.user_id`,
+      [equipeId, userId, conteudo]
+    );
+
+    res.status(201).json(r.rows[0]);
+  }));
+
   return router;
 }
