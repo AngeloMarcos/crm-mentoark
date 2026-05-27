@@ -4,7 +4,7 @@ import {
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
-  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor,
+  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -44,6 +44,19 @@ interface NavGroup {
 // ── Estrutura ─────────────────────────────────────────────────────────────────
 
 const navGroups: NavGroup[] = [
+  {
+    label: "Equipe",
+    subgroups: [
+      {
+        label: "Minha Equipe",
+        icon: Users2,
+        color: "text-indigo-500",
+        items: [
+          { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
+        ],
+      },
+    ],
+  },
   {
     label: "Visão Geral",
     subgroups: [
@@ -183,11 +196,25 @@ function NavSubgroupSection({
   hasModulo: (m: string) => boolean;
   location: { pathname: string };
 }) {
-  const { isAdmin } = useAuth();
-  const visibleItems = useMemo(
-    () => subgroup.items.filter((i) => hasModulo(i.modulo) && (!i.adminOnly || isAdmin)),
-    [subgroup.items, hasModulo, isAdmin]
-  );
+  const { isAdmin, equipeRole } = useAuth();
+  const visibleItems = useMemo(() => {
+    return subgroup.items.filter((i) => {
+      // 1. Permissão por módulo
+      if (!hasModulo(i.modulo)) return false;
+
+      // 2. Admin logic
+      if (i.adminOnly && !isAdmin) return false;
+
+      // 3. Equipe logic para 'membro'
+      if (equipeRole === 'membro') {
+        const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];
+        const isAllowed = allowedPaths.some(path => i.url.startsWith(path));
+        if (!isAllowed) return false;
+      }
+
+      return true;
+    });
+  }, [subgroup.items, hasModulo, isAdmin, equipeRole]);
 
   const hasActive = visibleItems.some((i) => isRouteActive(location.pathname, i.url));
   // Fechado por padrão; abre automaticamente se a rota ativa estiver dentro dele
@@ -296,13 +323,24 @@ function NavGroupSection({
   hasModulo: (m: string) => boolean;
   location: { pathname: string };
 }) {
-  const { isAdmin } = useAuth();
-  if (group.adminOnly && !isAdmin) return null;
+  const { isAdmin, equipeRole } = useAuth();
+  if (group.adminOnly && !isAdmin && equipeRole !== 'gerente') return null;
 
   // Filtra subgrupos visíveis (com pelo menos 1 item permitido)
   const visibleSubgroups = group.subgroups.filter((sg) => {
-    if (sg.adminOnly && !isAdmin) return false;
-    return sg.items.some((i) => hasModulo(i.modulo) && (!i.adminOnly || isAdmin));
+    if (sg.adminOnly && !isAdmin && equipeRole !== 'gerente') return false;
+    
+    return sg.items.some((i) => {
+      if (!hasModulo(i.modulo)) return false;
+      if (i.adminOnly && !isAdmin) return false;
+      
+      if (equipeRole === 'membro') {
+        const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];
+        return allowedPaths.some(path => i.url.startsWith(path));
+      }
+      
+      return true;
+    });
   });
   if (visibleSubgroups.length === 0) return null;
 
@@ -341,7 +379,7 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const navigate = useNavigate();
-  const { hasModulo, signOut } = useAuth();
+  const { hasModulo, signOut, isAdmin, equipeRole } = useAuth();
 
   const handleLogout = async () => {
     await signOut();
