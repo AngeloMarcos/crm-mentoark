@@ -29,6 +29,7 @@ interface AuthContextValue {
   modulos: string[];
   hasModulo: (key: string) => boolean;
   modulosLoading: boolean;
+  equipeRole: 'gerente' | 'membro' | null;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -40,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading]     = useState(true);
   const [modulos, setModulos]     = useState<string[]>([]);
   const [modulosLoading, setModulosLoading] = useState(true);
+  const [equipeRole, setEquipeRole] = useState<'gerente' | 'membro' | null>(null);
 
   const resolveAdmin = (u: AppUser | null) => {
     if (!u) { setIsAdmin(false); return; }
@@ -63,6 +65,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const carregarEquipeRole = async (token: string, currentUserId?: string) => {
+    try {
+      const r = await fetch(`${API_BASE}/api/equipes/minha`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const data = await r.json();
+        if (data.equipe) {
+          // Se for owner_id, é gerente. Senão pega o user_role retornado pela query (que vem de equipe_membros)
+          const isOwner = currentUserId && data.equipe.owner_id === currentUserId;
+          setEquipeRole(isOwner ? 'gerente' : data.equipe.user_role || 'membro');
+        } else {
+          setEquipeRole(null);
+        }
+      }
+    } catch {
+      setEquipeRole(null);
+    }
+  };
+
+  const carregarEquipeRole = async (token: string) => {
+    try {
+      const r = await fetch(`${API_BASE}/api/equipes/minha`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const data = await r.json();
+        if (data.equipe) {
+          setEquipeRole(data.equipe.user_role || (data.equipe.owner_id === data.equipe.id ? 'gerente' : 'membro'));
+          // Ajuste: se for owner_id == current user id, é gerente
+        } else {
+          setEquipeRole(null);
+        }
+      }
+    } catch {
+      setEquipeRole(null);
+    }
+  };
+
   useEffect(() => {
     const { data: { subscription } } = api.auth.onAuthStateChange((_event, sess: any) => {
       const s = sess as AppSession | null;
@@ -72,10 +113,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (_event === "SIGNED_IN" && s?.access_token) {
         carregarModulos(s.access_token);
+        carregarEquipeRole(s.access_token, s.user.id);
+        carregarEquipeRole(s.access_token);
       }
       if (_event === "SIGNED_OUT") {
         setModulos([]);
         setModulosLoading(false);
+        setEquipeRole(null);
       }
     });
 
@@ -88,6 +132,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (s?.access_token) {
         carregarModulos(s.access_token);
+        carregarEquipeRole(s.access_token, s.user.id);
+        carregarEquipeRole(s.access_token);
       } else {
         setModulosLoading(false);
       }
@@ -108,12 +154,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsAdmin(false);
     setModulos([]);
     setModulosLoading(false);
+    setEquipeRole(null);
   };
 
   return (
     <AuthContext.Provider value={{
       user, session, isAdmin, loading, signOut,
-      modulos, hasModulo, modulosLoading,
+      modulos, hasModulo, modulosLoading, equipeRole,
     }}>
       {children}
     </AuthContext.Provider>
@@ -132,6 +179,7 @@ export function useAuth() {
       modulos: [],
       hasModulo: () => false,
       modulosLoading: true,
+      equipeRole: null,
     };
   }
   return ctx;
