@@ -126,8 +126,12 @@ export function AppHeader() {
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 ml-1 pl-1 pr-2 py-1 rounded-full hover:bg-muted/60 transition-colors group">
               <div className="ring-gradient glow-primary">
-                <div className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-semibold gradient-brand-text">
-                  {initials}
+                <div className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-semibold gradient-brand-text overflow-hidden">
+                  {user?.avatar_url ? (
+                    <img src={user.avatar_url} alt={displayName} className="w-full h-full object-cover" />
+                  ) : (
+                    initials
+                  )}
                 </div>
               </div>
               <div className="hidden sm:flex flex-col items-start leading-tight">
