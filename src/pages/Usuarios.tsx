@@ -179,6 +179,58 @@ export default function UsuariosPage() {
     }
   };
 
+  /* ── Excluir usuário ────────────────────────────────────────── */
+  const confirmarExcluir = async () => {
+    if (!userExcluir) return;
+    setExcluindo(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/profiles/${userExcluir.user_id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.message || "Erro ao excluir");
+      }
+      toast.success(`${userExcluir.email} excluído`);
+      setUserExcluir(null);
+      load();
+    } catch (e: any) {
+      toast.error(e.message || "Erro ao excluir usuário");
+    } finally {
+      setExcluindo(false);
+    }
+  };
+
+  /* ── Resetar senha ──────────────────────────────────────────── */
+  const confirmarResetSenha = async () => {
+    if (!userResetar) return;
+    if (novaSenha.length < 6) {
+      toast.error("A senha deve ter pelo menos 6 caracteres");
+      return;
+    }
+    setResetando(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/profiles/${userResetar.user_id}/reset-password`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ new_password: novaSenha }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.message || "Erro ao resetar senha");
+      }
+      toast.success(`Senha de ${userResetar.email} redefinida`);
+      setUserResetar(null);
+      setNovaSenha("");
+    } catch (e: any) {
+      toast.error(e.message || "Erro ao resetar senha");
+    } finally {
+      setResetando(false);
+    }
+  };
+
+
   /* ── Render ─────────────────────────────────────────────────── */
   return (
     <CRMLayout>
