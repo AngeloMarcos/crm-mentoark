@@ -153,6 +153,7 @@ const navGroups: NavGroup[] = [
         color: "text-teal-600",
         adminOnly: true,
         items: [
+          { title: "Equipe",    url: "/equipe",    icon: UsersIcon,   modulo: "usuarios", color: "text-indigo-500", adminOnly: true },
           { title: "Usuários",  url: "/usuarios",  icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
           { title: "Segurança", url: "/seguranca", icon: Lock,        modulo: "usuarios", color: "text-red-400",  adminOnly: true },
         ],
