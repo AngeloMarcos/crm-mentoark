@@ -252,6 +252,26 @@ export default function UsuariosPage() {
                                 ? <><ShieldOff className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Remover admin</span></>
                                 : <><Shield className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Tornar admin</span></>}
                             </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => { setUserResetar(u); setNovaSenha(""); }}
+                              title="Resetar senha"
+                            >
+                              <KeyRound className="h-4 w-4 sm:mr-1" />
+                              <span className="hidden sm:inline">Senha</span>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setUserExcluir(u)}
+                              disabled={u.user_id === currentUser?.id}
+                              className="text-destructive hover:text-destructive"
+                              title="Excluir usuário"
+                            >
+                              <Trash2 className="h-4 w-4 sm:mr-1" />
+                              <span className="hidden sm:inline">Excluir</span>
+                            </Button>
                           </div>
                         </TableCell>
                       </TableRow>
