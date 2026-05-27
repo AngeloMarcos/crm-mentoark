@@ -196,11 +196,25 @@ function NavSubgroupSection({
   hasModulo: (m: string) => boolean;
   location: { pathname: string };
 }) {
-  const { isAdmin } = useAuth();
-  const visibleItems = useMemo(
-    () => subgroup.items.filter((i) => hasModulo(i.modulo) && (!i.adminOnly || isAdmin)),
-    [subgroup.items, hasModulo, isAdmin]
-  );
+  const { isAdmin, equipeRole } = useAuth();
+  const visibleItems = useMemo(() => {
+    return subgroup.items.filter((i) => {
+      // 1. Permissão por módulo
+      if (!hasModulo(i.modulo)) return false;
+
+      // 2. Admin logic
+      if (i.adminOnly && !isAdmin) return false;
+
+      // 3. Equipe logic para 'membro'
+      if (equipeRole === 'membro') {
+        const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];
+        const isAllowed = allowedPaths.some(path => i.url.startsWith(path));
+        if (!isAllowed) return false;
+      }
+
+      return true;
+    });
+  }, [subgroup.items, hasModulo, isAdmin, equipeRole]);
 
   const hasActive = visibleItems.some((i) => isRouteActive(location.pathname, i.url));
   // Fechado por padrão; abre automaticamente se a rota ativa estiver dentro dele
