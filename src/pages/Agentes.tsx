@@ -67,10 +67,60 @@ interface Agente {
   ativo: boolean;
   created_at: string;
   updated_at: string;
+  // Motor de IA nativo (novo)
+  provider?: string | null;
+  modelo_id?: string | null;
+  modalidade_audio?: boolean | null;
+  modalidade_imagem?: boolean | null;
+  modalidade_video?: boolean | null;
+  mcp_tools?: string[] | null;
 }
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
-const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "claude-3-5-sonnet", "gemini-1.5-pro"];
+
+// Motor nativo — providers e modelos disponíveis
+export const PROVIDERS = [
+  {
+    id: "claude",
+    label: "Claude (Anthropic)",
+    modelos: [
+      { id: "claude-3-5-haiku-latest",  label: "Haiku — rápido e barato",  custo: "~$0.0002/msg" },
+      { id: "claude-3-5-sonnet-latest", label: "Sonnet — balanceado",      custo: "~$0.003/msg"  },
+      { id: "claude-3-opus-latest",     label: "Opus — máxima qualidade",  custo: "~$0.015/msg"  },
+    ],
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    modelos: [
+      { id: "gpt-4o",      label: "GPT-4o — multimodal",  custo: "~$0.005/msg"  },
+      { id: "gpt-4o-mini", label: "GPT-4o mini — barato", custo: "~$0.0001/msg" },
+    ],
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini",
+    modelos: [
+      { id: "gemini-1.5-flash", label: "Flash — ultra barato", custo: "~$0.00004/msg" },
+      { id: "gemini-1.5-pro",   label: "Pro — qualidade",      custo: "~$0.001/msg"   },
+    ],
+  },
+] as const;
+
+export const MCP_TOOLS = [
+  { id: "buscar_contato",      label: "Buscar contato"        },
+  { id: "criar_contato",       label: "Criar contato"         },
+  { id: "buscar_historico",    label: "Buscar histórico"      },
+  { id: "buscar_leads",        label: "Buscar leads"          },
+  { id: "criar_lead",          label: "Criar lead"            },
+  { id: "atualizar_lead",      label: "Atualizar lead"        },
+  { id: "buscar_produtos",     label: "Buscar produtos"       },
+  { id: "buscar_agendamentos", label: "Buscar agendamentos"   },
+  { id: "criar_agendamento",   label: "Criar agendamento"     },
+  { id: "registrar_pausa_ia",  label: "Pausar IA p/ humano"   },
+];
+
+const MCP_TOOLS_DEFAULT = MCP_TOOLS.map((t) => t.id);
 
 const formInicial = {
   nome: "",
@@ -92,6 +142,13 @@ const formInicial = {
   rag_threshold: 0.7,
   rag_resultados: 5,
   ativo: true,
+  // Motor nativo
+  provider: "claude",
+  modelo_id: "claude-3-5-sonnet-latest",
+  modalidade_audio: true,
+  modalidade_imagem: true,
+  modalidade_video: false,
+  mcp_tools: MCP_TOOLS_DEFAULT as string[],
 };
 
 function formatarData(iso: string) {
