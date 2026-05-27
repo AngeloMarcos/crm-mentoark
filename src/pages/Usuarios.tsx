@@ -6,15 +6,21 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { api } from "@/integrations/database/client";
-import { Shield, ShieldOff, Loader2, Users, LayoutGrid } from "lucide-react";
+import { Shield, ShieldOff, Loader2, Users, LayoutGrid, Trash2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
+
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => getAuthToken();
@@ -46,6 +52,15 @@ export default function UsuariosPage() {
   const [modulosLoading, setModulosLoading]     = useState(false);
   const [salvandoModulo, setSalvandoModulo]     = useState<string | null>(null);
   const [modalModulos, setModalModulos]         = useState(false);
+
+  // Excluir / Resetar senha
+  const [userExcluir, setUserExcluir]   = useState<UserRow | null>(null);
+  const [excluindo, setExcluindo]       = useState(false);
+  const [userResetar, setUserResetar]   = useState<UserRow | null>(null);
+  const [novaSenha, setNovaSenha]       = useState("");
+  const [resetando, setResetando]       = useState(false);
+
+
 
   /* ── Carregar usuários ──────────────────────────────────────── */
   const load = async () => {
@@ -164,6 +179,58 @@ export default function UsuariosPage() {
     }
   };
 
+  /* ── Excluir usuário ────────────────────────────────────────── */
+  const confirmarExcluir = async () => {
+    if (!userExcluir) return;
+    setExcluindo(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/profiles/${userExcluir.user_id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.message || "Erro ao excluir");
+      }
+      toast.success(`${userExcluir.email} excluído`);
+      setUserExcluir(null);
+      load();
+    } catch (e: any) {
+      toast.error(e.message || "Erro ao excluir usuário");
+    } finally {
+      setExcluindo(false);
+    }
+  };
+
+  /* ── Resetar senha ──────────────────────────────────────────── */
+  const confirmarResetSenha = async () => {
+    if (!userResetar) return;
+    if (novaSenha.length < 6) {
+      toast.error("A senha deve ter pelo menos 6 caracteres");
+      return;
+    }
+    setResetando(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/profiles/${userResetar.user_id}/reset-password`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ new_password: novaSenha }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.message || "Erro ao resetar senha");
+      }
+      toast.success(`Senha de ${userResetar.email} redefinida`);
+      setUserResetar(null);
+      setNovaSenha("");
+    } catch (e: any) {
+      toast.error(e.message || "Erro ao resetar senha");
+    } finally {
+      setResetando(false);
+    }
+  };
+
+
   /* ── Render ─────────────────────────────────────────────────── */
   return (
     <CRMLayout>
@@ -236,6 +303,26 @@ export default function UsuariosPage() {
                               {u.is_admin
                                 ? <><ShieldOff className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Remover admin</span></>
                                 : <><Shield className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Tornar admin</span></>}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => { setUserResetar(u); setNovaSenha(""); }}
+                              title="Resetar senha"
+                            >
+                              <KeyRound className="h-4 w-4 sm:mr-1" />
+                              <span className="hidden sm:inline">Senha</span>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setUserExcluir(u)}
+                              disabled={u.user_id === currentUser?.id}
+                              className="text-destructive hover:text-destructive"
+                              title="Excluir usuário"
+                            >
+                              <Trash2 className="h-4 w-4 sm:mr-1" />
+                              <span className="hidden sm:inline">Excluir</span>
                             </Button>
                           </div>
                         </TableCell>
@@ -335,6 +422,64 @@ export default function UsuariosPage() {
             </Button>
             <Button onClick={() => setModalModulos(false)} className="flex-1 sm:flex-none">
               Fechar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmação de exclusão */}
+      <AlertDialog open={!!userExcluir} onOpenChange={(o) => !o && setUserExcluir(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir usuário?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação é permanente. O usuário <strong>{userExcluir?.email}</strong> e
+              todos os seus dados associados serão removidos.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={excluindo}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); confirmarExcluir(); }}
+              disabled={excluindo}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {excluindo ? <Loader2 className="h-4 w-4 animate-spin" /> : "Excluir"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reset de senha */}
+      <Dialog open={!!userResetar} onOpenChange={(o) => { if (!o) { setUserResetar(null); setNovaSenha(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-primary" />
+              Redefinir senha
+            </DialogTitle>
+            <DialogDescription>
+              Defina uma nova senha para <strong>{userResetar?.email}</strong>. O usuário
+              poderá usá-la imediatamente para entrar.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="nova-senha">Nova senha</Label>
+            <Input
+              id="nova-senha"
+              type="text"
+              value={novaSenha}
+              onChange={(e) => setNovaSenha(e.target.value)}
+              placeholder="Mínimo 6 caracteres"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setUserResetar(null); setNovaSenha(""); }} disabled={resetando}>
+              Cancelar
+            </Button>
+            <Button onClick={confirmarResetSenha} disabled={resetando || novaSenha.length < 6}>
+              {resetando ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar nova senha"}
             </Button>
           </DialogFooter>
         </DialogContent>

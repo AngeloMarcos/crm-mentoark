@@ -1,8 +1,10 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
+import bcrypt from 'bcryptjs';
 import { AuthRequest, adminMiddleware } from '../middleware';
 
 export default function usuarios(pool: Pool): Router {
+
   const router = Router();
 
   // ----- Virtual table: profiles -----
@@ -97,5 +99,43 @@ export default function usuarios(pool: Pool): Router {
     }
   });
 
+  // DELETE /api/profiles/:user_id — exclui um usuário (admin)
+  router.delete('/profiles/:user_id', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+      const { user_id } = req.params;
+      if (!user_id) return res.status(400).json({ message: 'user_id obrigatório' });
+      if (String(user_id) === req.userId) {
+        return res.status(403).json({ message: 'Você não pode excluir sua própria conta.' });
+      }
+      const r = await pool.query(`DELETE FROM users WHERE id = $1 RETURNING id`, [user_id]);
+      if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado' });
+      return res.status(204).send();
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/profiles/:user_id/reset-password — redefine a senha (admin)
+  router.post('/profiles/:user_id/reset-password', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+      const { user_id } = req.params;
+      const { new_password } = req.body || {};
+      if (!user_id) return res.status(400).json({ message: 'user_id obrigatório' });
+      if (!new_password || String(new_password).length < 6) {
+        return res.status(400).json({ message: 'Nova senha deve ter pelo menos 6 caracteres' });
+      }
+      const hash = await bcrypt.hash(String(new_password), 12);
+      const r = await pool.query(
+        `UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id`,
+        [hash, user_id]
+      );
+      if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado' });
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   return router;
 }
+
