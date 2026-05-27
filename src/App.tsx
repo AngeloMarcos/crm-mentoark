@@ -89,6 +89,7 @@ const App = () => (
               <Route path="/seguranca"    element={<ProtectedRoute requireAdmin>               <SegurancaPage /></ProtectedRoute>} />
               <Route path="/chat-equipe"  element={<ProtectedRoute requireModulo="whatsapp">   <ChatEquipePage /></ProtectedRoute>} />
               <Route path="/smart-links"  element={<ProtectedRoute requireModulo="whatsapp">   <SmartLinksPage /></ProtectedRoute>} />
+              <Route path="/perfil"       element={<ProtectedRoute><PerfilPage /></ProtectedRoute>} />
 
               {import.meta.env.DEV && (
                 <>
