@@ -85,24 +85,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const carregarEquipeRole = async (token: string) => {
-    try {
-      const r = await fetch(`${API_BASE}/api/equipes/minha`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (r.ok) {
-        const data = await r.json();
-        if (data.equipe) {
-          setEquipeRole(data.equipe.user_role || (data.equipe.owner_id === data.equipe.id ? 'gerente' : 'membro'));
-          // Ajuste: se for owner_id == current user id, é gerente
-        } else {
-          setEquipeRole(null);
-        }
-      }
-    } catch {
-      setEquipeRole(null);
-    }
-  };
 
   useEffect(() => {
     const { data: { subscription } } = api.auth.onAuthStateChange((_event, sess: any) => {
@@ -114,7 +96,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (_event === "SIGNED_IN" && s?.access_token) {
         carregarModulos(s.access_token);
         carregarEquipeRole(s.access_token, s.user.id);
-        carregarEquipeRole(s.access_token);
       }
       if (_event === "SIGNED_OUT") {
         setModulos([]);
@@ -133,7 +114,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (s?.access_token) {
         carregarModulos(s.access_token);
         carregarEquipeRole(s.access_token, s.user.id);
-        carregarEquipeRole(s.access_token);
       } else {
         setModulosLoading(false);
       }

@@ -4,7 +4,7 @@ import {
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
-  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor,
+  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -44,6 +44,19 @@ interface NavGroup {
 // ── Estrutura ─────────────────────────────────────────────────────────────────
 
 const navGroups: NavGroup[] = [
+  {
+    label: "Equipe",
+    subgroups: [
+      {
+        label: "Minha Equipe",
+        icon: Users2,
+        color: "text-indigo-500",
+        items: [
+          { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
+        ],
+      },
+    ],
+  },
   {
     label: "Visão Geral",
     subgroups: [
@@ -296,13 +309,24 @@ function NavGroupSection({
   hasModulo: (m: string) => boolean;
   location: { pathname: string };
 }) {
-  const { isAdmin } = useAuth();
-  if (group.adminOnly && !isAdmin) return null;
+  const { isAdmin, equipeRole } = useAuth();
+  if (group.adminOnly && !isAdmin && equipeRole !== 'gerente') return null;
 
   // Filtra subgrupos visíveis (com pelo menos 1 item permitido)
   const visibleSubgroups = group.subgroups.filter((sg) => {
-    if (sg.adminOnly && !isAdmin) return false;
-    return sg.items.some((i) => hasModulo(i.modulo) && (!i.adminOnly || isAdmin));
+    if (sg.adminOnly && !isAdmin && equipeRole !== 'gerente') return false;
+    
+    return sg.items.some((i) => {
+      if (!hasModulo(i.modulo)) return false;
+      if (i.adminOnly && !isAdmin) return false;
+      
+      if (equipeRole === 'membro') {
+        const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];
+        return allowedPaths.some(path => i.url.startsWith(path));
+      }
+      
+      return true;
+    });
   });
   if (visibleSubgroups.length === 0) return null;
 
@@ -341,7 +365,7 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const navigate = useNavigate();
-  const { hasModulo, signOut } = useAuth();
+  const { hasModulo, signOut, isAdmin, equipeRole } = useAuth();
 
   const handleLogout = async () => {
     await signOut();
