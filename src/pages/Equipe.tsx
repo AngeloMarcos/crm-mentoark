@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,11 +8,20 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare } from "lucide-react";
+import { 
+  Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare, 
+  Settings2, Copy, RefreshCw, Shield, LayoutGrid, MessageCircle, 
+  UserPlus2, Users2, BarChart3, Send
+} from "lucide-react";
 import { useEquipe, type Membro } from "@/hooks/useEquipe";
 import { useAuth } from "@/hooks/useAuth";
 import { ChatEquipe } from "@/components/equipe/ChatEquipe";
+import { useSubPerfis, type SubPerfil } from "@/hooks/useSubPerfis";
+import { cn } from "@/lib/utils";
 
 function iniciais(nome?: string, email?: string) {
   const base = (nome || email || "?").trim();
