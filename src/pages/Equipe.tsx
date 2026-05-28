@@ -47,12 +47,33 @@ export default function EquipePage() {
         {!equipe ? (
           <Onboarding onCreate={criarEquipe} />
         ) : (
-          <Painel
-            equipe={equipe}
-            membros={membros}
-            onConvidar={convidarMembro}
-            onRemover={removerMembro}
-          />
+          <Tabs defaultValue="geral" className="space-y-6">
+            <div className="flex items-center justify-between">
+              <TabsList>
+                <TabsTrigger value="geral" className="gap-2">
+                  <Users2 className="w-4 h-4" /> Geral
+                </TabsTrigger>
+                {(user?.role === 'admin' || user?.role === 'gerente') && (
+                  <TabsTrigger value="membros" className="gap-2">
+                    <UserPlus2 className="w-4 h-4" /> Membros
+                  </TabsTrigger>
+                )}
+              </TabsList>
+            </div>
+
+            <TabsContent value="geral">
+              <Painel
+                equipe={equipe}
+                membros={membros}
+                onConvidar={convidarMembro}
+                onRemover={removerMembro}
+              />
+            </TabsContent>
+
+            <TabsContent value="membros">
+              <GestaoMembros />
+            </TabsContent>
+          </Tabs>
         )}
       </div>
     </CRMLayout>
