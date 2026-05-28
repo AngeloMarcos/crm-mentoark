@@ -89,7 +89,7 @@ const KanbanCard = ({ tarefa, onEditar, isDragging }: KanbanCardProps) => {
               dataVencida ? "text-red-500 font-medium" : "text-slate-400"
             )}>
               <Calendar className="w-3 h-3" />
-              {format(new Date(tarefa.data_limite), "dd/MM", { locale: pt_BR })}
+              {format(new Date(tarefa.data_limite), "dd/MM", { locale: ptBR })}
             </div>
           )}
           
