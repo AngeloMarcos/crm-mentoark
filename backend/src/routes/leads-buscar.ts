@@ -47,7 +47,6 @@ export default function leadsBuscarRouter(pool: Pool): Router {
       return res.status(400).json({ error: 'segmento é obrigatório' });
     }
 
-    const userId = req.userId!;
     const googleKey = await getKey(pool, userId, 'google_places', 'GOOGLE_PLACES_KEY');
 
     if (!googleKey) {
