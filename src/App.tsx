@@ -45,6 +45,7 @@ import TesteConversas from "./pages/TesteConversas";
 import MonitorWhatsApp from "./pages/MonitorWhatsApp";
 import PerfilPage from "./pages/Perfil";
 import EquipePage from "./pages/Equipe";
+import KanbanPage from "./pages/Kanban";
 import AceitarConvitePage from "./pages/AceitarConvite";
 
 const queryClient = new QueryClient();
