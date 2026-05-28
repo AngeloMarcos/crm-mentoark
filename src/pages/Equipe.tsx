@@ -736,4 +736,6 @@ function ModalPermissoes({ subPerfil, modulosDisponiveis, onClose, onSave }: { s
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
 
