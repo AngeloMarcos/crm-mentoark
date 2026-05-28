@@ -61,6 +61,7 @@ import marketingRouter from './routes/marketing';
 import teamRouter, { teamInvitePublicRouter } from './routes/team';
 import equipeRouter from './routes/equipe';
 import subPerfisRouter from './routes/subperfis';
+import kanbanRouter from './routes/kanban';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
