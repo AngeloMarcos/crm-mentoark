@@ -1,6 +1,12 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import OpenAI from 'openai';
+
+const anthropic = new OpenAI({
+  apiKey: process.env.ANTHROPIC_API_KEY || 'sk-ant-...', // Placeholder
+  baseURL: 'https://api.anthropic.com/v1', // Using OpenAI SDK with Anthropic base if possible, but actually we should use standard fetch or dedicated lib
+});
 
 export default function kanban(pool: Pool): Router {
   const router = Router();
