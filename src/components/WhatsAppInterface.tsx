@@ -233,6 +233,26 @@ export function WhatsAppInterface() {
     setMessageInput("");
   };
 
+  const handleCriarTarefaIA = async (conversaId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/kanban/tarefas/da-conversa`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ conversa_id: conversaId })
+      });
+      if (!res.ok) throw new Error();
+      toast.success("Tarefa criada no Kanban com resumo da IA ✨", {
+        description: "Acesse o menu Kanban para gerenciar.",
+        action: {
+          label: "Ver Kanban",
+          onClick: () => navigate("/kanban")
+        }
+      });
+    } catch {
+      toast.error("Erro ao criar tarefa via IA");
+    }
+  };
+
   const isConnected = connectionStatus?.state === "open";
 
   return (
