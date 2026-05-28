@@ -16,6 +16,9 @@ export interface Tarefa {
   atribuido_a?: string;
   atribuido_nome?: string;
   atribuido_email?: string;
+  sub_perfil_id?: string;
+  contato_id?: string;
+  conversa_id?: string;
   data_limite?: string;
   tags?: string[];
   origem?: string;
