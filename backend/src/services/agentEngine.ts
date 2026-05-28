@@ -3,12 +3,15 @@ import { Pool } from 'pg';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'not-configured' });
 
-interface MensagemEntrada {
+export interface MensagemEntrada {
   instancia: string;
   messageId: string;
-  telefone: string;         // ex: "5511999999999"
-  pushName: string;         // nome do WhatsApp
-  texto: string;            // conteúdo da mensagem
+  telefone: string;       // ex: "5511999999999"
+  pushName: string;       // nome do WhatsApp
+  texto: string | null;   // null quando for áudio/imagem sem legenda
+  tipo: string;           // 'text' | 'audio' | 'image' | 'video' | 'document'
+  midiaUrl?: string;      // URL pública da mídia (Evolution já serve)
+  midiaBase64?: string;   // Base64 da mídia
   timestamp: number;
 }
 
@@ -24,7 +27,80 @@ interface AgenteConfig {
   ativo: boolean;
 }
 
-// Gera embedding via OpenAI para busca RAG
+// Buffer de mensagens picotadas: chave → { timeout, textos[], última entrada }
+const bufferMensagens = new Map<string, {
+  timeout: ReturnType<typeof setTimeout>;
+  textos: string[];
+  entrada: MensagemEntrada;
+}>();
+
+// ── Transcrição de áudio via Whisper ───────────────────────
+
+async function transcreverAudio(url: string): Promise<string | null> {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const buffer = await resp.arrayBuffer();
+    const blob = new Blob([buffer], { type: 'audio/ogg' });
+
+    const form = new FormData();
+    form.append('file', blob, 'audio.ogg');
+    form.append('model', 'whisper-1');
+    form.append('language', 'pt');
+
+    const transcResp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: form,
+    });
+    if (!transcResp.ok) return null;
+    const data: any = await transcResp.json();
+    return data.text || null;
+  } catch (err: any) {
+    console.warn('[AGT] Falha na transcrição de áudio:', err.message);
+    return null;
+  }
+}
+
+// ── Análise de imagem via GPT-4o vision ───────────────────
+
+async function analisarImagem(url: string, caption?: string): Promise<string> {
+  try {
+    const resp = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url } },
+          {
+            type: 'text',
+            text: caption
+              ? `O cliente enviou esta imagem com a legenda: "${caption}". Descreva brevemente o que vê e inclua a legenda no contexto.`
+              : 'Descreva brevemente o que há nesta imagem em 1-2 frases.',
+          },
+        ],
+      }],
+      max_tokens: 200,
+    });
+    return resp.choices[0]?.message?.content || '[imagem enviada]';
+  } catch {
+    return caption || '[imagem enviada]';
+  }
+}
+
+// ── Divisão inteligente da resposta em até 2 partes ───────
+
+function dividirMensagem(texto: string): string[] {
+  const partes = texto.split(/\n\n+/).filter(p => p.trim().length > 0);
+  if (partes.length <= 1) return [texto.trim()];
+  if (partes.length > 2) {
+    return [partes.slice(0, -1).join('\n\n'), partes[partes.length - 1]];
+  }
+  return partes;
+}
+
+// ── Helpers de DB ──────────────────────────────────────────
+
 async function gerarEmbedding(texto: string): Promise<number[]> {
   const resp = await openai.embeddings.create({
     model: 'text-embedding-3-small',
@@ -33,16 +109,12 @@ async function gerarEmbedding(texto: string): Promise<number[]> {
   return resp.data[0].embedding;
 }
 
-// Busca semântica nos documentos do usuário
 async function buscaRAG(pool: Pool, userId: string, pergunta: string, limite = 4): Promise<string[]> {
   try {
     const embedding = await gerarEmbedding(pergunta);
     const r = await pool.query(
-      `SELECT content, metadata->>'tipo' as tipo
-       FROM documents
-       WHERE user_id = $1
-       ORDER BY embedding <-> $2::vector
-       LIMIT $3`,
+      `SELECT content FROM documents WHERE user_id = $1
+       ORDER BY embedding <-> $2::vector LIMIT $3`,
       [userId, JSON.stringify(embedding), limite]
     );
     return r.rows.map(row => row.content);
@@ -51,16 +123,12 @@ async function buscaRAG(pool: Pool, userId: string, pergunta: string, limite = 4
   }
 }
 
-// Carrega histórico da conversa (últimas 12 mensagens)
 async function carregarHistorico(pool: Pool, sessionId: string): Promise<OpenAI.Chat.ChatCompletionMessageParam[]> {
   const r = await pool.query(
-    `SELECT message FROM n8n_chat_histories
-     WHERE session_id = $1
-     ORDER BY created_at DESC
-     LIMIT 12`,
+    `SELECT message FROM n8n_chat_histories WHERE session_id = $1
+     ORDER BY created_at DESC LIMIT 12`,
     [sessionId]
   );
-  // Retorna em ordem cronológica (mais antiga primeiro)
   return r.rows
     .reverse()
     .map(row => {
@@ -70,14 +138,9 @@ async function carregarHistorico(pool: Pool, sessionId: string): Promise<OpenAI.
     .filter(msg => msg.role && msg.content);
 }
 
-// Salva mensagem no histórico
 async function salvarMensagem(
-  pool: Pool,
-  sessionId: string,
-  userId: string,
-  instancia: string,
-  role: 'user' | 'assistant',
-  content: string
+  pool: Pool, sessionId: string, userId: string,
+  instancia: string, role: 'user' | 'assistant', content: string
 ) {
   await pool.query(
     `INSERT INTO n8n_chat_histories (session_id, message, user_id, instancia)
@@ -86,26 +149,15 @@ async function salvarMensagem(
   );
 }
 
-// Envia mensagem via Evolution API
 async function enviarResposta(
-  serverUrl: string,
-  apiKey: string,
-  instancia: string,
-  telefone: string,
-  texto: string
+  serverUrl: string, apiKey: string,
+  instancia: string, telefone: string, texto: string
 ): Promise<void> {
   const base = serverUrl.replace(/\/$/, '');
   const resp = await fetch(`${base}/message/sendText/${instancia}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: apiKey,
-    },
-    body: JSON.stringify({
-      number: telefone,
-      text: texto,
-      delay: 1200,
-    }),
+    headers: { 'Content-Type': 'application/json', apikey: apiKey },
+    body: JSON.stringify({ number: telefone, text: texto, delay: 1200 }),
   });
   if (!resp.ok) {
     const err = await resp.text();
@@ -113,16 +165,13 @@ async function enviarResposta(
   }
 }
 
-// Localiza ou cria contato no CRM
 async function upsertContato(pool: Pool, userId: string, telefone: string, nome: string): Promise<{ id: string; opt_out: boolean }> {
-  // Tenta encontrar pelo telefone
   const existente = await pool.query(
     `SELECT id, opt_out FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
     [userId, `%${telefone.slice(-11)}`]
   );
   if (existente.rows.length) return existente.rows[0];
 
-  // Cria novo contato
   const novo = await pool.query(
     `INSERT INTO contatos (user_id, nome, telefone, origem, status)
      VALUES ($1, $2, $3, 'WhatsApp', 'novo') RETURNING id, opt_out`,
@@ -134,9 +183,32 @@ async function upsertContato(pool: Pool, userId: string, telefone: string, nome:
 // ── MOTOR PRINCIPAL ─────────────────────────────────────────
 
 export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<void> {
-  console.log(`[AGT] Processando: instancia=${entrada.instancia} tel=${entrada.telefone}`);
+  console.log(`[AGT] Processando: instancia=${entrada.instancia} tel=${entrada.telefone} tipo=${entrada.tipo}`);
 
-  // 1. Encontrar agente pelo nome da instância (cada instância pertence a um único user)
+  // 1. Resolver mídia antes de qualquer outra lógica
+  let textoFinal = entrada.texto;
+
+  if (entrada.tipo === 'audio' && entrada.midiaUrl && !textoFinal) {
+    console.log(`[AGT] Transcrevendo áudio de ${entrada.telefone}...`);
+    textoFinal = await transcreverAudio(entrada.midiaUrl);
+    if (textoFinal) {
+      console.log(`[AGT] Transcrição: "${textoFinal.slice(0, 80)}..."`);
+    } else {
+      console.warn('[AGT] Não foi possível transcrever o áudio — ignorando');
+      return;
+    }
+  }
+
+  if (entrada.tipo === 'image' && entrada.midiaUrl) {
+    textoFinal = await analisarImagem(entrada.midiaUrl, entrada.texto || undefined);
+  }
+
+  if (!textoFinal) {
+    console.log('[AGT] Mensagem sem texto após processamento de mídia — ignorando');
+    return;
+  }
+
+  // 2. Encontrar agente
   const agenteRes = await pool.query(
     `SELECT * FROM agentes
      WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
@@ -149,18 +221,17 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
   }
   const agente: AgenteConfig = agenteRes.rows[0];
 
-  // 2. Verificar opt_out do contato
+  // 3. Verificar opt_out
   const contato = await upsertContato(pool, agente.user_id, entrada.telefone, entrada.pushName);
   if (contato.opt_out) {
     console.log(`[AGT] Contato ${entrada.telefone} com opt_out=true — ignorando`);
     return;
   }
 
-  // 2b. Verificar pausa de IA (atendimento humano ativo)
+  // 4. Verificar pausa de IA
   const pausaRes = await pool.query(
     `SELECT atendimento_ia FROM dados_cliente
-     WHERE user_id = $1 AND telefone ILIKE $2
-     LIMIT 1`,
+     WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
     [agente.user_id, `%${entrada.telefone.slice(-11)}`]
   ).catch(() => ({ rows: [] as any[] }));
   if (pausaRes.rows[0]?.atendimento_ia === 'pause') {
@@ -168,20 +239,17 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
     return;
   }
 
-  // 3. Carregar prompt ativo do agente
+  // 5. Carregar prompts e conhecimento
   const promptRes = await pool.query(
     `SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`,
     [agente.user_id]
   );
   const systemPrompt = promptRes.rows[0]?.conteudo ||
-    `Você é um assistente comercial prestativo. Atenda os clientes com educação e objetividade.`;
+    'Você é um assistente comercial prestativo. Atenda os clientes com educação e objetividade.';
 
-  // 4. Carregar conhecimento base (personalidade, negócio, FAQ)
   const conhecimentoRes = await pool.query(
-    `SELECT tipo, campo, conteudo FROM conhecimento
-     WHERE user_id = $1
-     ORDER BY tipo, created_at ASC
-     LIMIT 30`,
+    `SELECT tipo, campo, conteudo FROM conhecimento WHERE user_id = $1
+     ORDER BY tipo, created_at ASC LIMIT 30`,
     [agente.user_id]
   );
   const conhecimentoTexto = conhecimentoRes.rows.length
@@ -189,16 +257,15 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
       conhecimentoRes.rows.map(k => `[${k.tipo}${k.campo ? ' / ' + k.campo : ''}]\n${k.conteudo}`).join('\n\n')
     : '';
 
-  // 5. Busca RAG nos documentos vetoriais
-  const ragResultados = await buscaRAG(pool, agente.user_id, entrada.texto);
+  // 6. Busca RAG
+  const ragResultados = await buscaRAG(pool, agente.user_id, textoFinal);
   const ragTexto = ragResultados.length
     ? '\n\n--- INFORMAÇÕES RELEVANTES (RAG) ---\n' + ragResultados.join('\n\n---\n')
     : '';
 
-  // 6. Montar system prompt completo
   const systemCompleto = systemPrompt + conhecimentoTexto + ragTexto;
 
-  // 7. Carregar histórico da sessão
+  // 7. Histórico
   const sessionId = entrada.telefone;
   const historico = await carregarHistorico(pool, sessionId);
 
@@ -206,7 +273,7 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
   const mensagens: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemCompleto },
     ...historico,
-    { role: 'user', content: entrada.texto },
+    { role: 'user', content: textoFinal },
   ];
 
   const completion = await openai.chat.completions.create({
@@ -219,35 +286,121 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
   const resposta = completion.choices[0]?.message?.content;
   if (!resposta) throw new Error('OpenAI não retornou resposta');
 
-  // 9. Salvar conversa no histórico (n8n_chat_histories para RAG)
-  await salvarMensagem(pool, sessionId, agente.user_id, entrada.instancia, 'user', entrada.texto);
-  await salvarMensagem(pool, sessionId, agente.user_id, entrada.instancia, 'assistant', resposta);
+  // 9. Detectar sinal de pausa (251213) e limpar resposta
+  const SINAL_PAUSA = '251213';
+  const deveEPausar = resposta.includes(SINAL_PAUSA);
+  const respostaLimpa = resposta.replace(SINAL_PAUSA, '').replace(/\n{3,}/g, '\n\n').trim();
 
-  // 9b. Salvar resposta do agente em whatsapp_messages
+  // 10. Salvar conversa
+  await salvarMensagem(pool, sessionId, agente.user_id, entrada.instancia, 'user', textoFinal);
+  await salvarMensagem(pool, sessionId, agente.user_id, entrada.instancia, 'assistant', respostaLimpa);
+
+  // 10b. Salvar resposta em whatsapp_messages (schema novo EN)
   await pool.query(
     `INSERT INTO whatsapp_messages
-       (id, user_id, instancia, session_id, remote_jid, from_me, push_name, tipo, conteudo, status, timestamp_unix)
-     VALUES ($1, $2, $3, $4, $5, true, 'Agente IA', 'text', $6, 'sent', $7)
-     ON CONFLICT (id) DO NOTHING`,
+       (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
+     VALUES ($1, $2, $3, $4, true, 'text', $5, 'sent', to_timestamp($6))
+     ON CONFLICT (message_id, instance_name) DO NOTHING`,
     [
-      `resp_${entrada.messageId}`,
       agente.user_id,
       entrada.instancia,
-      entrada.telefone,
       `${entrada.telefone}@s.whatsapp.net`,
-      resposta,
+      `resp_${entrada.messageId}`,
+      respostaLimpa,
       Math.floor(Date.now() / 1000),
     ]
   ).catch(err => console.warn('[AGT] Falha ao salvar em whatsapp_messages:', err.message));
 
-  // 10. Enviar resposta via Evolution API
-  await enviarResposta(
-    agente.evolution_server_url,
-    agente.evolution_api_key,
-    agente.evolution_instancia || entrada.instancia,
-    entrada.telefone,
-    resposta
-  );
+  // 11. Dividir e enviar mensagens com delay
+  const partes = dividirMensagem(respostaLimpa);
+  for (let i = 0; i < partes.length; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 3000));
+    await enviarResposta(
+      agente.evolution_server_url,
+      agente.evolution_api_key,
+      agente.evolution_instancia || entrada.instancia,
+      entrada.telefone,
+      partes[i]
+    );
+  }
 
-  console.log(`[AGT] Resposta enviada para ${entrada.telefone}: ${resposta.slice(0, 80)}...`);
+  console.log(`[AGT] Resposta enviada para ${entrada.telefone}: "${respostaLimpa.slice(0, 80)}..."`);
+
+  // 12. Ações de pausa automática
+  if (deveEPausar) {
+    console.log(`[AGT] Pausa acionada para ${entrada.telefone}`);
+
+    await pool.query(
+      `UPDATE dados_cliente SET atendimento_ia = 'pause'
+       WHERE user_id = $1 AND telefone ILIKE $2`,
+      [agente.user_id, `%${entrada.telefone.slice(-11)}`]
+    ).catch(() => {});
+
+    // Buscar histórico para o card Kanban
+    const historicoRes = await pool.query(
+      `SELECT message FROM n8n_chat_histories
+       WHERE session_id = $1 AND user_id = $2
+       ORDER BY created_at DESC LIMIT 10`,
+      [sessionId, agente.user_id]
+    ).catch(() => ({ rows: [] as any[] }));
+
+    const resumoConversa = historicoRes.rows
+      .reverse()
+      .map((r: any) => {
+        const m = typeof r.message === 'string' ? JSON.parse(r.message) : r.message;
+        return `${m.role === 'user' ? 'Cliente' : 'IA'}: ${String(m.content).slice(0, 200)}`;
+      })
+      .join('\n');
+
+    const backendUrl = process.env.BACKEND_URL || 'https://api.mentoark.com.br';
+    const kanbanSecret = process.env.N8N_WEBHOOK_SECRET || 'mentoark-kanban-secret-2025';
+
+    fetch(`${backendUrl}/api/kanban/webhook/n8n`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-webhook-secret': kanbanSecret },
+      body: JSON.stringify({
+        user_id: agente.user_id,
+        titulo: `Lead: ${entrada.pushName} (${entrada.telefone})`,
+        resumo: resumoConversa.slice(0, 800) || 'Conversa finalizada pela IA',
+        contato_nome: entrada.pushName,
+        contato_telefone: entrada.telefone,
+        remote_jid: `${entrada.telefone}@s.whatsapp.net`,
+        instance_name: entrada.instancia,
+        conversa_id: sessionId,
+        prioridade: 'alta',
+      }),
+    }).catch(err => console.warn('[AGT] Falha ao criar card Kanban:', err.message));
+  }
+}
+
+// ── DEBOUNCE — agrupa mensagens picotadas ──────────────────
+
+export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada): Promise<void> {
+  const chave = `${entrada.instancia}:${entrada.telefone}`;
+  const DEBOUNCE_MS = 3000;
+
+  const existente = bufferMensagens.get(chave);
+  if (existente) {
+    clearTimeout(existente.timeout);
+    if (entrada.texto) existente.textos.push(entrada.texto);
+    existente.entrada = entrada;
+  } else {
+    bufferMensagens.set(chave, {
+      timeout: null as any,
+      textos: entrada.texto ? [entrada.texto] : [],
+      entrada,
+    });
+  }
+
+  const buf = bufferMensagens.get(chave)!;
+  buf.timeout = setTimeout(async () => {
+    bufferMensagens.delete(chave);
+    const entradaFinal: MensagemEntrada = { ...buf.entrada };
+    if (buf.textos.length > 1) {
+      entradaFinal.texto = buf.textos.join(' ');
+    }
+    await processarMensagem(pool, entradaFinal).catch(err => {
+      console.error('[AGT] Erro ao processar mensagem agrupada:', err);
+    });
+  }, DEBOUNCE_MS);
 }

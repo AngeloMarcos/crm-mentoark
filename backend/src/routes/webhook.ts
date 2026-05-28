@@ -1,24 +1,16 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import crypto from 'crypto';
-import { processarMensagem } from '../services/agentEngine';
+import { processarComDebounce } from '../services/agentEngine';
 
 function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
   const assinaturaRecebida = req.headers['x-evolution-hmac'] as string;
   if (!assinaturaRecebida) return false;
-
   const body = JSON.stringify(req.body);
-  const hmac = crypto
-    .createHmac('sha256', secret)
-    .update(body)
-    .digest('hex');
-
+  const hmac = crypto.createHmac('sha256', secret).update(body).digest('hex');
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(assinaturaRecebida, 'hex'),
-      Buffer.from(hmac, 'hex')
-    );
-  } catch (e) {
+    return crypto.timingSafeEqual(Buffer.from(assinaturaRecebida, 'hex'), Buffer.from(hmac, 'hex'));
+  } catch {
     return false;
   }
 }
@@ -27,11 +19,7 @@ interface EvolutionPayload {
   event: string;
   instance: string;
   data: {
-    key: {
-      remoteJid: string;
-      fromMe: boolean;
-      id: string;
-    };
+    key: { remoteJid: string; fromMe: boolean; id: string };
     message?: {
       conversation?: string;
       extendedTextMessage?: { text: string };
@@ -50,9 +38,12 @@ interface EvolutionPayload {
   };
 }
 
-// Palavras-chave de opt-out (comparação case-insensitive após trim)
 const OPT_OUT_KEYWORDS = new Set([
   'sair', 'stop', 'parar', 'cancelar', 'remover', 'não quero', 'nao quero',
+]);
+
+const REATIVAR_COMANDOS = new Set([
+  'reativar ia', 'ativar ia', 'reativar', 'atendimento finalizado',
 ]);
 
 function extrairTexto(data: EvolutionPayload['data']): string | null {
@@ -84,58 +75,66 @@ function extrairTipo(data: EvolutionPayload['data']): string {
 function extrairMidia(data: EvolutionPayload['data']): { url?: string; mime?: string; nome?: string } {
   const m = data.message;
   if (!m) return {};
-  const src =
-    m.imageMessage ||
-    m.audioMessage ||
-    m.videoMessage ||
-    m.documentMessage ||
-    m.stickerMessage;
+  const src = m.imageMessage || m.audioMessage || m.videoMessage || m.documentMessage || m.stickerMessage;
   if (!src) return {};
-  return {
-    url: (src as any).url,
-    mime: (src as any).mimetype,
-    nome: (src as any).fileName,
-  };
+  return { url: (src as any).url, mime: (src as any).mimetype, nome: (src as any).fileName };
 }
 
 export default function webhookRouter(pool: Pool): Router {
   const router = Router();
-
   const processados = new Set<string>();
 
   router.post('/evolution', async (req: Request, res: Response) => {
-    // Verificar assinatura se EVOLUTION_WEBHOOK_SECRET estiver configurado
     const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
-    if (webhookSecret) {
-      if (!verificarAssinaturaEvolution(req, webhookSecret)) {
-        console.warn('[WEBHOOK] Assinatura inválida — requisição rejeitada');
-        return res.status(401).json({ error: 'Assinatura inválida' });
-      }
+    if (webhookSecret && !verificarAssinaturaEvolution(req, webhookSecret)) {
+      console.warn('[WEBHOOK] Assinatura inválida — requisição rejeitada');
+      return res.status(401).json({ error: 'Assinatura inválida' });
     }
 
     res.status(200).json({ ok: true });
 
     try {
       const payload = req.body as EvolutionPayload;
-
       if (payload.event !== 'messages.upsert') return;
-      if (payload.data?.key?.fromMe === true) return;
       if (payload.data?.status === 'READ') return;
 
-      const messageId = payload.data?.key?.id;
+      const messageId = payload.data?.key?.id || '';
       const instancia = payload.instance;
       const remoteJid = payload.data?.key?.remoteJid || '';
       const telefone = remoteJid.split('@')[0];
       const pushName = payload.data?.pushName || telefone;
+      const fromMe = payload.data?.key?.fromMe === true;
 
       if (!messageId || !telefone || remoteJid.includes('@g.us')) return;
 
-      // Deduplicação em memória
+      // ── Mensagem enviada pelo atendente (fromMe) → pausa humana ───────────
+      if (fromMe) {
+        // Ignorar respostas do próprio bot (prefixo resp_)
+        if (messageId.startsWith('resp_')) return;
+
+        // É o atendente enviando manualmente → pausar IA
+        const aR = await pool.query(
+          `SELECT user_id FROM agentes
+           WHERE evolution_instancia = $1 AND ativo = true LIMIT 1`,
+          [instancia]
+        ).catch(() => ({ rows: [] as any[] }));
+
+        if (aR.rows[0]?.user_id) {
+          await pool.query(
+            `UPDATE dados_cliente SET atendimento_ia = 'pause'
+             WHERE user_id = $1 AND telefone ILIKE $2`,
+            [aR.rows[0].user_id, `%${telefone.slice(-11)}`]
+          ).catch(() => {});
+          console.log(`[WEBHOOK] IA pausada por intervenção humana: ${telefone}`);
+        }
+        return;
+      }
+
+      // ── Deduplicação ──────────────────────────────────────────────────────
       if (processados.has(messageId)) return;
       processados.add(messageId);
       setTimeout(() => processados.delete(messageId), 60000);
 
-      // Deduplicação no banco
       const jaExiste = await pool.query(
         'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
         [messageId]
@@ -147,128 +146,86 @@ export default function webhookRouter(pool: Pool): Router {
         [messageId, instancia]
       );
 
-      // Extrair dados da mensagem
+      // ── Extrair dados da mensagem ─────────────────────────────────────────
       const texto = extrairTexto(payload.data);
       const tipo = extrairTipo(payload.data);
       const midia = extrairMidia(payload.data);
       const timestamp = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
 
-      // Encontrar user_id e n8n_webhook_url pela instância
+      // ── Encontrar agente e user_id ────────────────────────────────────────
       const agenteRes = await pool.query(
-        `SELECT user_id, n8n_webhook_url FROM agentes
+        `SELECT user_id FROM agentes
          WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
          ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       );
 
       let userId: string | null = null;
-      let n8nWebhookUrl: string | null = null;
-
       if (agenteRes.rows.length) {
         userId = agenteRes.rows[0].user_id;
-        n8nWebhookUrl = agenteRes.rows[0].n8n_webhook_url || null;
 
-        // Salvar na tabela whatsapp_messages
+        // Salvar mensagem recebida (schema novo EN)
         await pool.query(
           `INSERT INTO whatsapp_messages
-             (id, user_id, instancia, session_id, remote_jid, from_me, push_name, tipo,
-              conteudo, midia_url, midia_mime, midia_nome, status, timestamp_unix)
-           VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10, $11, 'received', $12)
-           ON CONFLICT (id) DO NOTHING`,
-          [
-            messageId, userId, instancia, telefone, remoteJid,
-            pushName, tipo,
-            texto || null, midia.url || null, midia.mime || null, midia.nome || null,
-            timestamp,
-          ]
-        );
+             (user_id, instance_name, remote_jid, message_id, from_me, message_type,
+              content, media_url, media_mimetype, status, timestamp_wa)
+           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, 'received', to_timestamp($9))
+           ON CONFLICT (message_id, instance_name) DO NOTHING`,
+          [userId, instancia, remoteJid, messageId, tipo,
+           texto || null, midia.url || null, midia.mime || null, timestamp]
+        ).catch(err => console.warn('[WEBHOOK] Falha ao salvar whatsapp_messages:', err.message));
 
         // Atualizar push_name e timestamp no contato
         await pool.query(
           `UPDATE contatos
            SET push_name = COALESCE($1, push_name),
-               ultima_mensagem_em = NOW(),
-               updated_at = NOW()
+               ultima_mensagem_em = NOW(), updated_at = NOW()
            WHERE user_id = $2 AND telefone ILIKE $3`,
           [pushName || null, userId, `%${telefone.slice(-11)}`]
-        );
+        ).catch(() => {});
       }
 
-      // Só processar se houver texto
-      if (!texto) return;
-
-      // ── Detecção automática de opt-out ─────────────────────────────────────
-      const textoNorm = texto.trim().toLowerCase();
+      // ── Opt-out ───────────────────────────────────────────────────────────
+      const textoNorm = (texto || '').trim().toLowerCase();
       if (userId && OPT_OUT_KEYWORDS.has(textoNorm)) {
-        // Marcar opt-out na tabela contatos (campo oficial)
         await pool.query(
           `UPDATE contatos SET opt_out = true, updated_at = NOW()
            WHERE user_id = $1 AND telefone ILIKE $2`,
           [userId, `%${telefone.slice(-11)}`]
-        ).catch(err => console.warn('[WEBHOOK] Falha ao marcar opt-out em contatos:', err.message));
-
-        // Registrar log em disparo_optouts
+        ).catch(() => {});
         await pool.query(
           `INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`,
           [userId, telefone, textoNorm]
         ).catch(() => {});
-
-        console.log(`[WEBHOOK] Opt-out registrado: ${telefone} via "${textoNorm}"`);
-
-        // Enviar mensagem de confirmação via Evolution
-        const evoConf = await pool.query(
-          `SELECT url, api_key, instancia AS inst FROM integracoes_config
-           WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado') LIMIT 1`,
-          [userId]
-        ).catch(() => ({ rows: [] as any[] }));
-
-        if (evoConf.rows.length) {
-          const { url: evoUrl, api_key: evoKey, inst: evoInst } = evoConf.rows[0];
-          fetch(`${evoUrl.replace(/\/$/, '')}/message/sendText/${evoInst}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', apikey: evoKey },
-            body: JSON.stringify({
-              number: telefone,
-              text: 'Você foi removido da nossa lista. Não receberá mais mensagens. Para reativar, entre em contato conosco.',
-              delay: 1000,
-            }),
-          }).catch(err =>
-            console.warn('[WEBHOOK] Falha ao enviar confirmação de opt-out:', err.message)
-          );
-        }
-
-        return; // Não encaminhar para n8n/agentEngine
+        console.log(`[WEBHOOK] Opt-out registrado: ${telefone}`);
+        return;
       }
 
-      // ── Roteamento: n8n (primário) ou agentEngine (fallback) ───────────────
-      if (n8nWebhookUrl) {
-        fetch(n8nWebhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            telefone,
-            pushName,
-            texto,
-            instancia,
-            messageId,
-            timestamp,
-            user_id: userId,
-          }),
-        }).catch(err => {
-          console.error(`[WEBHOOK] Erro ao chamar n8n (${n8nWebhookUrl}):`, err.message);
-        });
-      } else {
-        processarMensagem(pool, {
-          instancia,
-          messageId,
-          telefone,
-          pushName,
-          texto,
-          timestamp,
-        }).catch(err => {
-          console.error(`[WEBHOOK] Erro ao processar mensagem ${messageId}:`, err);
-        });
+      // ── Reativação da IA por comando ──────────────────────────────────────
+      if (userId && REATIVAR_COMANDOS.has(textoNorm)) {
+        await pool.query(
+          `UPDATE dados_cliente SET atendimento_ia = 'ativo'
+           WHERE user_id = $1 AND telefone ILIKE $2`,
+          [userId, `%${telefone.slice(-11)}`]
+        ).catch(() => {});
+        console.log(`[WEBHOOK] IA reativada por comando: ${telefone}`);
+        return;
       }
+
+      // ── Motor IA (sempre — sem n8n) ───────────────────────────────────────
+      // Processar apenas texto e mídia suportada (ignorar sticker, video, document sem texto)
+      if (!texto && !['audio', 'image'].includes(tipo)) return;
+
+      processarComDebounce(pool, {
+        instancia,
+        messageId,
+        telefone,
+        pushName,
+        texto,
+        tipo,
+        midiaUrl: midia.url || undefined,
+        timestamp,
+      }).catch(err => console.error(`[WEBHOOK] Erro ao processar ${messageId}:`, err));
 
     } catch (err) {
       console.error('[WEBHOOK] Erro crítico no receptor:', err);
