@@ -1,15 +1,110 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
-import OpenAI from 'openai';
-
-const anthropic = new OpenAI({
-  apiKey: process.env.ANTHROPIC_API_KEY || 'sk-ant-...', // Placeholder
-  baseURL: 'https://api.anthropic.com/v1', // Using OpenAI SDK with Anthropic base if possible, but actually we should use standard fetch or dedicated lib
-});
 
 export default function kanban(pool: Pool): Router {
   const router = Router();
+
+  // 0. POST /api/kanban/tarefas/da-conversa
+  router.post('/tarefas/da-conversa', async (req: AuthRequest, res: Response) => {
+    try {
+      const { conversa_id, titulo: tituloManual } = req.body;
+      const userId = req.userId;
+
+      if (!conversa_id) return res.status(400).json({ message: 'conversa_id é obrigatório' });
+
+      // 1. Buscar mensagens contextuais
+      const msgsRes = await pool.query(
+        `SELECT role, message->>'content' as content 
+         FROM n8n_chat_histories 
+         WHERE session_id = $1 AND user_id = $2 
+         ORDER BY created_at DESC LIMIT 10`,
+        [conversa_id, userId]
+      );
+      
+      const context = msgsRes.rows.reverse().map(m => `${m.role}: ${m.content}`).join('\n');
+
+      // 2. Chamar IA para resumo (Usando fetch direto para Anthropic)
+      let aiResult = { titulo: tituloManual || 'Nova Tarefa da IA', resumo: '', prioridade: 'media' };
+      
+      const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+      if (ANTHROPIC_KEY) {
+        try {
+          const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': ANTHROPIC_KEY,
+              'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+              model: 'claude-3-haiku-20240307',
+              max_tokens: 500,
+              messages: [{
+                role: 'user',
+                content: `Resuma em 2-3 linhas o assunto desta conversa e sugira um título de tarefa. 
+                Retorne APENAS um JSON: { "titulo": "string", "resumo": "string", "prioridade": "baixa"|"media"|"alta" }
+                
+                Conversa:
+                ${context}`
+              }]
+            })
+          });
+          
+          const aiJson: any = await aiResp.json();
+          const text = aiJson.content?.[0]?.text || '';
+          const match = text.match(/\{.*\}/s);
+          if (match) {
+            const parsed = JSON.parse(match[0]);
+            aiResult = {
+              titulo: tituloManual || parsed.titulo,
+              resumo: parsed.resumo,
+              prioridade: parsed.prioridade || 'media'
+            };
+          }
+        } catch (err) {
+          console.error('[IA_KANBAN] Erro ao chamar Anthropic:', err);
+        }
+      }
+
+      // 3. Buscar coluna Backlog (ou a primeira disponível)
+      const colRes = await pool.query(
+        "SELECT id FROM kanban_colunas WHERE user_id = $1 AND nome ILIKE '%Backlog%' LIMIT 1",
+        [userId]
+      );
+      let colunaId = colRes.rows[0]?.id;
+      
+      if (!colunaId) {
+        const firstCol = await pool.query(
+          "SELECT id FROM kanban_colunas WHERE user_id = $1 ORDER BY ordem ASC LIMIT 1",
+          [userId]
+        );
+        colunaId = firstCol.rows[0]?.id;
+      }
+
+      if (!colunaId) return res.status(400).json({ message: 'Nenhuma coluna de Kanban encontrada para o usuário.' });
+
+      // 4. Inserir tarefa
+      const orderRes = await pool.query(
+        'SELECT COALESCE(MAX(ordem), -1) as last_order FROM tarefas WHERE user_id = $1 AND coluna_id = $2',
+        [userId, colunaId]
+      );
+      
+      const insRes = await pool.query(
+        `INSERT INTO tarefas (
+          user_id, coluna_id, titulo, resumo_ia, prioridade, 
+          ordem, conversa_id, origem, criada_por
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
+        RETURNING *`,
+        [userId, colunaId, aiResult.titulo, aiResult.resumo, aiResult.prioridade, 
+         orderRes.rows[0].last_order + 1, conversa_id, 'ia', userId]
+      );
+
+      return res.status(201).json(insRes.rows[0]);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
 
   // 1. GET /api/kanban/colunas
   router.get('/colunas', async (req: AuthRequest, res: Response) => {
