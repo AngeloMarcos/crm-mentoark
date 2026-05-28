@@ -30,33 +30,35 @@ const KanbanColuna = ({
   const isWipExceeded = coluna.limite_wip ? tarefas.length > coluna.limite_wip : false;
 
   return (
-    <div className="w-80 flex flex-col bg-slate-100/50 rounded-lg border border-slate-200 h-full max-h-full overflow-hidden shrink-0">
-      {/* Header da Coluna */}
-      <div className="p-3 flex items-center justify-between border-b border-slate-200 bg-white/50 backdrop-blur-sm sticky top-0 z-10">
+    <div className="w-80 flex flex-col bg-card/60 backdrop-blur-sm rounded-lg border border-border h-full max-h-full overflow-hidden shrink-0">
+      {/* Header */}
+      <div className="p-3 flex items-center justify-between border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-10">
         <div className="flex items-center gap-2 overflow-hidden">
-          <div 
-            className="w-3 h-3 rounded-full shrink-0" 
-            style={{ backgroundColor: coluna.cor || '#e2e8f0' }} 
+          <div
+            className="w-3 h-3 rounded-full shrink-0 ring-2 ring-background"
+            style={{ backgroundColor: coluna.cor || 'hsl(var(--muted-foreground))' }}
           />
-          <h3 className="font-semibold text-sm text-slate-700 truncate">
+          <h3 className="font-semibold text-sm text-foreground truncate">
             {coluna.nome}
           </h3>
-          <Badge 
-            variant="secondary" 
+          <Badge
+            variant="secondary"
             className={cn(
               "text-[10px] px-1.5 py-0 h-5",
-              isWipExceeded ? "bg-red-100 text-red-700" : "bg-slate-200 text-slate-600"
+              isWipExceeded
+                ? "bg-destructive/15 text-destructive"
+                : "bg-muted text-muted-foreground"
             )}
           >
             {tarefas.length}
             {coluna.limite_wip ? `/${coluna.limite_wip}` : ''}
           </Badge>
         </div>
-        
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          className="h-7 w-7 text-slate-400 hover:text-primary hover:bg-white"
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-muted"
           onClick={() => onAdicionarTarefa(coluna.id)}
         >
           <Plus className="w-4 h-4" />
@@ -68,26 +70,26 @@ const KanbanColuna = ({
         <div className="flex flex-col gap-3 min-h-[100px]">
           {tarefas.length > 0 ? (
             tarefas.map((tarefa) => (
-              <KanbanCard 
-                key={tarefa.id} 
-                tarefa={tarefa} 
-                onEditar={onEditarTarefa} 
+              <KanbanCard
+                key={tarefa.id}
+                tarefa={tarefa}
+                onEditar={onEditarTarefa}
               />
             ))
           ) : (
-            <div className="flex flex-col items-center justify-center py-10 px-4 border-2 border-dashed border-slate-200 rounded-lg text-slate-400">
-              <ListTodo className="w-8 h-8 mb-2 opacity-20" />
+            <div className="flex flex-col items-center justify-center py-10 px-4 border-2 border-dashed border-border rounded-lg text-muted-foreground">
+              <ListTodo className="w-8 h-8 mb-2 opacity-40" />
               <p className="text-xs font-medium">Nenhuma tarefa</p>
             </div>
           )}
         </div>
       </ScrollArea>
 
-      {/* Rodapé da Coluna */}
-      <div className="p-2 border-t border-slate-200 bg-white/30">
-        <Button 
-          variant="ghost" 
-          className="w-full justify-start text-xs text-slate-500 hover:text-primary hover:bg-white gap-2 h-8"
+      {/* Rodapé */}
+      <div className="p-2 border-t border-border bg-muted/20">
+        <Button
+          variant="ghost"
+          className="w-full justify-start text-xs text-muted-foreground hover:text-primary hover:bg-muted gap-2 h-8"
           onClick={() => onAdicionarTarefa(coluna.id)}
         >
           <Plus className="w-3.5 h-3.5" />

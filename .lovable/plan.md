@@ -1,94 +1,43 @@
-# Sprint F — Frontend do Motor de IA Nativo
+## Problema
 
-Backend novo (AI Engine, MCP, multimodal, migração PG) é responsabilidade do Claude Code no VPS. Aqui só faço o frontend Lovable e **defino o contrato de API** que o backend vai expor.
+A página `/kanban` está fora do padrão visual do CRM:
 
-A página `/agentes` já existe com 749 linhas (CRUD de agentes, prompt, modelo, tom, RAG, Evolution). Vou **estendê-la** para suportar o novo motor sem quebrar o que já funciona, e criar um **Dashboard de Uso de IA** novo.
+1. **Não usa `CRMLayout`** — por isso a sidebar e o header somem, e o fundo branco vaza sobre os orbs ambientes (causando o efeito "fantasma" na imagem).
+2. **Cores cruas** (`bg-white`, `bg-slate-*`, `text-slate-*`, `border-slate-200`) em vez dos tokens semânticos (`bg-card`, `bg-muted`, `text-foreground`, `border-border`) — então no tema dark fica ilegível e no light fica destoante.
+3. O título "Kanban da Equipe" perde contraste contra os orbs porque o header da página tem `bg-white` sólido mas o texto usa cor padrão sem foreground.
 
----
+## Plano
 
-## 1. Estender `src/pages/Agentes.tsx`
+### 1. `src/pages/Kanban.tsx`
+- Envolver toda a página em `<CRMLayout>` (igual a Equipe, Leads etc.).
+- Remover `h-[calc(100vh-64px)]` — o `<main>` do CRMLayout já controla scroll.
+- Trocar `bg-white` / `bg-slate-50` / `text-slate-*` / `border-slate-200` por tokens: `bg-card`, `bg-muted/30`, `text-foreground`, `text-muted-foreground`, `border-border`.
+- Header da página: `bg-card/60 backdrop-blur` com borda inferior `border-border`.
+- Barra de filtros: `bg-muted/30 border-border`, separadores `bg-border`.
+- Área do board: `bg-muted/20` (fundo translúcido que deixa os orbs aparecerem suavemente).
+- FAB: `bg-primary text-primary-foreground shadow-xl ring-background`.
 
-Adicionar à interface `Agente` e ao formulário 4 blocos novos:
+### 2. `src/components/kanban/KanbanColuna.tsx`
+- Container: `bg-card/60 backdrop-blur-sm border-border` (em vez de `bg-slate-100/50`).
+- Header da coluna: `bg-card/80 border-border`, título `text-foreground`.
+- Contador WIP: `bg-destructive/15 text-destructive` quando estourado, senão `bg-muted text-muted-foreground`.
+- Empty state: `border-border text-muted-foreground`.
+- Rodapé: `border-border bg-muted/20`.
 
-**a) Bloco "Provedor de IA"** (substitui o select de `modelo` plano)
-- Select de **Provider**: Claude (Anthropic) · OpenAI · Google Gemini
-- Select de **Modelo** dependente do provider:
-  - Claude → haiku, sonnet, opus
-  - OpenAI → gpt-4o, gpt-4o-mini
-  - Gemini → flash, pro
-- Badge de custo estimado por mensagem (tabela do plano)
+### 3. `src/components/kanban/KanbanCard.tsx`
+- Card: `bg-card border-border hover:border-primary/40` em vez de `bg-white border-slate-200`.
+- Título: `text-foreground`.
+- Resumo IA: `text-muted-foreground`.
+- Tags: `bg-muted text-muted-foreground border-border`.
+- Data vencida: `text-destructive`; data normal: `text-muted-foreground`.
+- Borda inferior do rodapé: `border-border/50`.
+- Avatar: `border-background` (para contrastar com o card no dark).
+- Badge IA: trocar `bg-purple-100 text-purple-700` por `bg-accent/15 text-accent` para casar com a paleta MentoArk (laranja).
 
-**b) Bloco "Modalidades"** (toggles)
-- Áudio (transcrição via Whisper)
-- Imagem (visão)
-- Vídeo (extração de áudio) — marcado como "em breve", desabilitado
+### 4. Não mexer
+- Lógica de filtros, drag-stub, modal, hooks, rotas — nada de comportamento muda.
+- KanbanColuna mantém `style={{ backgroundColor: coluna.cor }}` para a bolinha da coluna (cor vem do banco).
+- KanbanCard mantém as cores semânticas de prioridade (vermelho/laranja/azul/cinza) na barra lateral — é sinalização, não branding.
 
-**c) Bloco "Ferramentas MCP"** (lista checkbox)
-- buscar_contato · criar_contato · buscar_historico · buscar_leads · criar_lead · atualizar_lead · buscar_produtos · buscar_agendamentos · criar_agendamento · registrar_pausa_ia
-- Por padrão todas ligadas; permite desligar individualmente
-
-**d) Limpeza**
-- Manter `n8n_webhook_url` no schema mas esconder do formulário com um aviso "Legacy — será removido"
-- O campo `modelo` antigo continua sendo enviado (compat) mas derivado de `provider + modelo_id`
-
-## 2. Nova página `src/pages/UsoIA.tsx` (rota `/uso-ia`)
-
-Dashboard simples consumindo o endpoint novo `GET /api/ia/uso`:
-
-- **Cards no topo**: Mensagens hoje · Tokens hoje · Custo estimado hoje · Custo no mês
-- **Gráfico de linha**: tokens/dia últimos 30 dias (recharts já está no projeto)
-- **Gráfico de pizza**: distribuição por modalidade (texto/áudio/imagem)
-- **Tabela**: últimas 20 execuções (agente, modelo, modalidade, tokens in/out, custo, latência, status)
-- **Filtros**: range de datas, agente, provider
-
-Adicionar item no Sidebar "Uso de IA" (ícone `Activity`), visível para admin.
-
-## 3. Hook `src/hooks/useUsoIA.ts`
-
-- `useUsoIA({ from, to, agenteId? })` → fetch + cache simples
-- `useUltimasExecucoes(limit)` → polling 10s opcional
-
-## 4. Contrato de API esperado do backend
-
-Documento a ser entregue ao Claude Code:
-
-```
-GET  /api/ia/uso?from=ISO&to=ISO&agente_id?=
-     → { mensagens, tokens_in, tokens_out, custo_brl,
-         por_dia: [{ dia, tokens, custo }],
-         por_modalidade: [{ modalidade, count }] }
-
-GET  /api/ia/execucoes?limit=20&agente_id?=
-     → [{ id, agente_id, agente_nome, provider, modelo,
-          modalidade, tokens_in, tokens_out, custo_brl,
-          latencia_ms, status, created_at }]
-
-PATCH /api/agentes/:id  (extensão dos campos atuais)
-     body adicional: { provider, modelo_id, modalidades: {audio,imagem,video},
-                       mcp_tools: string[] }
-```
-
-## 5. Limpezas / Memória
-
-- Atualizar `mem://features/architecture` com a decisão "Provider abstrato + modalidades por agente"
-- Não tocar em `/cerebro` (continua funcional até backend migrar)
-- Não remover n8n do código ainda — só esconder
-
----
-
-## Detalhes técnicos
-
-- Tudo via `api` em `src/integrations/database/client.ts` (HTTP wrapper já existente, JWT no localStorage)
-- Tokens semânticos do design system (sem cores hardcoded)
-- shadcn já instalado: Card, Select, Switch, Slider, Tabs, Dialog, Badge, Table
-- Recharts já presente para os gráficos
-- PT-BR em toda a UI
-- Endpoints novos retornam 404 hoje → mostrar empty state "Aguardando backend do motor nativo" em vez de quebrar
-
-## Fora do escopo (backend / Claude Code no VPS)
-
-AI Engine, MCP embutido, providers Claude/OpenAI/Gemini, pipeline Whisper, processamento de imagem, migração PostgreSQL, remoção do n8n, novas tabelas `ia_execucoes` / colunas extras em `agentes`.
-
-## Próximo passo após aprovar
-
-Implemento na ordem: (1) extensão do form em `Agentes.tsx`, (2) hook `useUsoIA`, (3) página `UsoIA.tsx`, (4) item no Sidebar, (5) atualização da memória.
+## Resultado esperado
+Página renderiza dentro do shell padrão (sidebar + header), funciona no tema claro e no escuro, e respeita a identidade visual definida em `index.css` / `tailwind.config.ts`.
