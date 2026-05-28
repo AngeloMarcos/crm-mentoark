@@ -10,6 +10,7 @@ import {
   Mic, LayoutGrid, MessageSquare, SlidersHorizontal,
   UserPlus, AlertTriangle, Check, Smartphone,
   Zap, Copy, ExternalLink, Shield, ShieldAlert, Tag,
+  ClipboardList, Sparkles
 } from "lucide-react";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
