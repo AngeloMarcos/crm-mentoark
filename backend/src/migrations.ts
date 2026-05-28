@@ -836,14 +836,19 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS equipe_membros (
-      id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      equipe_id  UUID NOT NULL REFERENCES equipes(id) ON DELETE CASCADE,
-      user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      role       TEXT NOT NULL DEFAULT 'membro',
-      joined_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      equipe_id     UUID NOT NULL REFERENCES equipes(id) ON DELETE CASCADE,
+      user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role          TEXT NOT NULL DEFAULT 'membro',
+      convidado_por UUID REFERENCES users(id) ON DELETE SET NULL,
+      joined_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE(equipe_id, user_id)
     )
   `).catch(() => {});
+
+  // Garantir coluna convidado_por em instâncias já criadas
+  await pool.query(`ALTER TABLE equipe_membros ADD COLUMN IF NOT EXISTS convidado_por UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_equipe_membros_user ON equipe_membros(user_id)`).catch(() => {});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS equipe_chat (
@@ -855,6 +860,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_equipe_chat_equipe ON equipe_chat(equipe_id, created_at DESC)`).catch(() => {});
+
+  // Garantir convidado_por em equipe_membros (pode ter sido criada sem a coluna)
+  await pool.query(`ALTER TABLE equipe_membros ADD COLUMN IF NOT EXISTS convidado_por UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
 
   // Kanban
   await pool.query(`

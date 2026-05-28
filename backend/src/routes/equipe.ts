@@ -17,18 +17,36 @@ export default function equipeRouter(pool: Pool): Router {
   // 1. GET /api/equipes/minha
   router.get('/minha', wrap(async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
-    
-    // Busca se é owner ou membro de alguma equipe
-    const r = await pool.query(
-      `SELECT e.*, em.role as user_role
+
+    // Busca a equipe onde o usuário é owner ou membro
+    const equipeRes = await pool.query(
+      `SELECT DISTINCT e.*
        FROM equipes e
        LEFT JOIN equipe_membros em ON em.equipe_id = e.id
        WHERE e.owner_id = $1 OR em.user_id = $1
-       LIMIT 1`,
+       ORDER BY e.created_at DESC LIMIT 1`,
       [userId]
     );
 
-    res.json({ equipe: r.rows[0] || null });
+    if (!equipeRes.rows.length) {
+      return res.json({ equipe: null, membros: [] });
+    }
+
+    const equipe = equipeRes.rows[0];
+
+    // Buscar membros com nome e email
+    const membrosRes = await pool.query(
+      `SELECT em.user_id, em.role, em.joined_at,
+              COALESCE(u.display_name, u.email) AS display_name,
+              u.email
+       FROM equipe_membros em
+       JOIN users u ON u.id = em.user_id
+       WHERE em.equipe_id = $1
+       ORDER BY em.joined_at ASC`,
+      [equipe.id]
+    );
+
+    res.json({ equipe, membros: membrosRes.rows });
   }));
 
   // 2. POST /api/equipes
@@ -92,7 +110,7 @@ export default function equipeRouter(pool: Pool): Router {
     }
 
     const r = await pool.query(
-      `SELECT em.user_id, u.display_name as nome, u.email, em.role, em.joined_at
+      `SELECT em.user_id, COALESCE(u.name, u.display_name, u.email) as nome, u.email, em.role, em.joined_at
        FROM equipe_membros em
        JOIN users u ON u.id = em.user_id
        WHERE em.equipe_id = $1
@@ -117,20 +135,23 @@ export default function equipeRouter(pool: Pool): Router {
     }
 
     // Busca usuário por email
-    const userRes = await pool.query(`SELECT id, display_name FROM users WHERE email = $1`, [email]);
+    const userRes = await pool.query(
+      `SELECT id, COALESCE(name, display_name, email) as nome FROM users WHERE email = $1`,
+      [email]
+    );
     if (userRes.rowCount === 0) {
-      return res.status(404).json({ message: 'Usuário não encontrado' });
+      return res.status(404).json({ message: 'Usuário não encontrado. Peça que ele crie uma conta primeiro, ou use a tela de Sub-perfis para criar um acesso.' });
     }
     const targetUser = userRes.rows[0];
 
     await pool.query(
       `INSERT INTO equipe_membros (equipe_id, user_id, role, convidado_por)
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (equipe_id, user_id) DO NOTHING`,
+       ON CONFLICT (equipe_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
       [equipeId, targetUser.id, role || 'membro', inviterId]
     );
 
-    res.json({ success: true, user_id: targetUser.id, nome: targetUser.display_name });
+    res.json({ success: true, user_id: targetUser.id, nome: targetUser.nome });
   }));
 
   // 5. DELETE /api/equipes/:id/membros/:userId
