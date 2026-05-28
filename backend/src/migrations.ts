@@ -821,5 +821,152 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   console.log('[MIGRATIONS] 002_whatsapp_messages OK');
 
+  // ── Sprint Equipe / Kanban / Sub-perfis ──────────────────────────────────
+
+  // Equipes
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipes (
+      id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      nome       TEXT NOT NULL,
+      owner_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_equipes_owner ON equipes(owner_id)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipe_membros (
+      id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      equipe_id  UUID NOT NULL REFERENCES equipes(id) ON DELETE CASCADE,
+      user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role       TEXT NOT NULL DEFAULT 'membro',
+      joined_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(equipe_id, user_id)
+    )
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipe_chat (
+      id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      equipe_id  UUID NOT NULL REFERENCES equipes(id) ON DELETE CASCADE,
+      user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      conteudo   TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_equipe_chat_equipe ON equipe_chat(equipe_id, created_at DESC)`).catch(() => {});
+
+  // Kanban
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS kanban_colunas (
+      id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      nome       TEXT NOT NULL,
+      ordem      INTEGER NOT NULL DEFAULT 0,
+      cor        TEXT DEFAULT '#6366f1',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_kanban_colunas_user ON kanban_colunas(user_id, ordem)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tarefas (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      coluna_id     UUID REFERENCES kanban_colunas(id) ON DELETE SET NULL,
+      titulo        TEXT NOT NULL,
+      descricao     TEXT,
+      resumo_ia     TEXT,
+      prioridade    TEXT NOT NULL DEFAULT 'media',
+      ordem         INTEGER NOT NULL DEFAULT 0,
+      conversa_id   TEXT,
+      origem        TEXT DEFAULT 'manual',
+      criada_por    UUID REFERENCES users(id) ON DELETE SET NULL,
+      atribuido_a   UUID REFERENCES users(id) ON DELETE SET NULL,
+      sub_perfil_id UUID,
+      contato_id    UUID,
+      concluida     BOOLEAN NOT NULL DEFAULT false,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_tarefas_user_coluna ON tarefas(user_id, coluna_id, ordem)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tarefa_comentarios (
+      id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tarefa_id  UUID NOT NULL REFERENCES tarefas(id) ON DELETE CASCADE,
+      user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      conteudo   TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+
+  // Team (convites e papéis)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_members (
+      id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id            UUID REFERENCES users(id) ON DELETE SET NULL,
+      email              TEXT NOT NULL,
+      nome               TEXT,
+      cargo              TEXT,
+      status             TEXT NOT NULL DEFAULT 'convidado',
+      convite_token      TEXT UNIQUE,
+      convite_expira_at  TIMESTAMPTZ,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(owner_id, email)
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_team_members_owner ON team_members(owner_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_team_members_token ON team_members(convite_token) WHERE convite_token IS NOT NULL`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_roles (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      nome        TEXT NOT NULL,
+      cor         TEXT DEFAULT '#6366f1',
+      descricao   TEXT,
+      is_system   BOOLEAN NOT NULL DEFAULT false,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_member_roles (
+      member_id UUID NOT NULL REFERENCES team_members(id) ON DELETE CASCADE,
+      role_id   UUID NOT NULL REFERENCES team_roles(id) ON DELETE CASCADE,
+      PRIMARY KEY(member_id, role_id)
+    )
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_role_permissions (
+      role_id    UUID NOT NULL REFERENCES team_roles(id) ON DELETE CASCADE,
+      permission TEXT NOT NULL,
+      PRIMARY KEY(role_id, permission)
+    )
+  `).catch(() => {});
+
+  // Sub-perfis
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sub_perfis (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      membro_id   UUID REFERENCES users(id) ON DELETE SET NULL,
+      nome        TEXT NOT NULL,
+      email       TEXT NOT NULL UNIQUE,
+      senha_hash  TEXT NOT NULL,
+      modulos     TEXT[] NOT NULL DEFAULT '{}',
+      avatar_cor  TEXT DEFAULT '#6366f1',
+      ativo       BOOLEAN NOT NULL DEFAULT true,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sub_perfis_user ON sub_perfis(user_id)`).catch(() => {});
+
+  console.log('[MIGRATIONS] Equipe/Kanban/SubPerfis OK');
+
   console.log('[MIGRATIONS] OK');
 }
