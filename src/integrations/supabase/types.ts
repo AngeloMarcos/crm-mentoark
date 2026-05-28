@@ -149,6 +149,41 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_conversas: {
+        Row: {
+          contato_id: string | null
+          created_at: string
+          id: string
+          titulo: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          contato_id?: string | null
+          created_at?: string
+          id?: string
+          titulo?: string | null
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          contato_id?: string | null
+          created_at?: string
+          id?: string
+          titulo?: string | null
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_conversas_contato_id_fkey"
+            columns: ["contato_id"]
+            isOneToOne: false
+            referencedRelation: "contatos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campanhas: {
         Row: {
           cliques: number
@@ -1164,6 +1199,36 @@ export type Database = {
         }
         Relationships: []
       }
+      kanban_colunas: {
+        Row: {
+          cor: string | null
+          created_at: string
+          id: string
+          limite_wip: number | null
+          nome: string
+          ordem: number
+          user_id: string
+        }
+        Insert: {
+          cor?: string | null
+          created_at?: string
+          id?: string
+          limite_wip?: number | null
+          nome: string
+          ordem?: number
+          user_id: string
+        }
+        Update: {
+          cor?: string | null
+          created_at?: string
+          id?: string
+          limite_wip?: number | null
+          nome?: string
+          ordem?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       listas: {
         Row: {
           cor: string | null
@@ -1481,6 +1546,51 @@ export type Database = {
         }
         Relationships: []
       }
+      sub_perfis: {
+        Row: {
+          ativo: boolean
+          avatar_cor: string | null
+          created_at: string
+          email: string
+          id: string
+          membro_id: string | null
+          modulos: string[]
+          nome: string
+          primeiro_acesso: boolean
+          senha_temp: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean
+          avatar_cor?: string | null
+          created_at?: string
+          email: string
+          id?: string
+          membro_id?: string | null
+          modulos?: string[]
+          nome: string
+          primeiro_acesso?: boolean
+          senha_temp?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean
+          avatar_cor?: string | null
+          created_at?: string
+          email?: string
+          id?: string
+          membro_id?: string | null
+          modulos?: string[]
+          nome?: string
+          primeiro_acesso?: boolean
+          senha_temp?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       tags: {
         Row: {
           cor: string | null
@@ -1505,49 +1615,132 @@ export type Database = {
         }
         Relationships: []
       }
-      tarefas: {
+      tarefa_comentarios: {
         Row: {
-          concluida_at: string | null
-          contato_id: string | null
+          conteudo: string
           created_at: string
-          descricao: string | null
           id: string
-          prazo: string | null
-          prioridade: string
-          status: string
-          titulo: string
+          tarefa_id: string
           user_id: string
         }
         Insert: {
-          concluida_at?: string | null
-          contato_id?: string | null
+          conteudo: string
           created_at?: string
-          descricao?: string | null
           id?: string
-          prazo?: string | null
-          prioridade?: string
-          status?: string
-          titulo: string
+          tarefa_id: string
           user_id: string
         }
         Update: {
-          concluida_at?: string | null
-          contato_id?: string | null
+          conteudo?: string
           created_at?: string
-          descricao?: string | null
           id?: string
-          prazo?: string | null
-          prioridade?: string
-          status?: string
-          titulo?: string
+          tarefa_id?: string
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "tarefa_comentarios_tarefa_id_fkey"
+            columns: ["tarefa_id"]
+            isOneToOne: false
+            referencedRelation: "tarefas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tarefas: {
+        Row: {
+          atribuido_a: string | null
+          coluna_id: string
+          concluida_em: string | null
+          contato_id: string | null
+          conversa_id: string | null
+          created_at: string
+          criada_por: string | null
+          data_limite: string | null
+          descricao: string | null
+          id: string
+          lead_id: string | null
+          ordem: number
+          origem: string | null
+          prioridade: string
+          resumo_ia: string | null
+          sub_perfil_id: string | null
+          tags: string[] | null
+          titulo: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          atribuido_a?: string | null
+          coluna_id: string
+          concluida_em?: string | null
+          contato_id?: string | null
+          conversa_id?: string | null
+          created_at?: string
+          criada_por?: string | null
+          data_limite?: string | null
+          descricao?: string | null
+          id?: string
+          lead_id?: string | null
+          ordem?: number
+          origem?: string | null
+          prioridade?: string
+          resumo_ia?: string | null
+          sub_perfil_id?: string | null
+          tags?: string[] | null
+          titulo: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          atribuido_a?: string | null
+          coluna_id?: string
+          concluida_em?: string | null
+          contato_id?: string | null
+          conversa_id?: string | null
+          created_at?: string
+          criada_por?: string | null
+          data_limite?: string | null
+          descricao?: string | null
+          id?: string
+          lead_id?: string | null
+          ordem?: number
+          origem?: string | null
+          prioridade?: string
+          resumo_ia?: string | null
+          sub_perfil_id?: string | null
+          tags?: string[] | null
+          titulo?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tarefas_coluna_id_fkey"
+            columns: ["coluna_id"]
+            isOneToOne: false
+            referencedRelation: "kanban_colunas"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "tarefas_contato_id_fkey"
             columns: ["contato_id"]
             isOneToOne: false
             referencedRelation: "contatos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tarefas_conversa_id_fkey"
+            columns: ["conversa_id"]
+            isOneToOne: false
+            referencedRelation: "ai_conversas"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tarefas_sub_perfil_id_fkey"
+            columns: ["sub_perfil_id"]
+            isOneToOne: false
+            referencedRelation: "sub_perfis"
             referencedColumns: ["id"]
           },
         ]
