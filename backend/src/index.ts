@@ -219,6 +219,7 @@ app.use('/api/marketing', marketing.protected); // Protected part of marketing (
 app.use('/api/team', teamRouter(pool));
 app.use('/api/equipes', equipeRouter(pool));
 app.use('/api/sub-perfis', subPerfisRouter(pool));
+app.use('/api/kanban', kanbanRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
