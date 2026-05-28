@@ -110,7 +110,7 @@ export default function equipeRouter(pool: Pool): Router {
     }
 
     const r = await pool.query(
-      `SELECT em.user_id, COALESCE(u.name, u.display_name, u.email) as nome, u.email, em.role, em.joined_at
+      `SELECT em.user_id, COALESCE(u.display_name, u.email) as nome, u.email, em.role, em.joined_at
        FROM equipe_membros em
        JOIN users u ON u.id = em.user_id
        WHERE em.equipe_id = $1
@@ -136,7 +136,7 @@ export default function equipeRouter(pool: Pool): Router {
 
     // Busca usuário por email
     const userRes = await pool.query(
-      `SELECT id, COALESCE(name, display_name, email) as nome FROM users WHERE email = $1`,
+      `SELECT id, COALESCE(display_name, email) as nome FROM users WHERE email = $1`,
       [email]
     );
     if (userRes.rowCount === 0) {
