@@ -356,6 +356,16 @@ export const api = {
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw e; }
     return { data: await res.json() };
   },
+  patch: async (path: string, body: any) => {
+    const res = await fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: _authHeaders(), body: JSON.stringify(body) });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw e; }
+    return { data: await res.json() };
+  },
+  delete: async (path: string) => {
+    const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: _authHeaders() });
+    if (!res.ok && res.status !== 204) { const e = await res.json().catch(() => ({})); throw e; }
+    return { data: null };
+  },
 };
 
 export default api;

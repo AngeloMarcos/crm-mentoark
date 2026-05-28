@@ -45,6 +45,7 @@ import TesteConversas from "./pages/TesteConversas";
 import MonitorWhatsApp from "./pages/MonitorWhatsApp";
 import PerfilPage from "./pages/Perfil";
 import EquipePage from "./pages/Equipe";
+import KanbanPage from "./pages/Kanban";
 import AceitarConvitePage from "./pages/AceitarConvite";
 
 const queryClient = new QueryClient();
@@ -84,6 +85,7 @@ const App = () => (
               <Route path="/cerebro"      element={<ProtectedRoute requireAdmin>     <CerebroPage /></ProtectedRoute>} />
               <Route path="/agentes"      element={<ProtectedRoute requireAdmin>     <AgentesPage /></ProtectedRoute>} />
               <Route path="/uso-ia"       element={<ProtectedRoute requireAdmin>     <UsoIAPage /></ProtectedRoute>} />
+              <Route path="/kanban"       element={<ProtectedRoute requireModulo="leads">       <KanbanPage /></ProtectedRoute>} />
               <Route path="/catalogo"     element={<ProtectedRoute requireModulo="catalogo">    <CatalogoPage /></ProtectedRoute>} />
               <Route path="/catalogo/:id" element={<ProtectedRoute requireModulo="catalogo">    <CatalogoDetalhePage /></ProtectedRoute>} />
               <Route path="/catalogo/envios" element={<ProtectedRoute requireModulo="catalogo"> <CatalogoEnviosPage /></ProtectedRoute>} />
