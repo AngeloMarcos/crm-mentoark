@@ -106,6 +106,59 @@ export default function kanban(pool: Pool): Router {
     }
   });
 
+  // 0b. POST /api/kanban/colunas — criar nova coluna
+  router.post('/colunas', async (req: AuthRequest, res: Response) => {
+    try {
+      const { nome, cor, ordem } = req.body;
+      if (!nome) return res.status(400).json({ message: 'Nome é obrigatório' });
+      const r = await pool.query(
+        'INSERT INTO kanban_colunas (user_id, nome, cor, ordem) VALUES ($1, $2, $3, $4) RETURNING *',
+        [req.userId, nome, cor || '#f1f5f9', ordem ?? 99]
+      );
+      return res.status(201).json(r.rows[0]);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // 0c. PATCH /api/kanban/colunas/:id — renomear coluna
+  router.patch('/colunas/:id', async (req: AuthRequest, res: Response) => {
+    try {
+      const { nome, cor } = req.body;
+      const sets: string[] = [];
+      const params: any[] = [];
+      if (nome)  { params.push(nome); sets.push(`nome = $${params.length}`); }
+      if (cor)   { params.push(cor);  sets.push(`cor = $${params.length}`); }
+      if (!sets.length) return res.status(400).json({ message: 'Nenhum campo para atualizar' });
+      params.push(req.params.id); params.push(req.userId);
+      const r = await pool.query(
+        `UPDATE kanban_colunas SET ${sets.join(', ')} WHERE id = $${params.length - 1} AND user_id = $${params.length} RETURNING *`,
+        params
+      );
+      if (!r.rows.length) return res.status(404).json({ message: 'Coluna não encontrada' });
+      return res.json(r.rows[0]);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // 0d. DELETE /api/kanban/colunas/:id — excluir coluna vazia
+  router.delete('/colunas/:id', async (req: AuthRequest, res: Response) => {
+    try {
+      const countRes = await pool.query(
+        'SELECT COUNT(*) FROM tarefas WHERE coluna_id = $1 AND user_id = $2',
+        [req.params.id, req.userId]
+      );
+      if (parseInt(countRes.rows[0].count) > 0) {
+        return res.status(400).json({ message: 'Mova as tarefas antes de excluir a coluna' });
+      }
+      await pool.query('DELETE FROM kanban_colunas WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
+      return res.status(204).send();
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // 1. GET /api/kanban/colunas
   router.get('/colunas', async (req: AuthRequest, res: Response) => {
     try {
@@ -379,4 +432,87 @@ export default function kanban(pool: Pool): Router {
   });
 
   return router;
+}
+
+// ─── Webhook público do n8n (sem JWT) ─────────────────────────────────────────
+// Registrar no index.ts ANTES do authMiddleware:
+//   app.post('/api/kanban/webhook/n8n', kanbanWebhookN8n(pool));
+export function kanbanWebhookN8n(pool: Pool) {
+  return async (req: any, res: Response) => {
+    try {
+      const secret = req.headers['x-webhook-secret'] as string;
+      if (!process.env.N8N_WEBHOOK_SECRET || secret !== process.env.N8N_WEBHOOK_SECRET) {
+        return res.status(401).json({ message: 'Webhook secret inválido' });
+      }
+
+      const {
+        user_id, titulo, resumo, contato_nome, contato_telefone,
+        remote_jid, instance_name, conversa_id, prioridade,
+      } = req.body;
+
+      if (!user_id || !titulo) {
+        return res.status(400).json({ message: 'user_id e titulo são obrigatórios' });
+      }
+
+      // Buscar coluna Backlog do usuário — ou criar as 4 colunas padrão
+      let backlogRes = await pool.query(
+        `SELECT id FROM kanban_colunas WHERE user_id = $1 AND nome = 'Backlog' LIMIT 1`,
+        [user_id]
+      );
+
+      if (!backlogRes.rows.length) {
+        const colunasPadrao = [
+          { nome: 'Backlog',       cor: '#f1f5f9', ordem: 0 },
+          { nome: 'Em Andamento',  cor: '#dbeafe', ordem: 1 },
+          { nome: 'Em Revisão',    cor: '#fef9c3', ordem: 2 },
+          { nome: 'Concluído',     cor: '#dcfce7', ordem: 3 },
+        ];
+        for (const c of colunasPadrao) {
+          await pool.query(
+            `INSERT INTO kanban_colunas (user_id, nome, cor, ordem)
+             VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+            [user_id, c.nome, c.cor, c.ordem]
+          );
+        }
+        backlogRes = await pool.query(
+          `SELECT id FROM kanban_colunas WHERE user_id = $1 AND nome = 'Backlog' LIMIT 1`,
+          [user_id]
+        );
+      }
+
+      const backlogId = backlogRes.rows[0]?.id;
+      if (!backlogId) {
+        return res.status(500).json({ message: 'Falha ao encontrar/criar coluna Backlog' });
+      }
+
+      // Calcular próxima ordem
+      const orderRes = await pool.query(
+        `SELECT COALESCE(MAX(ordem), -1) + 1 AS next_ordem
+         FROM tarefas WHERE coluna_id = $1 AND user_id = $2`,
+        [backlogId, user_id]
+      );
+      const nextOrdem = orderRes.rows[0].next_ordem;
+
+      // Inserir tarefa
+      const r = await pool.query(
+        `INSERT INTO tarefas
+           (user_id, coluna_id, titulo, descricao, contato_nome, contato_telefone,
+            remote_jid, instance_name, conversa_id, prioridade, origem, ordem)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'n8n',$11)
+         RETURNING id`,
+        [
+          user_id, backlogId, titulo, resumo || null,
+          contato_nome || null, contato_telefone || null,
+          remote_jid || null, instance_name || null,
+          conversa_id || null, prioridade || 'media',
+          nextOrdem,
+        ]
+      );
+
+      return res.json({ success: true, tarefa_id: r.rows[0].id, coluna: 'Backlog' });
+    } catch (err: any) {
+      console.error('[KANBAN_WEBHOOK]', err.message);
+      return res.status(500).json({ message: err.message });
+    }
+  };
 }

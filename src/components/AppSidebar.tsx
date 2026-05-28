@@ -84,7 +84,7 @@ const navGroups: NavGroup[] = [
           { title: "Tags e Funil",    url: "/tags-funil", icon: Tags,     modulo: "leads",    color: "text-violet-500" },
           { title: "Contatos",        url: "/contatos",   icon: BookUser, modulo: "contatos", color: "text-purple-500" },
           { title: "Funil de Vendas", url: "/funil",      icon: Filter,   modulo: "funil",    color: "text-orange-500" },
-          { title: "Kanban",          url: "/kanban",     icon: LayoutDashboard, modulo: "leads",    color: "text-blue-500" },
+          { title: "Kanban",          url: "/kanban",     icon: LayoutGrid,      modulo: "leads",    color: "text-blue-500" },
         ],
       },
     ],
