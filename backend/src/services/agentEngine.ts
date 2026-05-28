@@ -1,52 +1,91 @@
+/**
+ * agentEngine.ts — Motor de IA nativo do CRM Mentoark
+ *
+ * Responsabilidade:
+ *   Processar mensagens recebidas via WhatsApp (Evolution API) sem depender do n8n.
+ *   O fluxo completo é: recebe mensagem → processa mídia → verifica pausa →
+ *   busca contexto (RAG) → chama OpenAI → detecta sinal de pausa → envia resposta.
+ *
+ * Integra:
+ *   - OpenAI (GPT-4o-mini para texto/visão, Whisper para áudio)
+ *   - Evolution API (envio de mensagens WhatsApp)
+ *   - PostgreSQL (histórico, prompt, conhecimento, dados_cliente)
+ */
+
 import OpenAI from 'openai';
 import { Pool } from 'pg';
 
+// Cliente OpenAI configurado via variável de ambiente
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'not-configured' });
 
+/**
+ * MensagemEntrada — estrutura normalizada de uma mensagem recebida via webhook.
+ *
+ * O webhook.ts extrai esses campos do payload raw da Evolution API antes de
+ * passar para cá, separando texto de mídia para facilitar o processamento.
+ */
 export interface MensagemEntrada {
-  instancia: string;
-  messageId: string;
-  telefone: string;       // ex: "5511999999999"
-  pushName: string;       // nome do WhatsApp
-  texto: string | null;   // null quando for áudio/imagem sem legenda
+  instancia: string;      // Nome da instância WhatsApp (ex: "crm_65aba552")
+  messageId: string;      // ID único gerado pelo WhatsApp / Evolution API
+  telefone: string;       // Número no formato 5511999999999 (sem @s.whatsapp.net)
+  pushName: string;       // Nome exibido no WhatsApp do contato
+  texto: string | null;   // Conteúdo textual (null quando só há mídia sem legenda)
   tipo: string;           // 'text' | 'audio' | 'image' | 'video' | 'document'
-  midiaUrl?: string;      // URL pública da mídia (Evolution já serve)
-  midiaBase64?: string;   // Base64 da mídia
-  timestamp: number;
+  midiaUrl?: string;      // URL pública da mídia servida pela Evolution API
+  midiaBase64?: string;   // Alternativa em base64 (não utilizada atualmente)
+  timestamp: number;      // Unix timestamp da mensagem original
 }
 
+/** Campos do agente lidos do banco (tabela agentes) */
 interface AgenteConfig {
   user_id: string;
   nome: string;
   evolution_instancia: string;
   evolution_api_key: string;
   evolution_server_url: string;
-  modelo: string;
-  temperatura: number;
-  max_tokens: number;
+  modelo: string;           // ex: "gpt-4o-mini"
+  temperatura: number;      // 0.0–2.0, controla criatividade da resposta
+  max_tokens: number;       // Limite de tokens na resposta gerada
   ativo: boolean;
 }
 
-// Buffer de mensagens picotadas: chave → { timeout, textos[], última entrada }
+// ── Buffer de debounce para mensagens picotadas ────────────────────────────────
+/**
+ * Usuários frequentemente enviam o mesmo pensamento em múltiplas mensagens
+ * curtas em sequência ("oi" → "queria saber" → "o preço do imóvel").
+ *
+ * Este Map evita que cada fragmento dispare uma chamada separada à OpenAI.
+ * A chave é "instancia:telefone"; o valor acumula textos até o timer disparar.
+ */
 const bufferMensagens = new Map<string, {
   timeout: ReturnType<typeof setTimeout>;
-  textos: string[];
-  entrada: MensagemEntrada;
+  textos: string[];      // Fragmentos acumulados enquanto o timer está ativo
+  entrada: MensagemEntrada; // Última entrada recebida (usada para metadados de mídia)
 }>();
 
-// ── Transcrição de áudio via Whisper ───────────────────────
+// ── Funções de processamento de mídia ─────────────────────────────────────────
 
+/**
+ * Transcreve um arquivo de áudio OGG (formato padrão do WhatsApp) usando
+ * o modelo Whisper-1 da OpenAI.
+ *
+ * Por que baixar e re-enviar? A Evolution API serve o áudio em uma URL com
+ * autenticação via header (apikey), que o endpoint da OpenAI não suporta
+ * diretamente — por isso fazemos proxy do buffer em memória.
+ */
 async function transcreverAudio(url: string): Promise<string | null> {
   try {
     const resp = await fetch(url);
     if (!resp.ok) return null;
+
     const buffer = await resp.arrayBuffer();
     const blob = new Blob([buffer], { type: 'audio/ogg' });
 
+    // FormData é necessário porque a API Whisper espera multipart/form-data
     const form = new FormData();
     form.append('file', blob, 'audio.ogg');
     form.append('model', 'whisper-1');
-    form.append('language', 'pt');
+    form.append('language', 'pt'); // Forçar português melhora a precisão
 
     const transcResp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
@@ -62,8 +101,13 @@ async function transcreverAudio(url: string): Promise<string | null> {
   }
 }
 
-// ── Análise de imagem via GPT-4o vision ───────────────────
-
+/**
+ * Usa o GPT-4o-mini (com suporte a visão) para descrever uma imagem enviada
+ * pelo cliente. A descrição é inserida no histórico como mensagem do usuário,
+ * permitindo que o agente responda ao contexto visual.
+ *
+ * @param caption Legenda enviada junto com a imagem (opcional)
+ */
 async function analisarImagem(url: string, caption?: string): Promise<string> {
   try {
     const resp = await openai.chat.completions.create({
@@ -84,31 +128,52 @@ async function analisarImagem(url: string, caption?: string): Promise<string> {
     });
     return resp.choices[0]?.message?.content || '[imagem enviada]';
   } catch {
+    // Em caso de falha na visão, usar a legenda original como fallback
     return caption || '[imagem enviada]';
   }
 }
 
-// ── Divisão inteligente da resposta em até 2 partes ───────
-
+/**
+ * Divide uma resposta longa em até 2 partes, quebrando em parágrafos duplos.
+ *
+ * Por que 2 partes? Enviar múltiplas mensagens curtas simula comportamento
+ * humano no WhatsApp, reduz a sensação de "mural de texto" e aumenta o
+ * engajamento. Mais de 2 partes seria excessivo e poderia parecer spam.
+ */
 function dividirMensagem(texto: string): string[] {
   const partes = texto.split(/\n\n+/).filter(p => p.trim().length > 0);
   if (partes.length <= 1) return [texto.trim()];
   if (partes.length > 2) {
+    // Agrupar tudo exceto o último parágrafo no primeiro bloco
     return [partes.slice(0, -1).join('\n\n'), partes[partes.length - 1]];
   }
   return partes;
 }
 
-// ── Helpers de DB ──────────────────────────────────────────
+// ── Funções auxiliares de banco de dados ──────────────────────────────────────
 
+/**
+ * Gera embedding vetorial do texto para busca semântica (RAG).
+ * Usamos text-embedding-3-small: barato, rápido e suficientemente preciso
+ * para base de conhecimento de pequenas/médias empresas.
+ */
 async function gerarEmbedding(texto: string): Promise<number[]> {
   const resp = await openai.embeddings.create({
     model: 'text-embedding-3-small',
-    input: texto.slice(0, 8000),
+    input: texto.slice(0, 8000), // Limite do modelo
   });
   return resp.data[0].embedding;
 }
 
+/**
+ * Busca Retrieval-Augmented Generation (RAG): encontra os trechos mais
+ * relevantes da base de conhecimento do usuário usando distância de vetor
+ * (pgvector com operador <->).
+ *
+ * Os resultados são injetados no system prompt antes de chamar a OpenAI,
+ * permitindo respostas baseadas em documentos específicos do cliente
+ * (catálogos, políticas, scripts de vendas, etc.).
+ */
 async function buscaRAG(pool: Pool, userId: string, pergunta: string, limite = 4): Promise<string[]> {
   try {
     const embedding = await gerarEmbedding(pergunta);
@@ -119,25 +184,36 @@ async function buscaRAG(pool: Pool, userId: string, pergunta: string, limite = 4
     );
     return r.rows.map(row => row.content);
   } catch {
-    return [];
+    return []; // RAG é melhor-esforço: nunca bloqueia o atendimento
   }
 }
 
+/**
+ * Carrega as últimas 12 mensagens da conversa (histórico de sessão).
+ *
+ * Por que 12? É o equilíbrio entre contexto suficiente para continuidade
+ * e custo de tokens. Conversas longas são comprimidas implicitamente pelo
+ * LIMIT — as mais antigas são descartadas (janela deslizante).
+ *
+ * O session_id é o telefone do contato, garantindo um histórico por número.
+ */
 async function carregarHistorico(pool: Pool, sessionId: string): Promise<OpenAI.Chat.ChatCompletionMessageParam[]> {
   const r = await pool.query(
     `SELECT message FROM n8n_chat_histories WHERE session_id = $1
      ORDER BY created_at DESC LIMIT 12`,
     [sessionId]
   );
+  // Reverter para ordem cronológica (DESC → ASC) antes de enviar à OpenAI
   return r.rows
     .reverse()
     .map(row => {
       const msg = typeof row.message === 'string' ? JSON.parse(row.message) : row.message;
       return msg as OpenAI.Chat.ChatCompletionMessageParam;
     })
-    .filter(msg => msg.role && msg.content);
+    .filter(msg => msg.role && msg.content); // Filtrar entradas inválidas
 }
 
+/** Persiste uma mensagem no histórico da sessão (n8n_chat_histories) */
 async function salvarMensagem(
   pool: Pool, sessionId: string, userId: string,
   instancia: string, role: 'user' | 'assistant', content: string
@@ -149,6 +225,13 @@ async function salvarMensagem(
   );
 }
 
+/**
+ * Envia uma mensagem de texto via Evolution API.
+ *
+ * O delay de 1200ms simula tempo de digitação, tornando o bot mais natural.
+ * A Evolution API envia o indicador "digitando..." automaticamente durante
+ * esse período.
+ */
 async function enviarResposta(
   serverUrl: string, apiKey: string,
   instancia: string, telefone: string, texto: string
@@ -165,6 +248,13 @@ async function enviarResposta(
   }
 }
 
+/**
+ * Localiza o contato no CRM pelo telefone ou cria um novo registro.
+ *
+ * Usamos ILIKE com slice(-11) para tolerar variações no formato
+ * (ex: 55119... vs 119...). O contato criado recebe status 'novo'
+ * para aparecer na fila de atendimento do painel.
+ */
 async function upsertContato(pool: Pool, userId: string, telefone: string, nome: string): Promise<{ id: string; opt_out: boolean }> {
   const existente = await pool.query(
     `SELECT id, opt_out FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
@@ -180,35 +270,55 @@ async function upsertContato(pool: Pool, userId: string, telefone: string, nome:
   return novo.rows[0];
 }
 
-// ── MOTOR PRINCIPAL ─────────────────────────────────────────
+// ── MOTOR PRINCIPAL ────────────────────────────────────────────────────────────
 
+/**
+ * processarMensagem — núcleo do atendimento automático.
+ *
+ * Fluxo completo:
+ *  1. Resolve mídia (áudio → transcrição, imagem → descrição)
+ *  2. Localiza o agente configurado para a instância
+ *  3. Verifica opt-out e pausa de atendimento humano
+ *  4. Monta o system prompt (prompt + conhecimento + RAG)
+ *  5. Carrega histórico da conversa
+ *  6. Chama OpenAI Chat Completions
+ *  7. Detecta sinal de pausa "251213" na resposta
+ *  8. Persiste mensagens no histórico e em whatsapp_messages
+ *  9. Divide e envia as mensagens com delay entre partes
+ * 10. Se 251213 detectado: pausa IA, cria card no Kanban
+ */
 export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<void> {
   console.log(`[AGT] Processando: instancia=${entrada.instancia} tel=${entrada.telefone} tipo=${entrada.tipo}`);
 
-  // 1. Resolver mídia antes de qualquer outra lógica
+  // ── Passo 1: Resolução de mídia ───────────────────────────────────────────
   let textoFinal = entrada.texto;
 
+  // Áudio: transcrever com Whisper antes de qualquer outra etapa
   if (entrada.tipo === 'audio' && entrada.midiaUrl && !textoFinal) {
     console.log(`[AGT] Transcrevendo áudio de ${entrada.telefone}...`);
     textoFinal = await transcreverAudio(entrada.midiaUrl);
     if (textoFinal) {
       console.log(`[AGT] Transcrição: "${textoFinal.slice(0, 80)}..."`);
     } else {
+      // Sem transcrição não há contexto — ignorar silenciosamente
       console.warn('[AGT] Não foi possível transcrever o áudio — ignorando');
       return;
     }
   }
 
+  // Imagem: gerar descrição textual para incluir no histórico
   if (entrada.tipo === 'image' && entrada.midiaUrl) {
     textoFinal = await analisarImagem(entrada.midiaUrl, entrada.texto || undefined);
   }
 
   if (!textoFinal) {
+    // Sticker, vídeo sem legenda, etc. — não há conteúdo para processar
     console.log('[AGT] Mensagem sem texto após processamento de mídia — ignorando');
     return;
   }
 
-  // 2. Encontrar agente
+  // ── Passo 2: Localizar agente ─────────────────────────────────────────────
+  // Cada instância WhatsApp é mapeada para um agente no painel de Agentes IA
   const agenteRes = await pool.query(
     `SELECT * FROM agentes
      WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
@@ -221,14 +331,19 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
   }
   const agente: AgenteConfig = agenteRes.rows[0];
 
-  // 3. Verificar opt_out
+  // ── Passo 3: Verificações de bloqueio ─────────────────────────────────────
+
+  // Opt-out: contatos que pediram para sair da lista não são atendidos
   const contato = await upsertContato(pool, agente.user_id, entrada.telefone, entrada.pushName);
   if (contato.opt_out) {
     console.log(`[AGT] Contato ${entrada.telefone} com opt_out=true — ignorando`);
     return;
   }
 
-  // 4. Verificar pausa de IA
+  // Pausa: atendente humano assumiu a conversa — bot fica em silêncio
+  // O campo atendimento_ia = 'pause' é setado quando:
+  //   a) O sinal 251213 aparece na resposta da IA (fim de conversa automático)
+  //   b) O atendente envia uma mensagem manualmente (fromMe=true no webhook)
   const pausaRes = await pool.query(
     `SELECT atendimento_ia FROM dados_cliente
      WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
@@ -239,7 +354,9 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
     return;
   }
 
-  // 5. Carregar prompts e conhecimento
+  // ── Passo 4: Montar system prompt completo ────────────────────────────────
+
+  // Prompt base configurado no painel "Agentes IA" → aba Prompt
   const promptRes = await pool.query(
     `SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`,
     [agente.user_id]
@@ -247,6 +364,7 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
   const systemPrompt = promptRes.rows[0]?.conteudo ||
     'Você é um assistente comercial prestativo. Atenda os clientes com educação e objetividade.';
 
+  // Base de conhecimento: personalidade, scripts, FAQ, objeções
   const conhecimentoRes = await pool.query(
     `SELECT tipo, campo, conteudo FROM conhecimento WHERE user_id = $1
      ORDER BY tipo, created_at ASC LIMIT 30`,
@@ -257,7 +375,7 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
       conhecimentoRes.rows.map(k => `[${k.tipo}${k.campo ? ' / ' + k.campo : ''}]\n${k.conteudo}`).join('\n\n')
     : '';
 
-  // 6. Busca RAG
+  // RAG: documentos vetoriais (catálogos, contratos, políticas)
   const ragResultados = await buscaRAG(pool, agente.user_id, textoFinal);
   const ragTexto = ragResultados.length
     ? '\n\n--- INFORMAÇÕES RELEVANTES (RAG) ---\n' + ragResultados.join('\n\n---\n')
@@ -265,11 +383,11 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
 
   const systemCompleto = systemPrompt + conhecimentoTexto + ragTexto;
 
-  // 7. Histórico
-  const sessionId = entrada.telefone;
+  // ── Passo 5: Histórico da sessão ──────────────────────────────────────────
+  const sessionId = entrada.telefone; // Um histórico por número de telefone
   const historico = await carregarHistorico(pool, sessionId);
 
-  // 8. Chamar OpenAI
+  // ── Passo 6: Chamada à OpenAI ─────────────────────────────────────────────
   const mensagens: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemCompleto },
     ...historico,
@@ -286,16 +404,26 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
   const resposta = completion.choices[0]?.message?.content;
   if (!resposta) throw new Error('OpenAI não retornou resposta');
 
-  // 9. Detectar sinal de pausa (251213) e limpar resposta
+  // ── Passo 7: Detectar sinal de pausa ──────────────────────────────────────
+  // A IA inclui "251213" na resposta quando avalia que a conversa chegou ao
+  // ponto de qualificação e deve ser transferida para um humano.
+  // Esse código é configurado no system prompt do agente.
+  // Exemplo de instrução no prompt:
+  //   "Quando o cliente estiver qualificado, inclua '251213' no final da resposta."
   const SINAL_PAUSA = '251213';
   const deveEPausar = resposta.includes(SINAL_PAUSA);
-  const respostaLimpa = resposta.replace(SINAL_PAUSA, '').replace(/\n{3,}/g, '\n\n').trim();
 
-  // 10. Salvar conversa
+  // Remover o código do texto antes de enviar ao cliente
+  const respostaLimpa = resposta
+    .replace(SINAL_PAUSA, '')
+    .replace(/\n{3,}/g, '\n\n') // Colapsar linhas em branco extras
+    .trim();
+
+  // ── Passo 8: Persistir mensagens ──────────────────────────────────────────
   await salvarMensagem(pool, sessionId, agente.user_id, entrada.instancia, 'user', textoFinal);
   await salvarMensagem(pool, sessionId, agente.user_id, entrada.instancia, 'assistant', respostaLimpa);
 
-  // 10b. Salvar resposta em whatsapp_messages (schema novo EN)
+  // Salvar também em whatsapp_messages (schema EN canônico) para o painel
   await pool.query(
     `INSERT INTO whatsapp_messages
        (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
@@ -305,16 +433,16 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
       agente.user_id,
       entrada.instancia,
       `${entrada.telefone}@s.whatsapp.net`,
-      `resp_${entrada.messageId}`,
+      `resp_${entrada.messageId}`, // Prefixo 'resp_' identifica mensagens do bot no webhook
       respostaLimpa,
       Math.floor(Date.now() / 1000),
     ]
   ).catch(err => console.warn('[AGT] Falha ao salvar em whatsapp_messages:', err.message));
 
-  // 11. Dividir e enviar mensagens com delay
+  // ── Passo 9: Enviar resposta (dividida em até 2 partes) ───────────────────
   const partes = dividirMensagem(respostaLimpa);
   for (let i = 0; i < partes.length; i++) {
-    if (i > 0) await new Promise(r => setTimeout(r, 3000));
+    if (i > 0) await new Promise(r => setTimeout(r, 3000)); // 3s entre partes
     await enviarResposta(
       agente.evolution_server_url,
       agente.evolution_api_key,
@@ -323,20 +451,20 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
       partes[i]
     );
   }
-
   console.log(`[AGT] Resposta enviada para ${entrada.telefone}: "${respostaLimpa.slice(0, 80)}..."`);
 
-  // 12. Ações de pausa automática
+  // ── Passo 10: Ações de pausa automática ───────────────────────────────────
   if (deveEPausar) {
     console.log(`[AGT] Pausa acionada para ${entrada.telefone}`);
 
+    // Marcar contato como em atendimento humano
     await pool.query(
       `UPDATE dados_cliente SET atendimento_ia = 'pause'
        WHERE user_id = $1 AND telefone ILIKE $2`,
       [agente.user_id, `%${entrada.telefone.slice(-11)}`]
     ).catch(() => {});
 
-    // Buscar histórico para o card Kanban
+    // Buscar últimas 10 mensagens para montar o resumo do card Kanban
     const historicoRes = await pool.query(
       `SELECT message FROM n8n_chat_histories
        WHERE session_id = $1 AND user_id = $2
@@ -352,6 +480,8 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
       })
       .join('\n');
 
+    // Criar card no Kanban (coluna Backlog) via endpoint interno
+    // O fetch é fire-and-forget (não bloqueia o envio da resposta)
     const backendUrl = process.env.BACKEND_URL || 'https://api.mentoark.com.br';
     const kanbanSecret = process.env.N8N_WEBHOOK_SECRET || 'mentoark-kanban-secret-2025';
 
@@ -367,23 +497,41 @@ export async function processarMensagem(pool: Pool, entrada: MensagemEntrada): P
         remote_jid: `${entrada.telefone}@s.whatsapp.net`,
         instance_name: entrada.instancia,
         conversa_id: sessionId,
-        prioridade: 'alta',
+        prioridade: 'alta', // Lead qualificado → prioridade alta
       }),
     }).catch(err => console.warn('[AGT] Falha ao criar card Kanban:', err.message));
   }
 }
 
-// ── DEBOUNCE — agrupa mensagens picotadas ──────────────────
+// ── DEBOUNCE — agrupa mensagens picotadas ──────────────────────────────────────
 
+/**
+ * processarComDebounce — ponto de entrada público para o webhook.ts.
+ *
+ * Aguarda 3 segundos após a última mensagem do mesmo contato antes de
+ * processar. Se novas mensagens chegarem durante o timer:
+ *   - O timer é reiniciado
+ *   - O texto é acumulado em `textos[]`
+ *
+ * No processamento final, todos os fragmentos são concatenados com espaço,
+ * formando uma mensagem única coerente para a OpenAI.
+ *
+ * Exemplo:
+ *   "oi"           → timer 3s
+ *   "queria saber" → reset timer, acumula
+ *   "o preço"      → reset timer, acumula
+ *   (silêncio 3s)  → processa "oi queria saber o preço"
+ */
 export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada): Promise<void> {
   const chave = `${entrada.instancia}:${entrada.telefone}`;
-  const DEBOUNCE_MS = 3000;
+  const DEBOUNCE_MS = 3000; // 3 segundos de janela de espera
 
   const existente = bufferMensagens.get(chave);
   if (existente) {
+    // Cancelar timer anterior e acumular texto
     clearTimeout(existente.timeout);
     if (entrada.texto) existente.textos.push(entrada.texto);
-    existente.entrada = entrada;
+    existente.entrada = entrada; // Atualiza metadados com a mensagem mais recente
   } else {
     bufferMensagens.set(chave, {
       timeout: null as any,
@@ -395,10 +543,13 @@ export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada)
   const buf = bufferMensagens.get(chave)!;
   buf.timeout = setTimeout(async () => {
     bufferMensagens.delete(chave);
+
+    // Montar entrada final com textos concatenados
     const entradaFinal: MensagemEntrada = { ...buf.entrada };
     if (buf.textos.length > 1) {
       entradaFinal.texto = buf.textos.join(' ');
     }
+
     await processarMensagem(pool, entradaFinal).catch(err => {
       console.error('[AGT] Erro ao processar mensagem agrupada:', err);
     });

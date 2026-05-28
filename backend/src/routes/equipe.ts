@@ -1,3 +1,27 @@
+/**
+ * equipe.ts — Rotas de gerenciamento de equipes e chat interno
+ *
+ * Modelo de dados:
+ *  equipes          → uma equipe por usuário (owner_id)
+ *  equipe_membros   → N membros por equipe (role: 'membro' | 'gerente')
+ *  equipe_chat      → mensagens do chat interno da equipe
+ *
+ * Endpoints:
+ *  GET  /api/equipes/minha              → equipe do usuário + lista de membros
+ *  POST /api/equipes                    → criar nova equipe (dono vira gerente)
+ *  GET  /api/equipes/:id/membros        → listar membros
+ *  POST /api/equipes/:id/convidar       → convidar por email (usuário já cadastrado)
+ *  DELETE /api/equipes/:id/membros/:uid → remover membro
+ *  PATCH  /api/equipes/:id/membros/:uid → alterar papel (owner only)
+ *  GET  /api/equipes/:id/chat           → últimas 50 mensagens do chat
+ *  POST /api/equipes/:id/chat           → enviar mensagem no chat
+ *
+ * Autorização:
+ *  - Apenas owner e gerentes podem convidar/remover membros
+ *  - Apenas o owner pode alterar papéis
+ *  - Todos os membros podem enviar mensagens no chat
+ */
+
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';

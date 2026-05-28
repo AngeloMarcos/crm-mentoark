@@ -1,3 +1,28 @@
+/**
+ * Kanban.tsx — Página principal do quadro Kanban
+ *
+ * Arquitetura geral:
+ *  - DndContext (dnd-kit) envolve todo o board e gerencia arrastar/soltar
+ *  - onDragOver: move o card optimisticamente no estado local enquanto arrasta
+ *  - onDragEnd: persiste a nova posição no servidor; reverte em caso de erro
+ *  - DragOverlay: renderiza uma cópia "fantasma" do card sendo arrastado
+ *
+ * Filtros disponíveis:
+ *  - Busca por texto (título e descrição)
+ *  - Prioridade (alta / media / baixa)
+ *  - Origem (manual / ia) — cards criados por IA são gerados pelo agentEngine
+ *  - Membro (atribuído a) — avatares clicáveis no header
+ *
+ * Gerenciamento de colunas:
+ *  - Colunas padrão criadas automaticamente no primeiro acesso (via backend)
+ *  - Botão "Nova coluna" com color picker → POST /api/kanban/colunas
+ *  - Renomear inline e excluir (apenas se vazia) via menu "..."
+ *
+ * Criação de tarefas:
+ *  - Inline: clica em "+" na coluna → textarea no final da lista
+ *  - Modal: botão "Nova Tarefa" no header → ModalTarefa.tsx (campos completos)
+ */
+
 import { useEffect, useState, useMemo, useRef } from "react";
 import {
   LayoutGrid, Plus, Search, X, SlidersHorizontal, Check,

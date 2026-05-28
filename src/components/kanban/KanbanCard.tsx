@@ -1,3 +1,17 @@
+/**
+ * KanbanCard.tsx — Card individual do quadro Kanban
+ *
+ * Responsabilidades:
+ *  - Exibir título, prioridade, data limite, comentários e atribuição
+ *  - Ser arrastável via @dnd-kit/sortable (useSortable hook)
+ *  - Separar handle de drag (ícone grip) do clique para editar
+ *
+ * Design:
+ *  - Barra colorida lateral indica prioridade visualmente
+ *  - Cards de IA têm badge "✨ IA" em roxo
+ *  - Opacidade 40% enquanto sendo arrastado (feedback visual)
+ */
+
 import React from "react";
 import { format, isPast } from "date-fns";
 import { ptBR } from "date-fns/locale";

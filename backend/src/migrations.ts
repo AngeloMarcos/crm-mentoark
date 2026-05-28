@@ -1,3 +1,25 @@
+/**
+ * migrations.ts — Migrações automáticas do banco de dados
+ *
+ * Executadas automaticamente na inicialização do backend (chamada em index.ts).
+ * Todas as queries usam CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS
+ * para serem 100% idempotentes — podem rodar múltiplas vezes sem erro.
+ *
+ * Ordem das migrações:
+ *  1. Tabelas base (whatsapp_messages v1 legada, opt_out, webhook_dedup)
+ *  2. Sprint 3: refresh_tokens, galeria, índices
+ *  3. Sprint 5: oauth_state (CSRF protection)
+ *  4. CRM Features: tabelas de funil, campanhas, SLA, etc.
+ *  5. Sprint CRM+n8n: pausa IA, ia_pausa_log, colunas agentes
+ *  6. Migration 002: whatsapp_messages v2 (schema EN canônico)
+ *  7. Sprint Equipe/Kanban/SubPerfis: equipes, tarefas, sub_perfis
+ *
+ * Nota sobre whatsapp_messages:
+ *  A tabela foi originalmente criada com colunas em português (v1).
+ *  A migration 002 detecta o schema antigo (coluna 'instancia') e
+ *  dropa/recria com o schema canônico em inglês (v2).
+ */
+
 import { Pool } from 'pg';
 
 export async function runMigrations(pool: Pool): Promise<void> {

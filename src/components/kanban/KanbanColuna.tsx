@@ -1,3 +1,21 @@
+/**
+ * KanbanColuna.tsx — Coluna individual do quadro Kanban
+ *
+ * Funcionalidades:
+ *  - Lista os cards via SortableContext (reordenação interna)
+ *  - useDroppable: aceita drops de cards vindos de outras colunas
+ *  - Criação inline: pressione "+" → textarea aparece no final da coluna
+ *    (Enter confirma, ESC cancela — sem necessidade de abrir modal)
+ *  - Renomear coluna inline ao clicar no ícone "..."
+ *  - Excluir coluna (bloqueado se ainda tiver tarefas)
+ *  - Destaque azul na área de drop quando um card passa por cima
+ *
+ * Por que useDroppable separado do SortableContext?
+ *  O SortableContext cuida da ordenação interna, mas para detectar quando
+ *  um card de outra coluna é solto em uma coluna vazia precisamos do
+ *  useDroppable com o ID da coluna — o dnd-kit não cobre esse caso sozinho.
+ */
+
 import React, { useRef, useState } from "react";
 import { Plus, ListTodo, MoreHorizontal, Pencil, Trash2, Check, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
