@@ -12,6 +12,7 @@ import ModalTarefa from "@/components/kanban/ModalTarefa";
 import { Tarefa } from "@/components/kanban/KanbanCard";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
 interface Coluna {
   id: string;
