@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,11 +8,20 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare } from "lucide-react";
+import { 
+  Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare, 
+  Settings2, Copy, RefreshCw, Shield, LayoutGrid, MessageCircle, 
+  UserPlus2, Users2, BarChart3, Send
+} from "lucide-react";
 import { useEquipe, type Membro } from "@/hooks/useEquipe";
 import { useAuth } from "@/hooks/useAuth";
 import { ChatEquipe } from "@/components/equipe/ChatEquipe";
+import { useSubPerfis, type SubPerfil } from "@/hooks/useSubPerfis";
+import { cn } from "@/lib/utils";
 
 function iniciais(nome?: string, email?: string) {
   const base = (nome || email || "?").trim();
@@ -22,6 +31,7 @@ function iniciais(nome?: string, email?: string) {
 }
 
 export default function EquipePage() {
+  const { user } = useAuth();
   const { equipe, membros, loading, criarEquipe, convidarMembro, removerMembro } = useEquipe();
 
   if (loading) {
@@ -38,12 +48,33 @@ export default function EquipePage() {
         {!equipe ? (
           <Onboarding onCreate={criarEquipe} />
         ) : (
-          <Painel
-            equipe={equipe}
-            membros={membros}
-            onConvidar={convidarMembro}
-            onRemover={removerMembro}
-          />
+          <Tabs defaultValue="geral" className="space-y-6">
+            <div className="flex items-center justify-between">
+              <TabsList>
+                <TabsTrigger value="geral" className="gap-2">
+                  <Users2 className="w-4 h-4" /> Geral
+                </TabsTrigger>
+                {(user?.role === 'admin' || user?.role === 'gerente') && (
+                  <TabsTrigger value="membros" className="gap-2">
+                    <UserPlus2 className="w-4 h-4" /> Membros
+                  </TabsTrigger>
+                )}
+              </TabsList>
+            </div>
+
+            <TabsContent value="geral">
+              <Painel
+                equipe={equipe}
+                membros={membros}
+                onConvidar={convidarMembro}
+                onRemover={removerMembro}
+              />
+            </TabsContent>
+
+            <TabsContent value="membros">
+              <GestaoMembros />
+            </TabsContent>
+          </Tabs>
         )}
       </div>
     </CRMLayout>
@@ -420,3 +451,291 @@ function ConviteDialog({
     </Dialog>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// GESTÃO DE MEMBROS (SUB-PERFIS)
+// ─────────────────────────────────────────────────────────────
+function GestaoMembros() {
+  const { subPerfis, loading, criarSubPerfil, atualizarModulos, atualizarSubPerfil, excluirSubPerfil } = useSubPerfis();
+  const [modalAdicionar, setModalAdicionar] = useState(false);
+  const [modalPermissoes, setModalPermissoes] = useState<SubPerfil | null>(null);
+
+  const MODULOS_DISPONIVEIS = [
+    { id: "kanban", label: "Kanban", icon: LayoutGrid, color: "text-blue-500" },
+    { id: "mensagens", label: "Mensagens / WhatsApp", icon: MessageCircle, color: "text-green-500" },
+    { id: "leads", label: "Leads", icon: Send, color: "text-indigo-500" },
+    { id: "contatos", label: "Contatos", icon: Users, color: "text-purple-500" },
+    { id: "relatorios", label: "Relatórios", icon: BarChart3, color: "text-cyan-500" },
+    { id: "disparos", label: "Disparos em Massa", icon: Send, color: "text-sky-500" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <header className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold">Membros da Equipe</h2>
+          <p className="text-sm text-muted-foreground">Gerencie acessos e permissões dos membros</p>
+        </div>
+        <Button onClick={() => setModalAdicionar(true)} className="gap-2">
+          <UserPlus2 className="w-4 h-4" /> Adicionar Membro
+        </Button>
+      </header>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {loading ? (
+          <div className="col-span-full py-20 text-center text-muted-foreground">
+            Carregando membros...
+          </div>
+        ) : subPerfis.length === 0 ? (
+          <div className="col-span-full py-20 text-center text-muted-foreground border-2 border-dashed rounded-lg">
+            Nenhum membro cadastrado.
+          </div>
+        ) : (
+          subPerfis.map((sp) => (
+            <Card key={sp.id} className={cn("p-4 space-y-4", !sp.ativo && "opacity-60 grayscale")}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Avatar className="h-10 w-10 border-2" style={{ borderColor: sp.avatar_cor }}>
+                    <AvatarFallback style={{ backgroundColor: sp.avatar_cor + "20", color: sp.avatar_cor }}>
+                      {iniciais(sp.nome, sp.email)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold truncate">{sp.nome}</h3>
+                    <p className="text-xs text-muted-foreground truncate">{sp.email}</p>
+                  </div>
+                </div>
+                <Switch 
+                  checked={sp.ativo} 
+                  onCheckedChange={(v) => atualizarSubPerfil(sp.id, { ativo: v })}
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {sp.modulos.map((m) => (
+                  <Badge key={m} variant="secondary" className="text-[10px] capitalize px-1.5 py-0 h-5">
+                    {m}
+                  </Badge>
+                ))}
+                {sp.modulos.length === 0 && (
+                  <span className="text-[10px] text-muted-foreground italic">Sem módulos</span>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="text-xs h-8 gap-1.5"
+                  onClick={() => setModalPermissoes(sp)}
+                >
+                  <Settings2 className="w-3.5 h-3.5" /> Permissões
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="text-xs h-8 text-destructive hover:text-destructive gap-1.5"
+                  onClick={() => {
+                    if (confirm("Desativar acesso deste membro?")) excluirSubPerfil(sp.id);
+                  }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </Card>
+          ))
+        )}
+      </div>
+
+      <ModalAdicionarMembro 
+        open={modalAdicionar} 
+        onClose={() => setModalAdicionar(false)} 
+        onConfirm={criarSubPerfil} 
+      />
+
+      {modalPermissoes && (
+        <ModalPermissoes 
+          subPerfil={modalPermissoes} 
+          modulosDisponiveis={MODULOS_DISPONIVEIS}
+          onClose={() => setModalPermissoes(null)} 
+          onSave={atualizarModulos}
+        />
+      )}
+    </div>
+  );
+}
+
+function ModalAdicionarMembro({ open, onClose, onConfirm }: { open: boolean, onClose: () => void, onConfirm: (d: any) => Promise<void> }) {
+  const [form, setForm] = useState({
+    nome: "",
+    email: "",
+    senha: "",
+    avatar_cor: "#6366f1",
+    modulos: [] as string[]
+  });
+  const [saving, setSaving] = useState(false);
+
+  const CORES = ["#ef4444", "#f97316", "#f59e0b", "#10b981", "#3b82f6", "#6366f1", "#8b5cf6", "#d946ef"];
+
+  const gerarSenha = () => {
+    const s = Math.random().toString(36).slice(-8);
+    setForm({ ...form, senha: s });
+  };
+
+  const toggleModulo = (id: string) => {
+    setForm(prev => ({
+      ...prev,
+      modulos: prev.modulos.includes(id) ? prev.modulos.filter(m => m !== id) : [...prev.modulos, id]
+    }));
+  };
+
+  const handleSalvar = async () => {
+    if (!form.nome || !form.email || !form.senha) {
+      toast.error("Preencha todos os campos");
+      return;
+    }
+    setSaving(true);
+    try {
+      await onConfirm(form);
+      toast.success("Membro criado!");
+      setForm({ nome: "", email: "", senha: "", avatar_cor: "#6366f1", modulos: [] });
+      onClose();
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao criar membro");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Adicionar Membro</DialogTitle>
+          <DialogDescription>Crie um novo sub-perfil com acesso restrito.</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <Label>Nome completo</Label>
+            <Input value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} />
+          </div>
+          <div className="space-y-2">
+            <Label>Email (login)</Label>
+            <Input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+          </div>
+          <div className="space-y-2">
+            <Label>Senha temporária</Label>
+            <div className="flex gap-2">
+              <Input value={form.senha} onChange={e => setForm({...form, senha: e.target.value})} />
+              <Button size="icon" variant="outline" onClick={gerarSenha} title="Gerar senha">
+                <RefreshCw className="w-4 h-4" />
+              </Button>
+              <Button size="icon" variant="outline" onClick={() => {
+                navigator.clipboard.writeText(form.senha);
+                toast.success("Senha copiada");
+              }} disabled={!form.senha}>
+                <Copy className="w-4 h-4" />
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground italic">Envie essas credenciais para o membro. Ele deverá trocar a senha no primeiro acesso.</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Cor do avatar</Label>
+            <div className="flex flex-wrap gap-2">
+              {CORES.map(c => (
+                <button
+                  key={c}
+                  className={cn("w-6 h-6 rounded-full border-2", form.avatar_cor === c ? "border-slate-900" : "border-transparent")}
+                  style={{ backgroundColor: c }}
+                  onClick={() => setForm({...form, avatar_cor: c})}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <Label>Módulos disponíveis</Label>
+            <div className="grid grid-cols-2 gap-3">
+              {["kanban", "mensagens", "leads", "contatos", "relatorios", "disparos"].map(m => (
+                <div key={m} className="flex items-center gap-2">
+                  <Checkbox 
+                    id={`mod-${m}`} 
+                    checked={form.modulos.includes(m)}
+                    onCheckedChange={() => toggleModulo(m)}
+                  />
+                  <Label htmlFor={`mod-${m}`} className="text-xs capitalize cursor-pointer">{m}</Label>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={handleSalvar} disabled={saving}>
+            {saving ? "Criando..." : "Criar Membro"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ModalPermissoes({ subPerfil, modulosDisponiveis, onClose, onSave }: { subPerfil: SubPerfil, modulosDisponiveis: any[], onClose: () => void, onSave: (id: string, mods: string[]) => Promise<void> }) {
+  const [mods, setMods] = useState<string[]>(subPerfil.modulos);
+  const [saving, setSaving] = useState(false);
+
+  const toggle = (id: string) => {
+    setMods(prev => prev.includes(id) ? prev.filter(m => m !== id) : [...prev, id]);
+  };
+
+  const handleSalvar = async () => {
+    setSaving(true);
+    try {
+      await onSave(subPerfil.id, mods);
+      toast.success("Permissões atualizadas");
+      onClose();
+    } catch (err) {
+      toast.error("Erro ao salvar permissões");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={!!subPerfil} onOpenChange={onClose}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Permissões: {subPerfil.nome}</DialogTitle>
+          <DialogDescription>Defina quais módulos este membro pode acessar.</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-4">
+          {modulosDisponiveis.map(m => (
+            <div key={m.id} className="flex items-center justify-between p-3 border rounded-lg hover:bg-slate-50 transition-colors">
+              <div className="flex items-center gap-3">
+                <div className={cn("p-2 rounded-md bg-white border", m.color.replace("text-", "bg-").replace("500", "50"))}>
+                  <m.icon className={cn("w-4 h-4", m.color)} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold">{m.label}</p>
+                </div>
+              </div>
+              <Switch checked={mods.includes(m.id)} onCheckedChange={() => toggle(m.id)} />
+            </div>
+          ))}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={handleSalvar} disabled={saving}>
+            {saving ? "Salvando..." : "Salvar Permissões"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
