@@ -346,6 +346,16 @@ export const api = {
   },
   removeChannel: (_ch: any) => {},
   removeAllChannels: () => {},
+  get: async (path: string) => {
+    const res = await fetch(`${API_BASE}${path}`, { headers: _authHeaders() });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw e; }
+    return { data: await res.json() };
+  },
+  post: async (path: string, body: any) => {
+    const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: _authHeaders(), body: JSON.stringify(body) });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw e; }
+    return { data: await res.json() };
+  },
 };
 
 export default api;
