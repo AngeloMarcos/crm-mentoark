@@ -672,6 +672,14 @@ export function WhatsAppInterface() {
                     <ChevronDown className="h-4 w-4" />
                   </button>
                 </div>
+                <Button 
+                  variant="outline" 
+                  className="h-10 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
+                  onClick={() => handleCriarTarefaIA(activeChat.id)}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  <span className="hidden sm:inline">Criar Tarefa IA</span>
+                </Button>
                 <Button variant="ghost" size="icon" className="h-10 w-10 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
                   <Info className="h-4.5 w-4.5" />
                 </Button>
