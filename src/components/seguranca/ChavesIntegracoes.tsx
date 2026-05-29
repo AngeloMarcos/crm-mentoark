@@ -3,8 +3,12 @@ import { getAuthToken } from "@/lib/api-token";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Key, Plug, Bot, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Key, Plug, Bot, CheckCircle2, XCircle, Loader2, Save, Globe } from "lucide-react";
 import { api } from "@/integrations/database/client";
+import { toast } from "sonner";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => getAuthToken();
@@ -26,6 +30,11 @@ export function ChavesIntegracoes() {
   const [loadingChaves, setLoadingChaves] = useState(true);
   const [instancias, setInstancias] = useState<EvolutionInstance[]>([]);
   const [loadingInstancias, setLoadingInstancias] = useState(true);
+  const [configGlobal, setConfigGlobal] = useState({
+    url_padrao: "",
+    apikey_padrao: "",
+  });
+  const [salvandoConfig, setSalvandoConfig] = useState(false);
 
   useEffect(() => {
     // Carregar status das chaves
@@ -65,8 +74,43 @@ export function ChavesIntegracoes() {
       setLoadingInstancias(false);
     };
 
+    const loadConfigGlobal = async () => {
+      const { data } = await api
+        .from("integracoes_config")
+        .select("config")
+        .eq("tipo", "config_global")
+        .single();
+      
+      if (data?.config) {
+        setConfigGlobal(data.config);
+      }
+    };
+
     loadInstancias();
+    loadConfigGlobal();
   }, []);
+
+  const salvarConfigGlobal = async () => {
+    setSalvandoConfig(true);
+    const { data: { user } } = await api.auth.getUser();
+    
+    const { error } = await api
+      .from("integracoes_config")
+      .upsert({
+        tipo: "config_global",
+        nome: "Configuração Global Evolution",
+        config: configGlobal,
+        status: "conectado",
+        user_id: user?.id
+      });
+
+    if (error) {
+      toast.error(`Erro ao salvar: ${error.message}`);
+    } else {
+      toast.success("Configuração global salva!");
+    }
+    setSalvandoConfig(false);
+  };
 
   const tools = [
     { nome: "buscar_contatos", desc: "Busca contatos por nome/tel/email" },
@@ -171,6 +215,53 @@ export function ChavesIntegracoes() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Configuração Global Evolution (Mentoark Admin) */}
+      <Card className="bg-white/5 border-white/10">
+        <CardHeader className="pb-3 border-b border-white/5">
+          <CardTitle className="text-base font-semibold flex items-center gap-2">
+            <Globe className="h-4 w-4 text-emerald-500" />
+            Configurações Master Evolution (Admin Only)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">URL Padrão da Evolution API</Label>
+              <Input 
+                placeholder="https://disparo.mentoark.com.br" 
+                value={configGlobal.url_padrao}
+                onChange={(e) => setConfigGlobal(prev => ({ ...prev, url_padrao: e.target.value }))}
+                className="bg-white/5 border-white/10 text-white"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">API Key Padrão (Global)</Label>
+              <Input 
+                type="password"
+                placeholder="••••••••••••" 
+                value={configGlobal.apikey_padrao}
+                onChange={(e) => setConfigGlobal(prev => ({ ...prev, apikey_padrao: e.target.value }))}
+                className="bg-white/5 border-white/10 text-white"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end pt-2">
+            <Button 
+              onClick={salvarConfigGlobal} 
+              disabled={salvandoConfig}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 px-6"
+            >
+              {salvandoConfig ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Salvar Configuração Master
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            * Estas configurações são utilizadas como fallback caso um usuário não tenha uma URL/Key personalizada. 
+            Apenas administradores Mentoark têm acesso a este painel.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* MCP Tools */}
       <Card className="bg-white/5 border-white/10">

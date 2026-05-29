@@ -344,7 +344,7 @@ export default function IntegracoesPage() {
       url: row?.url ?? "",
       api_key: row?.api_key ?? "",
       instancia: row?.instancia ?? "",
-      status: row?.status ?? "inativo",
+      status: (row?.status as IntegStatus) ?? "inativo",
     });
     setModal(true);
     if (tpl.tipo === "evolution") {
