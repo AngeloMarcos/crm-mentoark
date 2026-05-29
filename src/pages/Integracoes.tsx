@@ -217,6 +217,7 @@ function formatarData(iso: string | null) {
 
 export default function IntegracoesPage() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<IntegRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
