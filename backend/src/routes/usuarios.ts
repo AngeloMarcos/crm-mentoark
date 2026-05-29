@@ -7,6 +7,69 @@ export default function usuarios(pool: Pool): Router {
 
   const router = Router();
 
+  const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const MODULOS_PADRAO_NOVO_USUARIO = ['dashboard', 'leads', 'whatsapp'];
+
+  // POST /api/profiles — criar novo usuário (admin)
+  router.post('/profiles', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    const client = await pool.connect();
+    try {
+      const { email, password, display_name } = req.body || {};
+      if (!email || !password) {
+        return res.status(400).json({ message: 'E-mail e senha são obrigatórios' });
+      }
+      if (!EMAIL_REGEX.test(String(email))) {
+        return res.status(400).json({ message: 'Formato de e-mail inválido' });
+      }
+      if (String(password).length < 6) {
+        return res.status(400).json({ message: 'Senha deve ter pelo menos 6 caracteres' });
+      }
+
+      const emailNorm = String(email).toLowerCase().trim();
+      const exists = await client.query('SELECT id FROM users WHERE email = $1', [emailNorm]);
+      if (exists.rows.length) {
+        return res.status(409).json({ message: 'E-mail já cadastrado' });
+      }
+
+      const password_hash = await bcrypt.hash(String(password), 12);
+      const nome = (display_name && String(display_name).trim()) || emailNorm.split('@')[0];
+
+      await client.query('BEGIN');
+      const ins = await client.query(
+        `INSERT INTO users (email, password_hash, display_name, role, active, email_verified)
+         VALUES ($1, $2, $3, 'user', true, false)
+         RETURNING id, email, display_name, role, created_at`,
+        [emailNorm, password_hash, nome]
+      );
+      const novo = ins.rows[0];
+
+      for (const mod of MODULOS_PADRAO_NOVO_USUARIO) {
+        await client.query(
+          `INSERT INTO user_modulos (user_id, modulo, ativo)
+           VALUES ($1, $2, true)
+           ON CONFLICT (user_id, modulo) DO UPDATE SET ativo = true`,
+          [novo.id, mod]
+        );
+      }
+      await client.query('COMMIT');
+
+      return res.status(201).json({
+        user_id: novo.id,
+        email: novo.email,
+        display_name: novo.display_name,
+        role: novo.role,
+        created_at: novo.created_at,
+        modulos_iniciais: MODULOS_PADRAO_NOVO_USUARIO,
+      });
+    } catch (err: any) {
+      await client.query('ROLLBACK').catch(() => {});
+      return res.status(500).json({ message: err.message });
+    } finally {
+      client.release();
+    }
+  });
+
+
   // ----- Virtual table: profiles -----
   // GET /api/profiles — returns users as profile rows with pagination
   router.get('/profiles', adminMiddleware, async (req: AuthRequest, res: Response) => {
