@@ -108,11 +108,11 @@ const TEMPLATES: Template[] = [
   },
   {
     tipo: "evolution",
-    nome: "Evolution API / WhatsApp",
-    descricao: "Mensagens via WhatsApp",
+    nome: "WhatsApp",
+    descricao: "Conecte seu WhatsApp para enviar e receber mensagens",
     icone: "MessageCircle",
-    campos: { url: true, api_key: true, instancia: true },
-    urlLabel: "URL da Evolution API",
+    campos: { whatsapp: true },
+    urlLabel: "",
   },
   {
     tipo: "database_vector",
