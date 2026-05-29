@@ -349,6 +349,7 @@ export default function IntegracoesPage() {
     });
     setModal(true);
     if (tpl.tipo === "evolution") {
+      setStep(row?.status === "conectado" ? 2 : 1);
       setQrCode(null);
       setPairingCode(null);
       const config = row?.config || {};
