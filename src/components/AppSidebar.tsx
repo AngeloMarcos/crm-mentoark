@@ -218,6 +218,7 @@ const navGroups: NavGroup[] = [
         items: [
           { title: "OpenAI", url: "/integracoes?tipo=openai", icon: Bot, modulo: "integracoes", color: "text-purple-500", adminOnly: true },
           { title: "Gemini", url: "/integracoes?tipo=gemini", icon: Sparkles, modulo: "integracoes", color: "text-orange-400", adminOnly: true },
+          { title: "Claude",     url: "/integracoes?tipo=claude",     icon: Brain,    modulo: "integracoes", color: "text-violet-500", adminOnly: true },
           { title: "ElevenLabs", url: "/integracoes?tipo=elevenlabs", icon: Activity, modulo: "integracoes", color: "text-pink-500", adminOnly: true },
         ],
       },
