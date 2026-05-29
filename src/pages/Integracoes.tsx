@@ -478,6 +478,12 @@ export default function IntegracoesPage() {
       const token = getAuthToken();
       const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
       
+      // TODO: Backend deve criar a instância na Evolution API 
+      // usando EVOLUTION_API_URL e EVOLUTION_API_KEY do .env ou config_global
+      // Rota esperada: POST /api/whatsapp/connect
+      // Payload: { phoneNumber, nome }
+      // Retorno: { state, qrCode, pairingCode, instancia }
+      
       const res = await fetch(`${API_URL}/api/whatsapp/connect`, {
         method: "POST",
         headers: { 
@@ -499,10 +505,16 @@ export default function IntegracoesPage() {
       if (data.qrCode) {
         setQrCode(data.qrCode);
         setPairingCode(data.pairingCode);
+        
+        // Se o backend retornar o nome da instância, já atualizamos no form
+        if (data.instancia) {
+          setForm(f => ({ ...f, instancia: data.instancia }));
+        }
+        
         toast.success("QR Code gerado! Escaneie agora.");
       } else if (data.state === "open") {
         toast.success("WhatsApp já está conectado!");
-        setForm(f => ({ ...f, status: "conectado" }));
+        setForm(f => ({ ...f, status: "conectado", instancia: data.instancia }));
       }
     } catch (e: any) {
       toast.error(`Falha: ${e.message}`);
