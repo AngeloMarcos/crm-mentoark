@@ -314,8 +314,10 @@ export default function IntegracoesPage() {
       api_key: n8nSecret.trim() || null,
       status: n8nSecret.trim() ? ("conectado" as IntegStatus) : ("inativo" as IntegStatus),
     };
-    if (n8nExistingId) payload.id = n8nExistingId;
-    const { error } = await api.from("integracoes_config").upsert(payload);
+    
+    const { error } = n8nExistingId 
+      ? await api.from("integracoes_config").update(payload).eq("id", n8nExistingId)
+      : await api.from("integracoes_config").insert(payload);
     setN8nSavingSecret(false);
     if (error) {
       toast.error(`Erro ao salvar segredo: ${error.message}`);
@@ -560,7 +562,7 @@ export default function IntegracoesPage() {
       return;
     }
     setSalvando(true);
-    const payload = {
+    const payload: any = {
       user_id: user.id,
       tipo: template.tipo,
       nome: form.nome.trim(),
@@ -572,9 +574,10 @@ export default function IntegracoesPage() {
       ultima_sync:
         form.status === "conectado" ? new Date().toISOString() : existing?.ultima_sync ?? null,
     };
-    const { error } = await api
-      .from("integracoes_config")
-      .upsert(payload);
+    
+    const { error } = existing?.id
+      ? await api.from("integracoes_config").update(payload).eq("id", existing.id)
+      : await api.from("integracoes_config").insert(payload);
     setSalvando(false);
     if (error) {
       toast.error(`Erro ao salvar: ${error.message}`);
