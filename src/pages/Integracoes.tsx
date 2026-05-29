@@ -342,10 +342,31 @@ export default function IntegracoesPage() {
 
   const testarConexao = async () => {
     if (!template) return;
-    if (!form.url && template.tipo !== "elevenlabs") { toast.error("Informe a URL para testar."); return; }
     setTestando(true);
     try {
-      if (template.tipo === "elevenlabs") {
+      if (template.tipo === "openai") {
+        if (!form.api_key) { toast.error("Informe a API Key."); setTestando(false); return; }
+        const res = await fetch("https://api.openai.com/v1/models", {
+          headers: { "Authorization": `Bearer ${form.api_key}` },
+        });
+        if (res.ok) {
+          setForm((f) => ({ ...f, status: "conectado" }));
+          toast.success("OpenAI conectada ✅");
+        } else {
+          setForm((f) => ({ ...f, status: "erro" }));
+          toast.error("API Key da OpenAI inválida");
+        }
+      } else if (template.tipo === "gemini") {
+        if (!form.api_key) { toast.error("Informe a API Key."); setTestando(false); return; }
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${form.api_key}`);
+        if (res.ok) {
+          setForm((f) => ({ ...f, status: "conectado" }));
+          toast.success("Google Gemini conectado ✅");
+        } else {
+          setForm((f) => ({ ...f, status: "erro" }));
+          toast.error("API Key do Gemini inválida");
+        }
+      } else if (template.tipo === "elevenlabs") {
         const token = getAuthToken();
         const apiUrl = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
         const res = await fetch(`${apiUrl}/api/elevenlabs/voices`, {
@@ -361,7 +382,7 @@ export default function IntegracoesPage() {
           toast.error("API Key inválida ou sem permissão");
         }
       } else if (template.tipo === "evolution") {
-        if (!form.api_key) { toast.error("Informe a API Key para testar."); setTestando(false); return; }
+        if (!form.api_key || !form.url) { toast.error("Informe URL e API Key."); setTestando(false); return; }
         const url = form.url.replace(/\/$/, "") + "/instance/fetchInstances";
         const res = await fetch(url, {
           method: "GET",
@@ -374,7 +395,7 @@ export default function IntegracoesPage() {
           setForm((f) => ({ ...f, status: "erro" }));
           toast.error(`Falha: HTTP ${res.status} — verifique URL e API Key`);
         }
-      } else {
+      } else if (form.url) {
         const res = await fetch(form.url, { method: "GET" });
         if (res.ok || res.type === "opaque") {
           setForm((f) => ({ ...f, status: "conectado" }));
@@ -383,6 +404,8 @@ export default function IntegracoesPage() {
           setForm((f) => ({ ...f, status: "erro" }));
           toast.error("A URL respondeu com erro.");
         }
+      } else {
+        toast.error("Informe os dados para testar.");
       }
     } catch (e: any) {
       setForm((f) => ({ ...f, status: "erro" }));
@@ -391,6 +414,7 @@ export default function IntegracoesPage() {
       setTestando(false);
     }
   };
+
 
   const salvar = async () => {
     if (!user || !template) return;
