@@ -17,7 +17,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { api } from "@/integrations/database/client";
-import { Shield, ShieldOff, Loader2, Users, LayoutGrid, Trash2, KeyRound } from "lucide-react";
+import { Shield, ShieldOff, Loader2, Users, LayoutGrid, Trash2, KeyRound, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 
