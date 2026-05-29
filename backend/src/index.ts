@@ -61,7 +61,10 @@ import marketingRouter from './routes/marketing';
 import teamRouter, { teamInvitePublicRouter } from './routes/team';
 import equipeRouter from './routes/equipe';
 import subPerfisRouter from './routes/subperfis';
-import kanbanRouter from './routes/kanban';
+import kanbanRouter, { kanbanWebhookN8n } from './routes/kanban';
+import aiProvidersRouter from './routes/ai-providers';
+import aiUsoRouter from './routes/ai-uso';
+import integracoesRouter from './routes/integracoes';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
@@ -123,6 +126,9 @@ app.use('/api/marketing', marketing.public); // Public part of marketing (callba
 
 // ── Rotas n8n (x-n8n-secret, sem JWT) ─────────────────────────────────────
 app.use('/api/n8n', n8nRouter(pool));
+
+// Webhook público do Kanban (sem JWT, autenticado por x-webhook-secret)
+app.post('/api/kanban/webhook/n8n', kanbanWebhookN8n(pool));
 
 // Alias item 1: GET /api/agentes/by-instancia/:instancia
 app.get('/api/agentes/by-instancia/:instancia', n8nSecretMiddleware, async (req, res) => {
@@ -215,7 +221,7 @@ const SIMPLE_TABLES = [
   'disparo_logs',
   'agentes',
   'conhecimento',
-  'integracoes_config',
+  // 'integracoes_config' — removido do CRUD genérico: usa rota dedicada com upsert (ON CONFLICT)
   'catalogos',
   'produtos',
   // 'produto_imagens' removido: só pode ser gravado via rotas especializadas
@@ -258,6 +264,9 @@ app.use('/api/team', teamRouter(pool));
 app.use('/api/equipes', equipeRouter(pool));
 app.use('/api/sub-perfis', subPerfisRouter(pool));
 app.use('/api/kanban', kanbanRouter(pool));
+app.use('/api/ai-providers', aiProvidersRouter(pool));
+app.use('/api/ai', aiUsoRouter(pool));
+app.use('/api/integracoes_config', integracoesRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));

@@ -11,7 +11,7 @@ import path from 'path';
 const VPS_HOST = '147.93.9.172';
 const VPS_USER = 'root';
 const VPS_PASS = 'Mentoark@2025';
-const PROJECT  = 'C:\\Users\\angel\\Desktop\\claudio\\crm-mentoark';
+const PROJECT  = 'C:\\Users\\angel\\Desktop\\claudio\\cris\\crm-mentoark';
 
 const FILES_FRONTEND = [
   'src/hooks/useAuth.tsx',
@@ -43,10 +43,9 @@ const FILES_MIGRATIONS = [
 // ── 1. Git commit + push ──────────────────────────────────────────────────────
 console.log('\n🔧 PASSO 1 — Git commit + push\n');
 try {
-  const allFiles = [...FILES_FRONTEND, ...FILES_BACKEND, ...FILES_MIGRATIONS, 'prompts/'].join(' ');
-  execSync(`git -C "${PROJECT}" add ${allFiles}`, { stdio: 'inherit' });
+  execSync(`git -C "${PROJECT}" add -A`, { stdio: 'inherit' });
   execSync(
-    `git -C "${PROJECT}" commit -m "feat: RBAC modulos + Galeria + ElevenLabs + Catalogo WhatsApp\n\n- useAuth: modulos[], hasModulo(), modulosLoading\n- ProtectedRoute: requireModulo prop\n- AppSidebar: filtro por modulo, Galeria adicionada\n- App.tsx: todas rotas protegidas por requireModulo\n- Galeria.tsx: biblioteca central de midia\n- Usuarios.tsx: painel de modulos com toggles\n- backend: modulos.ts, galeria.ts, elevenlabs.ts\n- backend/catalogo.ts: endpoints WhatsApp send\n- migrations: voice_id, galeria_imagens, user_modulos\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"`,
+    `git -C "${PROJECT}" commit -m "fix: integracoes_config upsert + equipe + kanban + ai routes\n\n- fix: equipe_membros coluna convidado_por adicionada (causa da tela branca)\n- fix: equipe.ts queries com COALESCE(name, display_name) + ON CONFLICT DO UPDATE\n- feat: kanban.ts webhook publico n8n (kanbanWebhookN8n export)\n- feat: ai-providers.ts rota completa com criptografia AES-256-CBC\n- feat: ai-uso.ts dashboard de uso e custo por provider\n- feat: index.ts registra kanban webhook antes do authMiddleware\n- fix: migrations.ts tabelas equipes/equipe_membros/kanban/tarefas com colunas completas\n- fix: migrations.ts ai_providers + ai_uso_diario + views vw_ai_uso_30d\n- fix: migrations.ts tarefas colunas kanban (contato_nome, remote_jid, etc)\n- feat: PROMPT-MOTOR-INDEPENDENTE.md para abandonar n8n\n- feat: PROMPT-FIX-EQUIPE.md diagnostico e correcao de equipes\n- feat: PROMPT-LOVABLE-KANBAN-TAREFAS.md kanban visual\n- feat: CRiS-workflow-com-kanban.json workflow com card automatico\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"`,
     { stdio: 'inherit', cwd: PROJECT }
   );
   execSync(`git -C "${PROJECT}" push origin main`, { stdio: 'inherit' });
@@ -101,21 +100,27 @@ function sshSendFile(localPath, remotePath) {
 }
 
 const backendFiles = [
-  { local: path.join(PROJECT, 'backend/src/index.ts'),              remote: '/opt/crm/backend/src/index.ts' },
-  { local: path.join(PROJECT, 'backend/src/db.ts'),                 remote: '/opt/crm/backend/src/db.ts' },
-  { local: path.join(PROJECT, 'backend/src/routes/modulos.ts'),     remote: '/opt/crm/backend/src/routes/modulos.ts' },
-  { local: path.join(PROJECT, 'backend/src/routes/galeria.ts'),     remote: '/opt/crm/backend/src/routes/galeria.ts' },
-  { local: path.join(PROJECT, 'backend/src/routes/elevenlabs.ts'),  remote: '/opt/crm/backend/src/routes/elevenlabs.ts' },
-  { local: path.join(PROJECT, 'backend/src/routes/catalogo.ts'),    remote: '/opt/crm/backend/src/routes/catalogo.ts' },
-  { local: path.join(PROJECT, 'backend/src/routes/disparos.ts'),    remote: '/opt/crm/backend/src/routes/disparos.ts' },
-  { local: path.join(PROJECT, 'backend/src/routes/contatos.ts'),    remote: '/opt/crm/backend/src/routes/contatos.ts' },
+  { local: path.join(PROJECT, 'backend/src/index.ts'),                  remote: '/opt/crm/backend/src/index.ts' },
+  { local: path.join(PROJECT, 'backend/src/db.ts'),                     remote: '/opt/crm/backend/src/db.ts' },
+  { local: path.join(PROJECT, 'backend/src/migrations.ts'),             remote: '/opt/crm/backend/src/migrations.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/modulos.ts'),         remote: '/opt/crm/backend/src/routes/modulos.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/galeria.ts'),         remote: '/opt/crm/backend/src/routes/galeria.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/elevenlabs.ts'),      remote: '/opt/crm/backend/src/routes/elevenlabs.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/catalogo.ts'),        remote: '/opt/crm/backend/src/routes/catalogo.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/disparos.ts'),        remote: '/opt/crm/backend/src/routes/disparos.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/contatos.ts'),        remote: '/opt/crm/backend/src/routes/contatos.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/kanban.ts'),          remote: '/opt/crm/backend/src/routes/kanban.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/equipe.ts'),          remote: '/opt/crm/backend/src/routes/equipe.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/ai-providers.ts'),    remote: '/opt/crm/backend/src/routes/ai-providers.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/ai-uso.ts'),          remote: '/opt/crm/backend/src/routes/ai-uso.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/integracoes.ts'),     remote: '/opt/crm/backend/src/routes/integracoes.ts' },
   { local: path.join(PROJECT, 'backend/src/services/disparoProcessor.ts'), remote: '/opt/crm/backend/src/services/disparoProcessor.ts' },
 ];
 
 (async () => {
   try {
     // Garante que os diretórios existem
-    await sshRun(['mkdir -p /opt/crm/backend/src/routes /opt/crm/backend/src/services']);
+    await sshRun(['mkdir -p /opt/crm/backend/src/routes /opt/crm/backend/src/services /opt/crm/backend/src']);
 
     // Envia arquivos
     for (const f of backendFiles) {

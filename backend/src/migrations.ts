@@ -868,7 +868,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
 
-  // Garantir coluna convidado_por em instâncias já criadas
+  // Garantir colunas em equipe_membros em instâncias já criadas
   await pool.query(`ALTER TABLE equipe_membros ADD COLUMN IF NOT EXISTS convidado_por UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_equipe_membros_user ON equipe_membros(user_id)`).catch(() => {});
 
@@ -921,6 +921,25 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_tarefas_user_coluna ON tarefas(user_id, coluna_id, ordem)`).catch(() => {});
+
+  // Garantir colunas do Kanban em tarefas (caso a tabela já existia no schema CRM antigo)
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS coluna_id     UUID REFERENCES kanban_colunas(id) ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS resumo_ia     TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS conversa_id   TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS origem        TEXT DEFAULT 'manual'`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS criada_por    UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS atribuido_a   UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS sub_perfil_id UUID`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS concluida     BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS tags          TEXT[] DEFAULT '{}'`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS data_limite   TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS contato_nome  TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS contato_telefone TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS remote_jid    TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS instance_name TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()`).catch(() => {});
+  // Tornar contato_id nullable (pode ter sido criado como NOT NULL na versão antiga)
+  await pool.query(`ALTER TABLE tarefas ALTER COLUMN contato_id DROP NOT NULL`).catch(() => {});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tarefa_comentarios (
@@ -997,6 +1016,79 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_sub_perfis_user ON sub_perfis(user_id)`).catch(() => {});
 
   console.log('[MIGRATIONS] Equipe/Kanban/SubPerfis OK');
+
+  // ── AI Providers & Uso ────────────────────────────────────────────────────
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_providers (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      nome              TEXT NOT NULL,
+      slug              TEXT NOT NULL,
+      modelo            TEXT NOT NULL,
+      api_key_enc       TEXT NOT NULL,
+      base_url          TEXT,
+      suporta_visao     BOOLEAN NOT NULL DEFAULT false,
+      suporta_audio     BOOLEAN NOT NULL DEFAULT false,
+      custo_input_mtok  NUMERIC,
+      custo_output_mtok NUMERIC,
+      ativo             BOOLEAN NOT NULL DEFAULT true,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(user_id, slug)
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_providers_user ON ai_providers(user_id)`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_uso_diario (
+      id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider_slug    TEXT NOT NULL,
+      modelo           TEXT NOT NULL,
+      data             DATE NOT NULL DEFAULT CURRENT_DATE,
+      total_mensagens  INTEGER NOT NULL DEFAULT 0,
+      tokens_entrada   BIGINT NOT NULL DEFAULT 0,
+      tokens_saida     BIGINT NOT NULL DEFAULT 0,
+      custo_usd        NUMERIC NOT NULL DEFAULT 0,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(user_id, provider_slug, modelo, data)
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_uso_diario_user_data ON ai_uso_diario(user_id, data DESC)`).catch(() => {});
+
+  await pool.query(`
+    CREATE OR REPLACE VIEW vw_ai_uso_30d AS
+    SELECT
+      user_id,
+      provider_slug,
+      modelo,
+      SUM(total_mensagens)::int AS total_mensagens,
+      SUM(tokens_entrada)::bigint AS tokens_entrada,
+      SUM(tokens_saida)::bigint AS tokens_saida,
+      SUM(custo_usd) AS custo_usd
+    FROM ai_uso_diario
+    WHERE data >= CURRENT_DATE - 30
+    GROUP BY user_id, provider_slug, modelo
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE OR REPLACE VIEW vw_conversas_ativas AS
+    SELECT
+      n.user_id,
+      n.session_id,
+      MAX(n.created_at) AS ultima_mensagem,
+      COUNT(*)::int AS total_mensagens
+    FROM n8n_chat_histories n
+    WHERE n.created_at >= NOW() - INTERVAL '7 days'
+    GROUP BY n.user_id, n.session_id
+  `).catch(() => {});
+
+  // Coluna provider_id em agentes (para associar ao ai_providers)
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS provider_id UUID REFERENCES ai_providers(id) ON DELETE SET NULL`).catch(() => {});
+
+  console.log('[MIGRATIONS] AI Providers/Uso OK');
 
   console.log('[MIGRATIONS] OK');
 }
