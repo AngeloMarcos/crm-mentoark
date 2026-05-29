@@ -669,6 +669,13 @@ export default function IntegracoesPage() {
                 const status = (row?.status ?? "inativo") as IntegStatus;
                 const st = statusConfig[status];
                 const StIcon = st.icon;
+                
+                // Formatação especial para WhatsApp Conectado
+                const isWhatsapp = tpl.tipo === "evolution";
+                const isConectado = status === "conectado";
+                const displayStatusLabel = isWhatsapp && isConectado ? "● Conectado" : st.label;
+                const displayStatusColor = isWhatsapp && isConectado ? "bg-green-100 text-green-700" : st.color;
+
                 return (
                   <Card
                     key={tpl.tipo}
@@ -685,20 +692,24 @@ export default function IntegracoesPage() {
                               {row?.nome ?? tpl.nome}
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              {tpl.descricao}
+                              {isWhatsapp && isConectado && row?.instancia ? (
+                                <span className="text-primary font-medium">{row.instancia}</span>
+                              ) : tpl.descricao}
                             </p>
                           </div>
                         </div>
                       </div>
 
                       <div className="flex items-center justify-between">
-                        <Badge className={`${st.color} text-xs border-0 gap-1`}>
-                          <StIcon
-                            className={`h-3 w-3 ${
-                              status === "sincronizando" ? "animate-spin" : ""
-                            }`}
-                          />
-                          {st.label}
+                        <Badge className={`${displayStatusColor} text-[10px] font-bold uppercase border-0 gap-1`}>
+                          {!isWhatsapp && (
+                            <StIcon
+                              className={`h-3 w-3 ${
+                                status === "sincronizando" ? "animate-spin" : ""
+                              }`}
+                            />
+                          )}
+                          {displayStatusLabel}
                         </Badge>
                         <span className="text-xs text-muted-foreground">
                           {row ? formatarData(row.ultima_sync) : "Não configurado"}
@@ -706,16 +717,13 @@ export default function IntegracoesPage() {
                       </div>
 
                       <Button
-                        variant="outline"
+                        variant={isConectado ? "secondary" : "outline"}
                         size="sm"
                         className="w-full"
                         onClick={() => abrirConfig(tpl, row)}
                       >
-                        {status === "erro"
-                          ? "Reconectar"
-                          : row
-                          ? "Configurar"
-                          : "Configurar"}
+                        {isWhatsapp && isConectado ? "Gerenciar" : 
+                         status === "erro" ? "Reconectar" : "Configurar"}
                       </Button>
                     </CardContent>
                   </Card>
