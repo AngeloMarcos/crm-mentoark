@@ -59,6 +59,13 @@ export default function UsuariosPage() {
   const [userResetar, setUserResetar]   = useState<UserRow | null>(null);
   const [novaSenha, setNovaSenha]       = useState("");
   const [resetando, setResetando]       = useState(false);
+  // Criar novo usuário
+  const [modalNovo, setModalNovo]     = useState(false);
+  const [novoNome, setNovoNome]       = useState("");
+  const [novoEmail, setNovoEmail]     = useState("");
+  const [novaSenhaNovo, setNovaSenhaNovo] = useState("");
+  const [confSenhaNovo, setConfSenhaNovo] = useState("");
+  const [criando, setCriando]         = useState(false);
 
 
 
