@@ -193,6 +193,14 @@ const TEMPLATES: Template[] = [
     campos: { api_key: true },
     urlLabel: "",
   },
+  {
+    tipo: "gemini",
+    nome: "Google Gemini",
+    descricao: "Integração com modelos Google Gemini (IA)",
+    icone: "Sparkles",
+    campos: { api_key: true },
+    urlLabel: "",
+  },
 ];
 
 function formatarData(iso: string | null) {
