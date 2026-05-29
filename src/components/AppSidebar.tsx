@@ -103,10 +103,6 @@ const navGroups: NavGroup[] = [
           { title: "Monitor",           url: "/monitor-whatsapp",   icon: Monitor,      modulo: "whatsapp",    color: "text-blue-400"    },
           { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap,           modulo: "whatsapp",    color: "text-amber-500"   },
           { title: "SLA / Gestão",      url: "/sla",               icon: Timer,         modulo: "whatsapp",    color: "text-yellow-500"  },
-          { title: "Configuração da IA", url: "/cerebro",           icon: Brain,         modulo: "cerebro",     color: "text-purple-400", adminOnly: true },
-          { title: "Agentes",           url: "/agentes",           icon: Bot,           modulo: "agentes",     color: "text-teal-500",   adminOnly: true },
-          { title: "Uso de IA",         url: "/uso-ia",            icon: Activity,      modulo: "agentes",     color: "text-pink-500",   adminOnly: true },
-          { title: "Workflows",         url: "/workflows",         icon: GitBranch,     modulo: "workflows",   color: "text-violet-500", adminOnly: true },
         ],
       },
       {
@@ -154,6 +150,24 @@ const navGroups: NavGroup[] = [
           { title: "Catálogo",     url: "/catalogo", icon: Package,  modulo: "catalogo", color: "text-fuchsia-500" },
           { title: "Galeria",      url: "/galeria",  icon: Images,   modulo: "galeria",  color: "text-pink-500"    },
           { title: "Documentação", url: "/docs",     icon: BookOpen, modulo: "docs",     color: "text-slate-400"   },
+        ],
+      },
+    ],
+  },
+  {
+    label: "IA & Automação",
+    adminOnly: true,
+    subgroups: [
+      {
+        label: "Agentes & Prompts",
+        icon: Bot,
+        color: "text-teal-500",
+        adminOnly: true,
+        items: [
+          { title: "Agentes de IA",      url: "/agentes",   icon: Bot,      modulo: "agentes",   color: "text-teal-500",   adminOnly: true },
+          { title: "Configuração da IA", url: "/cerebro",   icon: Brain,    modulo: "cerebro",   color: "text-purple-400", adminOnly: true },
+          { title: "Uso de IA",          url: "/uso-ia",    icon: Activity, modulo: "agentes",   color: "text-pink-500",   adminOnly: true },
+          { title: "Workflows",          url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500", adminOnly: true },
         ],
       },
     ],
