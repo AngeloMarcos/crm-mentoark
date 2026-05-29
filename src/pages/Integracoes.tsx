@@ -347,6 +347,15 @@ export default function IntegracoesPage() {
       status: row?.status ?? "inativo",
     });
     setModal(true);
+    if (tpl.tipo === "evolution") {
+      setQrCode(null);
+      setPairingCode(null);
+      const config = row?.config || {};
+      setWhatsappForm({
+        pais: config.pais || "55",
+        numero: config.numero || "",
+      });
+    }
   };
 
   const testarConexao = async () => {
