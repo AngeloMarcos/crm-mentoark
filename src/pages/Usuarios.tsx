@@ -238,18 +238,55 @@ export default function UsuariosPage() {
   };
 
 
+  /* ── Criar novo usuário ─────────────────────────────────────── */
+  const resetNovoForm = () => {
+    setNovoNome(""); setNovoEmail(""); setNovaSenhaNovo(""); setConfSenhaNovo("");
+  };
+  const confirmarCriar = async () => {
+    const email = novoEmail.trim().toLowerCase();
+    if (!novoNome.trim()) return toast.error("Informe o nome completo");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast.error("E-mail inválido");
+    if (novaSenhaNovo.length < 6) return toast.error("Senha deve ter pelo menos 6 caracteres");
+    if (novaSenhaNovo !== confSenhaNovo) return toast.error("As senhas não coincidem");
+
+    setCriando(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/profiles`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: novaSenhaNovo, display_name: novoNome.trim() }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.message || "Erro ao criar usuário");
+      toast.success(`Usuário criado. Acesso liberado a Dashboard, Leads e WhatsApp.`);
+      setModalNovo(false); resetNovoForm(); load();
+    } catch (e: any) {
+      toast.error(e.message || "Erro ao criar usuário");
+    } finally {
+      setCriando(false);
+    }
+  };
+
+
   /* ── Render ─────────────────────────────────────────────────── */
   return (
     <CRMLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-3">
-            <Users className="h-8 w-8 text-primary" /> Usuários
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Gerencie acesso, papéis e módulos de cada usuário
-          </p>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-3xl font-bold flex items-center gap-3">
+              <Users className="h-8 w-8 text-primary" /> Usuários
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Gerencie acesso, papéis e módulos de cada usuário
+            </p>
+          </div>
+          <Button onClick={() => { resetNovoForm(); setModalNovo(true); }} className="gap-2">
+            <UserPlus className="h-4 w-4" />
+            Adicionar Novo Usuário
+          </Button>
         </div>
+
 
         <Card>
           <CardHeader>
