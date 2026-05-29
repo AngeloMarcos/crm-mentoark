@@ -528,6 +528,50 @@ export default function UsuariosPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Modal Adicionar Novo Usuário */}
+      <Dialog open={modalNovo} onOpenChange={(o) => { if (!o) { setModalNovo(false); resetNovoForm(); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5 text-primary" />
+              Adicionar Novo Usuário
+            </DialogTitle>
+            <DialogDescription>
+              O novo usuário será criado com acesso mínimo: <strong>Dashboard, Leads e WhatsApp</strong>.
+              Use o botão "Módulos" depois para liberar mais permissões.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="novo-nome">Nome completo *</Label>
+              <Input id="novo-nome" value={novoNome} onChange={(e) => setNovoNome(e.target.value)} placeholder="Ex: João Silva" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="novo-email">E-mail (login) *</Label>
+              <Input id="novo-email" type="email" value={novoEmail} onChange={(e) => setNovoEmail(e.target.value)} placeholder="usuario@empresa.com" />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="novo-senha">Senha *</Label>
+                <Input id="novo-senha" type="password" value={novaSenhaNovo} onChange={(e) => setNovaSenhaNovo(e.target.value)} placeholder="Mín. 6 caracteres" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="novo-senha-conf">Confirmar senha *</Label>
+                <Input id="novo-senha-conf" type="password" value={confSenhaNovo} onChange={(e) => setConfSenhaNovo(e.target.value)} placeholder="Repita a senha" />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setModalNovo(false); resetNovoForm(); }} disabled={criando}>
+              Cancelar
+            </Button>
+            <Button onClick={confirmarCriar} disabled={criando}>
+              {criando ? <Loader2 className="h-4 w-4 animate-spin" /> : "Criar usuário"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </CRMLayout>
   );
 }
