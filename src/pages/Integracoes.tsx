@@ -46,6 +46,8 @@ import {
   Share2,
   Send as TelegramIcon,
   Sparkles,
+  ShieldCheck,
+  Smartphone,
 } from "lucide-react";
 import { toast } from "sonner";
 
