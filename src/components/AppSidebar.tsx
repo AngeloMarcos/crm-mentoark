@@ -256,8 +256,8 @@ function NavSubgroupSection({
       // 2. Admin logic
       if (i.adminOnly && !isAdmin) return false;
 
-      // 3. Equipe logic para 'membro'
-      if (equipeRole === 'membro') {
+      // 3. Equipe logic para 'membro' (admin bypassa essa restrição)
+      if (equipeRole === 'membro' && !isAdmin) {
         const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];
         const isAllowed = allowedPaths.some(path => i.url.startsWith(path));
         if (!isAllowed) return false;
@@ -385,7 +385,7 @@ function NavGroupSection({
       if (!hasModulo(i.modulo)) return false;
       if (i.adminOnly && !isAdmin) return false;
       
-      if (equipeRole === 'membro') {
+      if (equipeRole === 'membro' && !isAdmin) {
         const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];
         return allowedPaths.some(path => i.url.startsWith(path));
       }
