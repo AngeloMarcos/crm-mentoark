@@ -507,13 +507,13 @@ export default function IntegracoesPage() {
                     <Plug className="h-6 w-6" />
                   </div>
                   <div>
-                    <p className="font-semibold">Nenhuma integração configurada</p>
+                    <p className="font-semibold">Nenhum conector configurado</p>
                     <p className="text-sm text-muted-foreground">
                       Comece conectando seu primeiro serviço externo abaixo.
                     </p>
                   </div>
                   <Button onClick={() => abrirConfig(TEMPLATES[0], null)}>
-                    Configurar primeira integração
+                    Configurar primeiro conector
                   </Button>
                 </CardContent>
               </Card>
