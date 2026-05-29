@@ -107,7 +107,7 @@ const navGroups: NavGroup[] = [
           { title: "Agentes",           url: "/agentes",           icon: Bot,           modulo: "agentes",     color: "text-teal-500",   adminOnly: true },
           { title: "Uso de IA",         url: "/uso-ia",            icon: Activity,      modulo: "agentes",     color: "text-pink-500",   adminOnly: true },
           { title: "Workflows",         url: "/workflows",         icon: GitBranch,     modulo: "workflows",   color: "text-violet-500", adminOnly: true },
-          { title: "Integrações",       url: "/integracoes",       icon: Plug,          modulo: "integracoes", color: "text-amber-500",  adminOnly: true },
+          
         ],
       },
       {
@@ -172,6 +172,20 @@ const navGroups: NavGroup[] = [
           { title: "Equipe",    url: "/equipe",    icon: UsersIcon,   modulo: "usuarios", color: "text-indigo-500", adminOnly: true },
           { title: "Usuários",  url: "/usuarios",  icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
           { title: "Segurança", url: "/seguranca", icon: Lock,        modulo: "usuarios", color: "text-red-400",  adminOnly: true },
+        ],
+      },
+    ],
+  },
+  {
+    label: "Conectores",
+    adminOnly: true,
+    subgroups: [
+      {
+        label: "Conectores",
+        icon: Plug,
+        color: "text-amber-500",
+        items: [
+          { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500", adminOnly: true },
         ],
       },
     ],
