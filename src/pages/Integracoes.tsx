@@ -85,6 +85,7 @@ const iconMap = {
   Mail,
   Share2,
   TelegramIcon,
+  Sparkles,
 } as const;
 
 const statusConfig: Record<IntegStatus, { label: string; color: string; icon: any }> = {
