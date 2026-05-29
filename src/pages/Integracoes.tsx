@@ -923,7 +923,6 @@ export default function IntegracoesPage() {
                         onChange={(e) => setForm({ ...form, nome: e.target.value })}
                       />
                     </div>
-                    {/* ... (restantes campos de outros templates) */}
                   </>
                 )}
 
