@@ -69,7 +69,7 @@ interface Template {
   nome: string;
   descricao: string;
   icone: keyof typeof iconMap;
-  campos: { url?: boolean; api_key?: boolean; instancia?: boolean };
+  campos: { url?: boolean; api_key?: boolean; instancia?: boolean; whatsapp?: boolean };
   urlLabel: string;
 }
 
