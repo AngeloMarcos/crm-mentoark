@@ -235,6 +235,7 @@ export default function IntegracoesPage() {
   });
   
   // WhatsApp connection states
+  const [step, setStep] = useState<1 | 2>(1);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [loadingQr, setLoadingQr] = useState(false);
