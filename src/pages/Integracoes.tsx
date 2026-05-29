@@ -237,7 +237,7 @@ export default function IntegracoesPage() {
       .select("*")
       .eq("user_id", user.id);
     if (error) {
-      toast.error(`Erro ao carregar integrações: ${error.message}`);
+      toast.error(`Erro ao carregar conectores: ${error.message}`);
     } else {
       const list = (data ?? []) as IntegRow[];
       setRows(list);
@@ -394,7 +394,7 @@ export default function IntegracoesPage() {
       toast.error(`Erro ao salvar: ${error.message}`);
       return;
     }
-    toast.success("Integração salva!");
+    toast.success("Conector salvo!");
     setModal(false);
     setTemplate(null);
     setExisting(null);
@@ -412,7 +412,7 @@ export default function IntegracoesPage() {
     <CRMLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Integrações</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Conectores</h1>
           <p className="text-muted-foreground text-sm">
             Status das conexões e serviços externos
           </p>
@@ -424,7 +424,7 @@ export default function IntegracoesPage() {
           </div>
         ) : (
           <>
-            {/* Seção Integração n8n */}
+            {/* Seção Conector n8n */}
             <Card>
               <CardContent className="p-5 space-y-5">
                 <div className="flex items-start gap-3">
@@ -432,7 +432,7 @@ export default function IntegracoesPage() {
                     <Workflow className="h-5 w-5" />
                   </div>
                   <div className="flex-1">
-                    <h2 className="font-semibold">Integração n8n</h2>
+                    <h2 className="font-semibold">Conector n8n</h2>
                     <p className="text-xs text-muted-foreground">
                       Configure o segredo compartilhado e veja os agentes roteando para o n8n.
                     </p>

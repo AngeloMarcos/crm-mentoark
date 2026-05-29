@@ -107,7 +107,6 @@ const navGroups: NavGroup[] = [
           { title: "Agentes",           url: "/agentes",           icon: Bot,           modulo: "agentes",     color: "text-teal-500",   adminOnly: true },
           { title: "Uso de IA",         url: "/uso-ia",            icon: Activity,      modulo: "agentes",     color: "text-pink-500",   adminOnly: true },
           { title: "Workflows",         url: "/workflows",         icon: GitBranch,     modulo: "workflows",   color: "text-violet-500", adminOnly: true },
-          
         ],
       },
       {
