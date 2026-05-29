@@ -493,6 +493,7 @@ export default function IntegracoesPage() {
       api_key: form.api_key.trim() || null,
       instancia: form.instancia.trim() || null,
       status: form.status,
+      config: template.tipo === "evolution" ? whatsappForm : existing?.config || {},
       ultima_sync:
         form.status === "conectado" ? new Date().toISOString() : existing?.ultima_sync ?? null,
     };
