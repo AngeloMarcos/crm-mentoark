@@ -268,8 +268,8 @@ function NavSubgroupSection({
   }, [subgroup.items, hasModulo, isAdmin, equipeRole]);
 
   const hasActive = visibleItems.some((i) => isRouteActive(location.pathname, i.url));
-  // Fechado por padrão; abre automaticamente se a rota ativa estiver dentro dele
-  const [open, setOpen] = useState<boolean>(hasActive);
+  // Subgrupos admin começam expandidos; demais, abrem só se a rota ativa estiver dentro
+  const [open, setOpen] = useState<boolean>(hasActive || !!subgroup.adminOnly);
 
   if (visibleItems.length === 0 || (subgroup.adminOnly && !isAdmin)) return null;
 
