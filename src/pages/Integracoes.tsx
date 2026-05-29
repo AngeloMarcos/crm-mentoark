@@ -728,7 +728,7 @@ export default function IntegracoesPage() {
                   </Select>
                 </div>
 
-                {(template.campos.url || template.tipo === "elevenlabs") && (
+                {(template.campos.url || template.campos.api_key || template.tipo === "elevenlabs") && (
                   <Button
                     variant="secondary"
                     className="w-full"
@@ -736,14 +736,15 @@ export default function IntegracoesPage() {
                     disabled={testando}
                   >
                     {testando ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     ) : (
-                      <Plug className="h-4 w-4" />
+                      <Plug className="h-4 w-4 mr-2" />
                     )}
                     Testar conexão
                   </Button>
                 )}
               </div>
+
 
               <DialogFooter>
                 <Button variant="outline" onClick={() => setModal(false)}>
