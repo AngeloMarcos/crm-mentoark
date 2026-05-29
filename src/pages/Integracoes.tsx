@@ -113,7 +113,7 @@ const TEMPLATES: Template[] = [
     nome: "WhatsApp",
     descricao: "Conecte seu WhatsApp para enviar e receber mensagens",
     icone: "MessageCircle",
-    campos: { whatsapp: true },
+    campos: {},
     urlLabel: "",
   },
   {
@@ -978,7 +978,7 @@ export default function IntegracoesPage() {
                   </div>
                 )}
 
-                {template.campos.whatsapp && form.status === "conectado" && (
+                {template.tipo === "evolution" && form.status === "conectado" && (
                   <div className="space-y-4 pt-4 border-t border-border/50">
                     <div className="bg-muted/50 p-4 rounded-lg space-y-3">
                       <div className="flex justify-between items-center">
@@ -1014,7 +1014,7 @@ export default function IntegracoesPage() {
                   </div>
                 )}
 
-                {!template.campos.whatsapp && (
+                {template.tipo !== "evolution" && (
                   <div className="space-y-1.5">
                     <Label>Status</Label>
                     <Select
@@ -1035,7 +1035,7 @@ export default function IntegracoesPage() {
                   </div>
                 )}
 
-                {template.tipo !== "evolution" && (template.campos.url || template.campos.api_key || template.tipo === "elevenlabs") && (
+                {template.tipo !== "evolution" && (template.urlLabel || template.campos.api_key || template.tipo === "elevenlabs") && (
                   <Button
                     variant="secondary"
                     className="w-full"
