@@ -434,6 +434,50 @@ export default function IntegracoesPage() {
   };
 
 
+  const gerarQRCode = async () => {
+    if (!user) return;
+    setLoadingQr(true);
+    setQrCode(null);
+    setPairingCode(null);
+    
+    try {
+      const fullNumber = whatsappForm.pais + whatsappForm.numero.replace(/\D/g, "");
+      const token = getAuthToken();
+      const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
+      
+      const res = await fetch(`${API_URL}/api/whatsapp/connect`, {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ 
+          phoneNumber: fullNumber,
+          nome: form.nome 
+        }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Erro ao conectar");
+      }
+
+      const data = await res.json();
+      if (data.qrCode) {
+        setQrCode(data.qrCode);
+        setPairingCode(data.pairingCode);
+        toast.success("QR Code gerado! Escaneie agora.");
+      } else if (data.state === "open") {
+        toast.success("WhatsApp já está conectado!");
+        setForm(f => ({ ...f, status: "conectado" }));
+      }
+    } catch (e: any) {
+      toast.error(`Falha: ${e.message}`);
+    } finally {
+      setLoadingQr(false);
+    }
+  };
+
   const salvar = async () => {
     if (!user || !template) return;
     if (!form.nome.trim()) {
