@@ -873,6 +873,42 @@ export default function IntegracoesPage() {
                   </div>
                 )}
 
+                {template.campos.whatsapp && form.status === "conectado" && (
+                  <div className="space-y-4 pt-4 border-t border-border/50">
+                    <div className="bg-muted/50 p-4 rounded-lg space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground uppercase font-bold">Número Conectado</span>
+                        <span className="text-sm font-medium">
+                          +{whatsappForm.pais} ({whatsappForm.numero.slice(0,2)}) {whatsappForm.numero.slice(2,3)}****-{whatsappForm.numero.slice(-4)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground uppercase font-bold">Status</span>
+                        <Badge className="bg-green-100 text-green-700 border-0">Ativo</Badge>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <Button 
+                        variant="outline" 
+                        className="w-full"
+                        onClick={gerarQRCode}
+                        disabled={loadingQr}
+                      >
+                        Reconectar
+                      </Button>
+                      <Button 
+                        variant="destructive" 
+                        className="w-full"
+                        onClick={desconectarWhatsApp}
+                        disabled={salvando}
+                      >
+                        Desconectar
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 {!template.campos.whatsapp && (
                   <div className="space-y-1.5">
                     <Label>Status</Label>
