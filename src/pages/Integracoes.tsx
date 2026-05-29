@@ -434,6 +434,39 @@ export default function IntegracoesPage() {
   };
 
 
+  const desconectarWhatsApp = async () => {
+    if (!user || !existing) return;
+    if (!confirm("Tem certeza que deseja desconectar este WhatsApp?")) return;
+    
+    setSalvando(true);
+    try {
+      const token = getAuthToken();
+      const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
+      
+      const res = await fetch(`${API_URL}/api/whatsapp/disconnect`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+
+      if (!res.ok) throw new Error("Erro ao desconectar");
+
+      const { error } = await api
+        .from("integracoes_config")
+        .update({ status: "inativo", instancia: null })
+        .eq("id", existing.id);
+
+      if (error) throw error;
+
+      toast.success("WhatsApp desconectado!");
+      setModal(false);
+      carregar();
+    } catch (e: any) {
+      toast.error(`Falha: ${e.message}`);
+    } finally {
+      setSalvando(false);
+    }
+  };
+
   const gerarQRCode = async () => {
     if (!user) return;
     setLoadingQr(true);
