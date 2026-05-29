@@ -1090,5 +1090,36 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   console.log('[MIGRATIONS] AI Providers/Uso OK');
 
+  // ── WhatsApp Instances (fluxo QR simplificado) ───────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_instances (
+      id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      nome            TEXT        NOT NULL,
+      numero          TEXT,
+      instance_name   TEXT        NOT NULL,
+      status          TEXT        NOT NULL DEFAULT 'pendente',
+      qr_code         TEXT,
+      pairing_code    TEXT,
+      qr_expires_at   TIMESTAMPTZ,
+      conectado_em    TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT uq_wa_instance_name UNIQUE (instance_name),
+      CONSTRAINT uq_wa_user_nome     UNIQUE (user_id, nome)
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_instances_user ON whatsapp_instances(user_id, status)`).catch(() => {});
+
+  // Coluna provider_id em agentes (referência ao ai_providers)
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS provider_id UUID REFERENCES ai_providers(id) ON DELETE SET NULL`).catch(() => {});
+
+  // Colunas n8n/Kanban em tarefas (garantir no VPS também)
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS contato_nome     TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS contato_telefone TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS remote_jid       TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS instance_name    TEXT`).catch(() => {});
+
+  console.log('[MIGRATIONS] WhatsApp Instances + patches finais OK');
   console.log('[MIGRATIONS] OK');
 }
