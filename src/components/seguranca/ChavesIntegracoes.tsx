@@ -92,6 +92,8 @@ export function ChavesIntegracoes() {
 
   const salvarConfigGlobal = async () => {
     setSalvandoConfig(true);
+    const { data: { user } } = await api.auth.getUser();
+    
     const { error } = await api
       .from("integracoes_config")
       .upsert({
@@ -99,8 +101,8 @@ export function ChavesIntegracoes() {
         nome: "Configuração Global Evolution",
         config: configGlobal,
         status: "conectado",
-        user_id: (await api.auth.getUser()).data.user?.id
-      }, { onConflict: "tipo" });
+        user_id: user?.id
+      });
 
     if (error) {
       toast.error(`Erro ao salvar: ${error.message}`);
