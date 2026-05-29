@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getAuthToken, authHeader } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
