@@ -279,6 +279,18 @@ export default function IntegracoesPage() {
     carregarAgentesN8n();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+  useEffect(() => {
+    const tipo = searchParams.get("tipo");
+    if (tipo && rows.length > 0) {
+      const tpl = TEMPLATES.find((t) => t.tipo === tipo);
+      const row = rows.find((r) => r.tipo === tipo) ?? null;
+      if (tpl) {
+        abrirConfig(tpl, row);
+        searchParams.delete("tipo");
+        setSearchParams(searchParams);
+      }
+    }
+  }, [searchParams, rows]);
 
   const salvarN8nSecret = async () => {
     if (!user) return;
