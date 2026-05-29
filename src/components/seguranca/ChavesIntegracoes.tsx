@@ -3,8 +3,12 @@ import { getAuthToken } from "@/lib/api-token";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Key, Plug, Bot, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Key, Plug, Bot, CheckCircle2, XCircle, Loader2, Save, Globe } from "lucide-react";
 import { api } from "@/integrations/database/client";
+import { toast } from "sonner";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => getAuthToken();
@@ -26,6 +30,11 @@ export function ChavesIntegracoes() {
   const [loadingChaves, setLoadingChaves] = useState(true);
   const [instancias, setInstancias] = useState<EvolutionInstance[]>([]);
   const [loadingInstancias, setLoadingInstancias] = useState(true);
+  const [configGlobal, setConfigGlobal] = useState({
+    url_padrao: "",
+    apikey_padrao: "",
+  });
+  const [salvandoConfig, setSalvandoConfig] = useState(false);
 
   useEffect(() => {
     // Carregar status das chaves
