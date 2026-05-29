@@ -34,6 +34,7 @@ export function ChavesIntegracoes() {
     url_padrao: "",
     apikey_padrao: "",
   });
+  const [globalConfigId, setGlobalConfigId] = useState<string | null>(null);
   const [salvandoConfig, setSalvandoConfig] = useState(false);
 
   useEffect(() => {
@@ -77,12 +78,15 @@ export function ChavesIntegracoes() {
     const loadConfigGlobal = async () => {
       const { data } = await api
         .from("integracoes_config")
-        .select("config")
+        .select("id, config")
         .eq("tipo", "config_global")
         .single();
       
-      if (data?.config) {
-        setConfigGlobal(data.config);
+      if (data) {
+        setGlobalConfigId(data.id);
+        if (data.config) {
+          setConfigGlobal(data.config);
+        }
       }
     };
 
@@ -94,15 +98,17 @@ export function ChavesIntegracoes() {
     setSalvandoConfig(true);
     const { data: { user } } = await api.auth.getUser();
     
-    const { error } = await api
-      .from("integracoes_config")
-      .upsert({
-        tipo: "config_global",
-        nome: "Configuração Global Evolution",
-        config: configGlobal,
-        status: "conectado",
-        user_id: user?.id
-      });
+    const payload = {
+      tipo: "config_global",
+      nome: "Configuração Global Evolution",
+      config: configGlobal,
+      status: "conectado",
+      user_id: user?.id
+    };
+
+    const { error } = globalConfigId
+      ? await api.from("integracoes_config").update(payload).eq("id", globalConfigId)
+      : await api.from("integracoes_config").insert(payload);
 
     if (error) {
       toast.error(`Erro ao salvar: ${error.message}`);
