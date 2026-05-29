@@ -192,9 +192,9 @@ const navGroups: NavGroup[] = [
         icon: Link2,
         color: "text-blue-500",
         items: [
-          { title: "WhatsApp", url: "/integracoes/whatsapp", icon: MessageCircle, modulo: "integracoes", color: "text-green-500", adminOnly: true },
-          { title: "Webhook", url: "/integracoes/webhook", icon: Webhook, modulo: "integracoes", color: "text-blue-500", adminOnly: true },
-          { title: "Supabase", url: "/integracoes/supabase", icon: Database, modulo: "integracoes", color: "text-emerald-500", adminOnly: true },
+          { title: "WhatsApp", url: "/integracoes?tipo=evolution", icon: MessageCircle, modulo: "integracoes", color: "text-green-500", adminOnly: true },
+          { title: "Webhook", url: "/integracoes?tipo=webhook_in", icon: Webhook, modulo: "integracoes", color: "text-blue-500", adminOnly: true },
+          { title: "Supabase", url: "/integracoes?tipo=database_vector", icon: Database, modulo: "integracoes", color: "text-emerald-500", adminOnly: true },
         ],
       },
       {
@@ -202,8 +202,8 @@ const navGroups: NavGroup[] = [
         icon: Brain,
         color: "text-purple-500",
         items: [
-          { title: "OpenAI", url: "/integracoes/openai", icon: Bot, modulo: "integracoes", color: "text-purple-500", adminOnly: true },
-          { title: "Gemini", url: "/integracoes/gemini", icon: Sparkles, modulo: "integracoes", color: "text-orange-400", adminOnly: true },
+          { title: "OpenAI", url: "/integracoes?tipo=openai", icon: Bot, modulo: "integracoes", color: "text-purple-500", adminOnly: true },
+          { title: "Gemini", url: "/integracoes?tipo=gemini", icon: Sparkles, modulo: "integracoes", color: "text-orange-400", adminOnly: true },
         ],
       },
     ],
