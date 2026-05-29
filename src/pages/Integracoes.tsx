@@ -233,6 +233,15 @@ export default function IntegracoesPage() {
     instancia: "",
     status: "inativo" as IntegStatus,
   });
+  
+  // WhatsApp connection states
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [loadingQr, setLoadingQr] = useState(false);
+  const [whatsappForm, setWhatsappForm] = useState({
+    pais: "55",
+    numero: "",
+  });
 
   // n8n section
   const [n8nSecret, setN8nSecret] = useState("");
