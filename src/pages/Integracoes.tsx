@@ -44,6 +44,7 @@ import {
   Mail,
   Share2,
   Send as TelegramIcon,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 
