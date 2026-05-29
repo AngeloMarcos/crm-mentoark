@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getAuthToken, authHeader } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
@@ -44,6 +45,7 @@ import {
   Mail,
   Share2,
   Send as TelegramIcon,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -84,6 +86,7 @@ const iconMap = {
   Mail,
   Share2,
   TelegramIcon,
+  Sparkles,
 } as const;
 
 const statusConfig: Record<IntegStatus, { label: string; color: string; icon: any }> = {
@@ -191,6 +194,14 @@ const TEMPLATES: Template[] = [
     campos: { api_key: true },
     urlLabel: "",
   },
+  {
+    tipo: "gemini",
+    nome: "Google Gemini",
+    descricao: "Integração com modelos Google Gemini (IA)",
+    icone: "Sparkles",
+    campos: { api_key: true },
+    urlLabel: "",
+  },
 ];
 
 function formatarData(iso: string | null) {
@@ -206,6 +217,7 @@ function formatarData(iso: string | null) {
 
 export default function IntegracoesPage() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<IntegRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
@@ -267,6 +279,18 @@ export default function IntegracoesPage() {
     carregarAgentesN8n();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+  useEffect(() => {
+    const tipo = searchParams.get("tipo");
+    if (tipo && rows.length > 0) {
+      const tpl = TEMPLATES.find((t) => t.tipo === tipo);
+      const row = rows.find((r) => r.tipo === tipo) ?? null;
+      if (tpl) {
+        abrirConfig(tpl, row);
+        searchParams.delete("tipo");
+        setSearchParams(searchParams);
+      }
+    }
+  }, [searchParams, rows]);
 
   const salvarN8nSecret = async () => {
     if (!user) return;

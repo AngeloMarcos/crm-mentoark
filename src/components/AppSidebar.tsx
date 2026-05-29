@@ -5,7 +5,7 @@ import {
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
-  Activity,
+  Activity, Webhook, Database, Sparkles,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -180,11 +180,31 @@ const navGroups: NavGroup[] = [
     adminOnly: true,
     subgroups: [
       {
-        label: "Conectores",
+        label: "Configurações",
         icon: Plug,
         color: "text-amber-500",
         items: [
-          { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500", adminOnly: true },
+          { title: "Gerenciar Todos", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500", adminOnly: true },
+        ],
+      },
+      {
+        label: "Plataformas",
+        icon: Link2,
+        color: "text-blue-500",
+        items: [
+          { title: "WhatsApp", url: "/integracoes?tipo=evolution", icon: MessageCircle, modulo: "integracoes", color: "text-green-500", adminOnly: true },
+          { title: "Webhook", url: "/integracoes?tipo=webhook_in", icon: Webhook, modulo: "integracoes", color: "text-blue-500", adminOnly: true },
+          { title: "Supabase", url: "/integracoes?tipo=database_vector", icon: Database, modulo: "integracoes", color: "text-emerald-500", adminOnly: true },
+        ],
+      },
+      {
+        label: "Inteligência Artificial",
+        icon: Brain,
+        color: "text-purple-500",
+        items: [
+          { title: "OpenAI", url: "/integracoes?tipo=openai", icon: Bot, modulo: "integracoes", color: "text-purple-500", adminOnly: true },
+          { title: "Gemini", url: "/integracoes?tipo=gemini", icon: Sparkles, modulo: "integracoes", color: "text-orange-400", adminOnly: true },
+          { title: "ElevenLabs", url: "/integracoes?tipo=elevenlabs", icon: Activity, modulo: "integracoes", color: "text-pink-500", adminOnly: true },
         ],
       },
     ],
