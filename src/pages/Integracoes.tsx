@@ -713,12 +713,72 @@ export default function IntegracoesPage() {
 
               <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <Label>Nome</Label>
+                  <Label>{template.tipo === "evolution" ? "Nome da Identificação (ex: Vendas)" : "Nome"}</Label>
                   <Input
                     value={form.nome}
                     onChange={(e) => setForm({ ...form, nome: e.target.value })}
                   />
                 </div>
+
+                {template.campos.whatsapp && (
+                  <div className="space-y-4 pt-2 border-t border-border/50">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>País</Label>
+                        <Select 
+                          value={whatsappForm.pais} 
+                          onValueChange={(v) => setWhatsappForm({ ...whatsappForm, pais: v })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="55">🇧🇷 Brasil (+55)</SelectItem>
+                            <SelectItem value="1">🇺🇸 EUA (+1)</SelectItem>
+                            <SelectItem value="351">🇵🇹 Portugal (+351)</SelectItem>
+                            <SelectItem value="54">🇦🇷 Argentina (+54)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="col-span-2 space-y-1.5">
+                        <Label>Número do WhatsApp</Label>
+                        <Input
+                          placeholder="DDD + Número"
+                          value={whatsappForm.numero}
+                          onChange={(e) => setWhatsappForm({ ...whatsappForm, numero: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <Button 
+                      className="w-full bg-green-600 hover:bg-green-700 text-white" 
+                      onClick={gerarQRCode}
+                      disabled={loadingQr || !whatsappForm.numero}
+                    >
+                      {loadingQr ? (
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      ) : (
+                        <MessageCircle className="h-4 w-4 mr-2" />
+                      )}
+                      Gerar QR Code
+                    </Button>
+
+                    {qrCode && (
+                      <div className="flex flex-col items-center justify-center p-6 bg-white rounded-lg border border-border mt-4">
+                        <img src={qrCode} alt="WhatsApp QR Code" className="w-48 h-48" />
+                        <p className="text-xs text-muted-foreground mt-4 text-center">
+                          Abra o WhatsApp {">"} Aparelhos Conectados {">"} Conectar um aparelho
+                        </p>
+                        {pairingCode && (
+                          <div className="mt-4 p-2 bg-muted rounded text-center w-full">
+                            <p className="text-[10px] uppercase font-bold text-muted-foreground">Código de Pareamento</p>
+                            <p className="text-lg font-mono tracking-widest">{pairingCode}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {template.campos.url && (
                   <div className="space-y-1.5">
@@ -772,26 +832,28 @@ export default function IntegracoesPage() {
                   </div>
                 )}
 
-                <div className="space-y-1.5">
-                  <Label>Status</Label>
-                  <Select
-                    value={form.status}
-                    onValueChange={(v) =>
-                      setForm({ ...form, status: v as IntegStatus })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="conectado">Conectado</SelectItem>
-                      <SelectItem value="inativo">Inativo</SelectItem>
-                      <SelectItem value="erro">Erro</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                {!template.campos.whatsapp && (
+                  <div className="space-y-1.5">
+                    <Label>Status</Label>
+                    <Select
+                      value={form.status}
+                      onValueChange={(v) =>
+                        setForm({ ...form, status: v as IntegStatus })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="conectado">Conectado</SelectItem>
+                        <SelectItem value="inativo">Inativo</SelectItem>
+                        <SelectItem value="erro">Erro</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
-                {(template.campos.url || template.campos.api_key || template.tipo === "elevenlabs") && (
+                {template.tipo !== "evolution" && (template.campos.url || template.campos.api_key || template.tipo === "elevenlabs") && (
                   <Button
                     variant="secondary"
                     className="w-full"
