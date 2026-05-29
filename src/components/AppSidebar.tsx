@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, BarChart3, UserPlus, Tags, BookUser,
+  LayoutDashboard, LayoutGrid, BarChart3, UserPlus, Tags, BookUser,
   PhoneCall, Filter, MessageCircle, Timer, Zap,
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
