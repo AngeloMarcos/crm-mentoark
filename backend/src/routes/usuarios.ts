@@ -43,6 +43,23 @@ export default function usuarios(pool: Pool): Router {
       );
       const novo = ins.rows[0];
 
+      // Sincroniza com a tabela profiles (usada pelo frontend)
+      await client.query(
+        `INSERT INTO profiles (user_id, email, display_name)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name`,
+        [novo.id, novo.email, novo.display_name]
+      );
+
+      // Sincroniza com a tabela user_roles (usada para permissões)
+      await client.query(
+        `INSERT INTO user_roles (user_id, role)
+         VALUES ($1, 'user')
+         ON CONFLICT (user_id) DO UPDATE SET role = 'user'`,
+        [novo.id]
+      );
+
+      // Módulos padrão
       for (const mod of MODULOS_PADRAO_NOVO_USUARIO) {
         await client.query(
           `INSERT INTO user_modulos (user_id, modulo, ativo)
@@ -133,13 +150,23 @@ export default function usuarios(pool: Pool): Router {
         });
       }
 
-      const r = await pool.query(
-        `UPDATE users SET role = $1 WHERE id = $2 RETURNING id AS user_id, role`,
+      await pool.query('BEGIN');
+      await pool.query(
+        `UPDATE users SET role = $1 WHERE id = $2`,
         [role, user_id]
       );
+      const r = await pool.query(
+        `INSERT INTO user_roles (user_id, role) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role
+         RETURNING user_id, role`,
+        [user_id, role]
+      );
+      await pool.query('COMMIT');
+
       if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado' });
       return res.status(201).json(r.rows[0]);
     } catch (err: any) {
+      await pool.query('ROLLBACK').catch(() => {});
       return res.status(500).json({ message: err.message });
     }
   });
@@ -177,17 +204,33 @@ export default function usuarios(pool: Pool): Router {
 
   // DELETE /api/profiles/:user_id — exclui um usuário (admin)
   router.delete('/profiles/:user_id', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    const client = await pool.connect();
     try {
       const { user_id } = req.params;
       if (!user_id) return res.status(400).json({ message: 'user_id obrigatório' });
       if (String(user_id) === req.userId) {
         return res.status(403).json({ message: 'Você não pode excluir sua própria conta.' });
       }
-      const r = await pool.query(`DELETE FROM users WHERE id = $1 RETURNING id`, [user_id]);
-      if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado' });
+
+      await client.query('BEGIN');
+      // Remove de todas as tabelas relacionadas (ordem importa se houver FKs manuais)
+      await client.query('DELETE FROM user_modulos WHERE user_id = $1', [user_id]);
+      await client.query('DELETE FROM user_roles WHERE user_id = $1', [user_id]);
+      await client.query('DELETE FROM profiles WHERE user_id = $1', [user_id]);
+      const r = await client.query(`DELETE FROM users WHERE id = $1 RETURNING id`, [user_id]);
+      
+      if (!r.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ message: 'Usuário não encontrado' });
+      }
+      
+      await client.query('COMMIT');
       return res.status(204).send();
     } catch (err: any) {
+      await client.query('ROLLBACK').catch(() => {});
       return res.status(500).json({ message: err.message });
+    } finally {
+      client.release();
     }
   });
 
