@@ -480,12 +480,6 @@ export default function IntegracoesPage() {
       const token = getAuthToken();
       const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
       
-      // TODO: Backend deve criar a instância na Evolution API 
-      // usando EVOLUTION_API_URL e EVOLUTION_API_KEY do .env ou config_global
-      // Rota esperada: POST /api/whatsapp/connect
-      // Payload: { phoneNumber, nome }
-      // Retorno: { state, qrCode, pairingCode, instancia }
-      
       const res = await fetch(`${API_URL}/api/whatsapp/connect`, {
         method: "POST",
         headers: { 
@@ -507,16 +501,17 @@ export default function IntegracoesPage() {
       if (data.qrCode) {
         setQrCode(data.qrCode);
         setPairingCode(data.pairingCode);
+        setStep(2);
         
-        // Se o backend retornar o nome da instância, já atualizamos no form
         if (data.instancia) {
           setForm(f => ({ ...f, instancia: data.instancia }));
         }
         
-        toast.success("QR Code gerado! Escaneie agora.");
+        toast.success("Dados enviados! Prossiga para o pareamento.");
       } else if (data.state === "open") {
         toast.success("WhatsApp já está conectado!");
         setForm(f => ({ ...f, status: "conectado", instancia: data.instancia }));
+        setModal(false);
       }
     } catch (e: any) {
       toast.error(`Falha: ${e.message}`);
@@ -524,6 +519,37 @@ export default function IntegracoesPage() {
       setLoadingQr(false);
     }
   };
+
+  useEffect(() => {
+    let interval: any;
+    if (modal && template?.tipo === "evolution" && step === 2 && form.instancia) {
+      interval = setInterval(async () => {
+        try {
+          const token = getAuthToken();
+          const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
+          const res = await fetch(`${API_URL}/api/whatsapp/status`, {
+            method: "POST",
+            headers: { 
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({ instancia: form.instancia })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.state === "open" || data.state === "connected") {
+              toast.success("✓ WhatsApp conectado com sucesso!");
+              setModal(false);
+              carregar();
+            }
+          }
+        } catch (e) {
+          console.error("Polling error", e);
+        }
+      }, 5000);
+    }
+    return () => clearInterval(interval);
+  }, [modal, step, template, form.instancia]);
 
   const salvar = async () => {
     if (!user || !template) return;
