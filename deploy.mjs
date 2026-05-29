@@ -114,6 +114,7 @@ const backendFiles = [
   { local: path.join(PROJECT, 'backend/src/routes/ai-providers.ts'),    remote: '/opt/crm/backend/src/routes/ai-providers.ts' },
   { local: path.join(PROJECT, 'backend/src/routes/ai-uso.ts'),          remote: '/opt/crm/backend/src/routes/ai-uso.ts' },
   { local: path.join(PROJECT, 'backend/src/routes/integracoes.ts'),     remote: '/opt/crm/backend/src/routes/integracoes.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/modulos.ts'),         remote: '/opt/crm/backend/src/routes/modulos.ts' },
   { local: path.join(PROJECT, 'backend/src/migrations.ts'),             remote: '/opt/crm/backend/src/migrations.ts' },
   { local: path.join(PROJECT, 'backend/src/services/disparoProcessor.ts'), remote: '/opt/crm/backend/src/services/disparoProcessor.ts' },
 ];

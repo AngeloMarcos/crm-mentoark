@@ -4,17 +4,24 @@ import { AuthRequest, adminMiddleware } from '../middleware';
 
 // Lista canônica de todos os módulos do sistema
 export const TODOS_MODULOS = [
-  { key: 'dashboard',   label: 'Dashboard',         padrao: true  },
-  { key: 'leads',       label: 'Leads',              padrao: true  },
-  { key: 'contatos',    label: 'Contatos',           padrao: true  },
-  { key: 'discagem',    label: 'Discagem',           padrao: true  },
-  { key: 'funil',       label: 'Funil de Vendas',   padrao: true  },
-  { key: 'whatsapp',    label: 'WhatsApp',           padrao: true  },
-  { key: 'disparos',    label: 'Disparos',           padrao: true  },
-  { key: 'campanhas',   label: 'Campanhas',          padrao: false },
-  { key: 'catalogo',    label: 'Catálogo',           padrao: false },
-  { key: 'galeria',     label: 'Galeria',            padrao: false },
-  { key: 'docs',        label: 'Documentação',       padrao: false },
+  // ── Módulos padrão (todos os usuários) ───────────────────
+  { key: 'dashboard',    label: 'Dashboard',            padrao: true,  adminOnly: false },
+  { key: 'leads',        label: 'Leads',                padrao: true,  adminOnly: false },
+  { key: 'contatos',     label: 'Contatos',             padrao: true,  adminOnly: false },
+  { key: 'discagem',     label: 'Discagem',             padrao: true,  adminOnly: false },
+  { key: 'funil',        label: 'Funil de Vendas',      padrao: true,  adminOnly: false },
+  { key: 'whatsapp',     label: 'WhatsApp',             padrao: true,  adminOnly: false },
+  { key: 'disparos',     label: 'Disparos',             padrao: true,  adminOnly: false },
+  { key: 'campanhas',    label: 'Campanhas',            padrao: false, adminOnly: false },
+  { key: 'catalogo',     label: 'Catálogo',             padrao: false, adminOnly: false },
+  { key: 'galeria',      label: 'Galeria',              padrao: false, adminOnly: false },
+  { key: 'docs',         label: 'Documentação',         padrao: false, adminOnly: false },
+  // ── Módulos exclusivos de admin/gerente ───────────────────
+  { key: 'agentes',      label: 'Agentes de IA',        padrao: false, adminOnly: true  },
+  { key: 'cerebro',      label: 'Configuração da IA',   padrao: false, adminOnly: true  },
+  { key: 'workflows',    label: 'Workflows',            padrao: false, adminOnly: true  },
+  { key: 'integracoes',  label: 'Conectores',           padrao: false, adminOnly: true  },
+  { key: 'usuarios',     label: 'Usuários & Acessos',   padrao: false, adminOnly: true  },
 ];
 
 // MASTERS: carregado de variável de ambiente (MASTER_EMAILS=email1,email2)
