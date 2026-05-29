@@ -180,11 +180,30 @@ const navGroups: NavGroup[] = [
     adminOnly: true,
     subgroups: [
       {
-        label: "Conectores",
+        label: "Configurações",
         icon: Plug,
         color: "text-amber-500",
         items: [
-          { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500", adminOnly: true },
+          { title: "Gerenciar Todos", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500", adminOnly: true },
+        ],
+      },
+      {
+        label: "Plataformas",
+        icon: Link2,
+        color: "text-blue-500",
+        items: [
+          { title: "WhatsApp", url: "/integracoes/whatsapp", icon: MessageCircle, modulo: "integracoes", color: "text-green-500", adminOnly: true },
+          { title: "Webhook", url: "/integracoes/webhook", icon: Webhook, modulo: "integracoes", color: "text-blue-500", adminOnly: true },
+          { title: "Supabase", url: "/integracoes/supabase", icon: Database, modulo: "integracoes", color: "text-emerald-500", adminOnly: true },
+        ],
+      },
+      {
+        label: "Inteligência Artificial",
+        icon: Brain,
+        color: "text-purple-500",
+        items: [
+          { title: "OpenAI", url: "/integracoes/openai", icon: Bot, modulo: "integracoes", color: "text-purple-500", adminOnly: true },
+          { title: "Gemini", url: "/integracoes/gemini", icon: Sparkles, modulo: "integracoes", color: "text-orange-400", adminOnly: true },
         ],
       },
     ],
