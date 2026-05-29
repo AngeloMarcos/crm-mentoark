@@ -74,8 +74,41 @@ export function ChavesIntegracoes() {
       setLoadingInstancias(false);
     };
 
+    const loadConfigGlobal = async () => {
+      const { data } = await api
+        .from("integracoes_config")
+        .select("config")
+        .eq("tipo", "config_global")
+        .single();
+      
+      if (data?.config) {
+        setConfigGlobal(data.config);
+      }
+    };
+
     loadInstancias();
+    loadConfigGlobal();
   }, []);
+
+  const salvarConfigGlobal = async () => {
+    setSalvandoConfig(true);
+    const { error } = await api
+      .from("integracoes_config")
+      .upsert({
+        tipo: "config_global",
+        nome: "Configuração Global Evolution",
+        config: configGlobal,
+        status: "conectado",
+        user_id: (await api.auth.getUser()).data.user?.id
+      }, { onConflict: "tipo" });
+
+    if (error) {
+      toast.error(`Erro ao salvar: ${error.message}`);
+    } else {
+      toast.success("Configuração global salva!");
+    }
+    setSalvandoConfig(false);
+  };
 
   const tools = [
     { nome: "buscar_contatos", desc: "Busca contatos por nome/tel/email" },
