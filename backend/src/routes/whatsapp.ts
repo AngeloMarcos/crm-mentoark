@@ -112,25 +112,25 @@ export default function whatsappRouter(pool: Pool): Router {
       if (useNewTable) {
         const r = await pool.query(
           `SELECT
-             SPLIT_PART(m.remote_jid, '@', 1) AS session_id,
-             m.instance_name AS instancia,
+             m.session_id,
+             m.instancia,
              MAX(m.created_at) AS ultima_atividade,
              COUNT(*) AS total,
              (
-               SELECT m2.content FROM whatsapp_messages m2
-               WHERE m2.remote_jid = m.remote_jid AND m2.user_id = $1
+               SELECT m2.conteudo FROM whatsapp_messages m2
+               WHERE m2.session_id = m.session_id AND m2.user_id = $1
                ORDER BY m2.created_at DESC LIMIT 1
              ) AS ultima_mensagem,
              (
                SELECT CASE WHEN m2.from_me THEN 'assistant' ELSE 'user' END
                FROM whatsapp_messages m2
-               WHERE m2.remote_jid = m.remote_jid AND m2.user_id = $1
+               WHERE m2.session_id = m.session_id AND m2.user_id = $1
                ORDER BY m2.created_at DESC LIMIT 1
              ) AS ultimo_role,
-             NULL AS push_name
+             MAX(m.push_name) AS push_name
            FROM whatsapp_messages m
            WHERE m.user_id = $1 AND m.remote_jid NOT LIKE '%@g.us'
-           GROUP BY m.remote_jid, m.instance_name
+           GROUP BY m.session_id, m.instancia
            ORDER BY ultima_atividade DESC
            LIMIT 200`,
           [userId]
@@ -215,9 +215,9 @@ export default function whatsappRouter(pool: Pool): Router {
 
       if (useNewTable) {
         const r = await pool.query(
-          `SELECT id, from_me, message_type, content, media_url, media_mimetype, status, timestamp_wa, created_at
+          `SELECT id, from_me, tipo AS message_type, conteudo AS content, midia_url, midia_mime AS media_mimetype, status, timestamp_unix AS timestamp_wa, created_at
            FROM whatsapp_messages
-           WHERE SPLIT_PART(remote_jid, '@', 1) = $1 AND user_id = $2
+           WHERE session_id = $1 AND user_id = $2
            ORDER BY created_at ASC`,
           [phone, userId]
         );

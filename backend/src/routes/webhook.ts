@@ -167,9 +167,10 @@ export default function webhookRouter(pool: Pool): Router {
       const messageId = payload.data?.key?.id || '';
       const instancia  = payload.instance;
       const remoteJid  = payload.data?.key?.remoteJid || '';
-      const telefone   = remoteJid.split('@')[0]; // Remove o sufixo @s.whatsapp.net
+      const telefone   = remoteJid.split('@')[0].replace(/\D/g, ''); // Garante session_id limpo
       const pushName   = payload.data?.pushName || telefone;
       const fromMe     = payload.data?.key?.fromMe === true;
+
 
       // Ignorar mensagens de grupos (JID termina em @g.us)
       if (!messageId || !telefone || remoteJid.includes('@g.us')) return;
@@ -177,11 +178,12 @@ export default function webhookRouter(pool: Pool): Router {
       // ── Localizar agente ou integração pela instância ────────────────────
       // Tenta primeiro em 'agentes', depois em 'integracoes_config' (G1/B3)
       let agenteRes = await pool.query(
-        `SELECT user_id, n8n_webhook_url FROM agentes
-         WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
+        `SELECT user_id, n8n_webhook_url FROM agentes 
+         WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL 
          ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       );
+
 
       if (!agenteRes.rows.length) {
         agenteRes = await pool.query(
@@ -210,7 +212,7 @@ export default function webhookRouter(pool: Pool): Router {
              (id, user_id, instancia, session_id, remote_jid, from_me, push_name, 
               tipo, conteudo, midia_url, midia_mime, status, timestamp_unix)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-           ON CONFLICT (id) DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status`,
           [
             messageId, userId, instancia, telefone, remoteJid, fromMe, 
             fromMe ? 'Você' : pushName,
@@ -218,6 +220,7 @@ export default function webhookRouter(pool: Pool): Router {
             fromMe ? 'sent' : 'received', timestamp
           ]
         ).catch(err => console.warn('[WEBHOOK] Falha ao salvar whatsapp_messages:', err.message));
+
 
         // ── UPSERT de Contato ───────────────────────────────────────────────
         // Cria se não existir, atualiza push_name e timestamp se existir
@@ -236,7 +239,16 @@ export default function webhookRouter(pool: Pool): Router {
         // Mensagens do próprio bot têm ID prefixado com 'resp_' (ver agentEngine.ts)
         // Ignorar para não criar loop infinito
         if (messageId.startsWith('resp_')) return;
-... (keep existing logic for manual intervention)
+
+        // É o atendente digitando manualmente → pausar IA para esse contato
+        if (userId) {
+          await pool.query(
+            `UPDATE dados_cliente SET atendimento_ia = 'pause'
+             WHERE user_id = $1 AND telefone ILIKE $2`,
+            [userId, `%${telefone.slice(-11)}`]
+          ).catch(() => {});
+          console.log(`[WEBHOOK] IA pausada por intervenção humana: ${telefone}`);
+        }
         return;
       }
 
