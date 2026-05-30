@@ -29,6 +29,7 @@ services:
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-mentoark-kanban-secret-2025}
       MASTER_EMAILS: ${MASTER_EMAILS:-angelobispofilho@gmail.com,mentoark@gmail.com}
       EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-Mentoark@2025}
     expose:
       - "3000"
     networks:

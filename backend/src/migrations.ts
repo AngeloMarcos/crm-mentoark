@@ -1121,5 +1121,43 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS instance_name    TEXT`).catch(() => {});
 
   console.log('[MIGRATIONS] WhatsApp Instances + patches finais OK');
+
+  // ── Garantir usuários admin master ────────────────────────────────────────
+  // Lê MASTER_EMAILS do ambiente e garante que cada um existe como admin.
+  // INITIAL_ADMIN_PASSWORD define a senha padrão (só usada na criação).
+  // Se o usuário já existe, não altera nada.
+  {
+    const masterEmails = (process.env.MASTER_EMAILS || 'angelobispofilho@gmail.com,mentoark@gmail.com')
+      .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    const defaultPassword = process.env.INITIAL_ADMIN_PASSWORD || 'Mentoark@2025';
+    const defaultNames: Record<string, string> = {
+      'angelobispofilho@gmail.com': 'Angelo Marcos',
+      'mentoark@gmail.com': 'Mentoark Admin',
+    };
+
+    for (const email of masterEmails) {
+      try {
+        const exists = await pool.query(`SELECT id FROM users WHERE email = $1`, [email]);
+        if (!exists.rows.length) {
+          await pool.query(
+            `INSERT INTO users (email, password_hash, display_name, role, active, email_verified)
+             VALUES ($1, crypt($2, gen_salt('bf', 10)), $3, 'admin', true, true)`,
+            [email, defaultPassword, defaultNames[email] || email.split('@')[0]]
+          );
+          console.log(`[MIGRATIONS] Usuário admin criado: ${email}`);
+        } else {
+          // Garantir que é admin e está ativo
+          await pool.query(
+            `UPDATE users SET role = 'admin', active = true WHERE email = $1 AND (role != 'admin' OR active = false)`,
+            [email]
+          );
+        }
+      } catch (err: any) {
+        console.warn(`[MIGRATIONS] Erro ao garantir admin ${email}:`, err.message);
+      }
+    }
+    console.log('[MIGRATIONS] Usuários master verificados OK');
+  }
+
   console.log('[MIGRATIONS] OK');
 }
