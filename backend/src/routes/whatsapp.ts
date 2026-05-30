@@ -66,12 +66,12 @@ export default function whatsappRouter(pool: Pool): Router {
       // Tem agente — usa config dele se completa, senão usa global com instância do agente
       const url = row.url || DEFAULT_EVO_URL;
       const api_key = row.api_key || DEFAULT_EVO_KEY;
-      const instancia = row.instancia || `crm_${userId.slice(0, 8)}`;
+      const instancia = row.instancia || `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
       return { url, api_key, instancia, agenteId: row.id, isGlobal: !row.url };
     }
 
     // Sem agente — usa global e cria instância única por userId
-    const instancia = `crm_${userId.slice(0, 8)}`;
+    const instancia = `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
     return { url: DEFAULT_EVO_URL, api_key: DEFAULT_EVO_KEY, instancia, agenteId: null, isGlobal: true };
   }
 
@@ -334,24 +334,35 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // 3. Cria nova instância (webhook embutido — Evolution v2)
       const phoneNumber = (req.body?.phoneNumber as string | undefined)?.replace(/\D/g, '') || undefined;
+      
+      const createPayload = {
+        instanceName: cfg.instancia,
+        token: cfg.api_key, // Algumas versões da Evolution exigem o token no body
+        qrcode: true,
+        integration: 'WHATSAPP-BAILEYS',
+        rejectCall: false,
+        groupsIgnore: true, // Mudado para true para melhor performance
+        alwaysOnline: false,
+        readMessages: false,
+        readStatus: false,
+        ...(phoneNumber ? { number: phoneNumber } : {}),
+        webhook: webhookPayload(),
+      };
+
+      console.log(`[WHATSAPP] Criando nova instância: ${cfg.instancia}`);
+      
       const createRes = await fetch(`${base}/instance/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-        body: JSON.stringify({
-          instanceName: cfg.instancia,
-          qrcode: true,
-          integration: 'WHATSAPP-BAILEYS',
-          rejectCall: false,
-          groupsIgnore: false,
-          alwaysOnline: false,
-          readMessages: false,
-          readStatus: false,
-          ...(phoneNumber ? { number: phoneNumber } : {}),
-          webhook: webhookPayload(),
-        }),
+        headers: { 
+          'Content-Type': 'application/json', 
+          'apikey': cfg.api_key 
+        },
+        body: JSON.stringify(createPayload),
       });
 
       const created: any = await createRes.json();
+      console.log(`[WHATSAPP] Resposta Evolution create:`, JSON.stringify(created).slice(0, 300));
+
 
       // Se já existe, tenta conectar
       if (!createRes.ok && (created?.message?.includes('already') || created?.message?.includes('exist'))) {
