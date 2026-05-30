@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Inbox, MessageSquare, Smartphone, FlaskConical } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-const VALID_TABS = ["conversas", "caixa", "instancias", "diagnostico"] as const;
+const VALID_TABS = ["conversas", "instancias", "diagnostico"] as const;
 type TabValue = (typeof VALID_TABS)[number];
 
 export default function WhatsAppPage() {
