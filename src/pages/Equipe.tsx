@@ -347,10 +347,11 @@ function Painel({
         </Card>
       </div>
 
-      <ConviteDialog
+      <AdicionarCorretorDialog
         open={conviteOpen}
         onClose={() => setConviteOpen(false)}
-        onInvite={onConvidar}
+        onAdd={onAdicionar}
+        membrosAtuais={membros}
       />
     </div>
   );
