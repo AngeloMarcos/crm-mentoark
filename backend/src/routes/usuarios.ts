@@ -126,11 +126,12 @@ export default function usuarios(pool: Pool): Router {
       const search = req.query.search ? `%${req.query.search}%` : null;
 
       const r = await pool.query(
-        `SELECT id AS user_id, email, display_name, role, active, created_at
-         FROM users
-         WHERE (owner_id = $1)
-           AND ($2::text IS NULL OR email ILIKE $2 OR display_name ILIKE $2)
-         ORDER BY created_at DESC
+        `SELECT u.id AS user_id, u.email, u.display_name, u.role, u.active, u.created_at,
+                (SELECT array_agg(modulo) FROM user_modulos WHERE user_id = u.id AND ativo = true) as modulos
+         FROM users u
+         WHERE (u.owner_id = $1)
+           AND ($2::text IS NULL OR u.email ILIKE $2 OR u.display_name ILIKE $2)
+         ORDER BY u.created_at DESC
          LIMIT $3 OFFSET $4`,
         [adminId, search, limit, offset]
       );
