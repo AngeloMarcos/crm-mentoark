@@ -139,12 +139,12 @@ function Onboarding({ onCreate }: { onCreate: (nome: string) => Promise<any> }) 
 function Painel({
   equipe,
   membros,
-  onConvidar,
+  onAdicionar,
   onRemover,
 }: {
   equipe: { id: string; nome: string; owner_id: string };
   membros: Membro[];
-  onConvidar: (email: string, role: string) => Promise<void>;
+  onAdicionar: (userId: string, role: string) => Promise<void>;
   onRemover: (userId: string) => Promise<void>;
 }) {
   const { user, session } = useAuth();
