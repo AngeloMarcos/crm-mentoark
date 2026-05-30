@@ -460,7 +460,7 @@ function AdicionarCorretorDialog({
 
           <div className="border rounded-md overflow-hidden bg-muted/20">
             <div className="max-h-[300px] overflow-y-auto">
-              {loading ? (
+              {isLoading ? (
                 <div className="p-8 text-center text-sm text-muted-foreground">
                   <Loader2 className="w-4 h-4 animate-spin mx-auto mb-2" />
                   Carregando corretores...
