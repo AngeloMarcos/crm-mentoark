@@ -6,6 +6,8 @@ import rateLimit from 'express-rate-limit';
 import { pool } from './db';
 import { authMiddleware, AuthRequest } from './middleware';
 
+const DEBUG_AUTH = process.env.NODE_ENV !== 'production' || true;
+
 const router = Router();
 
 // Rate limiter: máximo 10 tentativas por IP+email em 15 minutos
