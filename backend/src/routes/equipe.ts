@@ -178,6 +178,84 @@ export default function equipeRouter(pool: Pool): Router {
     res.json({ success: true, user_id: targetUser.id, nome: targetUser.nome });
   }));
 
+  // 4b. GET /api/equipes/:id/membros-disponiveis
+  router.get('/:id/membros-disponiveis', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const userId = req.userId!;
+
+    const access = await checkAccess(equipeId, userId);
+    if (!access || (!access.isOwner && access.role !== 'gerente')) {
+      return res.status(403).json({ message: 'Acesso negado' });
+    }
+
+    const r = await pool.query(
+      `SELECT u.id, u.email, u.display_name
+       FROM users u
+       WHERE u.owner_id = $1
+         AND u.active = true
+         AND NOT EXISTS (
+           SELECT 1 FROM equipe_membros em 
+           WHERE em.user_id = u.id AND em.equipe_id = $2
+         )
+       ORDER BY u.display_name ASC, u.email ASC`,
+      [userId, equipeId]
+    );
+
+    res.json(r.rows);
+  }));
+
+  // 4c. POST /api/equipes/:id/membros
+  router.post('/:id/membros', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const adminId = req.userId!;
+    const { user_id, role } = req.body;
+
+    if (!user_id) return res.status(400).json({ message: 'user_id é obrigatório' });
+    if (!['membro', 'gerente'].includes(role)) {
+      return res.status(400).json({ message: 'Role inválida' });
+    }
+
+    const access = await checkAccess(equipeId, adminId);
+    if (!access || (!access.isOwner && access.role !== 'gerente')) {
+      return res.status(403).json({ message: 'Apenas proprietários ou gerentes podem adicionar membros' });
+    }
+
+    // Validações do usuário a ser adicionado
+    const userCheck = await pool.query(
+      `SELECT id, email, display_name, active, owner_id FROM users WHERE id = $1`,
+      [user_id]
+    );
+
+    if (userCheck.rowCount === 0) {
+      return res.status(404).json({ message: 'Usuário não encontrado' });
+    }
+
+    const targetUser = userCheck.rows[0];
+
+    if (!targetUser.active) {
+      return res.status(400).json({ message: 'O usuário selecionado está inativo' });
+    }
+
+    if (targetUser.owner_id !== adminId) {
+      return res.status(403).json({ message: 'Você só pode adicionar membros que você mesmo cadastrou' });
+    }
+
+    const r = await pool.query(
+      `INSERT INTO equipe_membros (equipe_id, user_id, role, convidado_por)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [equipeId, targetUser.id, role, adminId]
+    );
+
+    const inserted = r.rows[0];
+
+    res.status(201).json({
+      ...inserted,
+      display_name: targetUser.display_name,
+      email: targetUser.email
+    });
+  }));
+
   // 5. DELETE /api/equipes/:id/membros/:userId
   router.delete('/:id/membros/:userId', wrap(async (req: AuthRequest, res: Response) => {
     const equipeId = req.params.id;
