@@ -378,14 +378,19 @@ function AdicionarCorretorDialog({
   const fetchProfiles = async () => {
     setLoading(true);
     try {
-      const { data } = await api.get("/api/profiles");
-      // Filtra usuários que já estão na equipe
-      const disponiveis = (data || []).filter(
-        (p: Profile) => !membrosAtuais.some((m) => m.user_id === p.user_id)
-      );
-      setProfiles(disponiveis);
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
+      const token = localStorage.getItem('access_token');
+      
+      const res = await fetch(`${API_BASE}/api/equipes/${equipe?.id}/membros-disponiveis`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error("Erro ao buscar corretores disponíveis");
+      const data = await res.json();
+      
+      setProfiles(data || []);
     } catch (e) {
       console.error("Erro ao buscar perfis", e);
+      toast.error("Erro ao carregar lista de corretores");
     } finally {
       setLoading(false);
     }
