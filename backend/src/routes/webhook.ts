@@ -239,7 +239,16 @@ export default function webhookRouter(pool: Pool): Router {
         // Mensagens do próprio bot têm ID prefixado com 'resp_' (ver agentEngine.ts)
         // Ignorar para não criar loop infinito
         if (messageId.startsWith('resp_')) return;
-... (keep existing logic for manual intervention)
+
+        // É o atendente digitando manualmente → pausar IA para esse contato
+        if (userId) {
+          await pool.query(
+            `UPDATE dados_cliente SET atendimento_ia = 'pause'
+             WHERE user_id = $1 AND telefone ILIKE $2`,
+            [userId, `%${telefone.slice(-11)}`]
+          ).catch(() => {});
+          console.log(`[WEBHOOK] IA pausada por intervenção humana: ${telefone}`);
+        }
         return;
       }
 
