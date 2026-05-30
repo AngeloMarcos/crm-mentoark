@@ -3,8 +3,8 @@ import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
 
 // Default Evolution server (VPS local — disparo.mentoark.com.br)
-const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
-const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
+const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://fierceparrot-evolution.cloudfy.live';
+const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'wZKRX72nZ6sM4yQuOoS6lo76fs5fO7cV';
 const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
 const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
