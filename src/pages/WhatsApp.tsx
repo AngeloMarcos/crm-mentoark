@@ -30,9 +30,6 @@ export default function WhatsAppPage() {
           <TabsTrigger value="conversas" className="gap-2">
             <MessageSquare className="h-4 w-4" /> Conversas
           </TabsTrigger>
-          <TabsTrigger value="caixa" className="gap-2">
-            <Inbox className="h-4 w-4" /> Caixa de Entrada
-          </TabsTrigger>
           <TabsTrigger value="instancias" className="gap-2">
             <Smartphone className="h-4 w-4" /> Instâncias
           </TabsTrigger>
