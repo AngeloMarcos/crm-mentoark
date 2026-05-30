@@ -112,30 +112,25 @@ export default function whatsappRouter(pool: Pool): Router {
       if (useNewTable) {
         const r = await pool.query(
           `SELECT
-             m.session_id,
-             m.instancia,
+             SPLIT_PART(m.remote_jid, '@', 1) AS session_id,
+             m.instance_name AS instancia,
              MAX(m.created_at) AS ultima_atividade,
              COUNT(*) AS total,
              (
-               SELECT m2.conteudo FROM whatsapp_messages m2
-               WHERE m2.session_id = m.session_id AND m2.user_id = $1
+               SELECT m2.content FROM whatsapp_messages m2
+               WHERE m2.remote_jid = m.remote_jid AND m2.user_id = $1
                ORDER BY m2.created_at DESC LIMIT 1
              ) AS ultima_mensagem,
              (
                SELECT CASE WHEN m2.from_me THEN 'assistant' ELSE 'user' END
                FROM whatsapp_messages m2
-               WHERE m2.session_id = m.session_id AND m2.user_id = $1
+               WHERE m2.remote_jid = m.remote_jid AND m2.user_id = $1
                ORDER BY m2.created_at DESC LIMIT 1
              ) AS ultimo_role,
-             (
-               SELECT m2.push_name FROM whatsapp_messages m2
-               WHERE m2.session_id = m.session_id AND m2.user_id = $1
-                 AND m2.push_name IS NOT NULL AND m2.from_me = false
-               ORDER BY m2.created_at DESC LIMIT 1
-             ) AS push_name
+             NULL AS push_name
            FROM whatsapp_messages m
-           WHERE m.user_id = $1
-           GROUP BY m.session_id, m.instancia
+           WHERE m.user_id = $1 AND m.remote_jid NOT LIKE '%@g.us'
+           GROUP BY m.remote_jid, m.instance_name
            ORDER BY ultima_atividade DESC
            LIMIT 200`,
           [userId]
@@ -220,9 +215,9 @@ export default function whatsappRouter(pool: Pool): Router {
 
       if (useNewTable) {
         const r = await pool.query(
-          `SELECT id, from_me, push_name, tipo, conteudo, midia_url, midia_mime, midia_nome, status, timestamp_unix, created_at
+          `SELECT id, from_me, message_type, content, media_url, media_mimetype, status, timestamp_wa, created_at
            FROM whatsapp_messages
-           WHERE session_id = $1 AND user_id = $2
+           WHERE SPLIT_PART(remote_jid, '@', 1) = $1 AND user_id = $2
            ORDER BY created_at ASC`,
           [phone, userId]
         );
@@ -230,12 +225,12 @@ export default function whatsappRouter(pool: Pool): Router {
         const mensagens = r.rows.map(row => ({
           id: row.id,
           role: row.from_me ? 'assistant' : 'user',
-          content: row.conteudo || '',
-          push_name: row.push_name,
-          tipo: row.tipo,
-          midia_url: row.midia_url,
-          midia_mime: row.midia_mime,
-          midia_nome: row.midia_nome,
+          content: row.content || '',
+          push_name: null,
+          tipo: row.message_type,
+          midia_url: row.media_url,
+          midia_mime: row.media_mimetype,
+          midia_nome: null,
           status: row.status,
           created_at: row.created_at,
         }));

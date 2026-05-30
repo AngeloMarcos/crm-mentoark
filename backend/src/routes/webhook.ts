@@ -159,7 +159,9 @@ export default function webhookRouter(pool: Pool): Router {
       const payload = req.body as EvolutionPayload;
 
       // Filtrar: só processar mensagens novas (ignorar status, conexão, etc.)
-      if (payload.event !== 'messages.upsert') return;
+      // Evolution envia MESSAGES_UPSERT (uppercase+underscore), normalizar para messages.upsert
+      const eventNorm = (payload.event || '').toLowerCase().replace(/_/g, '.');
+      if (eventNorm !== 'messages.upsert') return;
       if (payload.data?.status === 'READ') return; // Notificação de leitura
 
       const messageId = payload.data?.key?.id || '';
