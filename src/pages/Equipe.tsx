@@ -349,6 +349,7 @@ function Painel({
 
       <AdicionarCorretorDialog
         open={conviteOpen}
+        equipe={equipe}
         onClose={() => setConviteOpen(false)}
         onAdd={onAdicionar}
         membrosAtuais={membros}
