@@ -44,65 +44,96 @@ interface NavGroup {
 
 // ── Estrutura ─────────────────────────────────────────────────────────────────
 
+import {
+  LayoutDashboard, LayoutGrid, BarChart3, UserPlus, Tags, BookUser,
+  PhoneCall, Filter, MessageCircle, Timer, Zap,
+  Send, Megaphone, Rocket, GitBranch, Bot, Plug,
+  Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
+  ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
+  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
+  Activity, Webhook, Database, Sparkles,
+} from "lucide-react";
+import { useMemo, useState } from "react";
+import { useAuth } from "@/hooks/useAuth";
+import logo from "@/assets/mentoark-logo.png";
+import { NavLink } from "@/components/NavLink";
+import { useLocation, useNavigate } from "react-router-dom";
+import {
+  Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu,
+  SidebarMenuButton, SidebarMenuItem, SidebarFooter, useSidebar,
+} from "@/components/ui/sidebar";
+
+// ── Tipos ─────────────────────────────────────────────────────────────────────
+
+interface NavItem {
+  title: string;
+  url: string;
+  icon: React.ElementType;
+  modulo: string;
+  color: string;
+  adminOnly?: boolean;
+}
+
+interface NavSubgroup {
+  label: string;
+  icon?: React.ElementType;
+  color?: string;
+  adminOnly?: boolean;
+  items: NavItem[];
+}
+
+interface NavGroup {
+  label: string;
+  adminOnly?: boolean;
+  subgroups: NavSubgroup[];
+}
+
+// ── Estrutura ─────────────────────────────────────────────────────────────────
+
 const navGroups: NavGroup[] = [
   {
-    label: "Equipe",
+    label: "📊 VISÃO GERAL",
     subgroups: [
       {
-        label: "Minha Equipe",
-        icon: Users2,
-        color: "text-indigo-500",
+        label: "Dashboard",
         items: [
-          { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
+          { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, modulo: "dashboard", color: "text-blue-500" },
+          { title: "Central de BI", url: "/bi", icon: BarChart3, modulo: "dashboard", color: "text-cyan-500" },
         ],
       },
     ],
   },
   {
-    label: "Visão Geral",
-    subgroups: [
-      {
-        label: "Painéis",
-        icon: LayoutDashboard,
-        color: "text-blue-500",
-        items: [
-          { title: "Dashboard",     url: "/dashboard", icon: LayoutDashboard, modulo: "dashboard", color: "text-blue-500" },
-          { title: "Central de BI", url: "/bi",        icon: BarChart3,       modulo: "dashboard", color: "text-cyan-500" },
-        ],
-      },
-    ],
-  },
-  {
-    label: "Clientes & Vendas",
+    label: "🎯 VENDAS",
     subgroups: [
       {
         label: "Pipeline Comercial",
         icon: Filter,
         color: "text-orange-500",
         items: [
-          { title: "Leads",           url: "/leads",      icon: UserPlus, modulo: "leads",    color: "text-indigo-500" },
-          { title: "Tags e Funil",    url: "/tags-funil", icon: Tags,     modulo: "leads",    color: "text-violet-500" },
-          { title: "Contatos",        url: "/contatos",   icon: BookUser, modulo: "contatos", color: "text-purple-500" },
-          { title: "Funil de Vendas", url: "/funil",      icon: Filter,   modulo: "funil",    color: "text-orange-500" },
-          { title: "Kanban",          url: "/kanban",     icon: LayoutGrid,      modulo: "leads",    color: "text-blue-500" },
+          { title: "Leads", url: "/leads", icon: UserPlus, modulo: "leads", color: "text-indigo-500" },
+          { title: "Contatos", url: "/contatos", icon: BookUser, modulo: "contatos", color: "text-purple-500" },
+          { title: "Tags e Funil", url: "/tags-funil", icon: Tags, modulo: "leads", color: "text-violet-500" },
+          { title: "Funil de Vendas", url: "/funil", icon: Filter, modulo: "funil", color: "text-orange-500" },
+          { title: "Kanban / Tarefas", url: "/kanban", icon: LayoutGrid, modulo: "leads", color: "text-blue-500" },
         ],
       },
     ],
   },
   {
-    label: "Chat",
+    label: "💬 ATENDIMENTO",
     subgroups: [
       {
         label: "WhatsApp Chat",
         icon: MessagesSquare,
         color: "text-green-500",
         items: [
-          { title: "WhatsApp",          url: "/whatsapp",          icon: MessageCircle, modulo: "whatsapp",    color: "text-green-500"   },
-          { title: "Caixa de Entrada",  url: "/whatsapp?tab=caixa", icon: Inbox,        modulo: "whatsapp",    color: "text-emerald-500" },
-          { title: "Instâncias",        url: "/whatsapp?tab=instancias", icon: Smartphone, modulo: "whatsapp", color: "text-cyan-500"    },
-          { title: "Monitor",           url: "/monitor-whatsapp",   icon: Monitor,      modulo: "whatsapp",    color: "text-blue-400"    },
-          { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap,           modulo: "whatsapp",    color: "text-amber-500"   },
-          { title: "SLA / Gestão",      url: "/sla",               icon: Timer,         modulo: "whatsapp",    color: "text-yellow-500"  },
+          { title: "WhatsApp", url: "/whatsapp", icon: MessageCircle, modulo: "whatsapp", color: "text-green-500" },
+          { title: "Caixa de Entrada", url: "/whatsapp?tab=caixa", icon: Inbox, modulo: "whatsapp", color: "text-emerald-500" },
+          { title: "Instâncias", url: "/whatsapp?tab=instancias", icon: Smartphone, modulo: "whatsapp", color: "text-cyan-500" },
+          { title: "Monitor", url: "/monitor-whatsapp", icon: Monitor, modulo: "whatsapp", color: "text-blue-400" },
+          { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap, modulo: "whatsapp", color: "text-amber-500" },
+          { title: "SLA / Gestão", url: "/sla", icon: Timer, modulo: "whatsapp", color: "text-yellow-500" },
         ],
       },
       {
@@ -113,113 +144,94 @@ const navGroups: NavGroup[] = [
           { title: "Discagem", url: "/discagem", icon: PhoneCall, modulo: "discagem", color: "text-emerald-500" },
         ],
       },
-      {
-        label: "Utilitários",
-        icon: Wrench,
-        color: "text-purple-400",
-        items: [
-          { title: "Chat da Equipe",        url: "/chat-equipe",  icon: UsersIcon, modulo: "whatsapp", color: "text-purple-400" },
-          { title: "Smart Links & QR Code", url: "/smart-links",  icon: Link2,     modulo: "whatsapp", color: "text-fuchsia-400" },
-        ],
-      },
     ],
   },
   {
-    label: "Comunicação",
+    label: "📣 COMUNICAÇÃO",
     subgroups: [
       {
         label: "Campanhas & Disparos",
         icon: Megaphone,
         color: "text-rose-500",
         items: [
-          { title: "Disparos",          url: "/disparos",          icon: Send,     modulo: "disparos",  color: "text-sky-500"  },
-          { title: "Campanhas",         url: "/campanhas",         icon: Megaphone, modulo: "campanhas", color: "text-rose-500" },
-          { title: "Marketing Digital", url: "/marketing-digital", icon: Rocket,   modulo: "campanhas", color: "text-blue-600" },
+          { title: "Disparos", url: "/disparos", icon: Send, modulo: "disparos", color: "text-sky-500" },
+          { title: "Campanhas", url: "/campanhas", icon: Megaphone, modulo: "campanhas", color: "text-rose-500" },
+          { title: "Marketing Digital", url: "/marketing-digital", icon: Rocket, modulo: "campanhas", color: "text-blue-600" },
         ],
       },
     ],
   },
   {
-    label: "Conteúdo",
+    label: "📁 CONTEÚDO",
     subgroups: [
       {
         label: "Biblioteca",
         icon: Library,
         color: "text-fuchsia-500",
         items: [
-          { title: "Catálogo",     url: "/catalogo", icon: Package,  modulo: "catalogo", color: "text-fuchsia-500" },
-          { title: "Galeria",      url: "/galeria",  icon: Images,   modulo: "galeria",  color: "text-pink-500"    },
-          { title: "Documentação", url: "/docs",     icon: BookOpen, modulo: "docs",     color: "text-slate-400"   },
+          { title: "Catálogo", url: "/catalogo", icon: Package, modulo: "catalogo", color: "text-fuchsia-500" },
+          { title: "Galeria", url: "/galeria", icon: Images, modulo: "galeria", color: "text-pink-500" },
+          { title: "Documentação", url: "/docs", icon: BookOpen, modulo: "docs", color: "text-slate-400" },
         ],
       },
     ],
   },
   {
-    label: "IA & Automação",
+    label: "🤖 IA & AUTOMAÇÃO",
     adminOnly: true,
     subgroups: [
       {
         label: "Agentes & Prompts",
         icon: Bot,
         color: "text-teal-500",
-        adminOnly: true,
         items: [
-          { title: "Agentes de IA",      url: "/agentes",   icon: Bot,      modulo: "agentes",   color: "text-teal-500",   adminOnly: true },
-          { title: "Configuração da IA", url: "/cerebro",   icon: Brain,    modulo: "cerebro",   color: "text-purple-400", adminOnly: true },
-          { title: "Uso de IA",          url: "/uso-ia",    icon: Activity, modulo: "agentes",   color: "text-pink-500",   adminOnly: true },
-          { title: "Workflows",          url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500", adminOnly: true },
+          { title: "Agentes de IA", url: "/agentes", icon: Bot, modulo: "agentes", color: "text-teal-500" },
+          { title: "Configuração da IA", url: "/cerebro", icon: Brain, modulo: "cerebro", color: "text-purple-400" },
+          { title: "Workflows", url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500" },
+          { title: "Uso de IA", url: "/uso-ia", icon: Activity, modulo: "agentes", color: "text-pink-500" },
         ],
       },
     ],
   },
   {
-    label: "Administração",
+    label: "👥 EQUIPE",
+    subgroups: [
+      {
+        label: "Colaboração",
+        items: [
+          { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
+          { title: "Chat da Equipe", url: "/chat-equipe", icon: UsersIcon, modulo: "whatsapp", color: "text-purple-400" },
+          { title: "Smart Links & QR Code", url: "/smart-links", icon: Link2, modulo: "whatsapp", color: "text-fuchsia-400" },
+        ],
+      },
+    ],
+  },
+  {
+    label: "⚙️ ADMINISTRAÇÃO",
     adminOnly: true,
     subgroups: [
       {
         label: "Acessos",
         icon: SettingsIcon,
         color: "text-teal-600",
-        adminOnly: true,
         items: [
-          { title: "Equipe",    url: "/equipe",    icon: UsersIcon,   modulo: "usuarios", color: "text-indigo-500", adminOnly: true },
-          { title: "Usuários",  url: "/usuarios",  icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
-          { title: "Segurança", url: "/seguranca", icon: Lock,        modulo: "usuarios", color: "text-red-400",  adminOnly: true },
+          { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600" },
+          { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400" },
         ],
       },
-    ],
-  },
-  {
-    label: "Conectores",
-    adminOnly: true,
-    subgroups: [
       {
-        label: "Configurações",
+        label: "Conectores",
         icon: Plug,
         color: "text-amber-500",
         items: [
-          { title: "Gerenciar Todos", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500", adminOnly: true },
-        ],
-      },
-      {
-        label: "Plataformas",
-        icon: Link2,
-        color: "text-blue-500",
-        items: [
-          { title: "WhatsApp", url: "/integracoes?tipo=evolution", icon: MessageCircle, modulo: "integracoes", color: "text-green-500", adminOnly: true },
-          { title: "Webhook", url: "/integracoes?tipo=webhook_in", icon: Webhook, modulo: "integracoes", color: "text-blue-500", adminOnly: true },
-          { title: "Supabase", url: "/integracoes?tipo=database_vector", icon: Database, modulo: "integracoes", color: "text-emerald-500", adminOnly: true },
-        ],
-      },
-      {
-        label: "Inteligência Artificial",
-        icon: Brain,
-        color: "text-purple-500",
-        items: [
-          { title: "OpenAI", url: "/integracoes?tipo=openai", icon: Bot, modulo: "integracoes", color: "text-purple-500", adminOnly: true },
-          { title: "Gemini", url: "/integracoes?tipo=gemini", icon: Sparkles, modulo: "integracoes", color: "text-orange-400", adminOnly: true },
-          { title: "Claude",     url: "/integracoes?tipo=claude",     icon: Brain,    modulo: "integracoes", color: "text-violet-500", adminOnly: true },
-          { title: "ElevenLabs", url: "/integracoes?tipo=elevenlabs", icon: Activity, modulo: "integracoes", color: "text-pink-500", adminOnly: true },
+          { title: "Gerenciar Todos", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
+          { title: "WhatsApp", url: "/integracoes?tipo=evolution", icon: MessageCircle, modulo: "integracoes", color: "text-green-500" },
+          { title: "Webhook", url: "/integracoes?tipo=webhook_in", icon: Webhook, modulo: "integracoes", color: "text-blue-500" },
+          { title: "Supabase", url: "/integracoes?tipo=database_vector", icon: Database, modulo: "integracoes", color: "text-emerald-500" },
+          { title: "OpenAI", url: "/integracoes?tipo=openai", icon: Bot, modulo: "integracoes", color: "text-purple-500" },
+          { title: "Gemini", url: "/integracoes?tipo=gemini", icon: Sparkles, modulo: "integracoes", color: "text-orange-400" },
+          { title: "Claude", url: "/integracoes?tipo=claude", icon: Brain, modulo: "integracoes", color: "text-violet-500" },
+          { title: "ElevenLabs", url: "/integracoes?tipo=elevenlabs", icon: Activity, modulo: "integracoes", color: "text-pink-500" },
         ],
       },
     ],
