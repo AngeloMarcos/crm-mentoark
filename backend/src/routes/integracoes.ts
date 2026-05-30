@@ -36,14 +36,15 @@ export default function integracoesRouter(pool: Pool): Router {
   // POST /api/integracoes_config  — UPSERT por (user_id, tipo)
   // Sempre usa ON CONFLICT para evitar duplicidade com a constraint UNIQUE(user_id, tipo)
   router.post('/', wrap(async (req: AuthRequest, res: Response) => {
-    const { tipo, url, api_key, instancia, token, status, config } = req.body;
+    const { tipo, nome, url, api_key, instancia, token, status, config } = req.body;
     if (!tipo) return res.status(400).json({ message: 'Campo tipo é obrigatório' });
 
     const r = await pool.query(
       `INSERT INTO integracoes_config
-         (user_id, tipo, url, api_key, instancia, token, status, config, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+         (user_id, tipo, nome, url, api_key, instancia, token, status, config, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
        ON CONFLICT (user_id, tipo) DO UPDATE SET
+         nome       = EXCLUDED.nome,
          url        = EXCLUDED.url,
          api_key    = EXCLUDED.api_key,
          instancia  = EXCLUDED.instancia,
@@ -55,6 +56,7 @@ export default function integracoesRouter(pool: Pool): Router {
       [
         req.userId,
         tipo,
+        nome      || tipo,
         url       || null,
         api_key   || null,
         instancia || null,

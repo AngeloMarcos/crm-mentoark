@@ -1122,6 +1122,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   // Coluna token em integracoes_config (usada pela rota POST /api/integracoes_config)
   await pool.query(`ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS token TEXT`).catch(() => {});
+  // nome pode vir nulo quando o frontend não envia — dar default pelo tipo
+  await pool.query(`ALTER TABLE integracoes_config ALTER COLUMN nome SET DEFAULT ''`).catch(() => {});
+  await pool.query(`ALTER TABLE integracoes_config ALTER COLUMN nome DROP NOT NULL`).catch(() => {});
 
   console.log('[MIGRATIONS] WhatsApp Instances + patches finais OK');
 
