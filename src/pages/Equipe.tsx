@@ -393,13 +393,30 @@ function ConviteDialog({
     }
     setSaving(true);
     try {
+      // Verificar se o usuário já existe antes de enviar o convite
+      // O endpoint /api/profiles já filtra por owner_id, então buscamos por email
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
+      const token = localStorage.getItem('access_token');
+      
+      const searchRes = await fetch(`${API_BASE}/api/profiles?search=${email.trim()}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const existingUsers = await searchRes.json();
+      const userExists = existingUsers.length > 0 && existingUsers[0].email.toLowerCase() === email.trim().toLowerCase();
+
       await onInvite(email.trim(), role);
-      toast.success("Convite enviado!");
+      
+      if (userExists) {
+        toast.success("Usuário encontrado e adicionado à equipe!");
+      } else {
+        toast.success("Convite enviado!");
+      }
+      
       setEmail("");
       setRole("membro");
       onClose();
     } catch (e: any) {
-      toast.error(e.message || "Erro ao enviar convite");
+      toast.error(e.message || "Erro ao processar convite");
     } finally {
       setSaving(false);
     }
