@@ -167,9 +167,10 @@ export default function webhookRouter(pool: Pool): Router {
       const messageId = payload.data?.key?.id || '';
       const instancia  = payload.instance;
       const remoteJid  = payload.data?.key?.remoteJid || '';
-      const telefone   = remoteJid.split('@')[0]; // Remove o sufixo @s.whatsapp.net
+      const telefone   = remoteJid.split('@')[0].replace(/\D/g, ''); // Garante session_id limpo
       const pushName   = payload.data?.pushName || telefone;
       const fromMe     = payload.data?.key?.fromMe === true;
+
 
       // Ignorar mensagens de grupos (JID termina em @g.us)
       if (!messageId || !telefone || remoteJid.includes('@g.us')) return;
