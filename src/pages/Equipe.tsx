@@ -275,7 +275,7 @@ function Painel({
             </h3>
             <Button size="sm" onClick={() => setConviteOpen(true)}>
               <UserPlus className="w-4 h-4 mr-2" />
-              Convidar Membro
+              Adicionar Corretor
             </Button>
           </div>
 
