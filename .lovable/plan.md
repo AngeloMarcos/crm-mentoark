@@ -1,45 +1,20 @@
-## Objetivo
-Completar a gestão de usuários em `/usuarios` (a página já tem listagem, excluir, resetar senha, alternar admin e gerenciar módulos). Falta o **"+ Adicionar Novo Usuário"** e ajustar o padrão de módulos para o mínimo: **Dashboard + Leads + WhatsApp**.
+O problema de sincronização de conversas do WhatsApp ocorre principalmente devido a uma divergência entre os nomes das colunas no banco de dados e os nomes usados no código do backend, além da falta de criação automática de contatos quando uma nova mensagem é recebida.
 
-## O que vai mudar
+### Alterações propostas:
 
-### 1. Backend — nova rota `POST /api/profiles` (admin only)
-Arquivo: `backend/src/routes/usuarios.ts`
+#### 1. Banco de Dados (Migração)
+- Adicionar um índice ÚNICO na tabela `contatos` para o par `(user_id, telefone)`. Isso permitirá realizar um "UPSERT" seguro (inserir se não existir, atualizar se já existir).
+- Verificar e garantir a integridade da tabela `whatsapp_messages`.
 
-- Recebe `{ email, password, display_name }`
-- Valida: email único, senha ≥ 6 chars
-- Cria usuário em `users` (hash bcrypt, `role='user'`)
-- Insere `user_modulos` apenas com `['dashboard','leads','whatsapp']` (`ativo=true`)
-- Retorna `{ user_id, email, display_name }`
+#### 2. Backend - Webhook (`backend/src/routes/webhook.ts`)
+- **Correção de Nomes de Colunas**: Ajustar a query de inserção em `whatsapp_messages` para usar os nomes corretos: `instancia`, `id`, `tipo`, `conteudo`, `midia_mime` e `timestamp_unix`.
+- **Criação de Contatos (UPSERT)**: Substituir o `UPDATE` simples por um `INSERT ... ON CONFLICT` para garantir que novos leads que chamam no WhatsApp sejam criados automaticamente no CRM.
+- **Sincronização de Respostas Manuais**: Alterar a lógica para que mensagens enviadas manualmente (pelo próprio WhatsApp ou WhatsApp Web) também sejam salvas na tabela `whatsapp_messages`, permitindo que apareçam no histórico do CRM.
+- **Deduplicação**: Garantir que o `session_id` (número do telefone) seja preenchido corretamente.
 
-### 2. Backend — alterar padrão de módulos
-Arquivo: `backend/src/routes/modulos.ts` (lista `TODOS_MODULOS`)
+#### 3. Backend - Motor de IA (`backend/src/services/agentEngine.ts`)
+- **Correção de Nomes de Colunas**: Ajustar a query de inserção em `whatsapp_messages` para corresponder ao esquema do banco de dados, garantindo que as respostas da IA sejam registradas corretamente no chat.
 
-Mudar `padrao: true` para `false` em **contatos, discagem, funil, disparos**. Permanecem `padrao: true` apenas: **dashboard, leads, whatsapp**. Isso afeta:
-- Novos signups via `/auth/register` (que provavelmente cria com padrão — vamos checar)
-- Botão "Resetar para padrão" no modal de módulos
-- Fallback quando usuário não tem nenhum registro em `user_modulos`
-
-### 3. Frontend — modal "Adicionar Novo Usuário"
-Arquivo: `src/pages/Usuarios.tsx`
-
-- Botão **"+ Adicionar Novo Usuário"** no topo direito do header da página
-- Modal com campos: Nome Completo, E-mail, Senha, Confirmar Senha
-- Validação client-side (zod-style inline): email válido, senha ≥ 6, senhas iguais
-- Submit → `POST /api/profiles` → toast sucesso → recarrega lista
-- Mensagem de feedback: "Usuário criado com acesso a Dashboard, Leads e WhatsApp. Use o botão Módulos para liberar mais."
-
-## Detalhes técnicos
-
-- Token: `getAuthToken()` (já em uso no arquivo)
-- Base URL: `VITE_API_URL` (já em uso)
-- Inserts no backend rodam em transação (`BEGIN/COMMIT`) para garantir consistência de `users` + `user_modulos`
-- Admin não pode se auto-excluir (já implementado)
-
-## Fora do escopo
-- Cargos/Departamentos/Filiais (telas das imagens anexadas — não implementar agora, são referência visual)
-- Edição inline de nome/e-mail do usuário (pode entrar em sprint futura)
-- Convite por e-mail — usuário recebe a senha direto do admin
-
-## Após aprovação
-Implemento os 2 arquivos frontend + 2 arquivos backend e te entrego o `scp` pronto para deploy na VPS (já que o backend roda em `api.mentoark.com.br`, não no Lovable).
+### Detalhes Técnicos:
+- Tabela `whatsapp_messages` esquema: `id` (PK), `user_id`, `instancia`, `session_id`, `remote_jid`, `from_me`, `push_name`, `tipo`, `conteudo`, `midia_url`, `midia_mime`, `midia_nome`, `status`, `timestamp_unix`.
+- A query atual no código usa nomes como `instance_name`, `message_id`, `message_type`, `content`, o que causa falha silenciosa na persistência.
