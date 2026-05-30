@@ -6,6 +6,8 @@ import rateLimit from 'express-rate-limit';
 import { pool } from './db';
 import { authMiddleware, AuthRequest } from './middleware';
 
+const DEBUG_AUTH = process.env.NODE_ENV !== 'production' || true;
+
 const router = Router();
 
 // Rate limiter: máximo 10 tentativas por IP+email em 15 minutos
@@ -80,31 +82,39 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       [email.toLowerCase().trim()]
     );
     const user = rows[0];
-    if (!user) return res.status(401).json({ message: 'E-mail ou senha incorretos' });
+    if (!user) {
+      if (DEBUG_AUTH) console.warn(`[AUTH] Login falhou: usuário ${email} não encontrado no banco ou inativo.`);
+      return res.status(401).json({ message: 'E-mail ou senha incorretos' });
+    }
+
+    if (DEBUG_AUTH) console.log(`[AUTH] Usuário encontrado: ${user.email} (ID: ${user.id}). Verificando senha...`);
 
     let valid = false;
 
-    // Try bcrypt first (for users created via our API)
+    // Se a senha começa com $2, é bcrypt
     if (user.password_hash && user.password_hash.startsWith('$2')) {
       valid = await bcrypt.compare(password, user.password_hash);
-    }
-
-    // Fallback: try pgcrypto crypt() comparison for Database-migrated passwords
-    if (!valid && user.password_hash) {
+      if (DEBUG_AUTH) console.log(`[AUTH] Validação Bcrypt: ${valid}`);
+    } else if (user.password_hash) {
+      // Fallback para hashes antigos ou migrados do Database
       const r = await pool.query(
         "SELECT crypt($1, password_hash) = password_hash AS ok FROM users WHERE id = $2",
         [password, user.id]
       );
       valid = r.rows[0]?.ok === true;
-      // Rehash with bcrypt on first successful login with pgcrypto
+      if (DEBUG_AUTH) console.log(`[AUTH] Validação Pgcrypto: ${valid}`);
+      
       if (valid) {
         const newHash = await bcrypt.hash(password, 12);
         await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, user.id]);
-        console.log(`[AUTH] Senha migrada de pgcrypto → bcrypt para user ${user.id}`);
+        if (DEBUG_AUTH) console.log(`[AUTH] Senha migrada para Bcrypt.`);
       }
     }
 
-    if (!valid) return res.status(401).json({ message: 'E-mail ou senha incorretos' });
+    if (!valid) {
+      if (DEBUG_AUTH) console.warn(`[AUTH] Senha incorreta para o usuário: ${email}`);
+      return res.status(401).json({ message: 'E-mail ou senha incorretos' });
+    }
 
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 

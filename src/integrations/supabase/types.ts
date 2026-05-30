@@ -184,6 +184,77 @@ export type Database = {
           },
         ]
       }
+      ai_fila: {
+        Row: {
+          concluido_em: string | null
+          conteudo_texto: string | null
+          conversa_id: string | null
+          created_at: string
+          erro_msg: string | null
+          id: string
+          instance_name: string
+          max_tentativas: number
+          media_mimetype: string | null
+          media_url: string | null
+          processar_apos: string
+          remote_jid: string
+          status: string
+          tentativas: number
+          tipo: string
+          updated_at: string
+          user_id: string
+          wa_message_id: string
+        }
+        Insert: {
+          concluido_em?: string | null
+          conteudo_texto?: string | null
+          conversa_id?: string | null
+          created_at?: string
+          erro_msg?: string | null
+          id?: string
+          instance_name: string
+          max_tentativas?: number
+          media_mimetype?: string | null
+          media_url?: string | null
+          processar_apos?: string
+          remote_jid: string
+          status?: string
+          tentativas?: number
+          tipo: string
+          updated_at?: string
+          user_id: string
+          wa_message_id: string
+        }
+        Update: {
+          concluido_em?: string | null
+          conteudo_texto?: string | null
+          conversa_id?: string | null
+          created_at?: string
+          erro_msg?: string | null
+          id?: string
+          instance_name?: string
+          max_tentativas?: number
+          media_mimetype?: string | null
+          media_url?: string | null
+          processar_apos?: string
+          remote_jid?: string
+          status?: string
+          tentativas?: number
+          tipo?: string
+          updated_at?: string
+          user_id?: string
+          wa_message_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_fila_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campanhas: {
         Row: {
           cliques: number
@@ -237,6 +308,38 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      cargos: {
+        Row: {
+          created_at: string | null
+          id: string
+          nome: string
+          permissoes: string[]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          nome: string
+          permissoes?: string[]
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          nome?: string
+          permissoes?: string[]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cargos_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       catalogo_mensagens_logs: {
         Row: {
@@ -622,6 +725,38 @@ export type Database = {
             columns: ["disparo_id"]
             isOneToOne: false
             referencedRelation: "disparos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      disparo_optouts: {
+        Row: {
+          created_at: string | null
+          id: string
+          motivo: string | null
+          telefone: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          motivo?: string | null
+          telefone: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          motivo?: string | null
+          telefone?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "disparo_optouts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -1154,6 +1289,50 @@ export type Database = {
         }
         Relationships: []
       }
+      ia_pausa_log: {
+        Row: {
+          acao: string
+          atendente_id: string | null
+          contato_id: string | null
+          created_at: string | null
+          duracao_min: number | null
+          id: string
+          observacao: string | null
+          telefone: string | null
+          user_id: string
+        }
+        Insert: {
+          acao: string
+          atendente_id?: string | null
+          contato_id?: string | null
+          created_at?: string | null
+          duracao_min?: number | null
+          id?: string
+          observacao?: string | null
+          telefone?: string | null
+          user_id: string
+        }
+        Update: {
+          acao?: string
+          atendente_id?: string | null
+          contato_id?: string | null
+          created_at?: string | null
+          duracao_min?: number | null
+          id?: string
+          observacao?: string | null
+          telefone?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ia_pausa_log_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       integracoes_config: {
         Row: {
           api_key: string | null
@@ -1351,6 +1530,38 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      opt_out_contatos: {
+        Row: {
+          created_at: string | null
+          id: number
+          keyword: string | null
+          telefone: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: number
+          keyword?: string | null
+          telefone: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: number
+          keyword?: string | null
+          telefone?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "opt_out_contatos_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       produto_imagens: {
         Row: {
@@ -1831,6 +2042,38 @@ export type Database = {
           },
         ]
       }
+      user_modulos: {
+        Row: {
+          ativo: boolean
+          created_at: string | null
+          id: string
+          modulo: string
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean
+          created_at?: string | null
+          id?: string
+          modulo: string
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean
+          created_at?: string | null
+          id?: string
+          modulo?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_modulos_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_roles: {
         Row: {
           created_at: string
@@ -1851,6 +2094,69 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      users: {
+        Row: {
+          active: boolean
+          avatar_url: string | null
+          cargo_id: string | null
+          created_at: string
+          display_name: string | null
+          email: string
+          email_verified: boolean
+          id: string
+          last_login_at: string | null
+          owner_id: string | null
+          password_hash: string
+          role: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          avatar_url?: string | null
+          cargo_id?: string | null
+          created_at?: string
+          display_name?: string | null
+          email: string
+          email_verified?: boolean
+          id?: string
+          last_login_at?: string | null
+          owner_id?: string | null
+          password_hash: string
+          role?: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          avatar_url?: string | null
+          cargo_id?: string | null
+          created_at?: string
+          display_name?: string | null
+          email?: string
+          email_verified?: boolean
+          id?: string
+          last_login_at?: string | null
+          owner_id?: string | null
+          password_hash?: string
+          role?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "users_cargo_id_fkey"
+            columns: ["cargo_id"]
+            isOneToOne: false
+            referencedRelation: "cargos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "users_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       webhook_mensagens_processadas: {
         Row: {

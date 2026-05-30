@@ -4,23 +4,18 @@ import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Loader2, UserPlus, Pencil, Trash2, Search, Eye, EyeOff, LayoutGrid } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-  DialogDescription, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { api } from "@/integrations/database/client";
-import { Shield, ShieldOff, Loader2, Users, LayoutGrid, Trash2, KeyRound } from "lucide-react";
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from "@/components/ui/select";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
-
+import { useNavigate } from "react-router-dom";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => getAuthToken();
@@ -29,457 +24,319 @@ interface UserRow {
   user_id: string;
   email: string;
   display_name: string | null;
+  cargo_id: string | null;
+  cargo_nome: string | null;
+  active: boolean;
   created_at: string;
-  is_admin: boolean;
+  modulos: string[];
 }
 
-interface ModuloInfo {
-  key: string;
-  label: string;
-  padrao: boolean;
+interface Cargo {
+  id: string;
+  nome: string;
+  permissoes: string[];
 }
 
 export default function UsuariosPage() {
-  const { user: currentUser } = useAuth();
-  const [users, setUsers]       = useState<UserRow[]>([]);
-  const [loading, setLoading]   = useState(true);
+  const navigate = useNavigate();
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [cargos, setCargos] = useState<Cargo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
 
-  // Módulos
-  const [todosModulos, setTodosModulos]         = useState<ModuloInfo[]>([]);
-  const [userModulos, setUserModulos]           = useState<Record<string, boolean>>({});
-  const [modulosUsuarioId, setModulosUsuarioId] = useState<string | null>(null);
-  const [nomeUsuarioModulos, setNomeUsuarioModulos] = useState("");
-  const [modulosLoading, setModulosLoading]     = useState(false);
-  const [salvandoModulo, setSalvandoModulo]     = useState<string | null>(null);
-  const [modalModulos, setModalModulos]         = useState(false);
+  // Modal State
+  const [modal, setModal] = useState(false);
+  const [userEdit, setUserEdit] = useState<UserRow | null>(null);
+  const [nome, setNome] = useState("");
+  const [email, setEmail] = useState("");
+  const [senha, setSenha] = useState("");
+  const [confirmSenha, setConfirmSenha] = useState("");
+  const [cargoId, setCargoId] = useState("");
+  const [showSenha, setShowSenha] = useState(false);
+  const [salvando, setSalvando] = useState(false);
 
-  // Excluir / Resetar senha
-  const [userExcluir, setUserExcluir]   = useState<UserRow | null>(null);
-  const [excluindo, setExcluindo]       = useState(false);
-  const [userResetar, setUserResetar]   = useState<UserRow | null>(null);
-  const [novaSenha, setNovaSenha]       = useState("");
-  const [resetando, setResetando]       = useState(false);
-
-
-
-  /* ── Carregar usuários ──────────────────────────────────────── */
   const load = async () => {
     setLoading(true);
-    const { data: profiles } = await api
-      .from("profiles")
-      .select("user_id, email, display_name, created_at")
-      .order("created_at", { ascending: false });
-    const { data: roles } = await api.from("user_roles").select("user_id, role");
-    const adminSet = new Set(
-      (roles ?? []).filter(r => r.role === "admin").map(r => r.user_id)
-    );
-    setUsers((profiles ?? []).map(p => ({ ...p, is_admin: adminSet.has(p.user_id) })));
+    const offset = page * 15;
+    const r = await fetch(`${API_BASE}/api/profiles?search=${encodeURIComponent(search)}&limit=15&offset=${offset}`, {
+      headers: { Authorization: `Bearer ${token()}` },
+    });
+    if (r.ok) {
+      const data = await r.json();
+      setUsers(data);
+    }
     setLoading(false);
   };
 
-  /* ── Carregar lista canônica de módulos ─────────────────────── */
-  useEffect(() => {
-    load();
-    fetch(`${API_BASE}/api/modulos/lista`, {
-      headers: { Authorization: `Bearer ${token()}` },
-    })
-      .then(r => r.ok ? r.json() : [])
-      .then(setTodosModulos);
-  }, []);
-
-  /* ── Toggle admin ───────────────────────────────────────────── */
-  const toggleAdmin = async (u: UserRow) => {
-    if (u.is_admin) {
-      const { error } = await api.from("user_roles").delete().eq("user_id", u.user_id).eq("role", "admin");
-      if (error) return toast.error(error.message);
-      toast.success(`${u.email} não é mais admin`);
-    } else {
-      const { error } = await api.from("user_roles").insert({ user_id: u.user_id, role: "admin" });
-      if (error) return toast.error(error.message);
-      toast.success(`${u.email} agora é admin`);
-    }
-    load();
-  };
-
-  /* ── Abrir painel de módulos ────────────────────────────────── */
-  const abrirModulos = async (userId: string, nome: string) => {
-    setModulosUsuarioId(userId);
-    setNomeUsuarioModulos(nome);
-    setModalModulos(true);
-    setModulosLoading(true);
-
-    const r = await fetch(`${API_BASE}/api/modulos/usuario/${userId}`, {
+  const loadCargos = async () => {
+    const r = await fetch(`${API_BASE}/api/cargos`, {
       headers: { Authorization: `Bearer ${token()}` },
     });
     if (r.ok) {
-      const rows: { modulo: string; ativo: boolean }[] = await r.json();
-      const map: Record<string, boolean> = {};
-      todosModulos.forEach(m => { map[m.key] = false; });
-      rows.forEach(row => { map[row.modulo] = row.ativo; });
-      setUserModulos(map);
+      const data = await r.json();
+      setCargos(data);
     }
-    setModulosLoading(false);
   };
 
-  /* ── Toggle de módulo individual ───────────────────────────── */
-  const toggleModulo = async (key: string, novoValor: boolean) => {
-    if (!modulosUsuarioId) return;
-    setSalvandoModulo(key);
-    setUserModulos(prev => ({ ...prev, [key]: novoValor }));
+  useEffect(() => { load(); }, [search, page]);
+  useEffect(() => { loadCargos(); }, []);
 
+  const resetForm = () => {
+    setUserEdit(null);
+    setNome("");
+    setEmail("");
+    setSenha("");
+    setConfirmSenha("");
+    setCargoId("");
+    setShowSenha(false);
+  };
+
+  const handleEdit = (u: UserRow) => {
+    setUserEdit(u);
+    setNome(u.display_name || "");
+    setEmail(u.email);
+    setSenha("");
+    setConfirmSenha("");
+    setCargoId(u.cargo_id || "");
+    setModal(true);
+  };
+
+  const syncModulesWithRole = async (userId: string, cId: string) => {
+    const selectedCargo = cargos.find(c => c.id === cId);
+    if (!selectedCargo) return;
+
+    await fetch(`${API_BASE}/api/modulos/usuario/${userId}`, {
+      method: "PUT",
+      headers: { 
+        Authorization: `Bearer ${token()}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ modulos: selectedCargo.permissoes })
+    });
+  };
+
+  const save = async () => {
+    if (!nome || !email || (!userEdit && !senha)) {
+      return toast.error("Preencha todos os campos obrigatórios");
+    }
+    if (!userEdit && senha !== confirmSenha) {
+      return toast.error("As senhas não coincidem");
+    }
+
+    setSalvando(true);
     try {
-      const r = await fetch(`${API_BASE}/api/modulos/usuario/${modulosUsuarioId}/toggle`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ modulo: key, ativo: novoValor }),
-      });
-      if (!r.ok) {
-        setUserModulos(prev => ({ ...prev, [key]: !novoValor }));
-        toast.error("Erro ao salvar permissão");
+      if (userEdit) {
+        // Edit Profile
+        const r = await fetch(`${API_BASE}/api/profiles/${userEdit.user_id}`, {
+          method: "PATCH",
+          headers: { 
+            Authorization: `Bearer ${token()}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ display_name: nome, cargo_id: cargoId || null })
+        });
+        if (r.ok) {
+          if (cargoId) await syncModulesWithRole(userEdit.user_id, cargoId);
+          toast.success("Usuário atualizado");
+          setModal(false);
+          load();
+        }
+      } else {
+        // Create Profile
+        const r = await fetch(`${API_BASE}/api/profiles`, {
+          method: "POST",
+          headers: { 
+            Authorization: `Bearer ${token()}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ email, password: senha, display_name: nome, cargo_id: cargoId || null })
+        });
+        if (r.ok) {
+          const newUser = await r.json();
+          if (cargoId) await syncModulesWithRole(newUser.user_id, cargoId);
+          toast.success("Usuário criado");
+          setModal(false);
+          load();
+        } else {
+          const err = await r.json();
+          toast.error(err.message || "Erro ao criar usuário");
+        }
       }
-    } catch {
-      setUserModulos(prev => ({ ...prev, [key]: !novoValor }));
-      toast.error("Erro de conexão");
+    } catch (e) {
+      toast.error("Erro na comunicação com o servidor");
     } finally {
-      setSalvandoModulo(null);
+      setSalvando(false);
     }
   };
 
-  /* ── Reset para padrão ──────────────────────────────────────── */
-  const aplicarPadrao = async () => {
-    if (!modulosUsuarioId) return;
-    const padrao = todosModulos.filter(m => m.padrao).map(m => m.key);
-    const r = await fetch(`${API_BASE}/api/modulos/usuario/${modulosUsuarioId}`, {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ modulos: padrao }),
+  const deleteUser = async (id: string) => {
+    if (!confirm("Tem certeza que deseja excluir este usuário?")) return;
+    const r = await fetch(`${API_BASE}/api/profiles/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token()}` },
     });
     if (r.ok) {
-      const map: Record<string, boolean> = {};
-      todosModulos.forEach(m => { map[m.key] = padrao.includes(m.key); });
-      setUserModulos(map);
-      toast.success("Permissões resetadas para o padrão");
-    }
-  };
-
-  /* ── Ativar todos ───────────────────────────────────────────── */
-  const darTodosModulos = async () => {
-    if (!modulosUsuarioId) return;
-    const todos = todosModulos.map(m => m.key);
-    const r = await fetch(`${API_BASE}/api/modulos/usuario/${modulosUsuarioId}`, {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ modulos: todos }),
-    });
-    if (r.ok) {
-      const map: Record<string, boolean> = {};
-      todosModulos.forEach(m => { map[m.key] = true; });
-      setUserModulos(map);
-      toast.success("Todos os módulos ativados");
-    }
-  };
-
-  /* ── Excluir usuário ────────────────────────────────────────── */
-  const confirmarExcluir = async () => {
-    if (!userExcluir) return;
-    setExcluindo(true);
-    try {
-      const r = await fetch(`${API_BASE}/api/profiles/${userExcluir.user_id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token()}` },
-      });
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error(j.message || "Erro ao excluir");
-      }
-      toast.success(`${userExcluir.email} excluído`);
-      setUserExcluir(null);
+      toast.success("Usuário excluído");
       load();
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao excluir usuário");
-    } finally {
-      setExcluindo(false);
     }
   };
 
-  /* ── Resetar senha ──────────────────────────────────────────── */
-  const confirmarResetSenha = async () => {
-    if (!userResetar) return;
-    if (novaSenha.length < 6) {
-      toast.error("A senha deve ter pelo menos 6 caracteres");
-      return;
-    }
-    setResetando(true);
-    try {
-      const r = await fetch(`${API_BASE}/api/profiles/${userResetar.user_id}/reset-password`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ new_password: novaSenha }),
-      });
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error(j.message || "Erro ao resetar senha");
-      }
-      toast.success(`Senha de ${userResetar.email} redefinida`);
-      setUserResetar(null);
-      setNovaSenha("");
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao resetar senha");
-    } finally {
-      setResetando(false);
-    }
-  };
-
-
-  /* ── Render ─────────────────────────────────────────────────── */
   return (
     <CRMLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-3">
-            <Users className="h-8 w-8 text-primary" /> Usuários
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Gerencie acesso, papéis e módulos de cada usuário
-          </p>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold">Gerenciar Usuários</h1>
+            <p className="text-muted-foreground">Adicione, edite e gerencie os membros da sua equipe</p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => navigate("/usuarios/cargos")} className="gap-2">
+              <LayoutGrid className="h-4 w-4" /> Gerenciar Cargos
+            </Button>
+            <Button onClick={() => { resetForm(); setModal(true); }} className="bg-primary hover:bg-primary/90 gap-2">
+              <UserPlus className="h-4 w-4" /> Adicionar Novo Usuário
+            </Button>
+          </div>
         </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">{users.length} usuários cadastrados</CardTitle>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+            <CardTitle className="text-lg">Equipe</CardTitle>
+            <div className="relative w-64">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input 
+                placeholder="Buscar por nome ou e-mail..." 
+                className="pl-8"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+              />
+            </div>
           </CardHeader>
           <CardContent>
             {loading ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              </div>
+              <div className="flex justify-center py-8"><Loader2 className="animate-spin" /></div>
             ) : (
-              <div className="overflow-x-auto">
+              <>
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Nome</TableHead>
-                      <TableHead className="hidden sm:table-cell">E-mail</TableHead>
-                      <TableHead>Papel</TableHead>
-                      <TableHead className="hidden md:table-cell">Cadastrado em</TableHead>
-                      <TableHead className="text-right">Ações</TableHead>
+                      <TableHead>USUÁRIO</TableHead>
+                      <TableHead>CARGO</TableHead>
+                      <TableHead>MÓDULOS ATIVOS</TableHead>
+                      <TableHead>STATUS</TableHead>
+                      <TableHead className="text-right">AÇÕES</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {users.map(u => (
                       <TableRow key={u.user_id}>
                         <TableCell className="font-medium">
-                          <div>{u.display_name ?? "—"}</div>
-                          <div className="sm:hidden text-xs text-muted-foreground truncate max-w-[140px]">
-                            {u.email}
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-full bg-primary/20 flex items-center justify-center font-bold text-primary">
+                              {(u.display_name?.[0] || u.email[0]).toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="font-semibold">{u.display_name}</div>
+                              <div className="text-xs text-muted-foreground">{u.email}</div>
+                            </div>
                           </div>
                         </TableCell>
-                        <TableCell className="hidden sm:table-cell">{u.email}</TableCell>
                         <TableCell>
-                          {u.is_admin
-                            ? <Badge className="bg-primary/15 text-primary border-0">Admin</Badge>
-                            : <Badge variant="secondary">Usuário</Badge>}
+                          <Badge variant="outline" className="font-normal">
+                            {u.cargo_nome || "Sem Cargo"}
+                          </Badge>
                         </TableCell>
-                        <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
-                          {new Date(u.created_at).toLocaleDateString("pt-BR")}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex gap-2 justify-end flex-wrap">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => abrirModulos(u.user_id, u.display_name || u.email)}
-                              title="Gerenciar módulos"
-                            >
-                              <LayoutGrid className="h-4 w-4 sm:mr-1" />
-                              <span className="hidden sm:inline">Módulos</span>
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => toggleAdmin(u)}
-                              disabled={u.user_id === currentUser?.id}
-                            >
-                              {u.is_admin
-                                ? <><ShieldOff className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Remover admin</span></>
-                                : <><Shield className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Tornar admin</span></>}
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => { setUserResetar(u); setNovaSenha(""); }}
-                              title="Resetar senha"
-                            >
-                              <KeyRound className="h-4 w-4 sm:mr-1" />
-                              <span className="hidden sm:inline">Senha</span>
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setUserExcluir(u)}
-                              disabled={u.user_id === currentUser?.id}
-                              className="text-destructive hover:text-destructive"
-                              title="Excluir usuário"
-                            >
-                              <Trash2 className="h-4 w-4 sm:mr-1" />
-                              <span className="hidden sm:inline">Excluir</span>
-                            </Button>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1 max-w-[300px]">
+                            {u.modulos?.slice(0, 3).map(m => (
+                              <Badge key={m} variant="secondary" className="text-[10px] px-1.5 py-0">
+                                {m}
+                              </Badge>
+                            ))}
+                            {(u.modulos?.length || 0) > 3 && (
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                +{u.modulos.length - 3}
+                              </Badge>
+                            )}
                           </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={u.active ? "default" : "secondary"} className={u.active ? "bg-green-500/10 text-green-500 border-green-500/20" : "bg-gray-500/10 text-gray-500 border-gray-500/20"}>
+                            {u.active ? "Ativo" : "Inativo"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right space-x-1">
+                          <Button variant="ghost" size="icon" onClick={() => handleEdit(u)}><Pencil className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => deleteUser(u.user_id)} className="text-destructive"><Trash2 className="h-4 w-4" /></Button>
                         </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                
+                <div className="flex items-center justify-end space-x-2 pt-4">
+                  <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>Anterior</Button>
+                  <span className="text-sm text-muted-foreground">Página {page + 1}</span>
+                  <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={users.length < 15}>Próxima</Button>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Modal de módulos */}
-      <Dialog open={modalModulos} onOpenChange={setModalModulos}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={modal} onOpenChange={setModal}>
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <LayoutGrid className="h-5 w-5 text-primary" />
-              Módulos — {nomeUsuarioModulos}
-            </DialogTitle>
-            <DialogDescription>
-              Ative ou desative módulos para este usuário. As alterações são salvas imediatamente.
-              <br /><br />
-              <span className="text-xs text-amber-500 font-medium">
-                Nota: Os módulos de Automação & IA, Integrações e Configurações do Sistema são exclusivos do administrador e não podem ser delegados a usuários comuns.
-              </span>
-            </DialogDescription>
+            <DialogTitle>{userEdit ? "Editar Usuário" : "Adicionar Novo Usuário"}</DialogTitle>
           </DialogHeader>
-
-          {modulosLoading ? (
-            <div className="flex justify-center py-10">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="nome">Nome Completo*</Label>
+              <Input id="nome" value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: João Silva" />
             </div>
-          ) : (
-            <div className="space-y-4 py-2 max-h-[60vh] overflow-y-auto pr-1">
-              {/* Módulos Padrão */}
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                  Módulos Padrão
-                </p>
-                <div className="space-y-1">
-                  {todosModulos.filter(m => m.padrao).map(m => (
-                    <div key={m.key} className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-muted/50">
-                      <Label htmlFor={`mod-${m.key}`} className="cursor-pointer flex-1 font-normal">
-                        {m.label}
-                      </Label>
-                      {salvandoModulo === m.key ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      ) : (
-                        <Switch
-                          id={`mod-${m.key}`}
-                          checked={userModulos[m.key] ?? false}
-                          onCheckedChange={v => toggleModulo(m.key, v)}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="border-t" />
-
-              {/* Módulos Avançados */}
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                  Módulos Avançados
-                </p>
-                <div className="space-y-1">
-                  {todosModulos.filter(m => !m.padrao).map(m => (
-                    <div key={m.key} className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-muted/50">
-                      <Label htmlFor={`mod-${m.key}`} className="cursor-pointer flex-1 font-normal">
-                        {m.label}
-                      </Label>
-                      {salvandoModulo === m.key ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      ) : (
-                        <Switch
-                          id={`mod-${m.key}`}
-                          checked={userModulos[m.key] ?? false}
-                          onCheckedChange={v => toggleModulo(m.key, v)}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="email">E-mail (Login)*</Label>
+              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={!!userEdit} placeholder="exemplo@email.com" />
             </div>
-          )}
-
-          <DialogFooter className="flex gap-2 flex-wrap sm:flex-nowrap">
-            <Button variant="outline" size="sm" onClick={aplicarPadrao} className="flex-1 sm:flex-none">
-              Resetar padrão
-            </Button>
-            <Button variant="outline" size="sm" onClick={darTodosModulos} className="flex-1 sm:flex-none">
-              Ativar todos
-            </Button>
-            <Button onClick={() => setModalModulos(false)} className="flex-1 sm:flex-none">
-              Fechar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Confirmação de exclusão */}
-      <AlertDialog open={!!userExcluir} onOpenChange={(o) => !o && setUserExcluir(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Excluir usuário?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Esta ação é permanente. O usuário <strong>{userExcluir?.email}</strong> e
-              todos os seus dados associados serão removidos.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={excluindo}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => { e.preventDefault(); confirmarExcluir(); }}
-              disabled={excluindo}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {excluindo ? <Loader2 className="h-4 w-4 animate-spin" /> : "Excluir"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Reset de senha */}
-      <Dialog open={!!userResetar} onOpenChange={(o) => { if (!o) { setUserResetar(null); setNovaSenha(""); } }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <KeyRound className="h-5 w-5 text-primary" />
-              Redefinir senha
-            </DialogTitle>
-            <DialogDescription>
-              Defina uma nova senha para <strong>{userResetar?.email}</strong>. O usuário
-              poderá usá-la imediatamente para entrar.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <Label htmlFor="nova-senha">Nova senha</Label>
-            <Input
-              id="nova-senha"
-              type="text"
-              value={novaSenha}
-              onChange={(e) => setNovaSenha(e.target.value)}
-              placeholder="Mínimo 6 caracteres"
-              autoFocus
-            />
+            <div className="space-y-2">
+              <Label htmlFor="cargo">Cargo*</Label>
+              <Select value={cargoId} onValueChange={setCargoId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione um cargo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {cargos.map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            {!userEdit && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="senha">Senha Nova*</Label>
+                  <div className="relative">
+                    <Input id="senha" type={showSenha ? "text" : "password"} value={senha} onChange={(e) => setSenha(e.target.value)} />
+                    <Button variant="ghost" size="icon" className="absolute right-0 top-0 h-full" onClick={() => setShowSenha(!showSenha)}>
+                      {showSenha ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirmSenha">Confirmar Senha*</Label>
+                  <Input id="confirmSenha" type={showSenha ? "text" : "password"} value={confirmSenha} onChange={(e) => setConfirmSenha(e.target.value)} />
+                </div>
+              </>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setUserResetar(null); setNovaSenha(""); }} disabled={resetando}>
-              Cancelar
-            </Button>
-            <Button onClick={confirmarResetSenha} disabled={resetando || novaSenha.length < 6}>
-              {resetando ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar nova senha"}
+            <Button variant="ghost" onClick={() => setModal(false)}>Cancelar</Button>
+            <Button onClick={save} disabled={salvando}>
+              {salvando && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {userEdit ? "Salvar Alterações" : "Criar Usuário"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -30,8 +30,46 @@ export default function LoginPage() {
   const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
   useEffect(() => {
+    // Capturar tokens do hash da URL (Google Login)
+    if (window.location.hash) {
+      const hash = window.location.hash.substring(1);
+      const params = new URLSearchParams(hash);
+      const accessToken = params.get("access_token");
+      const refreshToken = params.get("refresh_token");
+      const error = params.get("error");
+      const errorDescription = params.get("error_description");
+
+      if (error) {
+        toast({
+          title: "Erro na Autenticação",
+          description: errorDescription || "Ocorreu um erro ao tentar entrar com o Google.",
+          variant: "destructive",
+        });
+        window.history.replaceState(null, "", window.location.pathname);
+      } else if (accessToken && refreshToken) {
+        localStorage.setItem("crm_access_token", accessToken);
+        localStorage.setItem("crm_refresh_token", refreshToken);
+        // Limpar o hash da URL para segurança
+        window.history.replaceState(null, "", window.location.pathname);
+        toast({
+          title: "Sucesso",
+          description: "Login realizado com sucesso via Google.",
+        });
+        navigate("/dashboard", { replace: true });
+        return;
+      } else if (hash.includes("access_token") || hash.includes("refresh_token")) {
+        // Se um dos tokens estiver faltando mas o hash indica uma tentativa de auth
+        toast({
+          title: "Erro de Token",
+          description: "Não foi possível recuperar todos os dados de acesso do Google.",
+          variant: "destructive",
+        });
+        window.history.replaceState(null, "", window.location.pathname);
+      }
+    }
+
     if (!authLoading && user) navigate("/dashboard", { replace: true });
-  }, [user, authLoading, navigate]);
+  }, [user, authLoading, navigate, toast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,22 +137,9 @@ export default function LoginPage() {
     }
   };
 
-  const handleGoogleLogin = async () => {
-    try {
-      const { error } = await api.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/dashboard`
-        }
-      });
-      if (error) throw error;
-    } catch (err: any) {
-      toast({
-        title: "Erro Google",
-        description: err.message,
-        variant: "destructive",
-      });
-    }
+  const handleGoogleLogin = () => {
+    const googleAuthUrl = "https://api.mentoark.com.br/auth/authorize?provider=google&redirect_to=https://crm.mentoark.com.br";
+    window.location.href = googleAuthUrl;
   };
 
   const handleForgotPassword = async () => {
@@ -300,9 +325,9 @@ export default function LoginPage() {
                   type="button" 
                   variant="outline" 
                   onClick={handleGoogleLogin}
-                  className="w-full bg-white/5 border-white/10 text-white hover:bg-white/10 hover:text-white transition-all duration-300 gap-2"
+                  className="w-full bg-white border-white shadow-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-all duration-300 gap-2 font-medium py-6"
                 >
-                  <svg className="h-4 w-4" viewBox="0 0 24 24">
+                  <svg className="h-5 w-5" viewBox="0 0 24 24">
                     <path
                       d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
                       fill="#4285F4"
@@ -320,7 +345,7 @@ export default function LoginPage() {
                       fill="#EA4335"
                     />
                   </svg>
-                  Google
+                  Continuar com Google
                 </Button>
 
                 <div className="text-center pt-2">

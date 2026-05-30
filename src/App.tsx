@@ -47,6 +47,7 @@ import PerfilPage from "./pages/Perfil";
 import EquipePage from "./pages/Equipe";
 import KanbanPage from "./pages/Kanban";
 import AceitarConvitePage from "./pages/AceitarConvite";
+import CargosPage from "./pages/Cargos";
 
 const queryClient = new QueryClient();
 
@@ -93,6 +94,7 @@ const App = () => (
               <Route path="/workflows"    element={<ProtectedRoute requireAdmin>   <WorkflowsPage /></ProtectedRoute>} />
               <Route path="/docs"         element={<ProtectedRoute requireModulo="docs">        <DocsPage /></ProtectedRoute>} />
               <Route path="/usuarios"     element={<ProtectedRoute requireAdmin>               <UsuariosPage /></ProtectedRoute>} />
+              <Route path="/usuarios/cargos" element={<ProtectedRoute requireAdmin>            <CargosPage /></ProtectedRoute>} />
               <Route path="/seguranca"    element={<ProtectedRoute requireAdmin>               <SegurancaPage /></ProtectedRoute>} />
               <Route path="/chat-equipe"  element={<ProtectedRoute requireModulo="whatsapp">   <ChatEquipePage /></ProtectedRoute>} />
               <Route path="/smart-links"  element={<ProtectedRoute requireModulo="whatsapp">   <SmartLinksPage /></ProtectedRoute>} />
