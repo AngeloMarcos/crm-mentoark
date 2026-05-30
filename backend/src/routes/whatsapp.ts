@@ -215,9 +215,9 @@ export default function whatsappRouter(pool: Pool): Router {
 
       if (useNewTable) {
         const r = await pool.query(
-          `SELECT id, from_me, message_type, content, media_url, media_mimetype, status, timestamp_wa, created_at
+          `SELECT id, from_me, tipo AS message_type, conteudo AS content, midia_url, midia_mime AS media_mimetype, status, timestamp_unix AS timestamp_wa, created_at
            FROM whatsapp_messages
-           WHERE SPLIT_PART(remote_jid, '@', 1) = $1 AND user_id = $2
+           WHERE session_id = $1 AND user_id = $2
            ORDER BY created_at ASC`,
           [phone, userId]
         );
