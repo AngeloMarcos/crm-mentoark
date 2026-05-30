@@ -107,14 +107,6 @@ export default function usuarios(pool: Pool): Router {
       client.release();
     }
   });
-    } catch (err: any) {
-      await client.query('ROLLBACK').catch(() => {});
-      return res.status(500).json({ message: err.message });
-    } finally {
-      client.release();
-    }
-  });
-
 
   // ----- Virtual table: profiles -----
   // GET /api/profiles — returns users as profile rows with pagination
