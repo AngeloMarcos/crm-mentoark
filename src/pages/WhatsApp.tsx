@@ -40,9 +40,6 @@ export default function WhatsAppPage() {
         <TabsContent value="conversas" className="m-0">
           <WhatsAppInterface />
         </TabsContent>
-        <TabsContent value="caixa" className="m-0">
-          <WhatsAppInterface />
-        </TabsContent>
         <TabsContent value="instancias" className="m-0">
           <InstanceManagementPanel />
         </TabsContent>
