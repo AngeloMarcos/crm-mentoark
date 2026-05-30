@@ -178,11 +178,12 @@ export default function webhookRouter(pool: Pool): Router {
       // ── Localizar agente ou integração pela instância ────────────────────
       // Tenta primeiro em 'agentes', depois em 'integracoes_config' (G1/B3)
       let agenteRes = await pool.query(
-        `SELECT user_id, n8n_webhook_url FROM agentes
-         WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
+        `SELECT user_id, n8n_webhook_url FROM agentes 
+         WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL 
          ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       );
+
 
       if (!agenteRes.rows.length) {
         agenteRes = await pool.query(
