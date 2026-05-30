@@ -322,14 +322,15 @@ export default function whatsappRouter(pool: Pool): Router {
 
       if (connectRes?.ok) {
         const connectData: any = await connectRes.json();
-        const qrRaw = connectData?.base64 || connectData?.qrcode?.base64 || connectData?.code || null;
+        const qrRaw = connectData?.base64 || connectData?.qrcode?.base64 || null;
+        // Só retorna aqui se tiver QR; se não tiver, segue para criar nova instância
         if (qrRaw) {
           await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
           await registrarWebhook(base, cfg.api_key, cfg.instancia);
           return res.json({
             state: 'connecting',
             qrCode: normalizeQr(qrRaw),
-            pairingCode: connectData?.pairingCode || connectData?.code || null,
+            pairingCode: connectData?.pairingCode || null,
             instanceName: cfg.instancia,
             instancia: cfg.instancia,
           });
@@ -377,9 +378,23 @@ export default function whatsappRouter(pool: Pool): Router {
         }
       }
 
-      const qrCode = created?.qrcode?.base64 || created?.hash?.qrcode || created?.code || null;
-      const pairingCode =
+      let qrCode = created?.qrcode?.base64 || created?.hash?.qrcode || null;
+      let pairingCode =
         created?.qrcode?.pairingCode || created?.pairingCode || created?.hash?.pairingCode || null;
+
+      // Se o create não retornou QR (comum no Evolution v2), busca via /connect
+      if (!qrCode) {
+        await new Promise(r => setTimeout(r, 1500)); // aguarda instância inicializar
+        const qrRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
+          headers: { apikey: cfg.api_key },
+        }).catch(() => null);
+        if (qrRes?.ok) {
+          const qrData: any = await qrRes.json();
+          qrCode = qrData?.base64 || qrData?.qrcode?.base64 || null;
+          pairingCode = pairingCode || qrData?.pairingCode || null;
+        }
+      }
+
       await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
       // Garante webhook configurado mesmo se o create inline foi ignorado
       await registrarWebhook(base, cfg.api_key, cfg.instancia);
