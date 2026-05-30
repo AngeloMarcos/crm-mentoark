@@ -15,6 +15,141 @@ async function getKey(pool: Pool, userId: string, tipo: string, envKey: string):
 export default function leadsBuscarRouter(pool: Pool): Router {
   const router = Router();
 
+  // ── GET /api/leads — lista contatos com filtros e paginação ──────────────
+  router.get('/', async (req: AuthRequest, res) => {
+    try {
+      const userId = req.userId!;
+      const {
+        head, status, created_at_gte, created_at_lte,
+        order = 'created_at', asc = 'false', limit = '50', offset = '0',
+        search,
+      } = req.query as Record<string, string>;
+
+      // head=1 → retornar apenas COUNT
+      if (head === '1') {
+        const wheres: string[] = ['user_id = $1'];
+        const vals: any[] = [userId];
+        let idx = 2;
+        if (status)         { wheres.push(`status = $${idx++}`);                       vals.push(status); }
+        if (created_at_gte) { wheres.push(`created_at >= $${idx++}`);                  vals.push(created_at_gte); }
+        if (created_at_lte) { wheres.push(`created_at <= $${idx++}`);                  vals.push(created_at_lte); }
+        if (search)         { wheres.push(`(nome ILIKE $${idx} OR telefone ILIKE $${idx++})`); vals.push(`%${search}%`); }
+
+        const r = await pool.query(
+          `SELECT COUNT(*) AS count FROM contatos WHERE ${wheres.join(' AND ')}`,
+          vals
+        );
+        return res.json({ count: parseInt(r.rows[0].count, 10) });
+      }
+
+      // Listagem
+      const wheres: string[] = ['user_id = $1'];
+      const vals: any[] = [userId];
+      let idx = 2;
+      if (status)         { wheres.push(`status = $${idx++}`);                              vals.push(status); }
+      if (created_at_gte) { wheres.push(`created_at >= $${idx++}`);                         vals.push(created_at_gte); }
+      if (created_at_lte) { wheres.push(`created_at <= $${idx++}`);                         vals.push(created_at_lte); }
+      if (search)         { wheres.push(`(nome ILIKE $${idx} OR telefone ILIKE $${idx++})`); vals.push(`%${search}%`); }
+
+      const allowedCols = ['created_at', 'nome', 'status', 'updated_at', 'ultima_mensagem_em'];
+      const orderCol = allowedCols.includes(order) ? order : 'created_at';
+      const direction = asc === 'true' ? 'ASC' : 'DESC';
+      const lim = Math.min(parseInt(limit, 10) || 50, 200);
+      const off = parseInt(offset, 10) || 0;
+
+      const r = await pool.query(
+        `SELECT * FROM contatos WHERE ${wheres.join(' AND ')}
+         ORDER BY ${orderCol} ${direction}
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        [...vals, lim, off]
+      );
+      return res.json(r.rows);
+    } catch (err: any) {
+      console.error('[leads/GET]', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── GET /api/leads/:id ───────────────────────────────────────────────────
+  router.get('/:id', async (req: AuthRequest, res) => {
+    try {
+      const r = await pool.query(
+        `SELECT * FROM contatos WHERE id = $1 AND user_id = $2`,
+        [req.params.id, req.userId]
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'Lead não encontrado' });
+      return res.json(r.rows[0]);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── POST /api/leads — cria contato ───────────────────────────────────────
+  router.post('/', async (req: AuthRequest, res) => {
+    try {
+      const userId = req.userId!;
+      const { nome, telefone, email, status = 'novo', origem, observacoes, ...rest } = req.body;
+      if (!nome && !telefone) {
+        return res.status(400).json({ error: 'nome ou telefone são obrigatórios' });
+      }
+      const r = await pool.query(
+        `INSERT INTO contatos (user_id, nome, telefone, email, status, origem, observacoes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [userId, nome || null, telefone || null, email || null, status, origem || 'manual', observacoes || null]
+      );
+      return res.status(201).json(r.rows[0]);
+    } catch (err: any) {
+      if ((err as any).code === '23505') return res.status(409).json({ error: 'Contato com esse telefone já existe' });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── PATCH /api/leads/:id ─────────────────────────────────────────────────
+  router.patch('/:id', async (req: AuthRequest, res) => {
+    try {
+      const campos = ['nome', 'telefone', 'email', 'status', 'origem', 'observacoes',
+                      'funil_estagio_id', 'push_name', 'opt_out'];
+      const sets: string[] = [];
+      const vals: any[] = [];
+      let idx = 1;
+      for (const c of campos) {
+        if (req.body[c] !== undefined) {
+          sets.push(`${c} = $${idx++}`);
+          vals.push(req.body[c]);
+        }
+      }
+      if (!sets.length) return res.status(400).json({ error: 'Nenhum campo para atualizar' });
+      sets.push(`updated_at = NOW()`);
+      vals.push(req.params.id, req.userId);
+      const r = await pool.query(
+        `UPDATE contatos SET ${sets.join(', ')}
+         WHERE id = $${idx} AND user_id = $${idx + 1}
+         RETURNING *`,
+        vals
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'Lead não encontrado' });
+      return res.json(r.rows[0]);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── DELETE /api/leads/:id ────────────────────────────────────────────────
+  router.delete('/:id', async (req: AuthRequest, res) => {
+    try {
+      const r = await pool.query(
+        `DELETE FROM contatos WHERE id = $1 AND user_id = $2 RETURNING id`,
+        [req.params.id, req.userId]
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'Lead não encontrado' });
+      return res.status(204).send();
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── POST /api/leads/buscar — busca via Google Places + scoring IA ─────────
   router.post('/buscar', async (req: AuthRequest, res) => {
     const userId = req.userId!;
     
