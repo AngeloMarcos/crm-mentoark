@@ -358,12 +358,13 @@ function Painel({
 }
 
 function AdicionarCorretorDialog({
-  open,
+  equipe,
   onClose,
   onAdd,
   membrosAtuais,
 }: {
   open: boolean;
+  equipe: { id: string } | null;
   onClose: () => void;
   onAdd: (userId: string, role: string) => Promise<void>;
   membrosAtuais: Membro[];
