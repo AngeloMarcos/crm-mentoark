@@ -497,10 +497,11 @@ function GestaoMembros() {
 
   const handleToggleAtivo = async (id: string, ativo: boolean) => {
     try {
+      await api.patch(`/api/profiles/${id}`, { active: ativo });
       setProfiles(prev => prev.map(p => p.user_id === id ? { ...p, active: ativo } : p));
       toast.success(ativo ? "Acesso ativado" : "Acesso desativado");
-    } catch (err) {
-      toast.error("Erro ao alterar status");
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao alterar status");
     }
   };
 
