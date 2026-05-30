@@ -117,6 +117,26 @@ export function useEquipe() {
     await fetchEquipe();
   };
 
+  const adicionarMembro = async (userId: string, role: string) => {
+    if (!session?.access_token || !equipe) return;
+
+    const res = await fetch(`${API_BASE}/api/equipes/${equipe.id}/membros`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ user_id: userId, role }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.message || "Erro ao adicionar membro");
+    }
+
+    await fetchEquipe();
+  };
+
   return {
     equipe,
     membros,
@@ -124,6 +144,7 @@ export function useEquipe() {
     error,
     criarEquipe,
     convidarMembro,
+    adicionarMembro,
     removerMembro,
     refresh: fetchEquipe,
   };
