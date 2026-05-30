@@ -16,6 +16,19 @@ services:
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-https://disparo.mentoark.com.br}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-mentoark2025evolutionkey}
       MCP_SECRET: ${MCP_SECRET:-mentoark2025mcpsecretkey}
+      # Google OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://api.mentoark.com.br/auth/callback/google}
+      # Integrações
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GOOGLE_PLACES_KEY: ${GOOGLE_PLACES_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      # Config adicional
+      BACKEND_URL: ${BACKEND_URL:-https://api.mentoark.com.br}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-mentoark-kanban-secret-2025}
+      MASTER_EMAILS: ${MASTER_EMAILS:-angelobispofilho@gmail.com,mentoark@gmail.com}
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET}
     expose:
       - "3000"
     networks:
