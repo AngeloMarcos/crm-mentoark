@@ -369,19 +369,19 @@ export default function whatsappRouter(pool: Pool): Router {
       
       const createPayload = {
         instanceName: cfg.instancia,
-        token: cfg.api_key, // Algumas versões da Evolution exigem o token no body
+        token: cfg.api_key,
         qrcode: true,
         integration: 'WHATSAPP-BAILEYS',
         rejectCall: false,
-        groupsIgnore: true, // Mudado para true para melhor performance
-        alwaysOnline: false,
-        readMessages: false,
+        groupsIgnore: true,
+        alwaysOnline: true,
+        readMessages: true,
         readStatus: false,
         ...(phoneNumber ? { number: phoneNumber } : {}),
         webhook: webhookPayload(),
       };
 
-      console.log(`[WHATSAPP] Criando nova instância: ${cfg.instancia}`);
+      console.log(`[WHATSAPP] Criando instância em ${base}: ${cfg.instancia}`);
       
       const createRes = await fetch(`${base}/instance/create`, {
         method: 'POST',
@@ -393,7 +393,8 @@ export default function whatsappRouter(pool: Pool): Router {
       });
 
       const created: any = await createRes.json();
-      console.log(`[WHATSAPP] Resposta Evolution create:`, JSON.stringify(created).slice(0, 300));
+      console.log(`[WHATSAPP] Resposta Evolution create:`, JSON.stringify(created).slice(0, 500));
+
 
 
       // Se já existe, tenta conectar
