@@ -32,7 +32,7 @@ function iniciais(nome?: string, email?: string) {
 
 export default function EquipePage() {
   const { user } = useAuth();
-  const { equipe, membros, loading, criarEquipe, convidarMembro, removerMembro } = useEquipe();
+  const { equipe, membros, loading, criarEquipe, convidarMembro, adicionarMembro, removerMembro } = useEquipe();
 
   if (loading) {
     return (
