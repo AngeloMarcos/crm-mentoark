@@ -15,6 +15,8 @@ export default function usuarios(pool: Pool): Router {
     const client = await pool.connect();
     try {
       const { email, password, display_name } = req.body || {};
+      const adminId = req.userId!;
+
       if (!email || !password) {
         return res.status(400).json({ message: 'E-mail e senha são obrigatórios' });
       }
@@ -35,15 +37,17 @@ export default function usuarios(pool: Pool): Router {
       const nome = (display_name && String(display_name).trim()) || emailNorm.split('@')[0];
 
       await client.query('BEGIN');
+      
+      // 1. Criar usuário com owner_id
       const ins = await client.query(
-        `INSERT INTO users (email, password_hash, display_name, role, active, email_verified)
-         VALUES ($1, $2, $3, 'user', true, false)
+        `INSERT INTO users (email, password_hash, display_name, role, active, email_verified, owner_id)
+         VALUES ($1, $2, $3, 'user', true, false, $4)
          RETURNING id, email, display_name, role, created_at`,
-        [emailNorm, password_hash, nome]
+        [emailNorm, password_hash, nome, adminId]
       );
       const novo = ins.rows[0];
 
-      // Sincroniza com a tabela profiles (usada pelo frontend)
+      // 2. Sincroniza com a tabela profiles
       await client.query(
         `INSERT INTO profiles (user_id, email, display_name)
          VALUES ($1, $2, $3)
@@ -51,7 +55,7 @@ export default function usuarios(pool: Pool): Router {
         [novo.id, novo.email, novo.display_name]
       );
 
-      // Sincroniza com a tabela user_roles (usada para permissões)
+      // 3. Sincroniza com a tabela user_roles
       await client.query(
         `INSERT INTO user_roles (user_id, role)
          VALUES ($1, 'user')
@@ -59,7 +63,7 @@ export default function usuarios(pool: Pool): Router {
         [novo.id]
       );
 
-      // Módulos padrão
+      // 4. Módulos padrão
       for (const mod of MODULOS_PADRAO_NOVO_USUARIO) {
         await client.query(
           `INSERT INTO user_modulos (user_id, modulo, ativo)
@@ -68,6 +72,24 @@ export default function usuarios(pool: Pool): Router {
           [novo.id, mod]
         );
       }
+
+      // 5. Adicionar automaticamente à equipe do admin
+      // Busca a equipe onde o admin é owner
+      const equipeRes = await client.query(
+        `SELECT id FROM equipes WHERE owner_id = $1 LIMIT 1`,
+        [adminId]
+      );
+      
+      if (equipeRes.rows.length > 0) {
+        const equipeId = equipeRes.rows[0].id;
+        await client.query(
+          `INSERT INTO equipe_membros (equipe_id, user_id, role, convidado_por)
+           VALUES ($1, $2, 'membro', $3)
+           ON CONFLICT (equipe_id, user_id) DO NOTHING`,
+          [equipeId, novo.id, adminId]
+        );
+      }
+
       await client.query('COMMIT');
 
       return res.status(201).json({
@@ -86,22 +108,24 @@ export default function usuarios(pool: Pool): Router {
     }
   });
 
-
   // ----- Virtual table: profiles -----
   // GET /api/profiles — returns users as profile rows with pagination
   router.get('/profiles', adminMiddleware, async (req: AuthRequest, res: Response) => {
     try {
+      const adminId = req.userId!;
       const limit  = Math.min(parseInt(String(req.query.limit  || '50'), 10), 200);
       const offset = Math.max(parseInt(String(req.query.offset || '0'),  10), 0);
       const search = req.query.search ? `%${req.query.search}%` : null;
 
       const r = await pool.query(
-        `SELECT id AS user_id, email, display_name, role, active, created_at
-         FROM users
-         WHERE ($1::text IS NULL OR email ILIKE $1 OR display_name ILIKE $1)
-         ORDER BY created_at DESC
-         LIMIT $2 OFFSET $3`,
-        [search, limit, offset]
+        `SELECT u.id AS user_id, u.email, u.display_name, u.role, u.active, u.created_at,
+                (SELECT array_agg(modulo) FROM user_modulos WHERE user_id = u.id AND ativo = true) as modulos
+         FROM users u
+         WHERE (u.owner_id = $1)
+           AND ($2::text IS NULL OR u.email ILIKE $2 OR u.display_name ILIKE $2)
+         ORDER BY u.created_at DESC
+         LIMIT $3 OFFSET $4`,
+        [adminId, search, limit, offset]
       );
       return res.json(r.rows);
     } catch (err: any) {
@@ -231,6 +255,29 @@ export default function usuarios(pool: Pool): Router {
       return res.status(500).json({ message: err.message });
     } finally {
       client.release();
+    }
+  });
+
+  // PATCH /api/profiles/:user_id — atualizar status (admin)
+  router.patch('/profiles/:user_id', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+      const { user_id } = req.params;
+      const { active } = req.body;
+      const adminId = req.userId!;
+
+      if (typeof active !== 'boolean') {
+        return res.status(400).json({ message: 'Status active deve ser booleano' });
+      }
+
+      const r = await pool.query(
+        `UPDATE users SET active = $1 WHERE id = $2 AND owner_id = $3 RETURNING id`,
+        [active, user_id, adminId]
+      );
+
+      if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado ou você não tem permissão.' });
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
     }
   });
 

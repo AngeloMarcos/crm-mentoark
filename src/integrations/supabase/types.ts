@@ -2073,6 +2073,7 @@ export type Database = {
           email_verified: boolean
           id: string
           last_login_at: string | null
+          owner_id: string | null
           password_hash: string
           role: string
           updated_at: string
@@ -2086,6 +2087,7 @@ export type Database = {
           email_verified?: boolean
           id?: string
           last_login_at?: string | null
+          owner_id?: string | null
           password_hash: string
           role?: string
           updated_at?: string
@@ -2099,11 +2101,20 @@ export type Database = {
           email_verified?: boolean
           id?: string
           last_login_at?: string | null
+          owner_id?: string | null
           password_hash?: string
           role?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "users_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       webhook_mensagens_processadas: {
         Row: {
