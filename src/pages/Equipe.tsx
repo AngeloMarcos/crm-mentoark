@@ -378,7 +378,7 @@ function AdicionarCorretorDialog({
   const [isSaving, setIsSaving] = useState(false);
 
   const fetchProfiles = async () => {
-    setLoading(true);
+    setIsLoading(true);
     try {
       const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
       const token = localStorage.getItem('access_token');
@@ -394,7 +394,7 @@ function AdicionarCorretorDialog({
       console.error("Erro ao buscar perfis", e);
       toast.error("Erro ao carregar lista de corretores");
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -423,7 +423,7 @@ function AdicionarCorretorDialog({
 
   const handleAdd = async () => {
     if (selectedIds.length === 0) return;
-    setSaving(true);
+    setIsSaving(true);
     try {
       for (const userId of selectedIds) {
         await onAdd(userId, role);
@@ -433,7 +433,7 @@ function AdicionarCorretorDialog({
     } catch (e: any) {
       toast.error(e.message || "Erro ao adicionar membros");
     } finally {
-      setSaving(false);
+      setIsSaving(false);
     }
   };
 
