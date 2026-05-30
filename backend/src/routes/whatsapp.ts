@@ -53,6 +53,25 @@ export default function whatsappRouter(pool: Pool): Router {
   async function getEvolutionConfig(userId: string): Promise<{
     url: string; api_key: string; instancia: string; agenteId: string | null; isGlobal: boolean;
   }> {
+    // 1. Tenta buscar em integracoes_config (onde o status de conexão principal é salvo)
+    const intRes = await pool.query(
+      `SELECT url, api_key, instancia FROM integracoes_config 
+       WHERE user_id = $1 AND tipo = 'evolution' LIMIT 1`,
+      [userId]
+    );
+
+    if (intRes.rows.length) {
+      const row = intRes.rows[0];
+      return {
+        url: row.url || DEFAULT_EVO_URL,
+        api_key: row.api_key || DEFAULT_EVO_KEY,
+        instancia: row.instancia || `crm_${userId.replace(/-/g, '').slice(0, 12)}`,
+        agenteId: null,
+        isGlobal: !row.url
+      };
+    }
+
+    // 2. Fallback para Agentes
     const r = await pool.query(
       `SELECT id, evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
        FROM agentes
@@ -63,14 +82,13 @@ export default function whatsappRouter(pool: Pool): Router {
 
     if (r.rows.length) {
       const row = r.rows[0];
-      // Tem agente — usa config dele se completa, senão usa global com instância do agente
       const url = row.url || DEFAULT_EVO_URL;
       const api_key = row.api_key || DEFAULT_EVO_KEY;
       const instancia = row.instancia || `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
       return { url, api_key, instancia, agenteId: row.id, isGlobal: !row.url };
     }
 
-    // Sem agente — usa global e cria instância única por userId
+    // 3. Fallback final global
     const instancia = `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
     return { url: DEFAULT_EVO_URL, api_key: DEFAULT_EVO_KEY, instancia, agenteId: null, isGlobal: true };
   }
@@ -80,6 +98,20 @@ export default function whatsappRouter(pool: Pool): Router {
     userId: string, agenteId: string | null,
     url: string, api_key: string, instancia: string
   ) {
+    // 1. Sempre salvar em integracoes_config (fonte da verdade do status)
+    await pool.query(
+      `INSERT INTO integracoes_config (user_id, tipo, url, api_key, instancia, status, updated_at)
+       VALUES ($1, 'evolution', $2, $3, $4, 'conectado', NOW())
+       ON CONFLICT (user_id, tipo) DO UPDATE SET
+         url = EXCLUDED.url,
+         api_key = EXCLUDED.api_key,
+         instancia = EXCLUDED.instancia,
+         status = 'conectado',
+         updated_at = NOW()`,
+      [userId, url, api_key, instancia]
+    );
+
+    // 2. Sincronizar com Agente se existir
     if (agenteId) {
       await pool.query(
         `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2, evolution_instancia=$3, updated_at=NOW()
@@ -87,11 +119,11 @@ export default function whatsappRouter(pool: Pool): Router {
         [url, api_key, instancia, agenteId, userId]
       );
     } else {
+      // Tentar encontrar um agente ativo para este usuário e atualizar
       await pool.query(
-        `INSERT INTO agentes (user_id, nome, ativo, evolution_server_url, evolution_api_key, evolution_instancia)
-         VALUES ($1, 'Agente IA', true, $2, $3, $4)
-         ON CONFLICT DO NOTHING`,
-        [userId, url, api_key, instancia]
+        `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2, evolution_instancia=$3, updated_at=NOW()
+         WHERE user_id=$4 AND ativo=true`,
+        [url, api_key, instancia, userId]
       );
     }
   }
