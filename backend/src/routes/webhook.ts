@@ -212,7 +212,7 @@ export default function webhookRouter(pool: Pool): Router {
              (id, user_id, instancia, session_id, remote_jid, from_me, push_name, 
               tipo, conteudo, midia_url, midia_mime, status, timestamp_unix)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-           ON CONFLICT (id) DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status`,
           [
             messageId, userId, instancia, telefone, remoteJid, fromMe, 
             fromMe ? 'Você' : pushName,
@@ -220,6 +220,7 @@ export default function webhookRouter(pool: Pool): Router {
             fromMe ? 'sent' : 'received', timestamp
           ]
         ).catch(err => console.warn('[WEBHOOK] Falha ao salvar whatsapp_messages:', err.message));
+
 
         // ── UPSERT de Contato ───────────────────────────────────────────────
         // Cria se não existir, atualiza push_name e timestamp se existir
