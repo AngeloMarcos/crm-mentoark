@@ -162,7 +162,7 @@ export default function webhookRouter(pool: Pool): Router {
       // Evolution envia MESSAGES_UPSERT (uppercase+underscore), normalizar para messages.upsert
       const eventNorm = (payload.event || '').toLowerCase().replace(/_/g, '.');
       if (eventNorm !== 'messages.upsert') return;
-      if (payload.data?.status === 'READ') return; // Notificação de leitura
+      if (payload.data?.status === 'READ' || payload.data?.status === 'DELIVERED') return; // Notificação de status
 
       const messageId = payload.data?.key?.id || '';
       const instancia  = payload.instance;
@@ -174,21 +174,35 @@ export default function webhookRouter(pool: Pool): Router {
       // Ignorar mensagens de grupos (JID termina em @g.us)
       if (!messageId || !telefone || remoteJid.includes('@g.us')) return;
 
-      // ── Localizar agente e user_id pela instância ─────────────────────────
-      const agenteRes = await pool.query(
-        `SELECT user_id FROM agentes
+      // ── Localizar agente ou integração pela instância ────────────────────
+      // Tenta primeiro em 'agentes', depois em 'integracoes_config' (G1/B3)
+      let agenteRes = await pool.query(
+        `SELECT user_id, n8n_webhook_url FROM agentes
          WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
          ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       );
+
+      if (!agenteRes.rows.length) {
+        agenteRes = await pool.query(
+          `SELECT user_id FROM integracoes_config
+           WHERE instancia = $1 AND tipo = 'evolution' AND user_id IS NOT NULL
+           ORDER BY updated_at DESC LIMIT 1`,
+          [instancia]
+        );
+      }
       
       let userId: string | null = null;
+      let n8nWebhookUrl: string | null = null;
+
 
 
       // ── Mensagens enviadas (fromMe=true ou false) ──────────────────────────
       // Salvamos sempre em whatsapp_messages para garantir sincronismo da UI
       if (agenteRes.rows.length) {
         userId = agenteRes.rows[0].user_id;
+        n8nWebhookUrl = agenteRes.rows[0].n8n_webhook_url || null;
+
 
         // Persistir a mensagem no histórico WhatsApp (usando nomes de colunas corretos)
         await pool.query(
@@ -250,7 +264,7 @@ export default function webhookRouter(pool: Pool): Router {
       const timestamp = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
 
       // ── Localizar agente já foi feito acima para persistência inicial ─────
-      // (userId já está populado se agenteRes.rows.length > 0)
+
 
 
       // ── Opt-out ───────────────────────────────────────────────────────────
@@ -287,8 +301,11 @@ export default function webhookRouter(pool: Pool): Router {
       // Sticker, vídeo sem legenda e documento sem legenda são descartados
       if (!texto && !['audio', 'image'].includes(tipo)) return;
 
+      // Se não tem agente IA mas tem integração, apenas salvamos a mensagem (já feito acima)
+      // e saímos, pois não há lógica de IA para processar.
+      if (!n8nWebhookUrl && !userId) return; 
+
       // processarComDebounce aguarda 3s por mais mensagens do mesmo contato
-      // antes de chamar a OpenAI (evita múltiplas respostas para mensagens picotadas)
       processarComDebounce(pool, {
         instancia,
         messageId,
@@ -299,6 +316,7 @@ export default function webhookRouter(pool: Pool): Router {
         midiaUrl: midia.url || undefined,
         timestamp,
       }).catch(err => console.error(`[WEBHOOK] Erro ao processar ${messageId}:`, err));
+
 
     } catch (err) {
       console.error('[WEBHOOK] Erro crítico no receptor:', err);
