@@ -527,15 +527,15 @@ function AdicionarCorretorDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={onClose} disabled={isSaving}>
             Cancelar
           </Button>
           <Button 
             onClick={handleAdd} 
-            disabled={saving || selectedIds.length === 0}
+            disabled={isSaving || selectedIds.length === 0}
             className="gap-2"
           >
-            {saving ? (
+            {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <UserPlus className="w-4 h-4" />
