@@ -349,6 +349,7 @@ function Painel({
 
       <AdicionarCorretorDialog
         open={conviteOpen}
+        equipe={equipe}
         onClose={() => setConviteOpen(false)}
         onAdd={onAdicionar}
         membrosAtuais={membros}
@@ -358,12 +359,13 @@ function Painel({
 }
 
 function AdicionarCorretorDialog({
-  open,
+  equipe,
   onClose,
   onAdd,
   membrosAtuais,
 }: {
   open: boolean;
+  equipe: { id: string } | null;
   onClose: () => void;
   onAdd: (userId: string, role: string) => Promise<void>;
   membrosAtuais: Membro[];
@@ -372,22 +374,27 @@ function AdicionarCorretorDialog({
   const [role, setRole] = useState("membro");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const fetchProfiles = async () => {
-    setLoading(true);
+    setIsLoading(true);
     try {
-      const { data } = await api.get("/api/profiles");
-      // Filtra usuários que já estão na equipe
-      const disponiveis = (data || []).filter(
-        (p: Profile) => !membrosAtuais.some((m) => m.user_id === p.user_id)
-      );
-      setProfiles(disponiveis);
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
+      const token = localStorage.getItem('access_token');
+      
+      const res = await fetch(`${API_BASE}/api/equipes/${equipe?.id}/membros-disponiveis`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error("Erro ao buscar corretores disponíveis");
+      const data = await res.json();
+      
+      setProfiles(data || []);
     } catch (e) {
       console.error("Erro ao buscar perfis", e);
+      toast.error("Erro ao carregar lista de corretores");
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -416,7 +423,7 @@ function AdicionarCorretorDialog({
 
   const handleAdd = async () => {
     if (selectedIds.length === 0) return;
-    setSaving(true);
+    setIsSaving(true);
     try {
       for (const userId of selectedIds) {
         await onAdd(userId, role);
@@ -426,12 +433,12 @@ function AdicionarCorretorDialog({
     } catch (e: any) {
       toast.error(e.message || "Erro ao adicionar membros");
     } finally {
-      setSaving(false);
+      setIsSaving(false);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={!!open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Adicionar Corretor à Equipe</DialogTitle>
@@ -453,7 +460,7 @@ function AdicionarCorretorDialog({
 
           <div className="border rounded-md overflow-hidden bg-muted/20">
             <div className="max-h-[300px] overflow-y-auto">
-              {loading ? (
+              {isLoading ? (
                 <div className="p-8 text-center text-sm text-muted-foreground">
                   <Loader2 className="w-4 h-4 animate-spin mx-auto mb-2" />
                   Carregando corretores...
@@ -520,15 +527,15 @@ function AdicionarCorretorDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={onClose} disabled={isSaving}>
             Cancelar
           </Button>
           <Button 
             onClick={handleAdd} 
-            disabled={saving || selectedIds.length === 0}
+            disabled={isSaving || selectedIds.length === 0}
             className="gap-2"
           >
-            {saving ? (
+            {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <UserPlus className="w-4 h-4" />
