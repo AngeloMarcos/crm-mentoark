@@ -309,6 +309,38 @@ export type Database = {
         }
         Relationships: []
       }
+      cargos: {
+        Row: {
+          created_at: string | null
+          id: string
+          nome: string
+          permissoes: string[]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          nome: string
+          permissoes?: string[]
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          nome?: string
+          permissoes?: string[]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cargos_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       catalogo_mensagens_logs: {
         Row: {
           catalogo_id: string | null
@@ -2067,6 +2099,7 @@ export type Database = {
         Row: {
           active: boolean
           avatar_url: string | null
+          cargo_id: string | null
           created_at: string
           display_name: string | null
           email: string
@@ -2081,6 +2114,7 @@ export type Database = {
         Insert: {
           active?: boolean
           avatar_url?: string | null
+          cargo_id?: string | null
           created_at?: string
           display_name?: string | null
           email: string
@@ -2095,6 +2129,7 @@ export type Database = {
         Update: {
           active?: boolean
           avatar_url?: string | null
+          cargo_id?: string | null
           created_at?: string
           display_name?: string | null
           email?: string
@@ -2107,6 +2142,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "users_cargo_id_fkey"
+            columns: ["cargo_id"]
+            isOneToOne: false
+            referencedRelation: "cargos"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "users_owner_id_fkey"
             columns: ["owner_id"]

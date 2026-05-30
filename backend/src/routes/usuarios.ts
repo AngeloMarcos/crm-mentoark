@@ -14,7 +14,7 @@ export default function usuarios(pool: Pool): Router {
   router.post('/profiles', adminMiddleware, async (req: AuthRequest, res: Response) => {
     const client = await pool.connect();
     try {
-      const { email, password, display_name } = req.body || {};
+      const { email, password, display_name, cargo_id } = req.body || {};
       const adminId = req.userId!;
 
       if (!email || !password) {
@@ -40,10 +40,10 @@ export default function usuarios(pool: Pool): Router {
       
       // 1. Criar usuário com owner_id
       const ins = await client.query(
-        `INSERT INTO users (email, password_hash, display_name, role, active, email_verified, owner_id)
-         VALUES ($1, $2, $3, 'user', true, false, $4)
-         RETURNING id, email, display_name, role, created_at`,
-        [emailNorm, password_hash, nome, adminId]
+        `INSERT INTO users (email, password_hash, display_name, role, active, email_verified, owner_id, cargo_id)
+         VALUES ($1, $2, $3, 'user', true, false, $4, $5)
+         RETURNING id, email, display_name, role, created_at, cargo_id`,
+        [emailNorm, password_hash, nome, adminId, cargo_id || null]
       );
       const novo = ins.rows[0];
 
@@ -118,9 +118,11 @@ export default function usuarios(pool: Pool): Router {
       const search = req.query.search ? `%${req.query.search}%` : null;
 
       const r = await pool.query(
-        `SELECT u.id AS user_id, u.email, u.display_name, u.role, u.active, u.created_at,
+        `SELECT u.id AS user_id, u.email, u.display_name, u.role, u.active, u.created_at, u.cargo_id,
+                c.nome as cargo_nome,
                 (SELECT array_agg(modulo) FROM user_modulos WHERE user_id = u.id AND ativo = true) as modulos
          FROM users u
+         LEFT JOIN cargos c ON c.id = u.cargo_id
          WHERE (u.owner_id = $1)
            AND ($2::text IS NULL OR u.email ILIKE $2 OR u.display_name ILIKE $2)
          ORDER BY u.created_at DESC
@@ -262,16 +264,32 @@ export default function usuarios(pool: Pool): Router {
   router.patch('/profiles/:user_id', adminMiddleware, async (req: AuthRequest, res: Response) => {
     try {
       const { user_id } = req.params;
-      const { active } = req.body;
+      const { active, display_name, cargo_id } = req.body;
       const adminId = req.userId!;
 
-      if (typeof active !== 'boolean') {
-        return res.status(400).json({ message: 'Status active deve ser booleano' });
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (active !== undefined) {
+        fields.push(`active = $${idx++}`);
+        values.push(active);
+      }
+      if (display_name !== undefined) {
+        fields.push(`display_name = $${idx++}`);
+        values.push(display_name);
+      }
+      if (cargo_id !== undefined) {
+        fields.push(`cargo_id = $${idx++}`);
+        values.push(cargo_id);
       }
 
+      if (fields.length === 0) return res.status(400).json({ message: 'Nada para atualizar' });
+
+      values.push(user_id, adminId);
       const r = await pool.query(
-        `UPDATE users SET active = $1 WHERE id = $2 AND owner_id = $3 RETURNING id`,
-        [active, user_id, adminId]
+        `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx++} AND owner_id = $${idx} RETURNING id`,
+        values
       );
 
       if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado ou você não tem permissão.' });
