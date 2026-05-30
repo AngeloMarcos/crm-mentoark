@@ -3,8 +3,8 @@ import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
 
 // Default Evolution server (VPS local — disparo.mentoark.com.br)
-const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
-const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
+const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://fierceparrot-evolution.cloudfy.live';
+const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'wZKRX72nZ6sM4yQuOoS6lo76fs5fO7cV';
 const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
 const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
@@ -369,19 +369,19 @@ export default function whatsappRouter(pool: Pool): Router {
       
       const createPayload = {
         instanceName: cfg.instancia,
-        token: cfg.api_key, // Algumas versões da Evolution exigem o token no body
+        token: cfg.api_key,
         qrcode: true,
         integration: 'WHATSAPP-BAILEYS',
         rejectCall: false,
-        groupsIgnore: true, // Mudado para true para melhor performance
-        alwaysOnline: false,
-        readMessages: false,
+        groupsIgnore: true,
+        alwaysOnline: true,
+        readMessages: true,
         readStatus: false,
         ...(phoneNumber ? { number: phoneNumber } : {}),
         webhook: webhookPayload(),
       };
 
-      console.log(`[WHATSAPP] Criando nova instância: ${cfg.instancia}`);
+      console.log(`[WHATSAPP] Criando instância em ${base}: ${cfg.instancia}`);
       
       const createRes = await fetch(`${base}/instance/create`, {
         method: 'POST',
@@ -393,7 +393,8 @@ export default function whatsappRouter(pool: Pool): Router {
       });
 
       const created: any = await createRes.json();
-      console.log(`[WHATSAPP] Resposta Evolution create:`, JSON.stringify(created).slice(0, 300));
+      console.log(`[WHATSAPP] Resposta Evolution create:`, JSON.stringify(created).slice(0, 500));
+
 
 
       // Se já existe, tenta conectar
