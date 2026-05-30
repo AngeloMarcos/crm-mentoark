@@ -68,7 +68,7 @@ export default function EquipePage() {
               <Painel
                 equipe={equipe}
                 membros={membros}
-                onConvidar={convidarMembro}
+                onAdicionar={adicionarMembro}
                 onRemover={removerMembro}
               />
             </TabsContent>
