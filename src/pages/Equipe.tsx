@@ -374,8 +374,8 @@ function AdicionarCorretorDialog({
   const [role, setRole] = useState("membro");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const fetchProfiles = async () => {
     setLoading(true);
