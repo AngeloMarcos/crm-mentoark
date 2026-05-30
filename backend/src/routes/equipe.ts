@@ -251,6 +251,70 @@ export default function equipeRouter(pool: Pool): Router {
     res.json(r.rows.reverse());
   }));
 
+  // 9. POST /api/equipes/:id/membros — adiciona user_id diretamente sem convite
+  router.post('/:id/membros', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const requesterId = req.userId!;
+    const { user_id, role } = req.body;
+
+    if (!user_id) return res.status(400).json({ message: 'user_id é obrigatório' });
+
+    // Apenas o owner pode adicionar membros diretamente
+    const equipeRes = await pool.query(
+      `SELECT owner_id FROM equipes WHERE id = $1`,
+      [equipeId]
+    );
+    if (!equipeRes.rows.length) return res.status(404).json({ message: 'Equipe não encontrada' });
+    if (equipeRes.rows[0].owner_id !== requesterId) {
+      return res.status(403).json({ message: 'Apenas o proprietário pode adicionar membros' });
+    }
+
+    // Verifica que o user a adicionar pertence ao mesmo owner
+    const userRes = await pool.query(
+      `SELECT id, COALESCE(display_name, email) AS nome FROM users WHERE id = $1`,
+      [user_id]
+    );
+    if (!userRes.rows.length) return res.status(404).json({ message: 'Usuário não encontrado' });
+
+    await pool.query(
+      `INSERT INTO equipe_membros (equipe_id, user_id, role, convidado_por, status)
+       VALUES ($1, $2, $3, $4, 'ativo')
+       ON CONFLICT (equipe_id, user_id) DO UPDATE SET role = EXCLUDED.role, status = 'ativo'`,
+      [equipeId, user_id, role || 'membro', requesterId]
+    );
+
+    return res.status(201).json({ success: true, user_id, nome: userRes.rows[0].nome });
+  }));
+
+  // 10. GET /api/equipes/:id/membros-disponiveis — users do owner que não estão na equipe
+  router.get('/:id/membros-disponiveis', wrap(async (req: AuthRequest, res: Response) => {
+    const equipeId = req.params.id;
+    const requesterId = req.userId!;
+
+    const equipeRes = await pool.query(
+      `SELECT owner_id FROM equipes WHERE id = $1`,
+      [equipeId]
+    );
+    if (!equipeRes.rows.length) return res.status(404).json({ message: 'Equipe não encontrada' });
+    if (equipeRes.rows[0].owner_id !== requesterId) {
+      return res.status(403).json({ message: 'Acesso negado' });
+    }
+
+    // Retorna users cadastrados pelo owner que ainda não estão na equipe
+    const r = await pool.query(
+      `SELECT u.id, COALESCE(u.display_name, u.email) AS nome, u.email
+       FROM users u
+       WHERE u.id != $1
+         AND u.id NOT IN (
+           SELECT em.user_id FROM equipe_membros em WHERE em.equipe_id = $2
+         )
+       ORDER BY nome`,
+      [requesterId, equipeId]
+    );
+
+    return res.json(r.rows);
+  }));
+
   // 8. POST /api/equipes/:id/chat
   router.post('/:id/chat', wrap(async (req: AuthRequest, res: Response) => {
     const equipeId = req.params.id;
