@@ -258,6 +258,29 @@ export default function usuarios(pool: Pool): Router {
     }
   });
 
+  // PATCH /api/profiles/:user_id — atualizar status (admin)
+  router.patch('/profiles/:user_id', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+      const { user_id } = req.params;
+      const { active } = req.body;
+      const adminId = req.userId!;
+
+      if (typeof active !== 'boolean') {
+        return res.status(400).json({ message: 'Status active deve ser booleano' });
+      }
+
+      const r = await pool.query(
+        `UPDATE users SET active = $1 WHERE id = $2 AND owner_id = $3 RETURNING id`,
+        [active, user_id, adminId]
+      );
+
+      if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado ou você não tem permissão.' });
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // POST /api/profiles/:user_id/reset-password — redefine a senha (admin)
   router.post('/profiles/:user_id/reset-password', adminMiddleware, async (req: AuthRequest, res: Response) => {
     try {
