@@ -438,7 +438,7 @@ function AdicionarCorretorDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={!!open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Adicionar Corretor à Equipe</DialogTitle>
