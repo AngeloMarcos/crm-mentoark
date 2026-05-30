@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { 
   Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare, 
   Settings2, Copy, RefreshCw, Shield, LayoutGrid, MessageCircle, 
-  UserPlus2, Users2, BarChart3, Send, Loader2
+  UserPlus2, Users2, BarChart3, Send, Loader2, Search
 } from "lucide-react";
 import { useEquipe, type Membro } from "@/hooks/useEquipe";
 import { useAuth } from "@/hooks/useAuth";
