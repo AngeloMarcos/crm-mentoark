@@ -30,52 +30,6 @@ interface NavItem {
 
 interface NavSubgroup {
   label: string;
-  icon: React.ElementType;
-  color: string;
-  adminOnly?: boolean;
-  items: NavItem[];
-}
-
-interface NavGroup {
-  label: string;
-  adminOnly?: boolean;
-  subgroups: NavSubgroup[];
-}
-
-// ── Estrutura ─────────────────────────────────────────────────────────────────
-
-import {
-  LayoutDashboard, LayoutGrid, BarChart3, UserPlus, Tags, BookUser,
-  PhoneCall, Filter, MessageCircle, Timer, Zap,
-  Send, Megaphone, Rocket, GitBranch, Bot, Plug,
-  Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
-  ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
-  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
-  Activity, Webhook, Database, Sparkles,
-} from "lucide-react";
-import { useMemo, useState } from "react";
-import { useAuth } from "@/hooks/useAuth";
-import logo from "@/assets/mentoark-logo.png";
-import { NavLink } from "@/components/NavLink";
-import { useLocation, useNavigate } from "react-router-dom";
-import {
-  Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu,
-  SidebarMenuButton, SidebarMenuItem, SidebarFooter, useSidebar,
-} from "@/components/ui/sidebar";
-
-// ── Tipos ─────────────────────────────────────────────────────────────────────
-
-interface NavItem {
-  title: string;
-  url: string;
-  icon: React.ElementType;
-  modulo: string;
-  color: string;
-  adminOnly?: boolean;
-}
-
-interface NavSubgroup {
-  label: string;
   icon?: React.ElementType;
   color?: string;
   adminOnly?: boolean;
@@ -95,7 +49,9 @@ const navGroups: NavGroup[] = [
     label: "📊 VISÃO GERAL",
     subgroups: [
       {
-        label: "Dashboard",
+        label: "Painéis",
+        icon: LayoutDashboard,
+        color: "text-blue-500",
         items: [
           { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, modulo: "dashboard", color: "text-blue-500" },
           { title: "Central de BI", url: "/bi", icon: BarChart3, modulo: "dashboard", color: "text-cyan-500" },
@@ -198,6 +154,8 @@ const navGroups: NavGroup[] = [
     subgroups: [
       {
         label: "Colaboração",
+        icon: Users2,
+        color: "text-indigo-500",
         items: [
           { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
           { title: "Chat da Equipe", url: "/chat-equipe", icon: UsersIcon, modulo: "whatsapp", color: "text-purple-400" },
@@ -281,11 +239,11 @@ function NavSubgroupSection({
 
   const hasActive = visibleItems.some((i) => isRouteActive(location.pathname, i.url));
   // Subgrupos admin começam expandidos; demais, abrem só se a rota ativa estiver dentro
-  const [open, setOpen] = useState<boolean>(hasActive || !!subgroup.adminOnly);
+  const [open, setOpen] = useState<boolean>(hasActive);
 
   if (visibleItems.length === 0 || (subgroup.adminOnly && !isAdmin)) return null;
 
-  const Icon = subgroup.icon;
+  const Icon = subgroup.icon || LayoutDashboard;
 
   // Modo colapsado (sidebar mini): mostra só os ícones dos itens, sem cabeçalho expansível
   if (collapsed) {
@@ -326,7 +284,7 @@ function NavSubgroupSection({
             : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_1px_hsl(217_91%_45%/0.03)]"
         }`}
       >
-        <Icon className={`h-[18px] w-[18px] shrink-0 transition-all duration-300 ${hasActive ? subgroup.color + " drop-shadow-[0_0_4px_hsl(217_91%_45%/0.25)] scale-105" : "text-muted-foreground"}`} />
+        <Icon className={`h-[18px] w-[18px] shrink-0 transition-all duration-300 ${hasActive ? (subgroup.color || "text-primary") + " drop-shadow-[0_0_4px_hsl(217_91%_45%/0.25)] scale-105" : "text-muted-foreground"}`} />
         <span className={`flex-1 text-left text-sm font-medium ${hasActive ? "gradient-brand-text" : "text-sidebar-foreground"}`}>
           {subgroup.label}
         </span>
