@@ -1120,6 +1120,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS remote_jid       TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS instance_name    TEXT`).catch(() => {});
 
+  // Coluna token em integracoes_config (usada pela rota POST /api/integracoes_config)
+  await pool.query(`ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS token TEXT`).catch(() => {});
+
   console.log('[MIGRATIONS] WhatsApp Instances + patches finais OK');
 
   // ── Garantir usuários admin master ────────────────────────────────────────
