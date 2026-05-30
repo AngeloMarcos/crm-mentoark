@@ -15,12 +15,12 @@ import { toast } from "sonner";
 import { 
   Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare, 
   Settings2, Copy, RefreshCw, Shield, LayoutGrid, MessageCircle, 
-  UserPlus2, Users2, BarChart3, Send
+  UserPlus2, Users2, BarChart3, Send, Loader2
 } from "lucide-react";
 import { useEquipe, type Membro } from "@/hooks/useEquipe";
 import { useAuth } from "@/hooks/useAuth";
 import { ChatEquipe } from "@/components/equipe/ChatEquipe";
-import { useSubPerfis, type SubPerfil } from "@/hooks/useSubPerfis";
+import { api } from "@/integrations/database/client";
 import { cn } from "@/lib/utils";
 
 function iniciais(nome?: string, email?: string) {
