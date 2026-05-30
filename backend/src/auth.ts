@@ -80,7 +80,10 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       [email.toLowerCase().trim()]
     );
     const user = rows[0];
-    if (!user) return res.status(401).json({ message: 'E-mail ou senha incorretos' });
+    if (!user) {
+      console.warn(`[AUTH] Login falhou: usuário ${email} não encontrado ou inativo.`);
+      return res.status(401).json({ message: 'E-mail ou senha incorretos' });
+    }
 
     let valid = false;
 
@@ -104,7 +107,10 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       }
     }
 
-    if (!valid) return res.status(401).json({ message: 'E-mail ou senha incorretos' });
+    if (!valid) {
+      console.warn(`[AUTH] Senha inválida para: ${email}`);
+      return res.status(401).json({ message: 'E-mail ou senha incorretos' });
+    }
 
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
