@@ -36,19 +36,40 @@ export default function LoginPage() {
       const params = new URLSearchParams(hash);
       const accessToken = params.get("access_token");
       const refreshToken = params.get("refresh_token");
+      const error = params.get("error");
+      const errorDescription = params.get("error_description");
 
-      if (accessToken && refreshToken) {
+      if (error) {
+        toast({
+          title: "Erro na Autenticação",
+          description: errorDescription || "Ocorreu um erro ao tentar entrar com o Google.",
+          variant: "destructive",
+        });
+        window.history.replaceState(null, "", window.location.pathname);
+      } else if (accessToken && refreshToken) {
         localStorage.setItem("crm_access_token", accessToken);
         localStorage.setItem("crm_refresh_token", refreshToken);
         // Limpar o hash da URL para segurança
         window.history.replaceState(null, "", window.location.pathname);
+        toast({
+          title: "Sucesso",
+          description: "Login realizado com sucesso via Google.",
+        });
         navigate("/dashboard", { replace: true });
         return;
+      } else if (hash.includes("access_token") || hash.includes("refresh_token")) {
+        // Se um dos tokens estiver faltando mas o hash indica uma tentativa de auth
+        toast({
+          title: "Erro de Token",
+          description: "Não foi possível recuperar todos os dados de acesso do Google.",
+          variant: "destructive",
+        });
+        window.history.replaceState(null, "", window.location.pathname);
       }
     }
 
     if (!authLoading && user) navigate("/dashboard", { replace: true });
-  }, [user, authLoading, navigate]);
+  }, [user, authLoading, navigate, toast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
