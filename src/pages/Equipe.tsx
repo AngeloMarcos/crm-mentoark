@@ -357,48 +357,74 @@ function Painel({
   );
 }
 
-function ConviteDialog({
+function AdicionarCorretorDialog({
   open,
   onClose,
-  onInvite,
+  onAdd,
+  membrosAtuais,
 }: {
   open: boolean;
   onClose: () => void;
-  onInvite: (email: string, role: string) => Promise<void>;
+  onAdd: (userId: string, role: string) => Promise<void>;
+  membrosAtuais: Membro[];
 }) {
-  const [email, setEmail] = useState("");
+  const [search, setSearch] = useState("");
   const [role, setRole] = useState("membro");
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const enviar = async () => {
-    if (!email.trim() || !email.includes("@")) {
-      toast.error("Digite um email válido");
-      return;
+  const fetchProfiles = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get("/api/profiles");
+      // Filtra usuários que já estão na equipe
+      const disponiveis = (data || []).filter(
+        (p: Profile) => !membrosAtuais.some((m) => m.user_id === p.user_id)
+      );
+      setProfiles(disponiveis);
+    } catch (e) {
+      console.error("Erro ao buscar perfis", e);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    if (open) {
+      fetchProfiles();
+      setSearch("");
+      setSelectedIds([]);
+      setRole("membro");
+    }
+  }, [open]);
+
+  const filteredProfiles = profiles.filter((p) => {
+    const term = search.toLowerCase();
+    return (
+      (p.display_name?.toLowerCase().includes(term) || false) ||
+      p.email.toLowerCase().includes(term)
+    );
+  });
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleAdd = async () => {
+    if (selectedIds.length === 0) return;
     setSaving(true);
     try {
-      const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
-      const token = localStorage.getItem('access_token');
-      
-      const searchRes = await fetch(`${API_BASE}/api/profiles?search=${email.trim()}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const existingUsers = await searchRes.json();
-      const userExists = existingUsers.length > 0 && existingUsers[0].email.toLowerCase() === email.trim().toLowerCase();
-
-      await onInvite(email.trim(), role);
-      
-      if (userExists) {
-        toast.success("Usuário encontrado e adicionado à equipe!");
-      } else {
-        toast.success("Convite enviado!");
+      for (const userId of selectedIds) {
+        await onAdd(userId, role);
       }
-      
-      setEmail("");
-      setRole("membro");
+      toast.success(`${selectedIds.length} membro(s) adicionado(s)`);
       onClose();
     } catch (e: any) {
-      toast.error(e.message || "Erro ao processar convite");
+      toast.error(e.message || "Erro ao adicionar membros");
     } finally {
       setSaving(false);
     }
@@ -406,27 +432,81 @@ function ConviteDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Convidar membro</DialogTitle>
+          <DialogTitle>Adicionar Corretor à Equipe</DialogTitle>
           <DialogDescription>
-            Envie um convite por email. O usuário será adicionado à equipe ao aceitar.
+            Selecione um ou mais corretores para adicionar ao seu time.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="convite-email">Email</Label>
+
+        <div className="space-y-4 py-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              id="convite-email"
-              type="email"
-              placeholder="colega@exemplo.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoFocus
+              placeholder="Buscar por nome ou email..."
+              className="pl-9"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+
+          <div className="border rounded-md overflow-hidden bg-muted/20">
+            <div className="max-h-[300px] overflow-y-auto">
+              {loading ? (
+                <div className="p-8 text-center text-sm text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin mx-auto mb-2" />
+                  Carregando corretores...
+                </div>
+              ) : filteredProfiles.length === 0 ? (
+                <div className="p-8 text-center text-sm text-muted-foreground">
+                  {profiles.length === 0 ? (
+                    <>
+                      Nenhum corretor disponível.<br />
+                      Cadastre usuários primeiro em Gerenciar Usuários.
+                    </>
+                  ) : (
+                    "Nenhum usuário encontrado para esta busca."
+                  )}
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {filteredProfiles.map((p) => (
+                    <div
+                      key={p.user_id}
+                      className={cn(
+                        "flex items-center gap-3 p-3 hover:bg-muted/50 transition cursor-pointer",
+                        selectedIds.includes(p.user_id) && "bg-primary/5"
+                      )}
+                      onClick={() => toggleSelect(p.user_id)}
+                    >
+                      <Checkbox
+                        checked={selectedIds.includes(p.user_id)}
+                        onCheckedChange={() => toggleSelect(p.user_id)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <Avatar className="h-8 w-8">
+                        <AvatarFallback className="text-[10px]">
+                          {iniciais(p.display_name || "", p.email)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">
+                          {p.display_name || "Sem nome"}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {p.email}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="space-y-2">
-            <Label>Papel</Label>
+            <Label>Papel na equipe (aplica a todos os selecionados)</Label>
             <Select value={role} onValueChange={setRole}>
               <SelectTrigger>
                 <SelectValue />
@@ -438,12 +518,22 @@ function ConviteDialog({
             </Select>
           </div>
         </div>
+
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancelar
           </Button>
-          <Button onClick={enviar} disabled={saving}>
-            {saving ? "Enviando..." : "Enviar Convite"}
+          <Button 
+            onClick={handleAdd} 
+            disabled={saving || selectedIds.length === 0}
+            className="gap-2"
+          >
+            {saving ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <UserPlus className="w-4 h-4" />
+            )}
+            Adicionar Selecionados ({selectedIds.length})
           </Button>
         </DialogFooter>
       </DialogContent>
