@@ -20,6 +20,7 @@ import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
 import { TestarAgente } from "@/components/cerebro/TestarAgente";
 import { PromptAgente } from "@/components/cerebro/PromptAgente";
 import { Configuracoes } from "@/components/cerebro/Configuracoes";
+import { ConfigAgenteIA } from "@/components/cerebro/ConfigAgenteIA";
 // GeradorPrompt removido pois agora está integrado no SetupAgente
 import { SetupAgente } from "@/components/cerebro/SetupAgente";
 import { api } from "@/integrations/database/client";
