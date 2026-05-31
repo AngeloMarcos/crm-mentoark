@@ -128,6 +128,113 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   }
 
+  // ── Helpers internos de foto de perfil ──────────────────────────────────────
+  async function buscarFotoEvo(base: string, apiKey: string, instancia: string, phone: string): Promise<string | null> {
+    // Tenta POST (Evolution v2)
+    try {
+      const r = await fetch(`${base}/chat/fetchProfilePictureUrl/${instancia}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: apiKey },
+        body: JSON.stringify({ number: phone }),
+      });
+      if (r.ok) {
+        const d: any = await r.json().catch(() => ({}));
+        const url = d?.profilePictureUrl || d?.url || d?.picture || null;
+        if (url) return url;
+      }
+    } catch {}
+    // Tenta GET (Evolution v1 fallback)
+    try {
+      const r = await fetch(`${base}/fetchProfilePicture/${instancia}?number=${phone}`, {
+        headers: { apikey: apiKey },
+      });
+      if (r.ok) {
+        const d: any = await r.json().catch(() => ({}));
+        return d?.profilePictureUrl || d?.url || d?.picture || null;
+      }
+    } catch {}
+    return null;
+  }
+
+  async function salvarFotoContato(userId: string, phone: string, picUrl: string, pushName?: string | null): Promise<void> {
+    const suffix = `%${phone.slice(-11)}`;
+    await pool.query(
+      `UPDATE contatos SET foto_perfil = $1, profile_pic_url = $1${pushName ? ', push_name = COALESCE($4, push_name)' : ''}
+       WHERE user_id = $2 AND telefone ILIKE $3`,
+      pushName ? [picUrl, userId, suffix, pushName] : [picUrl, userId, suffix]
+    ).catch(() => {});
+  }
+
+  // GET /api/whatsapp/profile-pic/:phone — busca foto de perfil on-demand
+  router.get('/profile-pic/:phone', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      if (!phone) return res.status(400).json({ message: 'phone inválido' });
+
+      // Checa se já existe no banco
+      const row = await pool.query(
+        `SELECT nome, push_name, foto_perfil, profile_pic_url FROM contatos
+         WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+        [userId, `%${phone.slice(-11)}`]
+      );
+      const c = row.rows[0];
+      const existingPic = c?.foto_perfil || c?.profile_pic_url;
+      const pushName = c?.push_name || c?.nome || null;
+
+      if (existingPic) {
+        return res.json({ foto_perfil: existingPic, push_name: pushName });
+      }
+
+      // Busca na Evolution API
+      const cfg = await getEvolutionConfig(userId);
+      const base = cfg.url.replace(/\/$/, '');
+      const picUrl = await buscarFotoEvo(base, cfg.api_key, cfg.instancia, phone);
+
+      if (picUrl) await salvarFotoContato(userId, phone, picUrl, pushName);
+
+      return res.json({ foto_perfil: picUrl, push_name: pushName });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/whatsapp/sync-profiles — sincroniza fotos de todos os contatos
+  router.post('/sync-profiles', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+
+      // Todos os telefones únicos que enviaram mensagens
+      const phonesRes = await pool.query(
+        `SELECT DISTINCT split_part(remote_jid, '@', 1) AS phone
+         FROM whatsapp_messages
+         WHERE user_id = $1 AND remote_jid NOT LIKE '%@g.us'
+         LIMIT 200`,
+        [userId]
+      );
+
+      const cfg = await getEvolutionConfig(userId);
+      const base = cfg.url.replace(/\/$/, '');
+
+      let sincronizados = 0;
+      for (const row of phonesRes.rows) {
+        const phone = row.phone;
+        try {
+          const picUrl = await buscarFotoEvo(base, cfg.api_key, cfg.instancia, phone);
+          if (picUrl) {
+            await salvarFotoContato(userId, phone, picUrl);
+            sincronizados++;
+          }
+        } catch {}
+        await new Promise(r => setTimeout(r, 150)); // respeita rate limit
+      }
+
+      return res.json({ sincronizados, total: phonesRes.rows.length });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/conversas
   // Usa window function para eliminar subqueries N+1 e JOIN para enriquecer contatos
   router.get('/conversas', async (req: AuthRequest, res: Response) => {
@@ -162,7 +269,7 @@ export default function whatsappRouter(pool: Pool): Router {
                 AND wm.push_name IS NOT NULL LIMIT 1)
            ) AS push_name,
            COALESCE(c.nome, c.push_name) AS nome_contato,
-           c.profile_pic_url
+           COALESCE(c.foto_perfil, c.profile_pic_url) AS profile_pic_url
          FROM (
            SELECT remote_jid,
                   split_part(remote_jid,'@',1) AS phone,

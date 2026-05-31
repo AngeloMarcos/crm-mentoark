@@ -9,7 +9,7 @@ import {
   Mic, LayoutGrid, MessageSquare, SlidersHorizontal,
   UserPlus, Check, Smartphone,
   ShieldAlert, Tag, Sparkles, Zap,
-  BotOff, Bot, Power,
+  BotOff, Bot, ImageIcon,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
@@ -89,6 +89,44 @@ interface RespostaRapida {
   atalho: string | null;
 }
 
+// ── Avatar com fallback de cor gerada do nome ──────────────────────────────────
+const AVATAR_PALETTE = [
+  '#6366f1','#8b5cf6','#ec4899','#f43f5e',
+  '#f97316','#22c55e','#14b8a6','#3b82f6','#0ea5e9','#a855f7',
+];
+function getAvatarColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+}
+
+function ChatAvatar({
+  name, url, size = 'md', rounded = '2xl', className = '',
+}: {
+  name: string; url?: string | null; size?: 'sm' | 'md' | 'lg'; rounded?: string; className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const color = getAvatarColor(name);
+  const initial = (name[0] || '?').toUpperCase();
+  const sizeClass = size === 'sm' ? 'w-8 h-8 text-xs' : size === 'lg' ? 'w-24 h-24 text-3xl' : 'w-12 h-12 text-sm';
+
+  return (
+    <div
+      className={`${sizeClass} rounded-${rounded} overflow-hidden flex items-center justify-center font-black text-white shrink-0 relative ${className}`}
+      style={{ backgroundColor: color }}
+    >
+      <span className="select-none">{initial}</span>
+      {url && !failed && (
+        <img
+          src={url}
+          alt={name}
+          className="absolute inset-0 w-full h-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      )}
+    </div>
+  );
+}
 
 export function WhatsAppInterface() {
   const navigate = useNavigate();
@@ -130,6 +168,10 @@ export function WhatsAppInterface() {
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [savingName, setSavingName] = useState(false);
+  // Sincronização de fotos
+  const [syncingProfiles, setSyncingProfiles] = useState(false);
+  // Cache de sessão: phone → foto_perfil buscada (evita repetir chamadas)
+  const picCacheRef = useRef<Map<string, string | null>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeChatIdRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -213,6 +255,48 @@ export function WhatsAppInterface() {
     } catch {}
     finally { setSearchingContatos(false); }
   }, []);
+
+  // Busca foto de perfil para um chat — usa cache, não bloqueia
+  const fetchProfilePic = useCallback(async (phone: string) => {
+    if (picCacheRef.current.has(phone)) return; // já buscado nesta sessão
+    picCacheRef.current.set(phone, null); // marca como "em busca"
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/profile-pic/${encodeURIComponent(phone)}`, {
+        headers: apiHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const pic: string | null = data.foto_perfil || null;
+      const name: string | null = data.push_name || null;
+      picCacheRef.current.set(phone, pic);
+      if (pic || name) {
+        setChats(prev => prev.map(c =>
+          c.id === phone
+            ? { ...c, profile_pic: pic || c.profile_pic, name: c.name !== phone ? c.name : (name || c.name) }
+            : c
+        ));
+      }
+    } catch {}
+  }, []);
+
+  const syncAllProfiles = async () => {
+    setSyncingProfiles(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/sync-profiles`, {
+        method: 'POST',
+        headers: apiHeaders(),
+      });
+      if (!res.ok) { toast.error('Erro ao sincronizar'); return; }
+      const { sincronizados, total } = await res.json();
+      toast.success(`${sincronizados} de ${total} fotos sincronizadas`);
+      picCacheRef.current.clear(); // limpa cache para recarregar
+      fetchConversas();
+    } catch {
+      toast.error('Erro ao sincronizar fotos');
+    } finally {
+      setSyncingProfiles(false);
+    }
+  };
 
   const salvarNomeContato = async () => {
     if (!activeChatId || !nameInput.trim()) return;
@@ -391,6 +475,8 @@ export function WhatsAppInterface() {
     const chat = chats.find(c => c.id === activeChatId);
     if (chat) fetchMensagens(activeChatId, chat.name, true);
     fetchIaStatus(activeChatId);
+    // Auto-fetch foto se ainda não tem
+    if (chat && !chat.profile_pic) fetchProfilePic(activeChatId);
     const tMsgs = setInterval(() => {
       const currentId = activeChatIdRef.current;
       if (!currentId) return;
@@ -544,6 +630,17 @@ export function WhatsAppInterface() {
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setShowNewMessageModal(true)} title="Nova Mensagem">
                 <UserPlus className="h-4.5 w-4.5" />
               </Button>
+              <Button
+                variant="ghost" size="icon"
+                className="h-8 w-8 text-muted-foreground"
+                onClick={syncAllProfiles}
+                disabled={syncingProfiles}
+                title="Sincronizar fotos de perfil"
+              >
+                {syncingProfiles
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <ImageIcon className="h-4 w-4" />}
+              </Button>
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
                 <SlidersHorizontal className="h-4 w-4" />
               </Button>
@@ -624,13 +721,12 @@ export function WhatsAppInterface() {
                   }`}
                 >
                   <div className="relative shrink-0">
-                    <div className={`w-12 h-12 rounded-2xl overflow-hidden flex items-center justify-center font-bold text-base uppercase transition-transform group-hover:scale-105 ${
-                      isActive ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20" : "bg-primary/10 text-primary"
-                    }`}>
-                      {chat.profile_pic
-                        ? <img src={chat.profile_pic} alt={chat.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
-                        : chat.name[0]}
-                    </div>
+                    <ChatAvatar
+                      name={chat.name}
+                      url={chat.profile_pic}
+                      size="md"
+                      className={`transition-transform group-hover:scale-105 ${isActive ? 'shadow-lg ring-2 ring-primary/30' : ''}`}
+                    />
                     {chat.online && (
                       <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-background rounded-full shadow-sm" />
                     )}
@@ -1003,11 +1099,13 @@ export function WhatsAppInterface() {
             {/* Chat header */}
             <div className="flex items-center justify-between px-6 py-4 border-b bg-background/40 backdrop-blur-md shrink-0 z-10 shadow-sm">
               <div className="flex items-center gap-4">
-                <div className="w-11 h-11 rounded-2xl bg-primary/10 border border-primary/20 overflow-hidden flex items-center justify-center font-bold text-lg text-primary uppercase shadow-inner">
-                  {activeChat.profile_pic
-                    ? <img src={activeChat.profile_pic} alt={activeChat.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
-                    : activeChat.name[0]}
-                </div>
+                <button
+                  onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
+                  className={activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}
+                  title={activeChat.profile_pic ? 'Ampliar foto' : ''}
+                >
+                  <ChatAvatar name={activeChat.name} url={activeChat.profile_pic} size="md" rounded="2xl" className="border border-primary/20 shadow-inner" />
+                </button>
                 <div>
                   <div className="flex items-center gap-2">
                     <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
@@ -1295,12 +1393,15 @@ export function WhatsAppInterface() {
               {/* Avatar clicável para ampliar */}
               <button
                 onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
-                className={`w-24 h-24 rounded-[2rem] bg-primary/10 border-4 border-background overflow-hidden flex items-center justify-center text-3xl font-black text-primary uppercase mb-4 shadow-xl shadow-primary/10 transition-transform hover:scale-105 duration-500 ${activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}`}
+                className={`mb-4 transition-transform hover:scale-105 duration-500 border-4 border-background rounded-[2rem] shadow-xl shadow-primary/10 ${activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}`}
                 title={activeChat.profile_pic ? 'Clique para ampliar' : ''}
               >
-                {activeChat.profile_pic
-                  ? <img src={activeChat.profile_pic} alt={activeChat.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
-                  : activeChat.name[0]}
+                <ChatAvatar
+                  name={activeChat.name}
+                  url={activeChat.profile_pic}
+                  size="lg"
+                  rounded="[2rem]"
+                />
               </button>
 
               {/* Nome editável */}
