@@ -8,8 +8,10 @@ import {
   ChevronDown, ChevronRight, X, Pencil, Plus,
   Mic, LayoutGrid, MessageSquare, SlidersHorizontal,
   UserPlus, Check, Smartphone,
-  ShieldAlert, Tag, Sparkles, Zap
+  ShieldAlert, Tag, Sparkles, Zap,
+  BotOff, Bot, Power,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -111,6 +113,13 @@ export function WhatsAppInterface() {
   const [respostasRapidas, setRespostasRapidas] = useState<RespostaRapida[]>([]);
   const [showQR, setShowQR] = useState(false);
   const [qrSearch, setQrSearch] = useState("");
+  // IA toggle por conversa
+  const [iaPausada, setIaPausada] = useState<boolean>(false);
+  const [togglingIA, setTogglingIA] = useState(false);
+  // Nova conversa — busca de contatos
+  const [contatoSearch, setContatoSearch] = useState("");
+  const [contatoResults, setContatoResults] = useState<{id: string; nome: string; telefone: string; push_name?: string}[]>([]);
+  const [searchingContatos, setSearchingContatos] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeChatIdRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -148,6 +157,60 @@ export function WhatsAppInterface() {
     setShowQR(false);
     setQrSearch('');
     textareaRef.current?.focus();
+  };
+
+  // Busca status IA ao abrir uma conversa
+  const fetchIaStatus = useCallback(async (phone: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/ia-status/${encodeURIComponent(phone)}`, { headers: apiHeaders() });
+      if (res.ok) {
+        const d = await res.json();
+        setIaPausada(d.pausada === true);
+      }
+    } catch {}
+  }, []);
+
+  const toggleIA = async () => {
+    if (!activeChatId) return;
+    setTogglingIA(true);
+    try {
+      const novoEstado = !iaPausada;
+      const res = await fetch(`${API_BASE}/api/whatsapp/ia-toggle`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ phone: activeChatId, pausar: novoEstado }),
+      });
+      if (res.ok) {
+        setIaPausada(novoEstado);
+        toast.success(novoEstado ? 'IA pausada para este contato' : 'IA reativada');
+      } else {
+        toast.error('Erro ao alterar status da IA');
+      }
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setTogglingIA(false);
+    }
+  };
+
+  // Busca contatos CRM para nova conversa
+  const buscarContatos = useCallback(async (q: string) => {
+    if (!q.trim() || q.length < 2) { setContatoResults([]); return; }
+    setSearchingContatos(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/contatos-search?q=${encodeURIComponent(q)}`, { headers: apiHeaders() });
+      if (res.ok) setContatoResults(await res.json());
+    } catch {}
+    finally { setSearchingContatos(false); }
+  }, []);
+
+  // Normaliza telefone para formato internacional (Brasil por padrão)
+  const normalizarTelefone = (tel: string): string => {
+    const digits = tel.replace(/\D/g, '');
+    if (digits.length === 11) return `55${digits}`;        // DDD+9+número
+    if (digits.length === 10) return `55${digits}`;        // DDD+número sem 9
+    if (digits.length === 13 && digits.startsWith('55')) return digits; // já tem código
+    return digits;
   };
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
@@ -280,6 +343,7 @@ export function WhatsAppInterface() {
     if (!activeChatId) return;
     const chat = chats.find(c => c.id === activeChatId);
     if (chat) fetchMensagens(activeChatId, chat.name, true);
+    fetchIaStatus(activeChatId);
     const tMsgs = setInterval(() => {
       const currentId = activeChatIdRef.current;
       if (!currentId) return;
@@ -362,37 +426,40 @@ export function WhatsAppInterface() {
     }
   };
 
-  const handleStartNewChat = () => {
-    if (!newMessagePhone.trim()) {
+  const handleStartNewChat = (phoneOverride?: string, nomeOverride?: string) => {
+    const rawPhone = phoneOverride || newMessagePhone;
+    if (!rawPhone.trim()) {
       toast.error("Informe o número de telefone");
       return;
     }
-    const cleanPhone = newMessagePhone.replace(/\D/g, "");
-    if (cleanPhone.length < 10) {
-      toast.error("Número de telefone inválido");
+    const cleanPhone = normalizarTelefone(rawPhone);
+    if (cleanPhone.replace(/\D/g, '').length < 10) {
+      toast.error("Número de telefone inválido (mínimo 10 dígitos com DDD)");
       return;
     }
 
-    const newChat: Chat = {
-      id: cleanPhone,
-      name: newMessagePhone,
-      phone: cleanPhone,
-      lastMessage: "Nova conversa iniciada",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      messages: [],
-      notes: '',
-    };
+    // Se a conversa já existe na lista, só abre
+    const existing = chats.find(c => c.id === cleanPhone || c.phone === cleanPhone);
+    if (existing) {
+      setActiveChatId(existing.id);
+    } else {
+      const newChat: Chat = {
+        id: cleanPhone,
+        name: nomeOverride || rawPhone,
+        phone: cleanPhone,
+        lastMessage: '',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        messages: [],
+        notes: '',
+      };
+      setChats(prev => [newChat, ...prev]);
+      setActiveChatId(cleanPhone);
+    }
 
-    setChats(prev => {
-      const exists = prev.find(c => c.id === cleanPhone);
-      if (exists) return prev;
-      return [newChat, ...prev];
-    });
-    
-    setActiveChatId(cleanPhone);
     setShowNewMessageModal(false);
     setNewMessagePhone("");
-    toast.success("Conversa iniciada!");
+    setContatoSearch("");
+    setContatoResults([]);
   };
 
   const isConnected = connectionStatus?.state === "open";
@@ -550,33 +617,98 @@ export function WhatsAppInterface() {
       <div className="flex-1 flex flex-col min-w-0 bg-background/40">
         
         {/* Modal Nova Mensagem */}
-        <Dialog open={showNewMessageModal} onOpenChange={setShowNewMessageModal}>
-          <DialogContent className="sm:max-w-[420px] p-6 rounded-2xl">
-            <DialogHeader>
-              <DialogTitle className="text-xl font-bold">Iniciar Nova Conversa</DialogTitle>
-              <DialogDescription>
-                Digite o número do WhatsApp (com DDD) para iniciar um novo atendimento.
+        <Dialog open={showNewMessageModal} onOpenChange={(o) => {
+          setShowNewMessageModal(o);
+          if (!o) { setContatoSearch(""); setContatoResults([]); setNewMessagePhone(""); }
+        }}>
+          <DialogContent className="sm:max-w-[460px] p-0 rounded-2xl overflow-hidden">
+            <DialogHeader className="px-6 pt-6 pb-4 border-b">
+              <DialogTitle className="text-lg font-bold">Nova Conversa</DialogTitle>
+              <DialogDescription className="text-sm">
+                Busque um contato do CRM ou digite o número diretamente.
               </DialogDescription>
             </DialogHeader>
-            <div className="py-4 space-y-4">
+
+            <div className="p-5 space-y-4">
+              {/* Busca de contatos CRM */}
               <div className="space-y-2">
-                <label className="text-xs font-bold uppercase text-muted-foreground">Número do Telefone</label>
+                <label className="text-xs font-bold uppercase text-muted-foreground">Buscar contato no CRM</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Nome, telefone ou WhatsApp..."
+                    className="pl-9 h-10 rounded-xl"
+                    value={contatoSearch}
+                    onChange={e => {
+                      setContatoSearch(e.target.value);
+                      buscarContatos(e.target.value);
+                    }}
+                    autoFocus
+                  />
+                  {searchingContatos && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />}
+                </div>
+
+                {/* Resultados */}
+                {contatoResults.length > 0 && (
+                  <div className="border rounded-xl overflow-hidden max-h-48 overflow-y-auto divide-y">
+                    {contatoResults.map(c => (
+                      <button
+                        key={c.id}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/50 transition-colors text-left"
+                        onClick={() => handleStartNewChat(c.telefone, c.push_name || c.nome)}
+                      >
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm uppercase shrink-0">
+                          {(c.push_name || c.nome)[0]}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold truncate">{c.push_name || c.nome}</p>
+                          <p className="text-xs text-muted-foreground">{c.telefone}</p>
+                        </div>
+                        <MessageSquare className="h-4 w-4 text-primary/40 ml-auto shrink-0" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {contatoSearch.length >= 2 && contatoResults.length === 0 && !searchingContatos && (
+                  <p className="text-xs text-muted-foreground px-1">Nenhum contato encontrado no CRM.</p>
+                )}
+              </div>
+
+              {/* Separador */}
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-[11px] uppercase font-bold text-muted-foreground tracking-widest">ou</span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+
+              {/* Número manual */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-muted-foreground">Digitar número</label>
                 <div className="relative">
                   <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input 
-                    placeholder="Ex: 11999999999" 
-                    className="pl-10 h-11 rounded-xl"
+                  <Input
+                    placeholder="Ex: 11999999999 (com DDD)"
+                    className="pl-10 h-10 rounded-xl"
                     value={newMessagePhone}
-                    onChange={(e) => setNewMessagePhone(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleStartNewChat()}
+                    onChange={e => setNewMessagePhone(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleStartNewChat()}
                   />
                 </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Código do Brasil (+55) adicionado automaticamente se necessário.
+                </p>
               </div>
             </div>
-            <DialogFooter className="gap-2 sm:gap-0">
-              <Button variant="ghost" onClick={() => setShowNewMessageModal(false)}>Cancelar</Button>
-              <Button className="bg-primary text-white hover:bg-primary/90 rounded-xl" onClick={handleStartNewChat}>
-                Iniciar Chat
+
+            <DialogFooter className="px-5 pb-5 pt-0 gap-2">
+              <Button variant="outline" onClick={() => setShowNewMessageModal(false)}>Cancelar</Button>
+              <Button
+                className="gap-2"
+                onClick={() => handleStartNewChat()}
+                disabled={!newMessagePhone.trim()}
+              >
+                <MessageSquare className="h-4 w-4" />
+                Abrir Chat
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -835,27 +967,37 @@ export function WhatsAppInterface() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                <Button variant="outline" size="icon" className="h-10 w-10 rounded-xl hover:bg-primary/5 hover:text-primary transition-colors">
-                  <Phone className="h-4.5 w-4.5" />
-                </Button>
-                <div className="flex items-stretch rounded-xl overflow-hidden shadow-lg shadow-green-500/20 border border-green-500/30">
-                  <button className="flex items-center gap-2 px-5 py-2 bg-green-500 hover:bg-green-600 text-white text-xs font-bold transition-all active:scale-95">
-                    <Check className="h-4 w-4" /> Resolver Conversa
-                  </button>
-                  <button className="px-2.5 bg-green-500 hover:bg-green-600 text-white border-l border-white/20 transition-colors">
-                    <ChevronDown className="h-4 w-4" />
-                  </button>
-                </div>
-                <Button 
-                  variant="outline" 
-                  className="h-10 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
+              <div className="flex items-center gap-2">
+                {/* Toggle IA — não interfere no envio/recebimento de mensagens */}
+                <button
+                  onClick={toggleIA}
+                  disabled={togglingIA}
+                  title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                    iaPausada
+                      ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
+                      : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                  }`}
+                >
+                  {togglingIA ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : iaPausada ? (
+                    <BotOff className="h-3.5 w-3.5" />
+                  ) : (
+                    <Bot className="h-3.5 w-3.5" />
+                  )}
+                  <span className="hidden sm:inline">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
+                </button>
+
+                <Button
+                  variant="outline"
+                  className="h-9 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
                   onClick={() => handleCriarTarefaIA(activeChat.id)}
                 >
                   <Sparkles className="h-4 w-4" />
-                  <span className="hidden sm:inline">Criar Tarefa IA</span>
+                  <span className="hidden sm:inline">Criar Tarefa</span>
                 </Button>
-                <Button variant="ghost" size="icon" className="h-10 w-10 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
+                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
                   <Info className="h-4.5 w-4.5" />
                 </Button>
               </div>

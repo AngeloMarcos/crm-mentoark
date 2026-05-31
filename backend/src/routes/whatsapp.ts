@@ -190,7 +190,6 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // GET /api/whatsapp/conversas/:phone
-  // Usa coluna phone gerada (índice) e JOIN para status de entrega
   router.get('/conversas/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -200,17 +199,19 @@ export default function whatsappRouter(pool: Pool): Router {
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Number(req.query.offset) || 0;
 
+      // Busca por sufixo do número (funciona com ou sem código de país)
       const r = await pool.query(
         `SELECT
            m.id, m.message_id, m.from_me, m.message_type, m.content,
-           m.media_url, m.media_mimetype, m.status, m.is_read,
+           m.media_url, m.media_mimetype, m.status,
            m.timestamp_wa, m.created_at,
            COALESCE(s.status, m.status) AS delivery_status
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
-         WHERE m.phone = $1 AND m.user_id = $2
-         ORDER BY m.created_at ASC
+         WHERE split_part(m.remote_jid, '@', 1) = $1
+           AND m.user_id = $2
+         ORDER BY COALESCE(m.timestamp_wa, m.created_at) ASC
          LIMIT $3 OFFSET $4`,
         [phone, userId, limit, offset]
       );
@@ -226,7 +227,6 @@ export default function whatsappRouter(pool: Pool): Router {
         midia_mime: row.media_mimetype,
         midia_nome: null,
         status: row.delivery_status || row.status,
-        is_read: row.is_read,
         created_at: row.created_at,
         timestamp_wa: row.timestamp_wa,
       }));
@@ -247,9 +247,74 @@ export default function whatsappRouter(pool: Pool): Router {
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
-         WHERE m.phone = $1 AND m.user_id = $2 AND m.from_me = true
+         WHERE split_part(m.remote_jid, '@', 1) = $1 AND m.user_id = $2 AND m.from_me = true
          ORDER BY m.created_at DESC LIMIT 50`,
         [phone, userId]
+      );
+      return res.json(r.rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/ia-status/:phone — lê se IA está pausada para esse contato
+  router.get('/ia-status/:phone', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const r = await pool.query(
+        `SELECT atendente_pausou_ia, nome, push_name
+         FROM contatos
+         WHERE user_id = $1 AND telefone ILIKE $2
+         LIMIT 1`,
+        [userId, `%${phone.slice(-11)}`]
+      );
+      const pausada = r.rows.length > 0 ? (r.rows[0].atendente_pausou_ia === true) : false;
+      return res.json({ pausada, contato: r.rows[0] || null });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/whatsapp/ia-toggle — pausa ou reativa IA para um contato manualmente
+  router.post('/ia-toggle', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const { phone, pausar } = req.body as { phone: string; pausar: boolean };
+      if (!phone) return res.status(400).json({ message: 'phone obrigatório' });
+      const phoneClean = phone.replace(/\D/g, '');
+
+      await pool.query(
+        `UPDATE contatos SET atendente_pausou_ia = $1, updated_at = NOW()
+         WHERE user_id = $2 AND telefone ILIKE $3`,
+        [pausar, userId, `%${phoneClean.slice(-11)}`]
+      );
+      await pool.query(
+        `UPDATE dados_cliente SET atendimento_ia = $1
+         WHERE user_id = $2 AND telefone ILIKE $3`,
+        [pausar ? 'pause' : 'ativo', userId, `%${phoneClean.slice(-11)}`]
+      ).catch(() => {});
+
+      return res.json({ ok: true, pausada: pausar });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/contatos-search — busca contatos CRM para nova conversa
+  router.get('/contatos-search', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const q = ((req.query.q as string) || '').trim();
+      if (!q) return res.json([]);
+      const r = await pool.query(
+        `SELECT id, nome, telefone, push_name, status
+         FROM contatos
+         WHERE user_id = $1
+           AND (nome ILIKE $2 OR telefone ILIKE $2 OR push_name ILIKE $2)
+           AND telefone IS NOT NULL AND telefone <> ''
+         ORDER BY nome ASC LIMIT 20`,
+        [userId, `%${q}%`]
       );
       return res.json(r.rows);
     } catch (err: any) {

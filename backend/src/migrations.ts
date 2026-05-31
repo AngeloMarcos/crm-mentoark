@@ -1132,5 +1132,24 @@ export async function runMigrations(pool: Pool): Promise<void> {
     console.log('[MIGRATIONS] Usuários master verificados OK');
   }
 
+  // ── whatsapp_message_status (status de entrega/leitura por messageId) ───────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_message_status (
+      id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      message_id    TEXT        NOT NULL,
+      instance_name TEXT        NOT NULL,
+      status        TEXT        NOT NULL,
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (message_id, instance_name)
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_msg_status_msg ON whatsapp_message_status(message_id)`).catch(() => {});
+
+  // Colunas extras em whatsapp_messages que podem não existir em instâncias antigas
+  await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS push_name TEXT`).catch(() => {});
+
+  console.log('[MIGRATIONS] whatsapp_message_status + patches OK');
+
   console.log('[MIGRATIONS] OK');
 }
