@@ -43,7 +43,7 @@ type ChatTab = "todos" | "fila" | "meus";
 
 interface Message {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "note";
   content: string;
   timestamp: string;
   senderName?: string;
@@ -220,19 +220,30 @@ export function WhatsAppInterface() {
 
   const handleSendMessage = () => {
     if (!messageInput.trim() || !activeChatId) return;
+    
+    const isNote = inputMode === "nota";
     const msg: Message = {
       id: Date.now().toString(),
-      role: "assistant",
+      role: isNote ? "note" : "assistant",
       content: messageInput,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      senderName: "Agente",
+      senderName: isNote ? "Nota Interna" : "Agente",
     };
+
     setChats(prev => prev.map(c =>
       c.id === activeChatId
-        ? { ...c, messages: [...c.messages, msg], lastMessage: messageInput, timestamp: msg.timestamp }
+        ? { 
+            ...c, 
+            messages: [...c.messages, msg], 
+            lastMessage: isNote ? `[NOTA] ${messageInput}` : messageInput, 
+            timestamp: msg.timestamp 
+          }
         : c
     ));
     setMessageInput("");
+    if (isNote) {
+      toast.success("Nota privada salva!");
+    }
   };
 
   const handleCriarTarefaIA = async (conversaId: string) => {
@@ -764,17 +775,26 @@ export function WhatsAppInterface() {
                 )}
                 {activeChat.messages.map((m, i) => {
                   const isOut = m.role === "assistant";
+                  const isNote = m.role === "note";
                   const prevRole = i > 0 ? activeChat.messages[i - 1].role : null;
-                  const showName = !isOut && prevRole !== "user";
+                  const showName = !isOut && !isNote && prevRole !== "user";
+                  
                   return (
-                    <div key={m.id} className={`flex ${isOut ? "justify-end" : "justify-start"} ${i > 0 && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
-                      <div className={`max-w-[70%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
+                    <div key={m.id} className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
+                      <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
                         isOut 
                           ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10" 
-                          : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
+                          : isNote
+                            ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
+                            : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
                       }`}>
                         {showName && (
                           <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
+                        )}
+                        {isNote && (
+                          <div className="flex items-center justify-center gap-1.5 mb-1 text-[10px] font-black uppercase tracking-widest text-amber-600/80">
+                            <Info className="h-3 w-3" /> Nota Privada
+                          </div>
                         )}
                         {m.tipo === 'image' && m.midia_url ? (
                           <img src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" />
@@ -788,7 +808,7 @@ export function WhatsAppInterface() {
                           </a>
                         ) : null}
                         {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
-                        <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : "text-muted-foreground/60"}`}>
+                        <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
                           <span className="text-[10px] font-bold">{m.timestamp}</span>
                           {isOut && <Check className="h-3 w-3 opacity-80" />}
                         </div>
