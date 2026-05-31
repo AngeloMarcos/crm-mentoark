@@ -390,7 +390,7 @@ export function WhatsAppInterface() {
                         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>{chat.tag}</span>
                       )}
                     </div>
-                    <p className={`text-xs truncate ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>{chat.lastMessage}</p>
+                    <p className={`text-xs truncate ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>{chat.lastMessage.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>
                   </div>
                   {chat.unread ? (
                     <div className="min-w-[20px] h-5 px-1.5 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center font-black shadow-lg shadow-green-500/20 shrink-0 animate-in zoom-in">
