@@ -124,6 +124,12 @@ export function WhatsAppInterface() {
   const [contatoSearch, setContatoSearch] = useState("");
   const [contatoResults, setContatoResults] = useState<{id: string; nome: string; telefone: string; push_name?: string}[]>([]);
   const [searchingContatos, setSearchingContatos] = useState(false);
+  // Foto de perfil — ampliar
+  const [photoModal, setPhotoModal] = useState<string | null>(null);
+  // Edição de nome do contato
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [savingName, setSavingName] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeChatIdRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -207,6 +213,31 @@ export function WhatsAppInterface() {
     } catch {}
     finally { setSearchingContatos(false); }
   }, []);
+
+  const salvarNomeContato = async () => {
+    if (!activeChatId || !nameInput.trim()) return;
+    setSavingName(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/contato/${encodeURIComponent(activeChatId)}`, {
+        method: 'PATCH',
+        headers: apiHeaders(),
+        body: JSON.stringify({ nome: nameInput.trim() }),
+      });
+      if (res.ok) {
+        setChats(prev => prev.map(c =>
+          c.id === activeChatId ? { ...c, name: nameInput.trim() } : c
+        ));
+        toast.success('Nome atualizado!');
+        setEditingName(false);
+      } else {
+        toast.error('Erro ao salvar nome');
+      }
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setSavingName(false);
+    }
+  };
 
   // Normaliza telefone para formato internacional (Brasil por padrão)
   const normalizarTelefone = (tel: string): string => {
@@ -1226,6 +1257,24 @@ export function WhatsAppInterface() {
         )}
       </div>
 
+      {/* Modal de foto ampliada */}
+      {photoModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => setPhotoModal(null)}
+        >
+          <div className="relative max-w-[90vw] max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <img src={photoModal} alt="Foto do contato" className="max-w-[80vw] max-h-[80vh] rounded-2xl shadow-2xl object-contain" />
+            <button
+              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white text-black flex items-center justify-center shadow-lg hover:bg-gray-100"
+              onClick={() => setPhotoModal(null)}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── RIGHT: Contact Profile Panel ── */}
       {activeChat && (
         <div className="w-[300px] shrink-0 border-l bg-card/20 backdrop-blur-md flex flex-col animate-in slide-in-from-right duration-500">
@@ -1243,16 +1292,47 @@ export function WhatsAppInterface() {
           <ScrollArea className="flex-1">
             {/* Avatar + name + phone */}
             <div className="flex flex-col items-center pt-8 pb-6 px-5 bg-gradient-to-b from-primary/[0.03] to-transparent">
-              <div className="w-24 h-24 rounded-[2rem] bg-primary/10 border-4 border-background overflow-hidden flex items-center justify-center text-3xl font-black text-primary uppercase mb-4 shadow-xl shadow-primary/10 transition-transform hover:scale-105 duration-500">
+              {/* Avatar clicável para ampliar */}
+              <button
+                onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
+                className={`w-24 h-24 rounded-[2rem] bg-primary/10 border-4 border-background overflow-hidden flex items-center justify-center text-3xl font-black text-primary uppercase mb-4 shadow-xl shadow-primary/10 transition-transform hover:scale-105 duration-500 ${activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}`}
+                title={activeChat.profile_pic ? 'Clique para ampliar' : ''}
+              >
                 {activeChat.profile_pic
                   ? <img src={activeChat.profile_pic} alt={activeChat.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
                   : activeChat.name[0]}
-              </div>
-              <div className="flex items-center gap-2 mb-1.5">
-                <p className="font-black text-base tracking-tight">{activeChat.name}</p>
-                <button className="p-1 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all">
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
+              </button>
+
+              {/* Nome editável */}
+              <div className="flex items-center gap-2 mb-1.5 w-full justify-center">
+                {editingName ? (
+                  <div className="flex items-center gap-1 w-full px-2">
+                    <input
+                      autoFocus
+                      value={nameInput}
+                      onChange={e => setNameInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') salvarNomeContato(); if (e.key === 'Escape') setEditingName(false); }}
+                      className="flex-1 text-sm font-bold bg-muted/50 border rounded-lg px-2 py-1 text-center outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <button onClick={salvarNomeContato} disabled={savingName} className="p-1 rounded text-success hover:bg-success/10">
+                      {savingName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    </button>
+                    <button onClick={() => setEditingName(false)} className="p-1 rounded text-muted-foreground hover:bg-muted">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <p className="font-black text-base tracking-tight">{activeChat.name}</p>
+                    <button
+                      onClick={() => { setNameInput(activeChat.name); setEditingName(true); }}
+                      className="p-1 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all"
+                      title="Editar nome"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
               </div>
               <div className="bg-muted/50 rounded-full px-4 py-1 flex flex-col items-center">
                 <p className="text-[9px] text-muted-foreground/60 uppercase font-black tracking-[0.15em] mb-0.5">

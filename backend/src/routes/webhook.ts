@@ -298,49 +298,73 @@ export default function webhookRouter(pool: Pool): Router {
            pushName || null, tsVal]
         ).catch(err => console.warn('[WEBHOOK] Falha ao salvar mensagem:', err.message));
 
-        // ── UPSERT de contato: UPDATE primeiro, INSERT se não existir ───────────
+        // ── UPSERT de contato + foto de perfil ───────────────────────────────────
         void (async () => {
           try {
             const suffix = `%${telefone.slice(-11)}`;
+            const nomeFinal = pushName || telefone;
+
+            // UPDATE se já existe; INSERT se é novo número
             const upd = await pool.query(
               `UPDATE contatos
                SET push_name          = COALESCE($1, push_name),
+                   nome               = CASE WHEN nome = telefone THEN $1 ELSE nome END,
                    ultima_mensagem_em = NOW()
                WHERE user_id = $2 AND telefone ILIKE $3`,
               [pushName || null, userId, suffix]
             );
 
             if (!upd.rowCount) {
-              // Contato novo — insere
               await pool.query(
                 `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, ultima_mensagem_em, atendente_pausou_ia)
                  VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)`,
-                [userId, pushName || telefone, telefone, pushName || null]
+                [userId, nomeFinal, telefone, pushName || null]
               ).catch(() => {}); // ignora race condition
             }
 
-            // ── Foto de perfil via Evolution API (assíncrono) ─────────────────
-            if (!pushName) return;
+            // ── Buscar foto de perfil via Evolution API ────────────────────────
+            // Tenta sempre (não só quando tem pushName) para recuperar fotos de contatos sem nome
             const cfg = await pool.query(
               `SELECT url, api_key FROM integracoes_config WHERE user_id=$1 AND tipo='evolution' LIMIT 1`,
               [userId]
             );
             const evoUrl = (cfg.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://fierceparrot-evolution.cloudfy.live').replace(/\/$/, '');
             const evoKey = cfg.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
-            const picRes = await fetch(`${evoUrl}/chat/fetchProfilePictureUrl/${instancia}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', apikey: evoKey },
-              body: JSON.stringify({ number: telefone }),
-            });
-            if (picRes.ok) {
-              const picData: any = await picRes.json().catch(() => ({}));
-              const picUrl: string | null = picData?.profilePictureUrl || picData?.url || null;
-              if (picUrl) {
-                await pool.query(
-                  `UPDATE contatos SET profile_pic_url = $1 WHERE user_id = $2 AND telefone ILIKE $3`,
-                  [picUrl, userId, suffix]
-                ).catch(() => {});
+
+            let picUrl: string | null = null;
+
+            // Tenta endpoint v2 (POST)
+            try {
+              const r = await fetch(`${evoUrl}/chat/fetchProfilePictureUrl/${instancia}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: evoKey },
+                body: JSON.stringify({ number: telefone }),
+              });
+              if (r.ok) {
+                const d: any = await r.json().catch(() => ({}));
+                picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
               }
+            } catch {}
+
+            // Tenta endpoint alternativo (GET) se v2 falhou
+            if (!picUrl) {
+              try {
+                const r = await fetch(`${evoUrl}/fetchProfilePicture/${instancia}?number=${telefone}`, {
+                  headers: { apikey: evoKey },
+                });
+                if (r.ok) {
+                  const d: any = await r.json().catch(() => ({}));
+                  picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
+                }
+              } catch {}
+            }
+
+            if (picUrl) {
+              await pool.query(
+                `UPDATE contatos SET profile_pic_url = $1 WHERE user_id = $2 AND telefone ILIKE $3`,
+                [picUrl, userId, suffix]
+              ).catch(() => {});
+              console.log(`[WEBHOOK] Foto de perfil atualizada para ${telefone}`);
             }
           } catch (e: any) {
             console.warn('[WEBHOOK] Falha ao upsert contato:', e.message);

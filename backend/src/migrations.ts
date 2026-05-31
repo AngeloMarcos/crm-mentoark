@@ -27,11 +27,21 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // Colunas de controle de IA — necessárias para o toggle de pausa manual
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS atendente_pausou_ia BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
-  // Índice UNIQUE para habilitar ON CONFLICT — deduplica antes de criar
+  // Remove duplicatas de contatos antes de criar índice ÚNICO
+  // (mantém o registro mais antigo de cada par user_id+telefone)
   await pool.query(`
-    DELETE FROM contatos a USING contatos b
-    WHERE a.id > b.id AND a.user_id = b.user_id AND a.telefone = b.telefone AND a.telefone IS NOT NULL
+    DELETE FROM contatos
+    WHERE id IN (
+      SELECT id FROM (
+        SELECT id,
+               ROW_NUMBER() OVER (PARTITION BY user_id, telefone ORDER BY created_at ASC) AS rn
+        FROM contatos
+        WHERE telefone IS NOT NULL
+      ) ranked
+      WHERE rn > 1
+    )
   `).catch(() => {});
+  // Índice ÚNICO — habilita ON CONFLICT e garante sem duplicatas futuras
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_contatos_user_tel_unique
     ON contatos(user_id, telefone) WHERE telefone IS NOT NULL

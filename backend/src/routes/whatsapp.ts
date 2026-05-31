@@ -324,6 +324,37 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // PATCH /api/whatsapp/contato/:phone — edita nome do contato
+  router.patch('/contato/:phone', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const { nome } = req.body as { nome: string };
+      if (!nome?.trim()) return res.status(400).json({ message: 'nome é obrigatório' });
+
+      const r = await pool.query(
+        `UPDATE contatos SET nome = $1
+         WHERE user_id = $2 AND telefone ILIKE $3
+         RETURNING id, nome, telefone, push_name, profile_pic_url`,
+        [nome.trim(), userId, `%${phone.slice(-11)}`]
+      );
+
+      if (!r.rowCount) {
+        // Contato não existe, cria
+        const ins = await pool.query(
+          `INSERT INTO contatos (user_id, nome, telefone, origem, status, atendente_pausou_ia)
+           VALUES ($1, $2, $3, 'WhatsApp', 'novo', false)
+           RETURNING id, nome, telefone, push_name, profile_pic_url`,
+          [userId, nome.trim(), phone]
+        );
+        return res.json(ins.rows[0]);
+      }
+      return res.json(r.rows[0]);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/contatos-search — busca contatos CRM para nova conversa
   router.get('/contatos-search', async (req: AuthRequest, res: Response) => {
     try {
