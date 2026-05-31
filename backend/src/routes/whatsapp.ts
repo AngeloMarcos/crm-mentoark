@@ -157,7 +157,8 @@ export default function whatsappRouter(pool: Pool): Router {
            r.content AS ultima_mensagem,
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
            COALESCE(c.push_name, c.nome) AS push_name,
-           c.nome AS nome_contato
+           c.nome AS nome_contato,
+           c.profile_pic_url
          FROM (
            SELECT remote_jid,
                   split_part(remote_jid,'@',1) AS phone,
@@ -176,6 +177,7 @@ export default function whatsappRouter(pool: Pool): Router {
         instancia: row.instancia,
         nome: row.nome_contato || row.push_name || row.session_id,
         push_name: row.push_name || null,
+        profile_pic_url: row.profile_pic_url || null,
         ultima_atividade: row.ultima_atividade,
         ultima_mensagem: row.ultima_mensagem || '',
         ultimo_role: row.ultimo_role,
@@ -287,11 +289,23 @@ export default function whatsappRouter(pool: Pool): Router {
       if (!phone) return res.status(400).json({ message: 'phone obrigatório' });
       const phoneClean = phone.replace(/\D/g, '');
 
+      // UPSERT garante que o contato exista antes de atualizar
       await pool.query(
-        `UPDATE contatos SET atendente_pausou_ia = $1, updated_at = NOW()
-         WHERE user_id = $2 AND telefone ILIKE $3`,
-        [pausar, userId, `%${phoneClean.slice(-11)}`]
-      );
+        `INSERT INTO contatos (user_id, nome, telefone, origem, status, atendente_pausou_ia)
+         VALUES ($1, $2, $3, 'WhatsApp', 'novo', $4)
+         ON CONFLICT (user_id, telefone) DO UPDATE
+           SET atendente_pausou_ia = EXCLUDED.atendente_pausou_ia,
+               updated_at = NOW()`,
+        [userId, phoneClean, phoneClean, pausar]
+      ).catch(async () => {
+        // Fallback: só UPDATE se o UPSERT falhar (ex: constraint diferente)
+        await pool.query(
+          `UPDATE contatos SET atendente_pausou_ia = $1
+           WHERE user_id = $2 AND telefone ILIKE $3`,
+          [pausar, userId, `%${phoneClean.slice(-11)}`]
+        );
+      });
+
       await pool.query(
         `UPDATE dados_cliente SET atendimento_ia = $1
          WHERE user_id = $2 AND telefone ILIKE $3`,

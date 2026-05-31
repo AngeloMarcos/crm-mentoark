@@ -223,10 +223,14 @@ export default function webhookRouter(pool: Pool): Router {
         if (messageId.startsWith('resp_') || messageId.startsWith('manual_')) return;
 
         if (userId) {
-          await pool.query(
-            `UPDATE contatos SET atendente_pausou_ia = true, updated_at = NOW()
-             WHERE user_id = $1 AND telefone ILIKE $2`,
-            [userId, `%${telefone.slice(-11)}`]
+          // UPSERT: garante que o contato exista mesmo antes de qualquer mensagem recebida
+          pool.query(
+            `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, atendente_pausou_ia)
+             VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', true)
+             ON CONFLICT (user_id, telefone) DO UPDATE
+               SET atendente_pausou_ia = true,
+                   push_name = COALESCE(EXCLUDED.push_name, contatos.push_name)`,
+            [userId, telefone, telefone, pushName || null]
           ).catch(() => {});
 
           await pool.query(
@@ -282,21 +286,55 @@ export default function webhookRouter(pool: Pool): Router {
         await pool.query(
           `INSERT INTO whatsapp_messages
              (user_id, instance_name, remote_jid, message_id, from_me, message_type,
-              content, media_url, media_mimetype, status, timestamp_wa)
-           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, 'received', to_timestamp($9))
+              content, media_url, media_mimetype, push_name, status, timestamp_wa)
+           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $9, 'received', to_timestamp($10))
            ON CONFLICT (message_id, instance_name) DO NOTHING`,
           [userId, instancia, remoteJid, messageId, tipo,
-           texto || null, midia.url || null, midia.mime || null, tsVal]
+           texto || null, midia.url || null, midia.mime || null,
+           pushName || null, tsVal]
         ).catch(err => console.warn('[WEBHOOK] Falha ao salvar mensagem:', err.message));
 
-        // Atualizar push_name no contato (sem bloquear fluxo)
+        // ── UPSERT de contato — cria se não existir, atualiza nome e timestamp ──
         pool.query(
-          `UPDATE contatos
-           SET push_name = COALESCE($1, push_name),
-               ultima_mensagem_em = NOW(), updated_at = NOW()
-           WHERE user_id = $2 AND telefone ILIKE $3`,
-          [pushName || null, userId, `%${telefone.slice(-11)}`]
-        ).catch(() => {});
+          `INSERT INTO contatos
+             (user_id, nome, telefone, push_name, origem, status, ultima_mensagem_em, atendente_pausou_ia)
+           VALUES ($1, $2, $3, $3, 'WhatsApp', 'novo', NOW(), false)
+           ON CONFLICT (user_id, telefone) DO UPDATE
+             SET push_name          = COALESCE(EXCLUDED.push_name, contatos.push_name),
+                 nome               = CASE WHEN contatos.nome = contatos.telefone OR contatos.nome IS NULL
+                                           THEN COALESCE(EXCLUDED.push_name, contatos.nome)
+                                           ELSE contatos.nome END,
+                 ultima_mensagem_em = NOW()`,
+          [userId, pushName || telefone, telefone]
+        ).then(async () => {
+          // ── Buscar foto de perfil na Evolution API (assíncrono, não bloqueia) ──
+          if (!pushName) return; // só busca se tiver push_name (contato real)
+          try {
+            const cfg = await pool.query(
+              `SELECT url, api_key FROM integracoes_config WHERE user_id=$1 AND tipo='evolution' LIMIT 1`,
+              [userId]
+            );
+            const evoUrl = cfg.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://fierceparrot-evolution.cloudfy.live';
+            const evoKey = cfg.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+            const base = evoUrl.replace(/\/$/, '');
+            const picRes = await fetch(`${base}/chat/fetchProfilePictureUrl/${instancia}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', apikey: evoKey },
+              body: JSON.stringify({ number: telefone }),
+            });
+            if (picRes.ok) {
+              const picData: any = await picRes.json().catch(() => ({}));
+              const picUrl: string | null = picData?.profilePictureUrl || picData?.url || null;
+              if (picUrl) {
+                await pool.query(
+                  `UPDATE contatos SET profile_pic_url = $1
+                   WHERE user_id = $2 AND telefone ILIKE $3`,
+                  [picUrl, userId, `%${telefone.slice(-11)}`]
+                ).catch(() => {});
+              }
+            }
+          } catch {}
+        }).catch(() => {});
       }
 
       // ── Opt-out ───────────────────────────────────────────────────────────────

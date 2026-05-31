@@ -72,6 +72,7 @@ interface Chat {
   source?: string;
   messages: Message[];
   notes?: string;
+  profile_pic?: string;
 }
 
 const TAG_COLORS: Record<string, string> = {
@@ -242,6 +243,7 @@ export function WhatsAppInterface() {
           timestamp: formatTime(row.ultima_atividade),
           messages: prevMap.get(row.session_id)?.messages || [],
           notes: prevMap.get(row.session_id)?.notes || '',
+          profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
         }));
 
         // Preserva chat local ativo que ainda não chegou ao banco (ex: nova conversa antes do 1º envio)
@@ -591,10 +593,12 @@ export function WhatsAppInterface() {
                   }`}
                 >
                   <div className="relative shrink-0">
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-base uppercase transition-transform group-hover:scale-105 ${
+                    <div className={`w-12 h-12 rounded-2xl overflow-hidden flex items-center justify-center font-bold text-base uppercase transition-transform group-hover:scale-105 ${
                       isActive ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20" : "bg-primary/10 text-primary"
                     }`}>
-                      {chat.name[0]}
+                      {chat.profile_pic
+                        ? <img src={chat.profile_pic} alt={chat.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
+                        : chat.name[0]}
                     </div>
                     {chat.online && (
                       <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-background rounded-full shadow-sm" />
@@ -968,8 +972,10 @@ export function WhatsAppInterface() {
             {/* Chat header */}
             <div className="flex items-center justify-between px-6 py-4 border-b bg-background/40 backdrop-blur-md shrink-0 z-10 shadow-sm">
               <div className="flex items-center gap-4">
-                <div className="w-11 h-11 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center font-bold text-lg text-primary uppercase shadow-inner">
-                  {activeChat.name[0]}
+                <div className="w-11 h-11 rounded-2xl bg-primary/10 border border-primary/20 overflow-hidden flex items-center justify-center font-bold text-lg text-primary uppercase shadow-inner">
+                  {activeChat.profile_pic
+                    ? <img src={activeChat.profile_pic} alt={activeChat.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
+                    : activeChat.name[0]}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -1237,8 +1243,10 @@ export function WhatsAppInterface() {
           <ScrollArea className="flex-1">
             {/* Avatar + name + phone */}
             <div className="flex flex-col items-center pt-8 pb-6 px-5 bg-gradient-to-b from-primary/[0.03] to-transparent">
-              <div className="w-24 h-24 rounded-[2rem] bg-primary/10 border-4 border-background flex items-center justify-center text-3xl font-black text-primary uppercase mb-4 shadow-xl shadow-primary/10 transition-transform hover:scale-105 duration-500">
-                {activeChat.name[0]}
+              <div className="w-24 h-24 rounded-[2rem] bg-primary/10 border-4 border-background overflow-hidden flex items-center justify-center text-3xl font-black text-primary uppercase mb-4 shadow-xl shadow-primary/10 transition-transform hover:scale-105 duration-500">
+                {activeChat.profile_pic
+                  ? <img src={activeChat.profile_pic} alt={activeChat.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
+                  : activeChat.name[0]}
               </div>
               <div className="flex items-center gap-2 mb-1.5">
                 <p className="font-black text-base tracking-tight">{activeChat.name}</p>
