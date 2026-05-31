@@ -14,8 +14,80 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_configs: {
+        Row: {
+          ativo: boolean | null
+          bloco_qualificacao: string | null
+          created_at: string | null
+          grupo_notificacao: string | null
+          id: string
+          mensagem_encaminhamento: string | null
+          mensagem_encerramento: string | null
+          modelo_llm: string | null
+          modelo_parser: string | null
+          nome_agente: string
+          palavra_reativar: string | null
+          prompt_sistema: string
+          saudacao_inicial: string | null
+          sinal_pausa: string | null
+          tempo_espera_mensagem: number | null
+          tempo_espera_resposta: number | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean | null
+          bloco_qualificacao?: string | null
+          created_at?: string | null
+          grupo_notificacao?: string | null
+          id?: string
+          mensagem_encaminhamento?: string | null
+          mensagem_encerramento?: string | null
+          modelo_llm?: string | null
+          modelo_parser?: string | null
+          nome_agente?: string
+          palavra_reativar?: string | null
+          prompt_sistema: string
+          saudacao_inicial?: string | null
+          sinal_pausa?: string | null
+          tempo_espera_mensagem?: number | null
+          tempo_espera_resposta?: number | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean | null
+          bloco_qualificacao?: string | null
+          created_at?: string | null
+          grupo_notificacao?: string | null
+          id?: string
+          mensagem_encaminhamento?: string | null
+          mensagem_encerramento?: string | null
+          modelo_llm?: string | null
+          modelo_parser?: string | null
+          nome_agente?: string
+          palavra_reativar?: string | null
+          prompt_sistema?: string
+          saudacao_inicial?: string | null
+          sinal_pausa?: string | null
+          tempo_espera_mensagem?: number | null
+          tempo_espera_resposta?: number | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_configs_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       agent_prompts: {
         Row: {
+          agent_config_id: string | null
           ativo: boolean
           conteudo: string
           created_at: string
@@ -25,6 +97,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          agent_config_id?: string | null
           ativo?: boolean
           conteudo: string
           created_at?: string
@@ -34,6 +107,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          agent_config_id?: string | null
           ativo?: boolean
           conteudo?: string
           created_at?: string
@@ -42,7 +116,15 @@ export type Database = {
           nome?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "agent_prompts_agent_config_id_fkey"
+            columns: ["agent_config_id"]
+            isOneToOne: false
+            referencedRelation: "agent_configs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       agentes: {
         Row: {
@@ -485,6 +567,7 @@ export type Database = {
           bot_message: string | null
           created_at: string
           id: number
+          instancia: string | null
           message_type: string | null
           nomewpp: string | null
           phone: string | null
@@ -496,6 +579,7 @@ export type Database = {
           bot_message?: string | null
           created_at?: string
           id?: number
+          instancia?: string | null
           message_type?: string | null
           nomewpp?: string | null
           phone?: string | null
@@ -507,6 +591,7 @@ export type Database = {
           bot_message?: string | null
           created_at?: string
           id?: number
+          instancia?: string | null
           message_type?: string | null
           nomewpp?: string | null
           phone?: string | null
@@ -650,29 +735,59 @@ export type Database = {
         Row: {
           atendimento_ia: boolean | null
           created_at: string
+          email: string | null
+          estado_civil: string | null
+          fgts: number | null
           id: number
+          nome_completo: string | null
           nomewpp: string | null
+          pausa_timestamp: string | null
+          renda_bruta: number | null
+          setor: string | null
           Setor: string | null
           telefone: string | null
+          tipo_trabalho: string | null
+          updated_at: string | null
           user_id: string | null
+          valor_entrada: number | null
         }
         Insert: {
           atendimento_ia?: boolean | null
           created_at?: string
+          email?: string | null
+          estado_civil?: string | null
+          fgts?: number | null
           id?: number
+          nome_completo?: string | null
           nomewpp?: string | null
+          pausa_timestamp?: string | null
+          renda_bruta?: number | null
+          setor?: string | null
           Setor?: string | null
           telefone?: string | null
+          tipo_trabalho?: string | null
+          updated_at?: string | null
           user_id?: string | null
+          valor_entrada?: number | null
         }
         Update: {
           atendimento_ia?: boolean | null
           created_at?: string
+          email?: string | null
+          estado_civil?: string | null
+          fgts?: number | null
           id?: number
+          nome_completo?: string | null
           nomewpp?: string | null
+          pausa_timestamp?: string | null
+          renda_bruta?: number | null
+          setor?: string | null
           Setor?: string | null
           telefone?: string | null
+          tipo_trabalho?: string | null
+          updated_at?: string | null
           user_id?: string | null
+          valor_entrada?: number | null
         }
         Relationships: []
       }

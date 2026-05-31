@@ -33,8 +33,15 @@ interface DadoCliente {
   id: number;
   nomewpp: string | null;
   telefone: string | null;
-  Setor: string | null;
+  setor: string | null;
   atendimento_ia: string | null;
+  nome_completo: string | null;
+  email: string | null;
+  renda_bruta: number | null;
+  tipo_trabalho: string | null;
+  estado_civil: string | null;
+  fgts: number | null;
+  valor_entrada: number | null;
   created_at: string;
 }
 
@@ -351,8 +358,8 @@ export default function ContatoDetalhePage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs text-muted-foreground uppercase font-semibold block">Setor</label>
-                    <Badge variant="outline" className={cn("mt-1", setorBadgeClass(contato.Setor))}>
-                      {contato.Setor?.trim() || "Sem setor"}
+                    <Badge variant="outline" className={cn("mt-1", setorBadgeClass(contato.setor))}>
+                      {contato.setor?.trim() || "Sem setor"}
                     </Badge>
                   </div>
                   <div>
@@ -371,6 +378,50 @@ export default function ContatoDetalhePage() {
                     </Badge>
                   </div>
                 </div>
+
+                {/* Bloco de Qualificação */}
+                {(contato.email || contato.renda_bruta || contato.tipo_trabalho) && (
+                  <div className="pt-4 border-t border-border/50 space-y-3">
+                    <label className="text-xs text-muted-foreground uppercase font-semibold block">Dados de Qualificação</label>
+                    
+                    {contato.email && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">E-mail</p>
+                        <p className="text-sm font-medium">{contato.email}</p>
+                      </div>
+                    )}
+                    
+                    {contato.renda_bruta && (
+                      <div className="flex justify-between">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Renda Bruta</p>
+                          <p className="text-sm font-medium">R$ {Number(contato.renda_bruta).toLocaleString('pt-BR')}</p>
+                        </div>
+                        {contato.fgts && (
+                          <div className="text-right">
+                            <p className="text-xs text-muted-foreground">FGTS</p>
+                            <p className="text-sm font-medium">R$ {Number(contato.fgts).toLocaleString('pt-BR')}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex justify-between">
+                      {contato.tipo_trabalho && (
+                        <div>
+                          <p className="text-xs text-muted-foreground">Trabalho</p>
+                          <p className="text-sm font-medium capitalize">{contato.tipo_trabalho}</p>
+                        </div>
+                      )}
+                      {contato.estado_civil && (
+                        <div className="text-right">
+                          <p className="text-xs text-muted-foreground">Estado Civil</p>
+                          <p className="text-sm font-medium capitalize">{contato.estado_civil.replace('_', ' ')}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="pt-2 border-t border-border/50">
                   <label className="text-xs text-muted-foreground uppercase font-semibold block">Cadastro</label>
