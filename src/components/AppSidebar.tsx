@@ -60,6 +60,21 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
+    label: "👥 EQUIPE",
+    subgroups: [
+      {
+        label: "Equipe",
+        icon: Users2,
+        color: "text-indigo-500",
+        items: [
+          { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
+          { title: "Chat da Equipe", url: "/chat-equipe", icon: UsersIcon, modulo: "whatsapp", color: "text-purple-400" },
+          { title: "Smart Links & QR Code", url: "/smart-links", icon: Link2, modulo: "whatsapp", color: "text-fuchsia-400" },
+        ],
+      },
+    ],
+  },
+  {
     label: "🎯 VENDAS",
     subgroups: [
       {
@@ -144,21 +159,6 @@ const navGroups: NavGroup[] = [
           { title: "Configuração da IA", url: "/cerebro", icon: Brain, modulo: "cerebro", color: "text-purple-400" },
           { title: "Workflows", url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500" },
           { title: "Uso de IA", url: "/uso-ia", icon: Activity, modulo: "agentes", color: "text-pink-500" },
-        ],
-      },
-    ],
-  },
-  {
-    label: "👥 EQUIPE",
-    subgroups: [
-      {
-        label: "Equipe",
-        icon: Users2,
-        color: "text-indigo-500",
-        items: [
-          { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
-          { title: "Chat da Equipe", url: "/chat-equipe", icon: UsersIcon, modulo: "whatsapp", color: "text-purple-400" },
-          { title: "Smart Links & QR Code", url: "/smart-links", icon: Link2, modulo: "whatsapp", color: "text-fuchsia-400" },
         ],
       },
     ],
