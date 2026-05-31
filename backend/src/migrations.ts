@@ -27,6 +27,15 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // Colunas de controle de IA — necessárias para o toggle de pausa manual
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS atendente_pausou_ia BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
+  // Índice UNIQUE para habilitar ON CONFLICT — deduplica antes de criar
+  await pool.query(`
+    DELETE FROM contatos a USING contatos b
+    WHERE a.id > b.id AND a.user_id = b.user_id AND a.telefone = b.telefone AND a.telefone IS NOT NULL
+  `).catch(() => {});
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_contatos_user_tel_unique
+    ON contatos(user_id, telefone) WHERE telefone IS NOT NULL
+  `).catch(() => {});
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS n8n_webhook_url TEXT`);
 
   await pool.query(`

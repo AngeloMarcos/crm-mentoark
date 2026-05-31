@@ -156,8 +156,12 @@ export default function whatsappRouter(pool: Pool): Router {
            r.total::int AS total,
            r.content AS ultima_mensagem,
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
-           COALESCE(c.push_name, c.nome) AS push_name,
-           c.nome AS nome_contato,
+           COALESCE(c.push_name, c.nome,
+             (SELECT wm.push_name FROM whatsapp_messages wm
+              WHERE wm.remote_jid = r.remote_jid AND wm.user_id = $1
+                AND wm.push_name IS NOT NULL LIMIT 1)
+           ) AS push_name,
+           COALESCE(c.nome, c.push_name) AS nome_contato,
            c.profile_pic_url
          FROM (
            SELECT remote_jid,
@@ -175,7 +179,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const conversas = r.rows.map(row => ({
         session_id: row.session_id,
         instancia: row.instancia,
-        nome: row.nome_contato || row.push_name || row.session_id,
+        nome: row.nome_contato || row.push_name || row.session_id.replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3'),
         push_name: row.push_name || null,
         profile_pic_url: row.profile_pic_url || null,
         ultima_atividade: row.ultima_atividade,
@@ -288,32 +292,34 @@ export default function whatsappRouter(pool: Pool): Router {
       const { phone, pausar } = req.body as { phone: string; pausar: boolean };
       if (!phone) return res.status(400).json({ message: 'phone obrigatório' });
       const phoneClean = phone.replace(/\D/g, '');
+      const suffix = `%${phoneClean.slice(-11)}`;
 
-      // UPSERT garante que o contato exista antes de atualizar
-      await pool.query(
-        `INSERT INTO contatos (user_id, nome, telefone, origem, status, atendente_pausou_ia)
-         VALUES ($1, $2, $3, 'WhatsApp', 'novo', $4)
-         ON CONFLICT (user_id, telefone) DO UPDATE
-           SET atendente_pausou_ia = EXCLUDED.atendente_pausou_ia,
-               updated_at = NOW()`,
-        [userId, phoneClean, phoneClean, pausar]
-      ).catch(async () => {
-        // Fallback: só UPDATE se o UPSERT falhar (ex: constraint diferente)
+      // 1. Tenta UPDATE em contato existente
+      const upd = await pool.query(
+        `UPDATE contatos SET atendente_pausou_ia = $1
+         WHERE user_id = $2 AND telefone ILIKE $3`,
+        [pausar, userId, suffix]
+      );
+
+      // 2. Se nenhuma linha afetada, cria o contato (número ainda não tem cadastro)
+      if (!upd.rowCount) {
         await pool.query(
-          `UPDATE contatos SET atendente_pausou_ia = $1
-           WHERE user_id = $2 AND telefone ILIKE $3`,
-          [pausar, userId, `%${phoneClean.slice(-11)}`]
-        );
-      });
+          `INSERT INTO contatos (user_id, nome, telefone, origem, status, atendente_pausou_ia)
+           VALUES ($1, $2, $3, 'WhatsApp', 'novo', $4)`,
+          [userId, phoneClean, phoneClean, pausar]
+        ).catch(() => {}); // ignora se criado por race condition
+      }
 
+      // 3. Atualiza dados_cliente também (sem travar em erro)
       await pool.query(
         `UPDATE dados_cliente SET atendimento_ia = $1
          WHERE user_id = $2 AND telefone ILIKE $3`,
-        [pausar ? 'pause' : 'ativo', userId, `%${phoneClean.slice(-11)}`]
+        [pausar ? 'pause' : 'ativo', userId, suffix]
       ).catch(() => {});
 
       return res.json({ ok: true, pausada: pausar });
     } catch (err: any) {
+      console.error('[IA-TOGGLE] Erro:', err.message);
       return res.status(500).json({ message: err.message });
     }
   });
