@@ -733,7 +733,7 @@ export type Database = {
       }
       dados_cliente: {
         Row: {
-          atendimento_ia: boolean | null
+          atendimento_ia: string | null
           created_at: string
           email: string | null
           estado_civil: string | null
@@ -744,7 +744,6 @@ export type Database = {
           pausa_timestamp: string | null
           renda_bruta: number | null
           setor: string | null
-          Setor: string | null
           telefone: string | null
           tipo_trabalho: string | null
           updated_at: string | null
@@ -752,7 +751,7 @@ export type Database = {
           valor_entrada: number | null
         }
         Insert: {
-          atendimento_ia?: boolean | null
+          atendimento_ia?: string | null
           created_at?: string
           email?: string | null
           estado_civil?: string | null
@@ -763,7 +762,6 @@ export type Database = {
           pausa_timestamp?: string | null
           renda_bruta?: number | null
           setor?: string | null
-          Setor?: string | null
           telefone?: string | null
           tipo_trabalho?: string | null
           updated_at?: string | null
@@ -771,7 +769,7 @@ export type Database = {
           valor_entrada?: number | null
         }
         Update: {
-          atendimento_ia?: boolean | null
+          atendimento_ia?: string | null
           created_at?: string
           email?: string | null
           estado_civil?: string | null
@@ -782,7 +780,6 @@ export type Database = {
           pausa_timestamp?: string | null
           renda_bruta?: number | null
           setor?: string | null
-          Setor?: string | null
           telefone?: string | null
           tipo_trabalho?: string | null
           updated_at?: string | null
