@@ -932,28 +932,36 @@ export default function CerebroPage() {
             </CardContent>
           </Card>
         ) : (
-          <Tabs defaultValue="personalidade">
-            {/* Grupo Conteúdo */}
+          <Tabs defaultValue="fluxo">
+            {/* Grupo Agente */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Conteúdo</p>
-              <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 h-auto">
-                <TabsTrigger value="personalidade"><User className="h-4 w-4 mr-1" /> Personalidade</TabsTrigger>
-                <TabsTrigger value="negocio"><Building2 className="h-4 w-4 mr-1" /> Negócio</TabsTrigger>
-                <TabsTrigger value="faqs"><HelpCircle className="h-4 w-4 mr-1" /> FAQs</TabsTrigger>
-                <TabsTrigger value="objecoes"><Shield className="h-4 w-4 mr-1" /> Objeções</TabsTrigger>
-                <TabsTrigger value="scripts"><FileText className="h-4 w-4 mr-1" /> Scripts</TabsTrigger>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Agente</p>
+              <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 h-auto p-1">
+                <TabsTrigger value="fluxo" className="gap-2"><Bot className="h-4 w-4" /> Fluxo IA</TabsTrigger>
+                <TabsTrigger value="testar" className="gap-2"><MessageCircle className="h-4 w-4" /> Testar</TabsTrigger>
+                <TabsTrigger value="prompt" className="gap-2"><FileCode className="h-4 w-4" /> Prompt</TabsTrigger>
+                <TabsTrigger value="config" className="gap-2"><Settings className="h-4 w-4" /> Configs</TabsTrigger>
+              </TabsList>
+            </div>
+
+            {/* Grupo Conteúdo */}
+            <div className="space-y-2 mt-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Conhecimento</p>
+              <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 h-auto p-1">
+                <TabsTrigger value="personalidade" className="gap-2"><User className="h-4 w-4" /> Persona</TabsTrigger>
+                <TabsTrigger value="negocio" className="gap-2"><Building2 className="h-4 w-4" /> Negócio</TabsTrigger>
+                <TabsTrigger value="faqs" className="gap-2"><HelpCircle className="h-4 w-4" /> FAQs</TabsTrigger>
+                <TabsTrigger value="objecoes" className="gap-2"><Shield className="h-4 w-4" /> Objeções</TabsTrigger>
+                <TabsTrigger value="scripts" className="gap-2"><FileText className="h-4 w-4" /> Scripts</TabsTrigger>
               </TabsList>
             </div>
 
             {/* Grupo Ferramentas */}
             <div className="space-y-2 mt-3">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Ferramentas</p>
-              <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 h-auto">
-                <TabsTrigger value="vetorial"><Database className="h-4 w-4 mr-1" /> Vetorial</TabsTrigger>
-                <TabsTrigger value="prompt"><FileCode className="h-4 w-4 mr-1" /> Prompt</TabsTrigger>
-                <TabsTrigger value="testar"><MessageCircle className="h-4 w-4 mr-1" /> Testar</TabsTrigger>
-                <TabsTrigger value="voz"><Volume2 className="h-4 w-4 mr-1" /> Voz</TabsTrigger>
-                <TabsTrigger value="config"><Settings className="h-4 w-4 mr-1" /> Configurações</TabsTrigger>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Avançado</p>
+              <TabsList className="grid w-full grid-cols-2 h-auto p-1">
+                <TabsTrigger value="vetorial" className="gap-2"><Database className="h-4 w-4" /> Base Vetorial</TabsTrigger>
+                <TabsTrigger value="voz" className="gap-2"><Volume2 className="h-4 w-4" /> Voz</TabsTrigger>
               </TabsList>
             </div>
 
