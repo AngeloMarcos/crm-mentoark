@@ -31,6 +31,26 @@ export default function agentPrompts(pool: Pool): Router {
     }
   });
 
+  // PATCH /agent_prompts/:id — se ativo=true, desativa os demais automaticamente
+  router.patch('/:id', async (req: AuthRequest, res: Response, next: any) => {
+    if (req.body?.ativo !== true) return next();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        'UPDATE agent_prompts SET ativo = false WHERE user_id = $1 AND id != $2',
+        [req.userId, req.params.id]
+      );
+      await client.query('COMMIT');
+      return next();
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      return res.status(500).json({ message: err.message });
+    } finally {
+      client.release();
+    }
+  });
+
   router.use('/', base);
   return router;
 }

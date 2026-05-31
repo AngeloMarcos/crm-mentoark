@@ -66,7 +66,6 @@ import kanbanRouter, { kanbanWebhookN8n } from './routes/kanban';
 import aiProvidersRouter from './routes/ai-providers';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
-import cargosRouter from './routes/cargos';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';

@@ -1,17 +1,11 @@
 /**
  * webhook.ts — Receptor de eventos da Evolution API (WhatsApp)
  *
- * A Evolution API envia um POST para /webhook/evolution a cada evento
- * (mensagem recebida, mensagem enviada, status atualizado, etc.).
- *
- * Este arquivo é responsável por:
- *  1. Validar a assinatura HMAC (segurança)
- *  2. Filtrar eventos relevantes (apenas messages.upsert)
- *  3. Deduplicar mensagens (evitar processamento duplicado)
- *  4. Detectar mensagens enviadas pelo atendente → pausar IA
- *  5. Processar opt-out (palavras como "sair", "stop")
- *  6. Processar comandos de reativação ("reativar ia")
- *  7. Encaminhar para o motor de IA (processarComDebounce)
+ * Melhorias v3:
+ * - Lookup de agente único com fallbacks (integracoes_config, whatsapp_instances, prefixo UUID)
+ * - Validação de JID e filtragem de grupos antes de qualquer DB op
+ * - Tratamento de MESSAGES_UPDATE para status de entrega/leitura
+ * - Melhor logging e tratamento de erros
  */
 
 import { Router, Request, Response } from 'express';
@@ -19,13 +13,6 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import { processarComDebounce } from '../services/agentEngine';
 
-/**
- * Verifica a assinatura HMAC-SHA256 enviada pela Evolution API.
- * O header x-evolution-hmac contém o HMAC do body em hexadecimal.
- *
- * timingSafeEqual é usado para evitar timing attacks — comparação
- * de strings normais vaza informação sobre quantos bytes são iguais.
- */
 function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
   const assinaturaRecebida = req.headers['x-evolution-hmac'] as string;
   if (!assinaturaRecebida) return false;
@@ -38,75 +25,62 @@ function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
   }
 }
 
-/** Estrutura do payload recebido da Evolution API no evento messages.upsert */
 interface EvolutionPayload {
-  event: string;       // Ex: "messages.upsert", "connection.update"
-  instance: string;    // Nome da instância WhatsApp configurada na Evolution
+  event: string;
+  instance: string;
   data: {
     key: {
-      remoteJid: string;  // JID do contato: "5511999@s.whatsapp.net" ou grupo@g.us
-      fromMe: boolean;    // true = mensagem enviada por nós; false = recebida
-      id: string;         // ID único da mensagem (gerado pelo WhatsApp)
+      remoteJid: string;
+      fromMe: boolean;
+      id: string;
     };
     message?: {
-      // Tipos de mensagem suportados pela Evolution API
-      conversation?: string;                                     // Texto simples
-      extendedTextMessage?: { text: string };                    // Texto com formatação
+      conversation?: string;
+      extendedTextMessage?: { text: string };
       imageMessage?: { caption?: string; url?: string; mimetype?: string };
       audioMessage?: { url?: string; mimetype?: string };
       videoMessage?: { caption?: string; url?: string; mimetype?: string };
       documentMessage?: { caption?: string; fileName?: string; url?: string; mimetype?: string };
       stickerMessage?: { url?: string; mimetype?: string };
-      // Respostas de botões interativos
       buttonsResponseMessage?: { selectedDisplayText: string };
       listResponseMessage?: { title: string };
       templateButtonReplyMessage?: { selectedDisplayText: string };
     };
-    messageTimestamp?: number;  // Unix timestamp da mensagem
-    pushName?: string;          // Nome exibido do contato
-    status?: string;            // "READ", "DELIVERED", etc.
+    update?: { status: string }[];
+    messageTimestamp?: number;
+    pushName?: string;
+    status?: string;
   };
 }
 
-/**
- * Palavras-chave que ativam o opt-out automático.
- * O contato é marcado como opt_out=true e não recebe mais mensagens do bot.
- * Comparação feita após normalização (trim + toLowerCase).
- */
 const OPT_OUT_KEYWORDS = new Set([
   'sair', 'stop', 'parar', 'cancelar', 'remover', 'não quero', 'nao quero',
 ]);
 
-/**
- * Comandos que reativam a IA após uma pausa humana.
- * O atendente (ou o próprio cliente) pode digitar um desses comandos
- * para devolver o controle ao bot.
- */
 const REATIVAR_COMANDOS = new Set([
   'reativar ia', 'ativar ia', 'reativar', 'atendimento finalizado',
 ]);
 
-/** Extrai o texto principal da mensagem, independente do tipo */
+function isValidJid(jid: string): boolean {
+  return /^\d+@(s\.whatsapp\.net|g\.us|lid)$/.test(jid);
+}
+
 function extrairTexto(data: EvolutionPayload['data']): string | null {
   const m = data.message;
   if (!m) return null;
   return (
     m.conversation ||
     m.extendedTextMessage?.text ||
-    m.imageMessage?.caption ||          // Legenda da imagem (pode ser null)
+    m.imageMessage?.caption ||
     m.buttonsResponseMessage?.selectedDisplayText ||
     m.listResponseMessage?.title ||
     m.templateButtonReplyMessage?.selectedDisplayText ||
+    m.videoMessage?.caption ||
     m.documentMessage?.caption ||
     null
   );
 }
 
-/**
- * Determina o tipo de mensagem para o motor de IA.
- * O motor usa esse campo para decidir se precisa transcrever (audio)
- * ou analisar visualmente (image) antes de processar.
- */
 function extrairTipo(data: EvolutionPayload['data']): string {
   const m = data.message;
   if (!m) return 'text';
@@ -118,7 +92,6 @@ function extrairTipo(data: EvolutionPayload['data']): string {
   return 'text';
 }
 
-/** Extrai URL e metadados da mídia (quando presente) */
 function extrairMidia(data: EvolutionPayload['data']): { url?: string; mime?: string; nome?: string } {
   const m = data.message;
   if (!m) return {};
@@ -130,134 +103,162 @@ function extrairMidia(data: EvolutionPayload['data']): { url?: string; mime?: st
 export default function webhookRouter(pool: Pool): Router {
   const router = Router();
 
-  /**
-   * Set em memória para deduplicação rápida.
-   * O mesmo messageId pode chegar múltiplas vezes devido a retentativas
-   * da Evolution API — guardamos os IDs por 60s para evitar duplicatas.
-   */
   const processados = new Set<string>();
 
-  /**
-   * POST /webhook/evolution
-   *
-   * Ponto de entrada único para todos os eventos da Evolution API.
-   * Retorna 200 imediatamente (antes do processamento assíncrono) para
-   * evitar timeout da Evolution e garantir entrega rápida do ACK.
-   */
+  async function handleStatusUpdate(payload: EvolutionPayload): Promise<void> {
+    const updates = payload.data?.update;
+    if (!Array.isArray(updates)) return;
+
+    for (const upd of updates) {
+      const messageId = (upd as any).id || payload.data?.key?.id;
+      const status = (upd as any).status || upd.status;
+      if (!messageId || !status) continue;
+
+      await pool.query(
+        `INSERT INTO whatsapp_message_status (message_id, instance_name, status, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (message_id, instance_name) DO UPDATE
+           SET status = EXCLUDED.status, updated_at = NOW()`,
+        [messageId, payload.instance, status]
+      ).catch(() => {});
+
+      if (status === 'READ' || status === 'PLAYED') {
+        await pool.query(
+          `UPDATE whatsapp_messages SET is_read = true
+           WHERE message_id = $1 AND instance_name = $2`,
+          [messageId, payload.instance]
+        ).catch(() => {});
+      }
+    }
+  }
+
   router.post('/evolution', async (req: Request, res: Response) => {
-    // Validar assinatura HMAC se o secret estiver configurado
     const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
     if (webhookSecret && !verificarAssinaturaEvolution(req, webhookSecret)) {
       console.warn('[WEBHOOK] Assinatura inválida — requisição rejeitada');
       return res.status(401).json({ error: 'Assinatura inválida' });
     }
 
-    // ACK imediato — processamento ocorre de forma assíncrona abaixo
     res.status(200).json({ ok: true });
 
     try {
       const payload = req.body as EvolutionPayload;
-
-      // Filtrar: só processar mensagens novas (ignorar status, conexão, etc.)
-      // Evolution envia MESSAGES_UPSERT (uppercase+underscore), normalizar para messages.upsert
       const eventNorm = (payload.event || '').toLowerCase().replace(/_/g, '.');
+
+      if (eventNorm === 'messages.update') {
+        await handleStatusUpdate(payload);
+        return;
+      }
+
       if (eventNorm !== 'messages.upsert') return;
-      if (payload.data?.status === 'READ' || payload.data?.status === 'DELIVERED') return; // Notificação de status
+
+      // Ignorar notificações de status sem conteúdo de mensagem
+      const dataStatus = payload.data?.status;
+      if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') return;
+
+      const remoteJid = payload.data?.key?.remoteJid || '';
+
+      // Validar JID e ignorar grupos
+      if (!remoteJid || !isValidJid(remoteJid)) return;
+      if (remoteJid.endsWith('@g.us')) return;
 
       const messageId = payload.data?.key?.id || '';
+      if (!messageId) return;
+
       const instancia  = payload.instance;
-      const remoteJid  = payload.data?.key?.remoteJid || '';
-      const telefone   = remoteJid.split('@')[0].replace(/\D/g, ''); // Garante session_id limpo
+      const telefone   = remoteJid.split('@')[0];
       const pushName   = payload.data?.pushName || telefone;
       const fromMe     = payload.data?.key?.fromMe === true;
 
-
-      // Ignorar mensagens de grupos (JID termina em @g.us)
-      if (!messageId || !telefone || remoteJid.includes('@g.us')) return;
-
-      // ── Localizar agente ou integração pela instância ────────────────────
-      // Tenta primeiro em 'agentes', depois em 'integracoes_config' (G1/B3)
-      let agenteRes = await pool.query(
-        `SELECT user_id, n8n_webhook_url FROM agentes 
-         WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL 
+      // ── Busca agente UMA VEZ com fallbacks ───────────────────────────────────
+      const agenteRes = await pool.query(
+        `SELECT user_id, id as agente_id FROM agentes
+         WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
          ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       );
 
+      let userId: string | null = null;
+      let temAgente = false;
 
-      if (!agenteRes.rows.length) {
-        agenteRes = await pool.query(
+      if (agenteRes.rows.length) {
+        userId = agenteRes.rows[0].user_id;
+        temAgente = true;
+      } else {
+        // Fallback 1: integracoes_config
+        const ic = await pool.query(
           `SELECT user_id FROM integracoes_config
            WHERE instancia = $1 AND tipo = 'evolution' AND user_id IS NOT NULL
            ORDER BY updated_at DESC LIMIT 1`,
           [instancia]
-        );
-      }
-      
-      let userId: string | null = null;
-      let n8nWebhookUrl: string | null = null;
+        ).catch(() => ({ rows: [] as any[] }));
 
+        if (ic.rows.length) {
+          userId = ic.rows[0].user_id;
+        } else {
+          // Fallback 2: whatsapp_instances
+          const wi = await pool.query(
+            `SELECT user_id FROM whatsapp_instances WHERE instance_name = $1 LIMIT 1`,
+            [instancia]
+          ).catch(() => ({ rows: [] as any[] }));
 
-
-      // ── Mensagens enviadas (fromMe=true ou false) ──────────────────────────
-      // Salvamos sempre em whatsapp_messages para garantir sincronismo da UI
-      if (agenteRes.rows.length) {
-        userId = agenteRes.rows[0].user_id;
-        n8nWebhookUrl = agenteRes.rows[0].n8n_webhook_url || null;
-
-
-        // Persistir a mensagem no histórico WhatsApp (usando nomes de colunas corretos)
-        await pool.query(
-          `INSERT INTO whatsapp_messages
-             (id, user_id, instancia, session_id, remote_jid, from_me, push_name, 
-              tipo, conteudo, midia_url, midia_mime, status, timestamp_unix)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-           ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status`,
-          [
-            messageId, userId, instancia, telefone, remoteJid, fromMe, 
-            fromMe ? 'Você' : pushName,
-            tipo, texto || null, midia.url || null, midia.mime || null,
-            fromMe ? 'sent' : 'received', timestamp
-          ]
-        ).catch(err => console.warn('[WEBHOOK] Falha ao salvar whatsapp_messages:', err.message));
-
-
-        // ── UPSERT de Contato ───────────────────────────────────────────────
-        // Cria se não existir, atualiza push_name e timestamp se existir
-        await pool.query(
-          `INSERT INTO contatos (user_id, nome, telefone, origem, status, push_name, ultima_mensagem_em)
-           VALUES ($1, $2, $3, 'WhatsApp', 'novo', $4, NOW())
-           ON CONFLICT (user_id, telefone) DO UPDATE
-             SET push_name = COALESCE(EXCLUDED.push_name, contatos.push_name),
-                 ultima_mensagem_em = NOW(),
-                 updated_at = NOW()`,
-          [userId, pushName || telefone, telefone, pushName || null]
-        ).catch(err => console.warn('[WEBHOOK] Falha ao upsert contato:', err.message));
+          if (wi.rows.length) {
+            userId = wi.rows[0].user_id;
+          } else if (instancia.startsWith('crm_')) {
+            // Fallback 3: prefixo UUID no nome da instância
+            const prefixo = instancia.slice(4);
+            const u = await pool.query(
+              `SELECT id FROM users
+               WHERE replace(id::text, '-', '') LIKE $1 OR id::text LIKE $2 LIMIT 1`,
+              [`${prefixo}%`, `${prefixo}%`]
+            ).catch(() => ({ rows: [] as any[] }));
+            if (u.rows.length) userId = u.rows[0].id;
+          }
+        }
       }
 
+      // ── Mensagens do atendente (fromMe=true) → pausar IA ─────────────────────
       if (fromMe) {
-        // Mensagens do próprio bot têm ID prefixado com 'resp_' (ver agentEngine.ts)
-        // Ignorar para não criar loop infinito
-        if (messageId.startsWith('resp_')) return;
+        // Ignorar respostas do próprio bot
+        if (messageId.startsWith('resp_') || messageId.startsWith('manual_')) return;
 
-        // É o atendente digitando manualmente → pausar IA para esse contato
         if (userId) {
+          await pool.query(
+            `UPDATE contatos SET atendente_pausou_ia = true, updated_at = NOW()
+             WHERE user_id = $1 AND telefone ILIKE $2`,
+            [userId, `%${telefone.slice(-11)}`]
+          ).catch(() => {});
+
           await pool.query(
             `UPDATE dados_cliente SET atendimento_ia = 'pause'
              WHERE user_id = $1 AND telefone ILIKE $2`,
             [userId, `%${telefone.slice(-11)}`]
           ).catch(() => {});
-          console.log(`[WEBHOOK] IA pausada por intervenção humana: ${telefone}`);
+
+          const texto = extrairTexto(payload.data);
+          const tipo  = extrairTipo(payload.data);
+          const ts    = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
+          const tsVal = ts > 1e10 ? Math.floor(ts / 1000) : ts;
+
+          await pool.query(
+            `INSERT INTO whatsapp_messages
+               (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
+             VALUES ($1, $2, $3, $4, true, $5, $6, 'sent', to_timestamp($7))
+             ON CONFLICT (message_id, instance_name) DO NOTHING`,
+            [userId, instancia, remoteJid, messageId, tipo, texto || null, tsVal]
+          ).catch(() => {});
+
+          console.log(`[WEBHOOK] Humano enviou para ${telefone} — IA pausada`);
         }
         return;
       }
 
-      // ── Deduplicação em memória (rápida) ──────────────────────────────────
+      // ── Deduplicação em memória ───────────────────────────────────────────────
       if (processados.has(messageId)) return;
       processados.add(messageId);
-      setTimeout(() => processados.delete(messageId), 60000); // Limpar após 1 min
+      setTimeout(() => processados.delete(messageId), 60000);
 
-      // ── Deduplicação no banco (persistente entre reinicializações) ─────────
+      // ── Deduplicação no banco ─────────────────────────────────────────────────
       const jaExiste = await pool.query(
         'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
         [messageId]
@@ -269,17 +270,36 @@ export default function webhookRouter(pool: Pool): Router {
         [messageId, instancia]
       );
 
-      // ── Extrair dados da mensagem ─────────────────────────────────────────
+      // ── Extrair dados ─────────────────────────────────────────────────────────
       const texto    = extrairTexto(payload.data);
       const tipo     = extrairTipo(payload.data);
       const midia    = extrairMidia(payload.data);
-      const timestamp = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
+      const ts       = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
+      const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
-      // ── Localizar agente já foi feito acima para persistência inicial ─────
+      // ── Persistir mensagem recebida ───────────────────────────────────────────
+      if (userId) {
+        await pool.query(
+          `INSERT INTO whatsapp_messages
+             (user_id, instance_name, remote_jid, message_id, from_me, message_type,
+              content, media_url, media_mimetype, status, timestamp_wa)
+           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, 'received', to_timestamp($9))
+           ON CONFLICT (message_id, instance_name) DO NOTHING`,
+          [userId, instancia, remoteJid, messageId, tipo,
+           texto || null, midia.url || null, midia.mime || null, tsVal]
+        ).catch(err => console.warn('[WEBHOOK] Falha ao salvar mensagem:', err.message));
 
+        // Atualizar push_name no contato (sem bloquear fluxo)
+        pool.query(
+          `UPDATE contatos
+           SET push_name = COALESCE($1, push_name),
+               ultima_mensagem_em = NOW(), updated_at = NOW()
+           WHERE user_id = $2 AND telefone ILIKE $3`,
+          [pushName || null, userId, `%${telefone.slice(-11)}`]
+        ).catch(() => {});
+      }
 
-
-      // ── Opt-out ───────────────────────────────────────────────────────────
+      // ── Opt-out ───────────────────────────────────────────────────────────────
       const textoNorm = (texto || '').trim().toLowerCase();
       if (userId && OPT_OUT_KEYWORDS.has(textoNorm)) {
         await pool.query(
@@ -291,33 +311,30 @@ export default function webhookRouter(pool: Pool): Router {
           `INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`,
           [userId, telefone, textoNorm]
         ).catch(() => {});
-        console.log(`[WEBHOOK] Opt-out registrado: ${telefone}`);
-        return; // Não processar pela IA
+        console.log(`[WEBHOOK] Opt-out: ${telefone}`);
+        return;
       }
 
-      // ── Comando de reativação da IA ───────────────────────────────────────
-      // O atendente (ou o cliente) envia um desses textos para devolver o
-      // controle ao bot após uma pausa de atendimento humano
+      // ── Reativação da IA ──────────────────────────────────────────────────────
       if (userId && REATIVAR_COMANDOS.has(textoNorm)) {
         await pool.query(
           `UPDATE dados_cliente SET atendimento_ia = 'ativo'
            WHERE user_id = $1 AND telefone ILIKE $2`,
           [userId, `%${telefone.slice(-11)}`]
         ).catch(() => {});
-        console.log(`[WEBHOOK] IA reativada por comando: ${telefone}`);
-        return; // Não processar a mensagem de reativação pela IA
+        await pool.query(
+          `UPDATE contatos SET atendente_pausou_ia = false, updated_at = NOW()
+           WHERE user_id = $1 AND telefone ILIKE $2`,
+          [userId, `%${telefone.slice(-11)}`]
+        ).catch(() => {});
+        console.log(`[WEBHOOK] IA reativada: ${telefone}`);
+        return;
       }
 
-      // ── Motor IA ──────────────────────────────────────────────────────────
-      // Processar apenas tipos com conteúdo útil para a IA
-      // Sticker, vídeo sem legenda e documento sem legenda são descartados
-      if (!texto && !['audio', 'image'].includes(tipo)) return;
+      // ── Motor IA ──────────────────────────────────────────────────────────────
+      if (!temAgente) return;
+      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) return;
 
-      // Se não tem agente IA mas tem integração, apenas salvamos a mensagem (já feito acima)
-      // e saímos, pois não há lógica de IA para processar.
-      if (!n8nWebhookUrl && !userId) return; 
-
-      // processarComDebounce aguarda 3s por mais mensagens do mesmo contato
       processarComDebounce(pool, {
         instancia,
         messageId,
@@ -326,12 +343,11 @@ export default function webhookRouter(pool: Pool): Router {
         texto,
         tipo,
         midiaUrl: midia.url || undefined,
-        timestamp,
+        timestamp: tsVal,
       }).catch(err => console.error(`[WEBHOOK] Erro ao processar ${messageId}:`, err));
 
-
     } catch (err) {
-      console.error('[WEBHOOK] Erro crítico no receptor:', err);
+      console.error('[WEBHOOK] Erro crítico:', err);
     }
   });
 

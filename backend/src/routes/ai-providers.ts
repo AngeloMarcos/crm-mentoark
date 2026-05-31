@@ -38,6 +38,47 @@ export default function aiProviders(pool: Pool): Router {
     return res.json(MODELOS_SUGERIDOS);
   });
 
+  // POST /api/ai-providers/testar — valida a api_key com o provedor real
+  router.post('/testar', async (req: AuthRequest, res: Response) => {
+    const { slug, api_key, modelo } = req.body;
+    if (!slug || !api_key) {
+      return res.status(400).json({ ok: false, message: 'slug e api_key são obrigatórios' });
+    }
+    try {
+      if (slug === 'openai') {
+        const r = await fetch('https://api.openai.com/v1/models', {
+          headers: { Authorization: `Bearer ${api_key}` },
+        });
+        return res.json({ ok: r.ok, status: r.status });
+      }
+      if (slug === 'claude') {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'x-api-key': api_key,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: modelo || 'claude-haiku-4-5-20251001',
+            max_tokens: 10,
+            messages: [{ role: 'user', content: 'ping' }],
+          }),
+        });
+        return res.json({ ok: r.ok, status: r.status });
+      }
+      if (slug === 'gemini') {
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${api_key}`
+        );
+        return res.json({ ok: r.ok, status: r.status });
+      }
+      return res.json({ ok: false, message: 'Provider não suportado' });
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, message: e.message });
+    }
+  });
+
   // GET /api/ai-providers
   router.get('/', async (req: AuthRequest, res: Response) => {
     try {

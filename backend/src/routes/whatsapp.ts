@@ -129,103 +129,59 @@ export default function whatsappRouter(pool: Pool): Router {
   }
 
   // GET /api/whatsapp/conversas
+  // Usa window function para eliminar subqueries N+1 e JOIN para enriquecer contatos
   router.get('/conversas', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
 
-      // Tenta primeiro a tabela whatsapp_messages (nova)
-      const hasTable = await pool.query(
-        `SELECT to_regclass('public.whatsapp_messages') AS t`
-      );
-      const useNewTable = !!hasTable.rows[0]?.t;
-
-      let rows: any[] = [];
-
-      if (useNewTable) {
-        const r = await pool.query(
-          `SELECT
-             m.session_id,
-             m.instancia,
-             MAX(m.created_at) AS ultima_atividade,
-             COUNT(*) AS total,
-             (
-               SELECT m2.conteudo FROM whatsapp_messages m2
-               WHERE m2.session_id = m.session_id AND m2.user_id = $1
-               ORDER BY m2.created_at DESC LIMIT 1
-             ) AS ultima_mensagem,
-             (
-               SELECT CASE WHEN m2.from_me THEN 'assistant' ELSE 'user' END
-               FROM whatsapp_messages m2
-               WHERE m2.session_id = m.session_id AND m2.user_id = $1
-               ORDER BY m2.created_at DESC LIMIT 1
-             ) AS ultimo_role,
-             MAX(m.push_name) AS push_name
+      const r = await pool.query(
+        `WITH ranked AS (
+           SELECT
+             m.remote_jid,
+             m.instance_name,
+             m.content,
+             m.from_me,
+             m.created_at,
+             m.message_id,
+             COUNT(*) OVER (PARTITION BY m.remote_jid, m.instance_name) AS total,
+             ROW_NUMBER() OVER (PARTITION BY m.remote_jid, m.instance_name ORDER BY m.created_at DESC) AS rn
            FROM whatsapp_messages m
-           WHERE m.user_id = $1 AND m.remote_jid NOT LIKE '%@g.us'
-           GROUP BY m.session_id, m.instancia
-           ORDER BY ultima_atividade DESC
-           LIMIT 200`,
-          [userId]
-        );
-        rows = r.rows;
-      } else {
-        const r = await pool.query(
-          `SELECT
-             h.session_id,
-             h.instancia,
-             MAX(h.created_at) AS ultima_atividade,
-             COUNT(*) AS total,
-             (
-               SELECT h2.message->>'content' FROM n8n_chat_histories h2
-               WHERE h2.session_id = h.session_id AND h2.user_id = $1
-               ORDER BY h2.created_at DESC LIMIT 1
-             ) AS ultima_mensagem,
-             (
-               SELECT h2.message->>'role' FROM n8n_chat_histories h2
-               WHERE h2.session_id = h.session_id AND h2.user_id = $1
-               ORDER BY h2.created_at DESC LIMIT 1
-             ) AS ultimo_role,
-             NULL AS push_name
-           FROM n8n_chat_histories h
-           WHERE h.user_id = $1
-           GROUP BY h.session_id, h.instancia
-           ORDER BY ultima_atividade DESC
-           LIMIT 200`,
-          [userId]
-        );
-        rows = r.rows;
-      }
+           WHERE m.user_id = $1
+             AND m.remote_jid NOT LIKE '%@g.us'
+         )
+         SELECT
+           r.phone AS session_id,
+           r.instance_name AS instancia,
+           r.created_at AS ultima_atividade,
+           r.total::int AS total,
+           r.content AS ultima_mensagem,
+           CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
+           COALESCE(c.push_name, c.nome) AS push_name,
+           c.nome AS nome_contato
+         FROM (
+           SELECT remote_jid,
+                  split_part(remote_jid,'@',1) AS phone,
+                  instance_name, content, from_me, created_at, total
+           FROM ranked WHERE rn = 1
+         ) r
+         LEFT JOIN contatos c ON c.user_id = $1
+           AND c.telefone LIKE '%' || RIGHT(r.phone, 11)
+         ORDER BY r.created_at DESC
+         LIMIT 300`,
+        [userId]
+      );
 
-      // Enriquecer com dados de contatos
-      let nomes: Record<string, { nome: string; push_name?: string }> = {};
-      if (rows.length) {
-        const contatos = await pool.query(
-          `SELECT telefone, nome, push_name FROM contatos WHERE user_id = $1`,
-          [userId]
-        );
-        for (const c of contatos.rows) {
-          const digits = (c.telefone || '').replace(/\D/g, '');
-          nomes[digits] = { nome: c.nome, push_name: c.push_name };
-          if (digits.length > 11) nomes[digits.slice(-11)] = { nome: c.nome, push_name: c.push_name };
-        }
-      }
-
-      const conversas = rows.map(row => {
-        const digits = (row.session_id || '').replace(/\D/g, '');
-        const contato = nomes[digits] || nomes[digits.slice(-11)];
-        const nome = contato?.nome || row.push_name || row.session_id;
-        return {
-          session_id: row.session_id,
-          instancia: row.instancia,
-          nome,
-          push_name: row.push_name || contato?.push_name || null,
-          ultima_atividade: row.ultima_atividade,
-          ultima_mensagem: row.ultima_mensagem || '',
-          ultimo_role: row.ultimo_role,
-          total: Number(row.total),
-          mensagens: [],
-        };
-      });
+      const conversas = r.rows.map(row => ({
+        session_id: row.session_id,
+        instancia: row.instancia,
+        nome: row.nome_contato || row.push_name || row.session_id,
+        push_name: row.push_name || null,
+        ultima_atividade: row.ultima_atividade,
+        ultima_mensagem: row.ultima_mensagem || '',
+        ultimo_role: row.ultimo_role,
+        total: Number(row.total),
+        mensagens: [],
+      }));
 
       return res.json(conversas);
     } catch (err: any) {
@@ -234,62 +190,68 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // GET /api/whatsapp/conversas/:phone
+  // Usa coluna phone gerada (índice) e JOIN para status de entrega
   router.get('/conversas/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
-      const phone = decodeURIComponent(req.params.phone);
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      if (!phone) return res.status(400).json({ message: 'Telefone inválido' });
 
-      // Tenta whatsapp_messages primeiro
-      const hasTable = await pool.query(
-        `SELECT to_regclass('public.whatsapp_messages') AS t`
-      );
-      const useNewTable = !!hasTable.rows[0]?.t;
+      const limit = Math.min(Number(req.query.limit) || 100, 500);
+      const offset = Number(req.query.offset) || 0;
 
-      if (useNewTable) {
-        const r = await pool.query(
-          `SELECT id, from_me, tipo AS message_type, conteudo AS content, midia_url, midia_mime AS media_mimetype, status, timestamp_unix AS timestamp_wa, created_at
-           FROM whatsapp_messages
-           WHERE session_id = $1 AND user_id = $2
-           ORDER BY created_at ASC`,
-          [phone, userId]
-        );
-
-        const mensagens = r.rows.map(row => ({
-          id: row.id,
-          role: row.from_me ? 'assistant' : 'user',
-          content: row.content || '',
-          push_name: null,
-          tipo: row.message_type,
-          midia_url: row.media_url,
-          midia_mime: row.media_mimetype,
-          midia_nome: null,
-          status: row.status,
-          created_at: row.created_at,
-        }));
-
-        return res.json(mensagens);
-      }
-
-      // Fallback: n8n_chat_histories
       const r = await pool.query(
-        `SELECT message, created_at
-         FROM n8n_chat_histories
-         WHERE session_id = $1 AND user_id = $2
-         ORDER BY created_at ASC`,
-        [phone, userId]
+        `SELECT
+           m.id, m.message_id, m.from_me, m.message_type, m.content,
+           m.media_url, m.media_mimetype, m.status, m.is_read,
+           m.timestamp_wa, m.created_at,
+           COALESCE(s.status, m.status) AS delivery_status
+         FROM whatsapp_messages m
+         LEFT JOIN whatsapp_message_status s
+           ON s.message_id = m.message_id AND s.instance_name = m.instance_name
+         WHERE m.phone = $1 AND m.user_id = $2
+         ORDER BY m.created_at ASC
+         LIMIT $3 OFFSET $4`,
+        [phone, userId, limit, offset]
       );
 
-      const mensagens = r.rows.map(row => {
-        const msg = typeof row.message === 'string' ? JSON.parse(row.message) : row.message;
-        return {
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content as string,
-          tipo: 'text',
-          created_at: row.created_at,
-        };
-      }).filter(m => m.role && m.content);
+      const mensagens = r.rows.map(row => ({
+        id: row.id,
+        message_id: row.message_id,
+        role: row.from_me ? 'assistant' : 'user',
+        content: row.content || '',
+        push_name: null,
+        tipo: row.message_type,
+        midia_url: row.media_url,
+        midia_mime: row.media_mimetype,
+        midia_nome: null,
+        status: row.delivery_status || row.status,
+        is_read: row.is_read,
+        created_at: row.created_at,
+        timestamp_wa: row.timestamp_wa,
+      }));
 
       return res.json(mensagens);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/status/:phone — status de entrega das últimas mensagens enviadas
+  router.get('/status/:phone', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const r = await pool.query(
+        `SELECT m.message_id, COALESCE(s.status, m.status) AS status, m.created_at
+         FROM whatsapp_messages m
+         LEFT JOIN whatsapp_message_status s
+           ON s.message_id = m.message_id AND s.instance_name = m.instance_name
+         WHERE m.phone = $1 AND m.user_id = $2 AND m.from_me = true
+         ORDER BY m.created_at DESC LIMIT 50`,
+        [phone, userId]
+      );
+      return res.json(r.rows);
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -452,6 +414,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
   // POST /api/whatsapp/disconnect
   router.post('/disconnect', async (req: AuthRequest, res: Response) => {
+    try {
       const userId = req.userId!;
       const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
@@ -506,7 +469,7 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // POST /api/whatsapp/sync-history — importa chats + mensagens da Evolution para whatsapp_messages
+  // POST /api/whatsapp/sync-history — importa mensagens da Evolution para whatsapp_messages
   router.post('/sync-history', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -515,63 +478,70 @@ export default function whatsappRouter(pool: Pool): Router {
       const instancia = instanciaParam || cfg.instancia;
       const base = cfg.url.replace(/\/$/, '');
 
-      // 1. Buscar todos os chats
-      const chatsRes = await fetch(`${base}/chat/findChats/${instancia}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-        body: JSON.stringify({}),
-      });
-      if (!chatsRes.ok) {
-        const t = await chatsRes.text().catch(() => '');
-        return res.status(502).json({ message: `Evolution chats ${chatsRes.status}: ${t.slice(0, 200)}` });
-      }
-      const chats: any[] = await chatsRes.json();
+      // Buscar mensagens com paginação via /chat/findMessages
+      // (findChats pode falhar em algumas versões da Evolution — usamos findMessages diretamente)
+      const PAGE_SIZE = 500;
+      const messages: any[] = [];
+      let page = 1;
+      let totalPages = 1;
 
-      // 2. Buscar mensagens em lote único (Evolution aceita filtro por chat)
-      const msgsRes = await fetch(`${base}/chat/findMessages/${instancia}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-        body: JSON.stringify({ where: {}, limit: 5000 }),
-      });
-      if (!msgsRes.ok) {
-        const t = await msgsRes.text().catch(() => '');
-        return res.status(502).json({ message: `Evolution messages ${msgsRes.status}: ${t.slice(0, 200)}` });
-      }
-      const msgsJson: any = await msgsRes.json();
-      const messages: any[] = msgsJson?.messages?.records || msgsJson?.records || msgsJson || [];
+      do {
+        const msgsRes = await fetch(`${base}/chat/findMessages/${instancia}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+          body: JSON.stringify({ where: {}, limit: PAGE_SIZE, page }),
+        });
+        if (!msgsRes.ok) {
+          const t = await msgsRes.text().catch(() => '');
+          if (messages.length === 0) {
+            return res.status(502).json({ message: `Evolution messages ${msgsRes.status}: ${t.slice(0, 200)}` });
+          }
+          break; // Se já temos mensagens, continua com o que tem
+        }
+        const msgsJson: any = await msgsRes.json();
+        const records: any[] = msgsJson?.messages?.records || msgsJson?.records || (Array.isArray(msgsJson) ? msgsJson : []);
+        messages.push(...records);
+        totalPages = msgsJson?.messages?.pages || 1;
+        page++;
+      } while (page <= totalPages && messages.length < 10000);
+
+      const chats: any[] = []; // findChats omitido — não necessário para importação
 
       let inseridos = 0;
       for (const m of messages) {
         try {
           const key = m.key || {};
           const remoteJid: string = key.remoteJid || m.remoteJid || '';
-          if (!remoteJid || remoteJid.endsWith('@g.us')) continue; // ignora grupos
-          const sessionId = remoteJid.split('@')[0];
-          const msgId = key.id || m.id || `${remoteJid}_${m.messageTimestamp}`;
+          if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
+          // message_id = WhatsApp message ID (key.id); fallback para id interno da Evolution
+          const messageId = key.id || m.id || `${remoteJid}_${m.messageTimestamp}`;
           const fromMe = !!key.fromMe;
-          const pushName = m.pushName || null;
           const ts = Number(m.messageTimestamp || Math.floor(Date.now() / 1000));
           const msgContent = m.message || {};
-          const texto =
+          const msgType: string = m.messageType || (
+            msgContent.imageMessage ? 'image'
+            : msgContent.audioMessage ? 'audio'
+            : msgContent.videoMessage ? 'video'
+            : msgContent.documentMessage ? 'document'
+            : msgContent.stickerMessage ? 'sticker'
+            : 'text'
+          );
+          const content =
             msgContent.conversation ||
             msgContent.extendedTextMessage?.text ||
             msgContent.imageMessage?.caption ||
             msgContent.videoMessage?.caption ||
             msgContent.documentMessage?.caption ||
-            '';
-          const tipo = msgContent.imageMessage ? 'image'
-            : msgContent.audioMessage ? 'audio'
-            : msgContent.videoMessage ? 'video'
-            : msgContent.documentMessage ? 'document'
-            : msgContent.stickerMessage ? 'sticker'
-            : 'text';
+            null;
 
           const result = await pool.query(
             `INSERT INTO whatsapp_messages
-               (id, user_id, instancia, session_id, remote_jid, from_me, push_name, tipo, conteudo, status, timestamp_unix, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, to_timestamp($11))
-             ON CONFLICT (id) DO NOTHING`,
-            [msgId, userId, instancia, sessionId, remoteJid, fromMe, pushName, tipo, texto, fromMe ? 'sent' : 'received', ts]
+               (user_id, instance_name, remote_jid, message_id, from_me, message_type,
+                content, status, timestamp_wa)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8, to_timestamp($9))
+             ON CONFLICT (message_id, instance_name) DO NOTHING`,
+            [userId, instancia, remoteJid, messageId, fromMe, msgType,
+             content, fromMe ? 'sent' : 'received', ts]
           );
           if (result.rowCount && result.rowCount > 0) inseridos++;
         } catch (err: any) {
@@ -580,6 +550,97 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       return res.json({ chats: chats.length, messages: messages.length, inseridos });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/whatsapp/send — envia mensagem manual (texto ou mídia)
+  router.post('/send', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const {
+        phone, text, instancia: instanciaParam,
+        mediaUrl, mediaType, mediaCaption, mediaFilename,
+      } = req.body as {
+        phone: string; text?: string; instancia?: string;
+        mediaUrl?: string; mediaType?: 'image' | 'audio' | 'video' | 'document';
+        mediaCaption?: string; mediaFilename?: string;
+      };
+
+      // Validar número de telefone (formato internacional)
+      const phoneClean = (phone || '').replace(/\D/g, '');
+      if (!phoneClean || phoneClean.length < 10 || phoneClean.length > 15) {
+        return res.status(400).json({ message: 'Número de telefone inválido' });
+      }
+      if (!text && !mediaUrl) {
+        return res.status(400).json({ message: 'text ou mediaUrl são obrigatórios' });
+      }
+
+      const cfg = await getEvolutionConfig(userId);
+      const instancia = instanciaParam || cfg.instancia;
+      const base = cfg.url.replace(/\/$/, '');
+
+      let evolutionResp: any;
+      let msgType = 'text';
+
+      if (mediaUrl && mediaType) {
+        // Envio de mídia
+        msgType = mediaType;
+        const mediaEndpoints: Record<string, string> = {
+          image: 'sendMedia',
+          video: 'sendMedia',
+          document: 'sendMedia',
+          audio: 'sendMedia',
+        };
+        const endpoint = mediaEndpoints[mediaType] || 'sendMedia';
+        const mediaPayload: any = {
+          number: phoneClean,
+          mediatype: mediaType,
+          media: mediaUrl,
+          delay: 1200,
+        };
+        if (mediaCaption) mediaPayload.caption = mediaCaption;
+        if (mediaFilename) mediaPayload.fileName = mediaFilename;
+
+        const r = await fetch(`${base}/message/${endpoint}/${instancia}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+          body: JSON.stringify(mediaPayload),
+        });
+        if (!r.ok) {
+          const err = await r.text().catch(() => r.status.toString());
+          return res.status(502).json({ message: `Evolution ${r.status}: ${err.slice(0, 200)}` });
+        }
+        evolutionResp = await r.json().catch(() => ({}));
+      } else {
+        // Envio de texto
+        const r = await fetch(`${base}/message/sendText/${instancia}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+          body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+        });
+        if (!r.ok) {
+          const err = await r.text().catch(() => r.status.toString());
+          return res.status(502).json({ message: `Evolution ${r.status}: ${err.slice(0, 200)}` });
+        }
+        evolutionResp = await r.json().catch(() => ({}));
+      }
+
+      const messageId = evolutionResp?.key?.id || `manual_${Date.now()}`;
+      const content = text || mediaCaption || null;
+
+      await pool.query(
+        `INSERT INTO whatsapp_messages
+           (user_id, instance_name, remote_jid, message_id, from_me, message_type,
+            content, media_url, status, timestamp_wa)
+         VALUES ($1, $2, $3, $4, true, $5, $6, $7, 'sent', NOW())
+         ON CONFLICT (message_id, instance_name) DO NOTHING`,
+        [userId, instancia, `${phoneClean}@s.whatsapp.net`,
+         messageId, msgType, content, mediaUrl || null]
+      ).catch(err => console.warn('[SEND] Falha ao salvar:', err.message));
+
+      return res.json({ ok: true, messageId });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

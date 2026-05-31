@@ -48,6 +48,8 @@ import {
   Sparkles,
   ShieldCheck,
   Smartphone,
+  Bot,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -246,6 +248,81 @@ export default function IntegracoesPage() {
     numero: "",
   });
 
+  // ── AI Providers ─────────────────────────────────────────────────────────────
+  interface AiProvider {
+    id?: string;
+    slug: string;
+    nome: string;
+    modelo: string;
+    ativo: boolean;
+  }
+  const AI_SLUGS = [
+    { slug: 'openai',  label: 'OpenAI',     icon: Bot,     modelos: ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'] },
+    { slug: 'claude',  label: 'Claude (Anthropic)', icon: Sparkles, modelos: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-6'] },
+    { slug: 'gemini',  label: 'Google Gemini', icon: Zap,   modelos: ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'] },
+  ] as const;
+
+  const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
+  const [aiForm, setAiForm] = useState<Record<string, { api_key: string; modelo: string; showKey: boolean; saving: boolean; testing: boolean }>>({
+    openai: { api_key: '', modelo: 'gpt-4o-mini', showKey: false, saving: false, testing: false },
+    claude: { api_key: '', modelo: 'claude-haiku-4-5-20251001', showKey: false, saving: false, testing: false },
+    gemini: { api_key: '', modelo: 'gemini-1.5-flash', showKey: false, saving: false, testing: false },
+  });
+
+  const carregarAiProviders = async () => {
+    const API_URL = import.meta.env.VITE_API_URL || 'https://api.mentoark.com.br';
+    try {
+      const res = await fetch(`${API_URL}/api/ai-providers`, { headers: authHeader() });
+      if (!res.ok) return;
+      const lista: AiProvider[] = await res.json();
+      setAiProviders(lista);
+    } catch {}
+  };
+
+  const salvarAiProvider = async (slug: string) => {
+    const API_URL = import.meta.env.VITE_API_URL || 'https://api.mentoark.com.br';
+    const f = aiForm[slug];
+    const nomeMap: Record<string, string> = { openai: 'OpenAI', claude: 'Claude (Anthropic)', gemini: 'Google Gemini' };
+    if (!f.api_key.trim()) { toast.error('Informe a API Key'); return; }
+    setAiForm(prev => ({ ...prev, [slug]: { ...prev[slug], saving: true } }));
+    try {
+      const existing = aiProviders.find(p => p.slug === slug);
+      const payload = { nome: nomeMap[slug], slug, modelo: f.modelo, api_key: f.api_key, ativo: true };
+      const res = existing?.id
+        ? await fetch(`${API_URL}/api/ai-providers/${existing.id}`, { method: 'PATCH', headers: { ...authHeader(), 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        : await fetch(`${API_URL}/api/ai-providers`, { method: 'POST', headers: { ...authHeader(), 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || 'Erro');
+      toast.success(`${nomeMap[slug]} salvo!`);
+      setAiForm(prev => ({ ...prev, [slug]: { ...prev[slug], api_key: '' } }));
+      carregarAiProviders();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setAiForm(prev => ({ ...prev, [slug]: { ...prev[slug], saving: false } }));
+    }
+  };
+
+  const testarAiProvider = async (slug: string) => {
+    const API_URL = import.meta.env.VITE_API_URL || 'https://api.mentoark.com.br';
+    const f = aiForm[slug];
+    if (!f.api_key.trim()) { toast.error('Informe a API Key para testar'); return; }
+    setAiForm(prev => ({ ...prev, [slug]: { ...prev[slug], testing: true } }));
+    try {
+      const res = await fetch(`${API_URL}/api/ai-providers/testar`, {
+        method: 'POST',
+        headers: { ...authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug, api_key: f.api_key, modelo: f.modelo }),
+      });
+      const data = await res.json();
+      if (data.ok) toast.success('Conexão bem-sucedida!');
+      else toast.error(`Falha: HTTP ${data.status}`);
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setAiForm(prev => ({ ...prev, [slug]: { ...prev[slug], testing: false } }));
+    }
+  };
+
   // n8n section
   const [n8nSecret, setN8nSecret] = useState("");
   const [n8nShowSecret, setN8nShowSecret] = useState(false);
@@ -289,6 +366,7 @@ export default function IntegracoesPage() {
   useEffect(() => {
     carregar();
     carregarAgentesN8n();
+    carregarAiProviders();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
   useEffect(() => {
@@ -688,6 +766,86 @@ export default function IntegracoesPage() {
               </CardContent>
             </Card>
 
+
+            {/* ── Seção Configuração de IA ────────────────────────────────── */}
+            <Card>
+              <CardContent className="p-5 space-y-5">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                    <Bot className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h2 className="font-semibold">Configuração de IA</h2>
+                    <p className="text-xs text-muted-foreground">
+                      Configure as chaves de API dos provedores de IA usados pelos agentes.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-3 gap-4">
+                  {AI_SLUGS.map(({ slug, label, icon: Icon, modelos }) => {
+                    const configured = aiProviders.find(p => p.slug === slug);
+                    const f = aiForm[slug];
+                    return (
+                      <div key={slug} className="border rounded-xl p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Icon className="h-4 w-4 text-primary" />
+                            <span className="font-semibold text-sm">{label}</span>
+                          </div>
+                          <Badge className={configured ? 'bg-success/15 text-success border-0 text-[10px]' : 'bg-muted text-muted-foreground border-0 text-[10px]'}>
+                            {configured ? 'Configurado' : 'Não configurado'}
+                          </Badge>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">API Key</Label>
+                          <div className="relative">
+                            <Input
+                              type={f.showKey ? 'text' : 'password'}
+                              value={f.api_key}
+                              onChange={e => setAiForm(prev => ({ ...prev, [slug]: { ...prev[slug], api_key: e.target.value } }))}
+                              placeholder={configured ? '••••• (salva — cole nova para atualizar)' : 'sk-...'}
+                              className="pr-10 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setAiForm(prev => ({ ...prev, [slug]: { ...prev[slug], showKey: !prev[slug].showKey } }))}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            >
+                              {f.showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">Modelo padrão</Label>
+                          <Select value={f.modelo} onValueChange={v => setAiForm(prev => ({ ...prev, [slug]: { ...prev[slug], modelo: v } }))}>
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {modelos.map(m => <SelectItem key={m} value={m} className="text-xs">{m}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" className="flex-1 h-8 text-xs" onClick={() => testarAiProvider(slug)} disabled={f.testing || !f.api_key}>
+                            {f.testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plug className="h-3.5 w-3.5" />}
+                            Testar
+                          </Button>
+                          <Button size="sm" className="flex-1 h-8 text-xs" onClick={() => salvarAiProvider(slug)} disabled={f.saving || !f.api_key}>
+                            {f.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                            Salvar
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
 
             {!algumaConfigurada && (
               <Card className="border-dashed">

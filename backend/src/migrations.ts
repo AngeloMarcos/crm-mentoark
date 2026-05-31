@@ -6,52 +6,19 @@
  * para serem 100% idempotentes — podem rodar múltiplas vezes sem erro.
  *
  * Ordem das migrações:
- *  1. Tabelas base (whatsapp_messages v1 legada, opt_out, webhook_dedup)
+ *  1. Tabelas base (opt_out, webhook_dedup, contatos patches)
  *  2. Sprint 3: refresh_tokens, galeria, índices
  *  3. Sprint 5: oauth_state (CSRF protection)
  *  4. CRM Features: tabelas de funil, campanhas, SLA, etc.
  *  5. Sprint CRM+n8n: pausa IA, ia_pausa_log, colunas agentes
- *  6. Migration 002: whatsapp_messages v2 (schema EN canônico)
+ *  6. Migration 002: whatsapp_messages v2 (schema canônico)
  *  7. Sprint Equipe/Kanban/SubPerfis: equipes, tarefas, sub_perfis
- *
- * Nota sobre whatsapp_messages:
- *  A tabela foi originalmente criada com colunas em português (v1).
- *  A migration 002 detecta o schema antigo (coluna 'instancia') e
- *  dropa/recria com o schema canônico em inglês (v2).
  */
 
 import { Pool } from 'pg';
 
 export async function runMigrations(pool: Pool): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS whatsapp_messages (
-      id TEXT PRIMARY KEY,
-      user_id UUID NOT NULL,
-      instancia TEXT NOT NULL,
-      session_id TEXT NOT NULL,
-      remote_jid TEXT NOT NULL,
-      from_me BOOLEAN NOT NULL DEFAULT false,
-      push_name TEXT,
-      tipo TEXT NOT NULL DEFAULT 'text',
-      conteudo TEXT,
-      midia_url TEXT,
-      midia_mime TEXT,
-      midia_nome TEXT,
-      status TEXT DEFAULT 'received',
-      timestamp_unix BIGINT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `).catch(() => {});
-
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_wamsg_user_session
-    ON whatsapp_messages (user_id, session_id, created_at DESC)
-  `).catch(() => {});
-
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_wamsg_user_instancia
-    ON whatsapp_messages (user_id, instancia, created_at DESC)
-  `).catch(() => {});
+  // whatsapp_messages v1 (schema PT legado) removida — criada pela migration 002 em schema EN canônico
 
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS push_name TEXT`);
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS profile_pic_url TEXT`);

@@ -6,7 +6,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Copy, Save, Loader2, Eye, RotateCcw, Trash2, FileCode, Code2 } from "lucide-react";
+import { Copy, Save, Loader2, Eye, RotateCcw, Trash2, FileCode, Code2, Info, Zap } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -127,8 +129,29 @@ export function PromptAgente() {
 
   const variaveis = useMemo(() => detectVariables(editor), [editor]);
 
+  const toggleAtivo = async (p: AgentPrompt, checked: boolean) => {
+    if (!user) return;
+    if (checked) {
+      await restaurar(p);
+    } else {
+      const { error } = await (api as any).from("agent_prompts").update({ ativo: false }).eq("id", p.id);
+      if (error) return toast.error(error.message);
+      toast.success("Prompt desativado");
+      carregar();
+    }
+  };
+
   return (
     <div className="space-y-4">
+      {/* Aviso sobre ativo único */}
+      <div className="flex items-start gap-3 p-3 rounded-xl bg-primary/5 border border-primary/20">
+        <Info className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+        <p className="text-xs text-foreground/80">
+          <strong>Apenas 1 prompt pode estar ativo por vez.</strong> Ativar um prompt desativa os outros automaticamente.
+          O agente de IA sempre usa o prompt marcado como ativo.
+        </p>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Editor */}
         <div className="lg:col-span-2 space-y-3">
@@ -138,7 +161,13 @@ export function PromptAgente() {
                 <div className="flex items-center gap-2">
                   <FileCode className="h-4 w-4 text-primary" />
                   <h3 className="font-semibold">Prompt ativo</h3>
-                  {ativo && <Badge className="bg-success/15 text-success border-0">{ativo.nome}</Badge>}
+                  {ativo ? (
+                    <Badge className="bg-success/15 text-success border-0 flex items-center gap-1">
+                      <Zap className="h-2.5 w-2.5" /> {ativo.nome}
+                    </Badge>
+                  ) : (
+                    <Badge className="bg-destructive/15 text-destructive border-0 text-xs">Nenhum ativo</Badge>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" variant="outline" onClick={copiar}><Copy className="h-4 w-4 mr-1" /> Copiar</Button>
@@ -240,17 +269,25 @@ export function PromptAgente() {
                           {p.created_by && ` • ${p.created_by}`}
                         </p>
                       </div>
-                      {p.ativo && <Badge className="bg-success/15 text-success border-0 text-[10px]">Ativo</Badge>}
-                    </div>
-                    <div className="flex gap-1 mt-2">
+                        </div>
+                    <div className="flex items-center gap-2 mt-2">
+                      <div className="flex items-center gap-1.5">
+                        <Switch
+                          id={`ativo-${p.id}`}
+                          checked={p.ativo}
+                          onCheckedChange={(checked) => toggleAtivo(p, checked)}
+                          className="scale-75"
+                        />
+                        <Label htmlFor={`ativo-${p.id}`} className="text-[11px] cursor-pointer">
+                          {p.ativo ? <span className="text-success font-bold">Ativo</span> : 'Ativar'}
+                        </Label>
+                      </div>
+                      <div className="flex gap-1 ml-auto">
                       <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setVisualizando(p)}>
                         <Eye className="h-3 w-3 mr-1" /> Ver
                       </Button>
                       {!p.ativo && (
                         <>
-                          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => restaurar(p)}>
-                            <RotateCcw className="h-3 w-3 mr-1" /> Restaurar
-                          </Button>
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
                               <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive hover:text-destructive">
@@ -270,6 +307,7 @@ export function PromptAgente() {
                           </AlertDialog>
                         </>
                       )}
+                      </div>
                     </div>
                   </div>
                 ))}

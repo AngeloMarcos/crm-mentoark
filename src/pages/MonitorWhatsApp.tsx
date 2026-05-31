@@ -4,18 +4,25 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { 
-  MessageCircle, 
-  RefreshCw, 
-  Search, 
-  Clock, 
-  Bot, 
-  Pause, 
-  User, 
-  Zap, 
+import {
+  MessageCircle,
+  RefreshCw,
+  Search,
+  Clock,
+  Bot,
+  Pause,
+  User,
+  Zap,
   ArrowRight,
   Filter,
-  ArrowUpDown
+  ArrowUpDown,
+  CheckCircle2,
+  XCircle,
+  Wifi,
+  Brain,
+  FileText,
+  ShieldCheck,
+  ExternalLink,
 } from "lucide-react";
 import { authHeader } from "@/lib/api-token";
 import { formatDistanceToNow } from "date-fns";
@@ -49,9 +56,18 @@ interface Mensagem {
   timestamp: string;
 }
 
+interface SystemStatus {
+  whatsapp: boolean | null;
+  ia: boolean | null;
+  agente: boolean | null;
+  prompt: boolean | null;
+}
+
 const MonitorWhatsApp = () => {
   const [conversas, setConversas] = useState<Conversa[]>([]);
   const [lastConversas, setLastConversas] = useState<Conversa[]>([]);
+  const [sysStatus, setSysStatus] = useState<SystemStatus>({ whatsapp: null, ia: null, agente: null, prompt: null });
+  const [loadingStatus, setLoadingStatus] = useState(true);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const [secondsSinceUpdate, setSecondsSinceUpdate] = useState(0);
@@ -62,6 +78,40 @@ const MonitorWhatsApp = () => {
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
   const [loadingMensagens, setLoadingMensagens] = useState(false);
   const navigate = useNavigate();
+
+  const fetchSystemStatus = useCallback(async () => {
+    setLoadingStatus(true);
+    try {
+      const [whatsRes, iaRes, agentesRes, promptsRes] = await Promise.allSettled([
+        fetch(`${API_URL}/api/whatsapp/status`, { method: 'POST', headers: { ...authHeader(), 'Content-Type': 'application/json' } }),
+        fetch(`${API_URL}/api/ai-providers`, { headers: authHeader() }),
+        fetch(`${API_URL}/api/agentes`, { headers: authHeader() }),
+        fetch(`${API_URL}/api/agent_prompts`, { headers: authHeader() }),
+      ]);
+
+      const whatsOk = whatsRes.status === 'fulfilled' && whatsRes.value.ok
+        ? await whatsRes.value.json().then((d: any) => d.state === 'open').catch(() => false)
+        : false;
+
+      const iaOk = iaRes.status === 'fulfilled' && iaRes.value.ok
+        ? await iaRes.value.json().then((d: any[]) => d.length > 0).catch(() => false)
+        : false;
+
+      const agenteOk = agentesRes.status === 'fulfilled' && agentesRes.value.ok
+        ? await agentesRes.value.json().then((d: any[]) => d.some((a: any) => a.ativo)).catch(() => false)
+        : false;
+
+      const promptOk = promptsRes.status === 'fulfilled' && promptsRes.value.ok
+        ? await promptsRes.value.json().then((d: any[]) => d.some((p: any) => p.ativo)).catch(() => false)
+        : false;
+
+      setSysStatus({ whatsapp: whatsOk, ia: iaOk, agente: agenteOk, prompt: promptOk });
+    } catch {
+      setSysStatus({ whatsapp: false, ia: false, agente: false, prompt: false });
+    } finally {
+      setLoadingStatus(false);
+    }
+  }, []);
 
   const fetchConversas = useCallback(async () => {
     try {
@@ -101,6 +151,7 @@ const MonitorWhatsApp = () => {
   };
 
   useEffect(() => {
+    fetchSystemStatus();
     fetchConversas();
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
@@ -204,6 +255,43 @@ const MonitorWhatsApp = () => {
             </Button>
           </div>
         </header>
+
+        {/* ── Painel de Status do Sistema ───────────────────────────────── */}
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold">Status do Sistema</h3>
+              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={fetchSystemStatus} disabled={loadingStatus}>
+                <RefreshCw className={`w-3 h-3 ${loadingStatus ? 'animate-spin' : ''}`} />
+                Verificar
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              {[
+                { key: 'whatsapp', label: 'WhatsApp', icon: Wifi, link: '/integracoes', ok: sysStatus.whatsapp },
+                { key: 'ia', label: 'IA configurada', icon: Brain, link: '/integracoes', ok: sysStatus.ia },
+                { key: 'agente', label: 'Agente ativo', icon: Bot, link: '/agentes', ok: sysStatus.agente },
+                { key: 'prompt', label: 'Prompt ativo', icon: FileText, link: '/cerebro', ok: sysStatus.prompt },
+                { key: 'pausa', label: 'Pausa automática', icon: ShieldCheck, link: null, ok: true },
+              ].map(({ key, label, icon: Icon, link, ok }) => (
+                <div key={key} className={`flex items-center gap-2 p-3 rounded-xl border ${ok === null ? 'bg-muted/30' : ok ? 'bg-success/5 border-success/20' : 'bg-destructive/5 border-destructive/20'}`}>
+                  <Icon className={`w-4 h-4 shrink-0 ${ok === null ? 'text-muted-foreground animate-pulse' : ok ? 'text-success' : 'text-destructive'}`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-medium text-foreground leading-tight">{label}</p>
+                    <p className={`text-[10px] ${ok === null ? 'text-muted-foreground' : ok ? 'text-success' : 'text-destructive'}`}>
+                      {ok === null ? 'Verificando...' : ok ? 'OK' : 'Configurar'}
+                    </p>
+                  </div>
+                  {!ok && ok !== null && link && (
+                    <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => navigate(link)} title="Configurar">
+                      <ExternalLink className="w-3 h-3" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
 
         <div className="flex flex-col lg:flex-row gap-4">
           <div className="relative flex-1">

@@ -1,16 +1,14 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  Search, User, Send, Phone, Paperclip, Smile,
-  QrCode, RefreshCw, Loader2, CheckCircle2, Info,
+  Search, Send, Phone, Paperclip,
+  QrCode, RefreshCw, Loader2, Info,
   ChevronDown, ChevronRight, X, Pencil, Plus,
   Mic, LayoutGrid, MessageSquare, SlidersHorizontal,
-  UserPlus, AlertTriangle, Check, Smartphone,
-  Zap, Copy, ExternalLink, Shield, ShieldAlert, Tag,
-  ClipboardList, Sparkles
+  UserPlus, Check, Smartphone,
+  ShieldAlert, Tag, Sparkles, Zap
 } from "lucide-react";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
@@ -41,8 +39,11 @@ function formatTime(iso: string): string {
 
 type ChatTab = "todos" | "fila" | "meus";
 
+type DeliveryStatus = "sent" | "SERVER_ACK" | "DELIVERY_ACK" | "READ" | "PLAYED" | "received" | string;
+
 interface Message {
   id: string;
+  message_id?: string;
   role: "user" | "assistant" | "note";
   content: string;
   timestamp: string;
@@ -51,6 +52,8 @@ interface Message {
   midia_url?: string;
   midia_mime?: string;
   midia_nome?: string;
+  status?: DeliveryStatus;
+  is_read?: boolean;
 }
 
 interface Chat {
@@ -75,6 +78,13 @@ const TAG_COLORS: Record<string, string> = {
   ATIVO: "bg-emerald-100 text-emerald-700",
 };
 
+interface RespostaRapida {
+  id: string;
+  titulo: string;
+  conteudo: string;
+  atalho: string | null;
+}
+
 
 export function WhatsAppInterface() {
   const navigate = useNavigate();
@@ -97,7 +107,48 @@ export function WhatsAppInterface() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [loadingChats, setLoadingChats] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [noteInput, setNoteInput] = useState("");
+  const [respostasRapidas, setRespostasRapidas] = useState<RespostaRapida[]>([]);
+  const [showQR, setShowQR] = useState(false);
+  const [qrSearch, setQrSearch] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const activeChatIdRef = useRef<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Quick replies filtradas pelo que o usuário digitou após "/"
+  const qrFiltradas = useMemo(() => {
+    const term = qrSearch.toLowerCase();
+    return respostasRapidas.filter(r =>
+      r.titulo.toLowerCase().includes(term) ||
+      (r.atalho ?? '').toLowerCase().includes(term)
+    );
+  }, [respostasRapidas, qrSearch]);
+
+  const fetchRespostasRapidas = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/respostas_rapidas`, { headers: apiHeaders() });
+      if (res.ok) setRespostasRapidas(await res.json());
+    } catch {}
+  }, []);
+
+  const handleInputChange = (value: string) => {
+    setMessageInput(value);
+    // Detecta "/" no início para abrir quick replies
+    if (value.startsWith('/')) {
+      setQrSearch(value.slice(1));
+      setShowQR(true);
+    } else {
+      setShowQR(false);
+      setQrSearch('');
+    }
+  };
+
+  const aplicarRespostaRapida = (r: RespostaRapida) => {
+    setMessageInput(r.conteudo);
+    setShowQR(false);
+    setQrSearch('');
+    textareaRef.current?.focus();
+  };
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
 
@@ -114,41 +165,54 @@ export function WhatsAppInterface() {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
       if (!res.ok) return;
       const rows: any[] = await res.json();
-      const mapped: Chat[] = rows.map(row => ({
-        id: row.session_id,
-        name: row.nome || row.session_id,
-        phone: row.session_id,
-        source: row.instancia || undefined,
-        lastMessage: row.ultima_mensagem || '',
-        timestamp: formatTime(row.ultima_atividade),
-        messages: [],
-        notes: '',
-      }));
-      setChats(mapped);
+      // Preserva mensagens já carregadas para evitar flickering
+      setChats(prev => {
+        const prevMap = new Map(prev.map(c => [c.id, c]));
+        return rows.map(row => ({
+          id: row.session_id,
+          name: row.nome || row.session_id,
+          phone: row.session_id,
+          source: row.instancia || undefined,
+          lastMessage: row.ultima_mensagem || '',
+          timestamp: formatTime(row.ultima_atividade),
+          messages: prevMap.get(row.session_id)?.messages || [],
+          notes: prevMap.get(row.session_id)?.notes || '',
+        }));
+      });
     } catch {}
     finally { setLoadingChats(false); }
   };
 
-  const fetchMensagens = async (phone: string, chatName: string) => {
-    setLoadingMessages(true);
+  const fetchMensagens = async (phone: string, chatName: string, showLoading = false) => {
+    if (showLoading) setLoadingMessages(true);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}`, { headers: apiHeaders() });
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}?limit=100`, { headers: apiHeaders() });
       if (!res.ok) return;
       const rows: any[] = await res.json();
       const msgs: Message[] = rows.map((m, i) => ({
-        id: m.id || `msg-${i}`,
+        id: String(m.id || `msg-${i}`),
+        message_id: m.message_id,
         role: (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant',
         content: m.content || m.conteudo || '',
         timestamp: formatTime(m.created_at),
-        senderName: m.role === 'assistant' || m.from_me ? (m.push_name || 'Agente') : (m.push_name || chatName),
+        senderName: m.role === 'assistant' || m.from_me ? 'Agente' : (m.push_name || chatName),
         tipo: m.tipo || 'text',
         midia_url: m.midia_url,
         midia_mime: m.midia_mime,
         midia_nome: m.midia_nome,
+        status: m.status || m.delivery_status,
+        is_read: m.is_read,
       }));
-      setChats(prev => prev.map(c => c.id === phone ? { ...c, messages: msgs } : c));
+      // Só atualiza se houver mudança real (evita re-render/flickering)
+      setChats(prev => {
+        const atual = prev.find(c => c.id === phone);
+        const currentIds = atual?.messages.map(m => m.id + (m.status || '')) ?? [];
+        const newIds     = msgs.map(m => m.id + (m.status || ''));
+        if (JSON.stringify(currentIds) === JSON.stringify(newIds)) return prev;
+        return prev.map(c => c.id === phone ? { ...c, messages: msgs } : c);
+      });
     } catch {}
-    finally { setLoadingMessages(false); }
+    finally { if (showLoading) setLoadingMessages(false); }
   };
 
   const checkStatus = async (silent = true) => {
@@ -202,47 +266,79 @@ export function WhatsAppInterface() {
   useEffect(() => {
     checkStatus();
     fetchConversas();
-    const t = setInterval(checkStatus, 30000);
-    return () => clearInterval(t);
-  }, []);
+    fetchRespostasRapidas();
+    const tStatus = setInterval(checkStatus, 30000);
+    const tConversas = setInterval(fetchConversas, 5000);
+    return () => { clearInterval(tStatus); clearInterval(tConversas); };
+  }, [fetchRespostasRapidas]);
+
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
 
   useEffect(() => {
     if (!activeChatId) return;
     const chat = chats.find(c => c.id === activeChatId);
-    if (chat && chat.messages.length === 0) {
-      fetchMensagens(activeChatId, chat.name);
-    }
+    if (chat) fetchMensagens(activeChatId, chat.name, true);
+    const tMsgs = setInterval(() => {
+      const currentId = activeChatIdRef.current;
+      if (!currentId) return;
+      const c = chats.find(x => x.id === currentId);
+      if (c) fetchMensagens(currentId, c.name, false);
+    }, 4000);
+    return () => clearInterval(tMsgs);
   }, [activeChatId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeChatId, chats]);
 
-  const handleSendMessage = () => {
-    if (!messageInput.trim() || !activeChatId) return;
-    
-    const isNote = inputMode === "nota";
-    const msg: Message = {
-      id: Date.now().toString(),
-      role: isNote ? "note" : "assistant",
-      content: messageInput,
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      senderName: isNote ? "Nota Interna" : "Agente",
-    };
+  const handleSendMessage = async () => {
+    if (inputMode === "nota") {
+      // Nota privada — salva internamente, não envia ao WhatsApp
+      if (!noteInput.trim() || !activeChatId) return;
+      toast.success("Nota salva internamente");
+      setNoteInput("");
+      return;
+    }
 
+    if (!messageInput.trim() || !activeChatId) return;
+
+    const text = messageInput.trim();
+    setMessageInput("");
+
+    // Atualização otimista — aparece imediatamente
+    const tempId = `local_${Date.now()}`;
+    const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     setChats(prev => prev.map(c =>
       c.id === activeChatId
-        ? { 
-            ...c, 
-            messages: [...c.messages, msg], 
-            lastMessage: isNote ? `[NOTA] ${messageInput}` : messageInput, 
-            timestamp: msg.timestamp 
-          }
+        ? { ...c, messages: [...c.messages, { id: tempId, role: "assistant" as const, content: text, timestamp: ts, senderName: "Agente", status: "sent" }], lastMessage: text, timestamp: ts }
         : c
     ));
-    setMessageInput("");
-    if (isNote) {
-      toast.success("Nota privada salva!");
+
+    try {
+      const chat = chats.find(c => c.id === activeChatId);
+      const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ phone: activeChatId, text, instancia: chat?.source }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: 'Erro ao enviar' }));
+        toast.error(err.message || 'Erro ao enviar mensagem');
+        setChats(prev => prev.map(c =>
+          c.id === activeChatId
+            ? { ...c, messages: c.messages.filter(m => m.id !== tempId) }
+            : c
+        ));
+      }
+    } catch {
+      toast.error('Sem conexão com o servidor');
+      setChats(prev => prev.map(c =>
+        c.id === activeChatId
+          ? { ...c, messages: c.messages.filter(m => m.id !== tempId) }
+          : c
+      ));
     }
   };
 
@@ -810,7 +906,19 @@ export function WhatsAppInterface() {
                         {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
                         <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
                           <span className="text-[10px] font-bold">{m.timestamp}</span>
-                          {isOut && <Check className="h-3 w-3 opacity-80" />}
+                          {isOut && (
+                            <span title={m.status || 'sent'}>
+                              {m.status === 'READ' || m.status === 'PLAYED' ? (
+                                <span className="text-sky-300 text-[10px] font-bold">✓✓</span>
+                              ) : m.status === 'DELIVERY_ACK' ? (
+                                <span className="text-primary-foreground/60 text-[10px] font-bold">✓✓</span>
+                              ) : m.status === 'SERVER_ACK' ? (
+                                <span className="text-primary-foreground/50 text-[10px] font-bold">✓</span>
+                              ) : (
+                                <Check className="h-3 w-3 opacity-50" />
+                              )}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -849,26 +957,76 @@ export function WhatsAppInterface() {
                 
                 <div className="p-2 flex items-end gap-2">
                   <div className="flex-1 relative">
-                    <textarea
-                      placeholder={inputMode === "nota" ? "O que aconteceu nesta conversa?" : "Escreva sua mensagem aqui..."}
-                      className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-transparent border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
-                      value={messageInput}
-                      onChange={e => setMessageInput(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          handleSendMessage();
-                        }
-                      }}
-                    />
+                    {inputMode === "nota" ? (
+                      <textarea
+                        placeholder="Adicione uma nota privada sobre esta conversa..."
+                        className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-amber-50/50 border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
+                        value={noteInput}
+                        onChange={e => setNoteInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendMessage();
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="relative">
+                        {/* Popup de Respostas Rápidas */}
+                        {showQR && qrFiltradas.length > 0 && (
+                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 max-h-52 overflow-y-auto">
+                            <div className="px-3 py-2 border-b flex items-center gap-2">
+                              <Zap className="h-3.5 w-3.5 text-amber-500" />
+                              <span className="text-xs font-bold text-muted-foreground">Respostas Rápidas</span>
+                            </div>
+                            {qrFiltradas.map(r => (
+                              <button
+                                key={r.id}
+                                className="w-full text-left px-3 py-2.5 hover:bg-muted/50 transition-colors flex items-start gap-2.5 border-b border-border/30 last:border-0"
+                                onMouseDown={e => { e.preventDefault(); aplicarRespostaRapida(r); }}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-semibold">{r.titulo}</p>
+                                  {r.atalho && <span className="text-[10px] text-amber-600 font-mono">/{r.atalho}</span>}
+                                  <p className="text-[11px] text-muted-foreground truncate mt-0.5">{r.conteudo}</p>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <textarea
+                          ref={textareaRef}
+                          placeholder="Escreva sua mensagem aqui... (/ para respostas rápidas)"
+                          className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-transparent border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
+                          value={messageInput}
+                          onChange={e => handleInputChange(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Escape') { setShowQR(false); return; }
+                            if (e.key === 'Enter' && !e.shiftKey && !showQR) {
+                              e.preventDefault();
+                              handleSendMessage();
+                            }
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-col gap-2 p-1">
-                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl hover:bg-primary/5 hover:text-primary transition-colors">
-                      <Paperclip className="h-5 w-5" />
+                    <Button
+                      variant="ghost" size="icon"
+                      className="h-9 w-9 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                      title="Respostas Rápidas (/)"
+                      onClick={() => { setMessageInput('/'); setShowQR(true); setQrSearch(''); textareaRef.current?.focus(); }}
+                    >
+                      <Zap className="h-4.5 w-4.5" />
                     </Button>
-                    <Button 
-                      className={`h-9 w-9 rounded-xl shadow-lg transition-all active:scale-90 ${messageInput.trim() ? "bg-primary hover:bg-primary/90 shadow-primary/20" : "bg-muted text-muted-foreground opacity-50"}`}
-                      disabled={!messageInput.trim()}
+                    <Button
+                      className={`h-9 w-9 rounded-xl shadow-lg transition-all active:scale-90 ${
+                        (inputMode === "nota" ? noteInput.trim() : messageInput.trim())
+                          ? (inputMode === "nota" ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-primary hover:bg-primary/90 shadow-primary/20")
+                          : "bg-muted text-muted-foreground opacity-50"
+                      }`}
+                      disabled={!(inputMode === "nota" ? noteInput.trim() : messageInput.trim())}
                       onClick={handleSendMessage}
                     >
                       <Send className="h-4.5 w-4.5" />
