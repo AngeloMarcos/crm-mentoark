@@ -276,6 +276,16 @@ export default function IntegracoesPage() {
       if (!res.ok) return;
       const lista: AiProvider[] = await res.json();
       setAiProviders(lista);
+      // Sincroniza o modelo salvo no banco com o formulário local
+      setAiForm(prev => {
+        const next = { ...prev };
+        lista.forEach(p => {
+          if (next[p.slug]) {
+            next[p.slug] = { ...next[p.slug], modelo: p.modelo || next[p.slug].modelo };
+          }
+        });
+        return next;
+      });
     } catch {}
   };
 
@@ -793,8 +803,8 @@ export default function IntegracoesPage() {
                             <Icon className="h-4 w-4 text-primary" />
                             <span className="font-semibold text-sm">{label}</span>
                           </div>
-                          <Badge className={configured ? 'bg-success/15 text-success border-0 text-[10px]' : 'bg-muted text-muted-foreground border-0 text-[10px]'}>
-                            {configured ? 'Configurado' : 'Não configurado'}
+                          <Badge className={configured ? 'bg-success/15 text-success border-0 text-[10px]' : 'bg-destructive/10 text-destructive border-0 text-[10px]'}>
+                            {configured ? 'Configurado ✅' : 'Não configurado ❌'}
                           </Badge>
                         </div>
 

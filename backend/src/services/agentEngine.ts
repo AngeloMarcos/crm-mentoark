@@ -194,10 +194,18 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   ];
 
   // 7. Criar provider (do banco ou fallback OpenAI)
-  const providerInfo = await criarProvider(pool, agente.user_id, agente.provider_id);
-  const provider = providerInfo?.provider ?? new OpenAIProvider(process.env.OPENAI_API_KEY || '');
+  const providerInfo = await criarProvider(pool, agente.user_id, agente.provider_id ?? null);
+  if (!providerInfo) {
+    console.warn(`[ENGINE] Nenhum ai_provider encontrado para user_id=${agente.user_id}. Configure em Integrações > Configuração de IA.`);
+  }
+  const envKey = process.env.OPENAI_API_KEY || '';
+  if (!providerInfo && !envKey) {
+    console.error(`[ENGINE] ATENÇÃO: sem provider no banco E OPENAI_API_KEY vazio — a IA não conseguirá responder!`);
+  }
+  const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
   const modelo = providerInfo?.modelo || agente.modelo || 'gpt-4o-mini';
   const providerSlug = providerInfo?.providerSlug || 'openai';
+  console.log(`[ENGINE] Provider: ${providerInfo ? providerSlug + '/' + modelo : 'FALLBACK env'} | user=${agente.user_id}`);
 
   // 8. Loop agêntico — máximo 5 iterações
   const MAX_ITER = 5;
