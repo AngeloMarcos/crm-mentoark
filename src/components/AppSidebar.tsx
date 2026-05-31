@@ -100,7 +100,7 @@ const navGroups: NavGroup[] = [
         color: "text-green-500",
         items: [
           { title: "WhatsApp", url: "/whatsapp", icon: MessageCircle, modulo: "whatsapp", color: "text-green-500" },
-          { title: "Instâncias", url: "/whatsapp?tab=instancias", icon: Smartphone, modulo: "whatsapp", color: "text-cyan-500" },
+          
           { title: "Monitor", url: "/monitor-whatsapp", icon: Monitor, modulo: "whatsapp", color: "text-blue-400" },
           { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap, modulo: "whatsapp", color: "text-amber-500" },
           { title: "SLA / Gestão", url: "/sla", icon: Timer, modulo: "whatsapp", color: "text-yellow-500" },
