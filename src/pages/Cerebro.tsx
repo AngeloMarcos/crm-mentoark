@@ -957,6 +957,9 @@ export default function CerebroPage() {
               </TabsList>
             </div>
 
+            <TabsContent value="fluxo" className="mt-4">
+              <ConfigAgenteIA />
+            </TabsContent>
             <TabsContent value="personalidade" className="mt-4">
               <KeyValueEditor {...personalidade} labelCampo="Atributo" />
             </TabsContent>
