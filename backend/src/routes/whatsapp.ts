@@ -236,22 +236,27 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // GET /api/whatsapp/conversas
-  // Usa window function para eliminar subqueries N+1 e JOIN para enriquecer contatos
   router.get('/conversas', async (req: AuthRequest, res: Response) => {
+    console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId });
     try {
       const userId = req.userId!;
 
+      // PARTITION BY phone (não por instância) — evita duplicatas quando o mesmo
+      // número existiu em duas instâncias diferentes
       const r = await pool.query(
         `WITH ranked AS (
            SELECT
-             m.remote_jid,
+             split_part(m.remote_jid,'@',1) AS phone,
              m.instance_name,
              m.content,
              m.from_me,
              m.created_at,
              m.message_id,
-             COUNT(*) OVER (PARTITION BY m.remote_jid, m.instance_name) AS total,
-             ROW_NUMBER() OVER (PARTITION BY m.remote_jid, m.instance_name ORDER BY m.created_at DESC) AS rn
+             COUNT(*) OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS total,
+             ROW_NUMBER() OVER (
+               PARTITION BY split_part(m.remote_jid,'@',1)
+               ORDER BY m.created_at DESC
+             ) AS rn
            FROM whatsapp_messages m
            WHERE m.user_id = $1
              AND m.remote_jid NOT LIKE '%@g.us'
@@ -263,21 +268,13 @@ export default function whatsappRouter(pool: Pool): Router {
            r.total::int AS total,
            r.content AS ultima_mensagem,
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
-           COALESCE(c.push_name, c.nome,
-             (SELECT wm.push_name FROM whatsapp_messages wm
-              WHERE wm.remote_jid = r.remote_jid AND wm.user_id = $1
-                AND wm.push_name IS NOT NULL LIMIT 1)
-           ) AS push_name,
+           COALESCE(c.push_name, c.nome) AS push_name,
            COALESCE(c.nome, c.push_name) AS nome_contato,
            COALESCE(c.foto_perfil, c.profile_pic_url) AS profile_pic_url
-         FROM (
-           SELECT remote_jid,
-                  split_part(remote_jid,'@',1) AS phone,
-                  instance_name, content, from_me, created_at, total
-           FROM ranked WHERE rn = 1
-         ) r
+         FROM ranked r
          LEFT JOIN contatos c ON c.user_id = $1
            AND c.telefone LIKE '%' || RIGHT(r.phone, 11)
+         WHERE r.rn = 1
          ORDER BY r.created_at DESC
          LIMIT 300`,
         [userId]
@@ -304,10 +301,12 @@ export default function whatsappRouter(pool: Pool): Router {
 
   // GET /api/whatsapp/conversas/:phone
   router.get('/conversas/:phone', async (req: AuthRequest, res: Response) => {
+    console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId, params: req.params });
     try {
       const userId = req.userId!;
+      // Aceita tanto "5511..." (com DDI) quanto "11..." (sem DDI) — remove tudo exceto dígitos
       const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
-      if (!phone) return res.status(400).json({ message: 'Telefone inválido' });
+      if (!phone || phone.length < 8) return res.status(400).json({ message: 'Telefone inválido' });
 
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Number(req.query.offset) || 0;
@@ -783,6 +782,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
   // POST /api/whatsapp/send — envia mensagem manual (texto ou mídia)
   router.post('/send', async (req: AuthRequest, res: Response) => {
+    console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId, phone: req.body?.phone, hasText: !!req.body?.text });
     try {
       const userId = req.userId!;
       const {
@@ -794,10 +794,11 @@ export default function whatsappRouter(pool: Pool): Router {
         mediaCaption?: string; mediaFilename?: string;
       };
 
-      // Validar número de telefone (formato internacional)
+      // Normaliza o telefone — remove tudo exceto dígitos
       const phoneClean = (phone || '').replace(/\D/g, '');
-      if (!phoneClean || phoneClean.length < 10 || phoneClean.length > 15) {
-        return res.status(400).json({ message: 'Número de telefone inválido' });
+      if (!phoneClean || phoneClean.length < 8 || phoneClean.length > 15) {
+        console.warn('[WHATSAPP] /send — telefone inválido:', phone);
+        return res.status(400).json({ message: `Número de telefone inválido: "${phone}"` });
       }
       if (!text && !mediaUrl) {
         return res.status(400).json({ message: 'text ou mediaUrl são obrigatórios' });
@@ -806,6 +807,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const cfg = await getEvolutionConfig(userId);
       const instancia = instanciaParam || cfg.instancia;
       const base = cfg.url.replace(/\/$/, '');
+      console.log(`[WHATSAPP] /send → instancia=${instancia} phone=${phoneClean} base=${base}`);
 
       let evolutionResp: any;
       let msgType = 'text';
@@ -835,8 +837,9 @@ export default function whatsappRouter(pool: Pool): Router {
           body: JSON.stringify(mediaPayload),
         });
         if (!r.ok) {
-          const err = await r.text().catch(() => r.status.toString());
-          return res.status(502).json({ message: `Evolution ${r.status}: ${err.slice(0, 200)}` });
+          const errText = await r.text().catch(() => r.status.toString());
+          console.error(`[WHATSAPP] /send mídia falhou — Evolution ${r.status}: ${errText.slice(0, 400)}`);
+          return res.status(502).json({ message: `Evolution ${r.status}: ${errText.slice(0, 200)}` });
         }
         evolutionResp = await r.json().catch(() => ({}));
       } else {
@@ -847,10 +850,12 @@ export default function whatsappRouter(pool: Pool): Router {
           body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
         });
         if (!r.ok) {
-          const err = await r.text().catch(() => r.status.toString());
-          return res.status(502).json({ message: `Evolution ${r.status}: ${err.slice(0, 200)}` });
+          const errText = await r.text().catch(() => r.status.toString());
+          console.error(`[WHATSAPP] /send texto falhou — Evolution ${r.status}: ${errText.slice(0, 400)}`);
+          return res.status(502).json({ message: `Evolution ${r.status}: ${errText.slice(0, 200)}` });
         }
         evolutionResp = await r.json().catch(() => ({}));
+        console.log(`[WHATSAPP] /send ok — messageId=${evolutionResp?.key?.id}`);
       }
 
       const messageId = evolutionResp?.key?.id || `manual_${Date.now()}`;
