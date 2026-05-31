@@ -133,183 +133,222 @@ export function ConfigAgenteIA() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Identidade e Modelos */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Bot className="h-4 w-4 text-primary" /> Identidade e Modelos
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Nome do Agente</Label>
-              <Input 
-                value={config.nome_agente} 
-                onChange={(e) => update("nome_agente", e.target.value)} 
-                placeholder="Ex: Cris"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Modelo Principal</Label>
-                <Select value={config.modelo_llm} onValueChange={(v) => update("modelo_llm", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="gpt-4o">gpt-4o</SelectItem>
-                    <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
-                    <SelectItem value="gpt-4-turbo">gpt-4-turbo</SelectItem>
-                    <SelectItem value="gpt-3.5-turbo">gpt-3.5-turbo</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Modelo Parser</Label>
-                <Select value={config.modelo_parser} onValueChange={(v) => update("modelo_parser", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
-                    <SelectItem value="gpt-4o">gpt-4o</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      <Tabs defaultValue="mensagens" className="w-full">
+        <TabsList className="grid w-full grid-cols-2 mb-8">
+          <TabsTrigger value="mensagens" className="gap-2">
+            <MessageSquare className="h-4 w-4" /> Mensagens Fixas
+          </TabsTrigger>
+          <TabsTrigger value="config" className="gap-2">
+            <Settings className="h-4 w-4" /> Parâmetros Técnicos
+          </TabsTrigger>
+        </TabsList>
 
-        {/* Controle e Pausa */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Shield className="h-4 w-4 text-primary" /> Controle e Pausa
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Sinal de Pausa (Código)</Label>
-                <Input 
-                  value={config.sinal_pausa} 
-                  onChange={(e) => update("sinal_pausa", e.target.value)} 
-                  placeholder="Ex: 251213"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Palavra para Reativar</Label>
-                <Input 
-                  value={config.palavra_reativar} 
-                  onChange={(e) => update("palavra_reativar", e.target.value)} 
-                  placeholder="Ex: Atendimento finalizado"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Debounce Mensagem (s)</Label>
-                <Input 
-                  type="number"
-                  value={config.tempo_espera_mensagem} 
-                  onChange={(e) => update("tempo_espera_mensagem", Number(e.target.value))} 
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Espera Resposta (s)</Label>
-                <Input 
-                  type="number"
-                  value={config.tempo_espera_resposta} 
-                  onChange={(e) => update("tempo_espera_resposta", Number(e.target.value))} 
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Notificações */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Bell className="h-4 w-4 text-primary" /> Notificações
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-1.5">
-              <Label>JID do Grupo de Notificação</Label>
-              <Input 
-                value={config.grupo_notificacao} 
-                onChange={(e) => update("grupo_notificacao", e.target.value)} 
-                placeholder="Ex: 120363427455779016@g.us"
-              />
-              <p className="text-[10px] text-muted-foreground">ID do grupo do WhatsApp onde a IA enviará notificações de novos leads qualificados.</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Prompts e Mensagens Fixas */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <MessageSquare className="h-4 w-4 text-primary" /> Prompts e Mensagens Fixas
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-1.5">
-              <Label>Prompt do Sistema (Instruções Principais)</Label>
-              <Textarea 
-                value={config.prompt_sistema} 
-                onChange={(e) => update("prompt_sistema", e.target.value)} 
-                rows={8}
-                placeholder="Descreva aqui a personalidade e as regras do agente..."
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-1.5">
-                <Label>Saudação Inicial (Etapa 1)</Label>
+        <TabsContent value="mensagens" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <MessageSquare className="h-4 w-4 text-primary" /> Configuração de Mensagens
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-8">
+              <div className="space-y-2">
+                <Label className="text-sm font-semibold">1. Saudação Inicial</Label>
+                <p className="text-xs text-muted-foreground">Primeira mensagem enviada para todo novo contato</p>
                 <Textarea 
                   value={config.saudacao_inicial} 
                   onChange={(e) => update("saudacao_inicial", e.target.value)} 
                   rows={4}
-                  placeholder="Primeira mensagem enviada ao lead..."
+                  placeholder="Ex: Olá! Sou a Cris, assistente virtual da Mentoark. Como posso te ajudar hoje?"
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Bloco de Qualificação (Etapa 3)</Label>
+
+              <div className="space-y-2">
+                <Label className="text-sm font-semibold">2. Bloco de Qualificação</Label>
+                <p className="text-xs text-muted-foreground">Enviado completo após coletar nome e e-mail do cliente</p>
                 <Textarea 
                   value={config.bloco_qualificacao} 
                   onChange={(e) => update("bloco_qualificacao", e.target.value)} 
                   rows={4}
-                  placeholder="Mensagem para coletar dados do lead..."
+                  placeholder="Ex: Ótimo! Para prosseguirmos, poderia me informar sua renda mensal aproximada e se possui FGTS?"
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Mensagem de Encaminhamento</Label>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-semibold">3. Mensagem de Encaminhamento</Label>
+                  <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">
+                    Inclui sinal de pausa
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">Quando cliente demonstra interesse — pausa a IA automaticamente</p>
                 <Textarea 
                   value={config.mensagem_encaminhamento} 
                   onChange={(e) => update("mensagem_encaminhamento", e.target.value)} 
                   rows={4}
-                  placeholder="Mensagem ao finalizar qualificação..."
+                  placeholder="Ex: Entendido! Vou encaminhar seus dados para um de nossos especialistas. Aguarde um momento."
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Mensagem de Encerramento</Label>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-semibold">4. Mensagem de Encerramento</Label>
+                  <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">
+                    Inclui sinal de pausa
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">Quando a conversa é finalizada — pausa a IA automaticamente</p>
                 <Textarea 
                   value={config.mensagem_encerramento} 
                   onChange={(e) => update("mensagem_encerramento", e.target.value)} 
                   rows={4}
-                  placeholder="Mensagem final de despedida..."
+                  placeholder="Ex: Obrigado pelo contato! Se precisar de algo mais, estou à disposição. Tenha um ótimo dia!"
                 />
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-        <div className="lg:col-span-2 flex justify-end">
-          <Button onClick={salvar} size="lg" className="px-8" disabled={salvando}>
-            {salvando ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />} 
-            Salvar Fluxo IA
-          </Button>
-        </div>
+        <TabsContent value="config" className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Identidade e Modelos */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Bot className="h-4 w-4 text-primary" /> Identidade e Modelos
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Nome do Agente</Label>
+                  <Input 
+                    value={config.nome_agente} 
+                    onChange={(e) => update("nome_agente", e.target.value)} 
+                    placeholder="Ex: Cris"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Modelo Principal</Label>
+                    <Select value={config.modelo_llm} onValueChange={(v) => update("modelo_llm", v)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="gpt-4o">gpt-4o</SelectItem>
+                        <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
+                        <SelectItem value="gpt-4-turbo">gpt-4-turbo</SelectItem>
+                        <SelectItem value="gpt-3.5-turbo">gpt-3.5-turbo</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Modelo Parser</Label>
+                    <Select value={config.modelo_parser} onValueChange={(v) => update("modelo_parser", v)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
+                        <SelectItem value="gpt-4o">gpt-4o</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Controle e Pausa */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Shield className="h-4 w-4 text-primary" /> Controle e Pausa
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Sinal de Pausa (Código)</Label>
+                    <Input 
+                      value={config.sinal_pausa} 
+                      onChange={(e) => update("sinal_pausa", e.target.value)} 
+                      placeholder="Ex: 251213"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Palavra para Reativar</Label>
+                    <Input 
+                      value={config.palavra_reativar} 
+                      onChange={(e) => update("palavra_reativar", e.target.value)} 
+                      placeholder="Ex: Atendimento finalizado"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Debounce Mensagem (s)</Label>
+                    <Input 
+                      type="number"
+                      value={config.tempo_espera_mensagem} 
+                      onChange={(e) => update("tempo_espera_mensagem", Number(e.target.value))} 
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Espera Resposta (s)</Label>
+                    <Input 
+                      type="number"
+                      value={config.tempo_espera_resposta} 
+                      onChange={(e) => update("tempo_espera_resposta", Number(e.target.value))} 
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Notificações */}
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Bell className="h-4 w-4 text-primary" /> Notificações
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-1.5">
+                  <Label>JID do Grupo de Notificação</Label>
+                  <Input 
+                    value={config.grupo_notificacao} 
+                    onChange={(e) => update("grupo_notificacao", e.target.value)} 
+                    placeholder="Ex: 120363427455779016@g.us"
+                  />
+                  <p className="text-[10px] text-muted-foreground">ID do grupo do WhatsApp onde a IA enviará notificações de novos leads qualificados.</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <FileCode className="h-4 w-4 text-primary" /> Prompt do Sistema
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-1.5">
+                  <Label>Instruções Principais</Label>
+                  <Textarea 
+                    value={config.prompt_sistema} 
+                    onChange={(e) => update("prompt_sistema", e.target.value)} 
+                    rows={8}
+                    placeholder="Descreva aqui a personalidade e as regras do agente..."
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
+
+      <div className="flex justify-end pt-4 border-t">
+        <Button onClick={salvar} size="lg" className="px-12 h-12 text-base font-semibold shadow-lg shadow-primary/20 transition-all hover:scale-[1.02]" disabled={salvando}>
+          {salvando ? <Loader2 className="h-5 w-5 mr-2 animate-spin" /> : <Save className="h-5 w-5 mr-2" />} 
+          Salvar Fluxo IA
+        </Button>
       </div>
     </div>
   );
+}
 }
