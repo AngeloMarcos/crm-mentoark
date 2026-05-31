@@ -7,8 +7,8 @@
  */
 export function getAuthToken(): string {
   return (
-    localStorage.getItem("crm_access_token") ||
     localStorage.getItem("access_token") ||
+    localStorage.getItem("crm_access_token") ||
     ""
   );
 }
