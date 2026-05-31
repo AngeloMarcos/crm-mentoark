@@ -207,7 +207,7 @@ const TEMPLATES: Template[] = [
 ];
 
 function formatarData(iso: string | null) {
-  if (!iso) return "Nunca sincronizado";
+  if (!iso) return <span title="Nunca sincronizado">Nunca sincronizado</span>;
   const d = new Date(iso);
   return d.toLocaleString("pt-BR", {
     day: "2-digit",

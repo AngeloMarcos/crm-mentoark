@@ -152,7 +152,7 @@ const navGroups: NavGroup[] = [
     label: "👥 EQUIPE",
     subgroups: [
       {
-        label: "Colaboração",
+        label: "Equipe",
         icon: Users2,
         color: "text-indigo-500",
         items: [
