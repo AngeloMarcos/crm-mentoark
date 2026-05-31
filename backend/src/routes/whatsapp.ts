@@ -199,16 +199,18 @@ export default function whatsappRouter(pool: Pool): Router {
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Number(req.query.offset) || 0;
 
-      // Busca por sufixo do número (funciona com ou sem código de país)
+      // Busca por sufixo do número + nome do remetente via JOIN com users
       const r = await pool.query(
         `SELECT
            m.id, m.message_id, m.from_me, m.message_type, m.content,
-           m.media_url, m.media_mimetype, m.status,
+           m.media_url, m.media_mimetype, m.status, m.push_name,
            m.timestamp_wa, m.created_at,
-           COALESCE(s.status, m.status) AS delivery_status
+           COALESCE(s.status, m.status) AS delivery_status,
+           u.display_name AS sender_name
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
+         LEFT JOIN users u ON u.id = m.sent_by_user_id
          WHERE split_part(m.remote_jid, '@', 1) = $1
            AND m.user_id = $2
          ORDER BY COALESCE(m.timestamp_wa, m.created_at) ASC
@@ -221,12 +223,13 @@ export default function whatsappRouter(pool: Pool): Router {
         message_id: row.message_id,
         role: row.from_me ? 'assistant' : 'user',
         content: row.content || '',
-        push_name: null,
+        push_name: row.push_name || null,
         tipo: row.message_type,
         midia_url: row.media_url,
         midia_mime: row.media_mimetype,
         midia_nome: null,
         status: row.delivery_status || row.status,
+        sender_name: row.sender_name || null,
         created_at: row.created_at,
         timestamp_wa: row.timestamp_wa,
       }));
@@ -697,11 +700,11 @@ export default function whatsappRouter(pool: Pool): Router {
 
       await pool.query(
         `INSERT INTO whatsapp_messages
-           (user_id, instance_name, remote_jid, message_id, from_me, message_type,
+           (user_id, sent_by_user_id, instance_name, remote_jid, message_id, from_me, message_type,
             content, media_url, status, timestamp_wa)
-         VALUES ($1, $2, $3, $4, true, $5, $6, $7, 'sent', NOW())
+         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW())
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
-        [userId, instancia, `${phoneClean}@s.whatsapp.net`,
+        [userId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
          messageId, msgType, content, mediaUrl || null]
       ).catch(err => console.warn('[SEND] Falha ao salvar:', err.message));
 

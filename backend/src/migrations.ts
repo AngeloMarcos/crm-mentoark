@@ -1148,6 +1148,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // Colunas extras em whatsapp_messages que podem não existir em instâncias antigas
   await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
   await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS push_name TEXT`).catch(() => {});
+  // Quem enviou a mensagem manualmente (diferencia atendente humano da IA)
+  await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS sent_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_sent_by ON whatsapp_messages(sent_by_user_id) WHERE sent_by_user_id IS NOT NULL`).catch(() => {});
 
   console.log('[MIGRATIONS] whatsapp_message_status + patches OK');
 

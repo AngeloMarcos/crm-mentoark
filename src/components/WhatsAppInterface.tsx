@@ -24,6 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { getAuthToken } from "@/lib/api-token";
+import { useAuth } from "@/hooks/useAuth";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 function apiHeaders(): Record<string, string> {
@@ -90,6 +91,8 @@ interface RespostaRapida {
 
 export function WhatsAppInterface() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const currentUserName = user?.display_name || user?.email?.split('@')[0] || 'Agente';
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
   const [searchTerm, setSearchTerm] = useState("");
@@ -228,10 +231,9 @@ export function WhatsAppInterface() {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
       if (!res.ok) return;
       const rows: any[] = await res.json();
-      // Preserva mensagens já carregadas para evitar flickering
       setChats(prev => {
         const prevMap = new Map(prev.map(c => [c.id, c]));
-        return rows.map(row => ({
+        const dbChats = rows.map(row => ({
           id: row.session_id,
           name: row.nome || row.session_id,
           phone: row.session_id,
@@ -241,6 +243,15 @@ export function WhatsAppInterface() {
           messages: prevMap.get(row.session_id)?.messages || [],
           notes: prevMap.get(row.session_id)?.notes || '',
         }));
+
+        // Preserva chat local ativo que ainda não chegou ao banco (ex: nova conversa antes do 1º envio)
+        const activeId = activeChatIdRef.current;
+        if (activeId && !dbChats.find(c => c.id === activeId)) {
+          const localChat = prevMap.get(activeId);
+          if (localChat) return [localChat, ...dbChats];
+        }
+
+        return dbChats;
       });
     } catch {}
     finally { setLoadingChats(false); }
@@ -257,8 +268,11 @@ export function WhatsAppInterface() {
         message_id: m.message_id,
         role: (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant',
         content: m.content || m.conteudo || '',
-        timestamp: formatTime(m.created_at),
-        senderName: m.role === 'assistant' || m.from_me ? 'Agente' : (m.push_name || chatName),
+        timestamp: formatTime(m.timestamp_wa || m.created_at),
+        // sender_name: nome de quem enviou (humano ou IA); push_name: nome do contato recebido
+        senderName: m.from_me
+          ? (m.sender_name || 'IA')
+          : (m.push_name || chatName),
         tipo: m.tipo || 'text',
         midia_url: m.midia_url,
         midia_mime: m.midia_mime,
@@ -376,7 +390,7 @@ export function WhatsAppInterface() {
     const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     setChats(prev => prev.map(c =>
       c.id === activeChatId
-        ? { ...c, messages: [...c.messages, { id: tempId, role: "assistant" as const, content: text, timestamp: ts, senderName: "Agente", status: "sent" }], lastMessage: text, timestamp: ts }
+        ? { ...c, messages: [...c.messages, { id: tempId, role: "assistant" as const, content: text, timestamp: ts, senderName: currentUserName, status: "sent" }], lastMessage: text, timestamp: ts }
         : c
     ));
 
@@ -1014,20 +1028,26 @@ export function WhatsAppInterface() {
                 {activeChat.messages.map((m, i) => {
                   const isOut = m.role === "assistant";
                   const isNote = m.role === "note";
-                  const prevRole = i > 0 ? activeChat.messages[i - 1].role : null;
-                  const showName = !isOut && !isNote && prevRole !== "user";
-                  
+                  const prevMsg = i > 0 ? activeChat.messages[i - 1] : null;
+                  const prevRole = prevMsg?.role ?? null;
+                  // Mostra nome quando muda de remetente
+                  const showNameIn  = !isOut && !isNote && prevRole !== "user";
+                  const showNameOut = isOut && !isNote && (prevRole !== "assistant" || prevMsg?.senderName !== m.senderName);
+
                   return (
                     <div key={m.id} className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
                       <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
-                        isOut 
-                          ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10" 
+                        isOut
+                          ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
                           : isNote
                             ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
                             : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
                       }`}>
-                        {showName && (
+                        {showNameIn && (
                           <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
+                        )}
+                        {showNameOut && m.senderName && (
+                          <p className="text-[10px] font-bold text-primary-foreground/70 mb-1 text-right">{m.senderName}</p>
                         )}
                         {isNote && (
                           <div className="flex items-center justify-center gap-1.5 mb-1 text-[10px] font-black uppercase tracking-widest text-amber-600/80">
