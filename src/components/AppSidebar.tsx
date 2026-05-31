@@ -168,27 +168,13 @@ const navGroups: NavGroup[] = [
     adminOnly: true,
     subgroups: [
       {
-        label: "Acessos",
+        label: "Acessos & Conexões",
         icon: SettingsIcon,
         color: "text-teal-600",
         items: [
           { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600" },
           { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400" },
-        ],
-      },
-      {
-        label: "Conectores",
-        icon: Plug,
-        color: "text-amber-500",
-        items: [
-          { title: "Gerenciar Todos", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
-          { title: "WhatsApp", url: "/integracoes?tipo=evolution", icon: MessageCircle, modulo: "integracoes", color: "text-green-500" },
-          { title: "Webhook", url: "/integracoes?tipo=webhook_in", icon: Webhook, modulo: "integracoes", color: "text-blue-500" },
-          { title: "Supabase", url: "/integracoes?tipo=database_vector", icon: Database, modulo: "integracoes", color: "text-emerald-500" },
-          { title: "OpenAI", url: "/integracoes?tipo=openai", icon: Bot, modulo: "integracoes", color: "text-purple-500" },
-          { title: "Gemini", url: "/integracoes?tipo=gemini", icon: Sparkles, modulo: "integracoes", color: "text-orange-400" },
-          { title: "Claude", url: "/integracoes?tipo=claude", icon: Brain, modulo: "integracoes", color: "text-violet-500" },
-          { title: "ElevenLabs", url: "/integracoes?tipo=elevenlabs", icon: Activity, modulo: "integracoes", color: "text-pink-500" },
+          { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
         ],
       },
     ],
