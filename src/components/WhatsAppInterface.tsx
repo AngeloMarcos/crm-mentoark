@@ -719,7 +719,7 @@ export function WhatsAppInterface() {
                             <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
                           </a>
                         ) : null}
-                        {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content}</p>}
+                        {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
                         <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : "text-muted-foreground/60"}`}>
                           <span className="text-[10px] font-bold">{m.timestamp}</span>
                           {isOut && <Check className="h-3 w-3 opacity-80" />}

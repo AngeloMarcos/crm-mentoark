@@ -337,7 +337,7 @@ export default function IntegracoesPage() {
     }
   })();
 
-  const truncate = (s: string, n = 50) => (s.length > n ? s.slice(0, n) + "…" : s);
+  const truncate = (s: string, n = 50) => (s.length > n ? s.slice(0, n) + "..." : s);
 
 
   const abrirConfig = (tpl: Template, row: IntegRow | null) => {
