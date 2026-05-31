@@ -88,7 +88,9 @@ export function WhatsAppInterface() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [showConnectModal, setShowConnectModal] = useState(false);
+  const [showNewMessageModal, setShowNewMessageModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [newMessagePhone, setNewMessagePhone] = useState("");
   const [instanceName, setInstanceName] = useState("");
   const [instancePhone, setInstancePhone] = useState("");
   const [instanceCountry, setInstanceCountry] = useState("BR");
@@ -253,6 +255,39 @@ export function WhatsAppInterface() {
     }
   };
 
+  const handleStartNewChat = () => {
+    if (!newMessagePhone.trim()) {
+      toast.error("Informe o número de telefone");
+      return;
+    }
+    const cleanPhone = newMessagePhone.replace(/\D/g, "");
+    if (cleanPhone.length < 10) {
+      toast.error("Número de telefone inválido");
+      return;
+    }
+
+    const newChat: Chat = {
+      id: cleanPhone,
+      name: newMessagePhone,
+      phone: cleanPhone,
+      lastMessage: "Nova conversa iniciada",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      messages: [],
+      notes: '',
+    };
+
+    setChats(prev => {
+      const exists = prev.find(c => c.id === cleanPhone);
+      if (exists) return prev;
+      return [newChat, ...prev];
+    });
+    
+    setActiveChatId(cleanPhone);
+    setShowNewMessageModal(false);
+    setNewMessagePhone("");
+    toast.success("Conversa iniciada!");
+  };
+
   const isConnected = connectionStatus?.state === "open";
 
   return (
@@ -285,11 +320,11 @@ export function WhatsAppInterface() {
                   <Plus className="h-4.5 w-4.5" />
                 </Button>
               )}
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                <SlidersHorizontal className="h-4 w-4" />
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setShowNewMessageModal(true)} title="Nova Mensagem">
+                <UserPlus className="h-4.5 w-4.5" />
               </Button>
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                <UserPlus className="h-4 w-4" />
+                <SlidersHorizontal className="h-4 w-4" />
               </Button>
             </div>
           </div>
@@ -407,6 +442,39 @@ export function WhatsAppInterface() {
       {/* ── CENTER: Chat Area ── */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/40">
         
+        {/* Modal Nova Mensagem */}
+        <Dialog open={showNewMessageModal} onOpenChange={setShowNewMessageModal}>
+          <DialogContent className="sm:max-w-[420px] p-6 rounded-2xl">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-bold">Iniciar Nova Conversa</DialogTitle>
+              <DialogDescription>
+                Digite o número do WhatsApp (com DDD) para iniciar um novo atendimento.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="py-4 space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-muted-foreground">Número do Telefone</label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input 
+                    placeholder="Ex: 11999999999" 
+                    className="pl-10 h-11 rounded-xl"
+                    value={newMessagePhone}
+                    onChange={(e) => setNewMessagePhone(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleStartNewChat()}
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="ghost" onClick={() => setShowNewMessageModal(false)}>Cancelar</Button>
+              <Button className="bg-primary text-white hover:bg-primary/90 rounded-xl" onClick={handleStartNewChat}>
+                Iniciar Chat
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Modal de Conexão Inteligente */}
         <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
           <DialogContent className="sm:max-w-[520px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl animate-in zoom-in-95 duration-300 [&>button]:hidden">
