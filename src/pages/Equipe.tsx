@@ -15,13 +15,15 @@ import { toast } from "sonner";
 import { 
   Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare, 
   Settings2, Copy, RefreshCw, Shield, LayoutGrid, MessageCircle, 
-  UserPlus2, Users2, BarChart3, Send, Loader2, Search
+  UserPlus2, Users2, BarChart3, Send, Loader2, Search, ListTodo
 } from "lucide-react";
 import { useEquipe, type Membro } from "@/hooks/useEquipe";
 import { useAuth } from "@/hooks/useAuth";
 import { ChatEquipe } from "@/components/equipe/ChatEquipe";
 import { api } from "@/integrations/database/client";
 import { cn } from "@/lib/utils";
+import KanbanBoard from "@/components/kanban/KanbanBoard";
+
 
 function iniciais(nome?: string, email?: string) {
   const base = (nome || email || "?").trim();
