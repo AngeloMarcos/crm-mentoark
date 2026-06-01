@@ -63,6 +63,7 @@ interface Chat {
   id: string;
   name: string;
   phone: string;
+  is_group?: boolean;
   status?: string;
   tag?: string;
   lastMessage: string;
@@ -85,7 +86,7 @@ const TAG_COLORS: Record<string, string> = {
 interface RespostaRapida {
   id: string;
   titulo: string;
-  conteudo: string;
+  mensagem: string;
   atalho: string | null;
 }
 
@@ -125,6 +126,52 @@ function ChatAvatar({
         />
       )}
     </div>
+  );
+}
+
+// ── Player de áudio com proxy autenticado ──────────────────────────────────────
+function AudioPlayer({ src }: { src: string }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let revoke: string | null = null;
+    setLoading(true);
+    setError(false);
+
+    const proxyUrl = `${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(src)}`;
+    const t = getAuthToken();
+    const headers: Record<string, string> = {};
+    if (t) headers['Authorization'] = `Bearer ${t}`;
+
+    fetch(proxyUrl, { headers })
+      .then(r => {
+        if (!r.ok) throw new Error('Falha');
+        return r.blob();
+      })
+      .then(blob => {
+        revoke = URL.createObjectURL(blob);
+        setBlobUrl(revoke);
+      })
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+
+    return () => { if (revoke) URL.revokeObjectURL(revoke); };
+  }, [src]);
+
+  if (loading) return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+      <Loader2 className="h-4 w-4 animate-spin" /> carregando áudio...
+    </div>
+  );
+  if (error) return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+      <Mic className="h-4 w-4" /> Áudio indisponível
+    </div>
+  );
+  return (
+    <audio controls src={blobUrl!} className="max-w-[260px] h-10 rounded-lg" preload="metadata" />
   );
 }
 
@@ -174,6 +221,7 @@ export function WhatsAppInterface() {
   const picCacheRef = useRef<Map<string, string | null>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeChatIdRef = useRef<string | null>(null);
+  const activeChatNameRef = useRef<string>('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
@@ -205,7 +253,7 @@ export function WhatsAppInterface() {
   };
 
   const aplicarRespostaRapida = (r: RespostaRapida) => {
-    setMessageInput(r.conteudo);
+    setMessageInput(r.mensagem);
     setShowQR(false);
     setQrSearch('');
     textareaRef.current?.focus();
@@ -353,6 +401,7 @@ export function WhatsAppInterface() {
           id: row.session_id,
           name: row.nome || row.session_id,
           phone: row.session_id,
+          is_group: row.is_group || false,
           source: row.instancia || undefined,
           lastMessage: row.ultima_mensagem || '',
           timestamp: formatTime(row.ultima_atividade),
@@ -473,16 +522,17 @@ export function WhatsAppInterface() {
   useEffect(() => {
     if (!activeChatId) return;
     const chat = chats.find(c => c.id === activeChatId);
-    if (chat) fetchMensagens(activeChatId, chat.name, true);
+    const chatName = chat?.name || activeChatId;
+    activeChatNameRef.current = chatName;
+    if (chat) fetchMensagens(activeChatId, chatName, true);
     fetchIaStatus(activeChatId);
-    // Auto-fetch foto se ainda não tem
     if (chat && !chat.profile_pic) fetchProfilePic(activeChatId);
     const tMsgs = setInterval(() => {
       const currentId = activeChatIdRef.current;
       if (!currentId) return;
-      const c = chats.find(x => x.id === currentId);
-      if (c) fetchMensagens(currentId, c.name, false);
-    }, 4000);
+      // Usa ref para evitar stale closure sobre chats
+      fetchMensagens(currentId, activeChatNameRef.current, false);
+    }, 3000);
     return () => clearInterval(tMsgs);
   }, [activeChatId]);
 
@@ -737,6 +787,9 @@ export function WhatsAppInterface() {
                       <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
                     </div>
                     <div className="flex items-center gap-1.5 mb-1.5">
+                      {chat.is_group && (
+                        <span className="text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase">Grupo</span>
+                      )}
                       {chat.source && (
                         <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
                       )}
@@ -1192,13 +1245,24 @@ export function WhatsAppInterface() {
                         {m.tipo === 'image' && m.midia_url ? (
                           <img src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" />
                         ) : m.tipo === 'audio' ? (
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
-                            <Mic className="h-4 w-4" /> Áudio
-                          </div>
+                          m.midia_url
+                            ? <AudioPlayer src={m.midia_url} />
+                            : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Mic className="h-4 w-4" /> Áudio</div>
+                        ) : m.tipo === 'video' && m.midia_url ? (
+                          <video controls className="rounded max-w-[260px] mb-1" preload="metadata">
+                            <source src={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`} type={m.midia_mime || 'video/mp4'} />
+                          </video>
                         ) : m.tipo === 'document' && m.midia_url ? (
-                          <a href={m.midia_url} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-xs text-primary underline py-1">
+                          <a
+                            href={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`}
+                            target="_blank" rel="noreferrer"
+                            className="flex items-center gap-2 text-xs text-primary underline py-1"
+                            download={m.midia_nome || true}
+                          >
                             <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
                           </a>
+                        ) : m.tipo === 'sticker' && m.midia_url ? (
+                          <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
                         ) : null}
                         {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
                         <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
@@ -1285,7 +1349,7 @@ export function WhatsAppInterface() {
                                 <div className="min-w-0 flex-1">
                                   <p className="text-xs font-semibold">{r.titulo}</p>
                                   {r.atalho && <span className="text-[10px] text-amber-600 font-mono">/{r.atalho}</span>}
-                                  <p className="text-[11px] text-muted-foreground truncate mt-0.5">{r.conteudo}</p>
+                                  <p className="text-[11px] text-muted-foreground truncate mt-0.5">{r.mensagem}</p>
                                 </div>
                               </button>
                             ))}

@@ -7,13 +7,13 @@ const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://fierceparrot-e
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'wZKRX72nZ6sM4yQuOoS6lo76fs5fO7cV';
 const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
-const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 function webhookPayload() {
   return {
     url: WEBHOOK_URL,
     byEvents: false,
-    base64: true,
+    base64: false,
     events: WEBHOOK_EVENTS,
   };
 }
@@ -252,6 +252,8 @@ export default function whatsappRouter(pool: Pool): Router {
              m.from_me,
              m.created_at,
              m.message_id,
+             m.remote_jid LIKE '%@g.us' AS is_group,
+             m.push_name AS last_sender,
              COUNT(*) OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS total,
              ROW_NUMBER() OVER (
                PARTITION BY split_part(m.remote_jid,'@',1)
@@ -259,7 +261,16 @@ export default function whatsappRouter(pool: Pool): Router {
              ) AS rn
            FROM whatsapp_messages m
            WHERE m.user_id = $1
-             AND m.remote_jid NOT LIKE '%@g.us'
+         ),
+         contato_unico AS (
+           SELECT DISTINCT ON (RIGHT(telefone, 11))
+             RIGHT(telefone, 11) AS sufixo,
+             COALESCE(push_name, nome) AS push_name,
+             COALESCE(nome, push_name) AS nome_contato,
+             COALESCE(foto_perfil, profile_pic_url) AS profile_pic_url
+           FROM contatos
+           WHERE user_id = $1 AND telefone IS NOT NULL
+           ORDER BY RIGHT(telefone, 11), updated_at DESC NULLS LAST
          )
          SELECT
            r.phone AS session_id,
@@ -267,31 +278,40 @@ export default function whatsappRouter(pool: Pool): Router {
            r.created_at AS ultima_atividade,
            r.total::int AS total,
            r.content AS ultima_mensagem,
+           r.is_group,
+           r.last_sender,
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
-           COALESCE(c.push_name, c.nome) AS push_name,
-           COALESCE(c.nome, c.push_name) AS nome_contato,
-           COALESCE(c.foto_perfil, c.profile_pic_url) AS profile_pic_url
+           cu.push_name,
+           cu.nome_contato,
+           cu.profile_pic_url
          FROM ranked r
-         LEFT JOIN contatos c ON c.user_id = $1
-           AND c.telefone LIKE '%' || RIGHT(r.phone, 11)
+         LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          WHERE r.rn = 1
          ORDER BY r.created_at DESC
          LIMIT 300`,
         [userId]
       );
 
-      const conversas = r.rows.map(row => ({
-        session_id: row.session_id,
-        instancia: row.instancia,
-        nome: row.nome_contato || row.push_name || row.session_id.replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3'),
-        push_name: row.push_name || null,
-        profile_pic_url: row.profile_pic_url || null,
-        ultima_atividade: row.ultima_atividade,
-        ultima_mensagem: row.ultima_mensagem || '',
-        ultimo_role: row.ultimo_role,
-        total: Number(row.total),
-        mensagens: [],
-      }));
+      const conversas = r.rows.map(row => {
+        const isGroup = row.is_group;
+        // Nome: para grupos usa "Grupo XXXX" se não tiver nome; para contatos usa nome do CRM
+        const nomeFormatado = isGroup
+          ? `Grupo ${row.session_id.split('-')[0]?.slice(-4) ?? row.session_id.slice(-8)}`
+          : (row.nome_contato || row.push_name || row.session_id.replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3'));
+        return {
+          session_id: row.session_id,
+          instancia: row.instancia,
+          is_group: isGroup,
+          nome: nomeFormatado,
+          push_name: isGroup ? (row.last_sender || null) : (row.push_name || null),
+          profile_pic_url: row.profile_pic_url || null,
+          ultima_atividade: row.ultima_atividade,
+          ultima_mensagem: row.ultima_mensagem || '',
+          ultimo_role: row.ultimo_role,
+          total: Number(row.total),
+          mensagens: [],
+        };
+      });
 
       return res.json(conversas);
     } catch (err: any) {
@@ -461,6 +481,73 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // GET /api/whatsapp/logs-ia — últimas interações do motor de IA
+  router.get('/logs-ia', async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT session_id AS telefone, message, created_at, instancia
+         FROM n8n_chat_histories
+         WHERE user_id = $1
+         ORDER BY created_at DESC LIMIT 100`,
+        [req.userId]
+      );
+      return res.json(r.rows.map((row: any) => {
+        const m = typeof row.message === 'string'
+          ? JSON.parse(row.message) : row.message;
+        return {
+          telefone: row.telefone,
+          role: m.role || m.type || 'unknown',
+          content: (m.content || m.text || '').slice(0, 300),
+          created_at: row.created_at,
+          instancia: row.instancia,
+        };
+      }));
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/debug-agente — diagnóstico completo de configuração
+  router.get('/debug-agente', async (req: AuthRequest, res: Response) => {
+    try {
+      const agentes = await pool.query(
+        `SELECT id, nome, evolution_instancia, evolution_server_url, ativo
+         FROM agentes WHERE user_id = $1`,
+        [req.userId]
+      );
+      const integracoes = await pool.query(
+        `SELECT instancia, url, status, updated_at
+         FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`,
+        [req.userId]
+      );
+      const ultimaMensagem = await pool.query(
+        `SELECT created_at, instance_name FROM whatsapp_messages
+         WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [req.userId]
+      );
+      const provider = await pool.query(
+        `SELECT nome, slug, modelo, ativo FROM ai_providers
+         WHERE user_id = $1 AND ativo = true LIMIT 1`,
+        [req.userId]
+      );
+      const agentConfig = await pool.query(
+        `SELECT nome_agente, modelo_llm, ativo,
+                (prompt_sistema IS NOT NULL AND prompt_sistema != '') AS tem_prompt
+         FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+        [req.userId]
+      );
+      return res.json({
+        agentes: agentes.rows,
+        integracoes: integracoes.rows,
+        ultima_mensagem: ultimaMensagem.rows[0] || null,
+        provider: provider.rows[0] || null,
+        agent_config: agentConfig.rows[0] || null,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/contatos-search — busca contatos CRM para nova conversa
   router.get('/contatos-search', async (req: AuthRequest, res: Response) => {
     try {
@@ -477,6 +564,44 @@ export default function whatsappRouter(pool: Pool): Router {
         [userId, `%${q}%`]
       );
       return res.json(r.rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/media — proxy autenticado para mídias da Evolution API (áudio, vídeo, doc)
+  router.get('/media', async (req: AuthRequest, res: Response) => {
+    try {
+      const mediaUrl = (req.query.url as string || '').trim();
+      if (!mediaUrl || !/^https?:\/\//.test(mediaUrl)) {
+        return res.status(400).json({ message: 'url inválida' });
+      }
+
+      const cfg = await getEvolutionConfig(req.userId!);
+
+      // Tenta buscar com apikey primeiro; se falhar, tenta sem auth (URL pública)
+      let mediaRes = await fetch(mediaUrl, {
+        headers: { apikey: cfg.api_key },
+      }).catch(() => null);
+
+      if (!mediaRes || !mediaRes.ok) {
+        mediaRes = await fetch(mediaUrl).catch(() => null);
+      }
+
+      if (!mediaRes || !mediaRes.ok) {
+        return res.status(502).json({ message: 'Mídia não disponível' });
+      }
+
+      const contentType = mediaRes.headers.get('content-type') || 'application/octet-stream';
+      const contentLength = mediaRes.headers.get('content-length');
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('Accept-Ranges', 'bytes');
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+
+      const buf = await mediaRes.arrayBuffer();
+      return res.send(Buffer.from(buf));
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -500,9 +625,26 @@ export default function whatsappRouter(pool: Pool): Router {
       const state = data?.instance?.state || data?.state || 'close';
       const phoneNumber = data?.instance?.profileName || data?.instance?.name || '';
 
+      // Re-registra webhook toda vez que a instância está conectada
+      if (state === 'open') {
+        registrarWebhook(base, cfg.api_key, cfg.instancia).catch(() => {});
+      }
+
       return res.json({ state, phoneNumber, instancia: cfg.instancia });
     } catch (err: any) {
       return res.json({ state: 'close', instancia: null });
+    }
+  });
+
+  // POST /api/whatsapp/register-webhook — força re-registro do webhook na Evolution
+  router.post('/register-webhook', async (req: AuthRequest, res: Response) => {
+    try {
+      const cfg = await getEvolutionConfig(req.userId!);
+      const base = cfg.url.replace(/\/$/, '');
+      await registrarWebhook(base, cfg.api_key, cfg.instancia);
+      return res.json({ ok: true, instancia: cfg.instancia, webhookUrl: WEBHOOK_URL });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
     }
   });
 
@@ -521,6 +663,8 @@ export default function whatsappRouter(pool: Pool): Router {
         const stateData: any = await stateRes.json();
         const state = stateData?.instance?.state || stateData?.state || 'close';
         if (state === 'open') {
+          // Sempre re-registra o webhook ao confirmar que está conectado
+          await registrarWebhook(base, cfg.api_key, cfg.instancia);
           return res.json({
             state: 'open',
             phoneNumber: stateData?.instance?.profileName || '',

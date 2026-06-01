@@ -11,7 +11,7 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import crypto from 'crypto';
-import { processarComDebounce } from '../services/agentEngine';
+import { processarComDebounce, botMessageIds } from '../services/agentEngine';
 
 function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
   const assinaturaRecebida = req.headers['x-evolution-hmac'] as string;
@@ -33,13 +33,14 @@ interface EvolutionPayload {
       remoteJid: string;
       fromMe: boolean;
       id: string;
+      participant?: string; // remetente real em mensagens de grupo
     };
     message?: {
       conversation?: string;
       extendedTextMessage?: { text: string };
       imageMessage?: { caption?: string; url?: string; mimetype?: string };
-      audioMessage?: { url?: string; mimetype?: string };
-      videoMessage?: { caption?: string; url?: string; mimetype?: string };
+      audioMessage?: { url?: string; mimetype?: string; seconds?: number };
+      videoMessage?: { caption?: string; url?: string; mimetype?: string; seconds?: number };
       documentMessage?: { caption?: string; fileName?: string; url?: string; mimetype?: string };
       stickerMessage?: { url?: string; mimetype?: string };
       buttonsResponseMessage?: { selectedDisplayText: string };
@@ -103,6 +104,16 @@ function extrairMidia(data: EvolutionPayload['data']): { url?: string; mime?: st
 export default function webhookRouter(pool: Pool): Router {
   const router = Router();
 
+  // Garantir que a tabela de deduplicação existe mesmo antes do primeiro webhook
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS webhook_mensagens_processadas (
+      id SERIAL PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      instancia TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+
   const processados = new Set<string>();
 
   async function handleStatusUpdate(payload: EvolutionPayload): Promise<void> {
@@ -143,14 +154,17 @@ export default function webhookRouter(pool: Pool): Router {
 
     try {
       const payload = req.body as EvolutionPayload;
-      const eventNorm = (payload.event || '').toLowerCase().replace(/_/g, '.');
+      // Correção 1 — normalizar evento removendo qualquer separador (_, ., /) e caixa
+      const eventClean = (payload.event || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      console.log(`[WEBHOOK EVENTO] event="${payload.event}" → clean="${eventClean}" | instance="${payload.instance}"`);
 
-      if (eventNorm === 'messages.update') {
+      if (eventClean === 'messagesupdate') {
         await handleStatusUpdate(payload);
         return;
       }
 
-      if (eventNorm !== 'messages.upsert') return;
+      // Aceita 'messagesupsert' (cobre MESSAGES_UPSERT, messages.upsert, messages_upsert etc.)
+      if (eventClean !== 'messagesupsert') return;
 
       // Ignorar notificações de status sem conteúdo de mensagem
       const dataStatus = payload.data?.status;
@@ -158,22 +172,29 @@ export default function webhookRouter(pool: Pool): Router {
 
       const remoteJid = payload.data?.key?.remoteJid || '';
 
-      // Validar JID e ignorar grupos
-      if (!remoteJid || !isValidJid(remoteJid)) return;
-      if (remoteJid.endsWith('@g.us')) return;
+      // Log para diagnóstico — nunca perder mensagens silenciosamente
+      console.log(`[WEBHOOK] remoteJid recebido: "${remoteJid}" | event: ${eventClean} | instance: ${payload.instance}`);
+      if (!remoteJid) return;
+      if (!remoteJid.includes('@')) return;
+      // Aceitar grupos (@g.us) e contatos individuais (@s.whatsapp.net / @lid)
+      const isGroup = remoteJid.endsWith('@g.us');
 
       const messageId = payload.data?.key?.id || '';
       if (!messageId) return;
 
       const instancia  = payload.instance;
-      const telefone   = remoteJid.split('@')[0];
-      const pushName   = payload.data?.pushName || telefone;
+      const telefone   = remoteJid.split('@')[0]; // phone ou groupId
+      // Em grupos o remetente real fica em key.participant
+      const participant = payload.data?.key?.participant;
+      const senderJid  = isGroup ? (participant || '') : remoteJid;
+      const senderPhone = senderJid.split('@')[0];
+      const pushName   = payload.data?.pushName || (isGroup ? senderPhone : telefone);
       const fromMe     = payload.data?.key?.fromMe === true;
 
       // ── Busca agente UMA VEZ com fallbacks ───────────────────────────────────
       const agenteRes = await pool.query(
         `SELECT user_id, id as agente_id FROM agentes
-         WHERE evolution_instancia = $1 AND ativo = true AND user_id IS NOT NULL
+         WHERE LOWER(evolution_instancia) = LOWER($1) AND ativo = true AND user_id IS NOT NULL
          ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       );
@@ -188,7 +209,7 @@ export default function webhookRouter(pool: Pool): Router {
         // Fallback 1: integracoes_config
         const ic = await pool.query(
           `SELECT user_id FROM integracoes_config
-           WHERE instancia = $1 AND tipo = 'evolution' AND user_id IS NOT NULL
+           WHERE LOWER(instancia) = LOWER($1) AND tipo = 'evolution' AND user_id IS NOT NULL
            ORDER BY updated_at DESC LIMIT 1`,
           [instancia]
         ).catch(() => ({ rows: [] as any[] }));
@@ -198,7 +219,7 @@ export default function webhookRouter(pool: Pool): Router {
         } else {
           // Fallback 2: whatsapp_instances
           const wi = await pool.query(
-            `SELECT user_id FROM whatsapp_instances WHERE instance_name = $1 LIMIT 1`,
+            `SELECT user_id FROM whatsapp_instances WHERE LOWER(instance_name) = LOWER($1) LIMIT 1`,
             [instancia]
           ).catch(() => ({ rows: [] as any[] }));
 
@@ -217,46 +238,86 @@ export default function webhookRouter(pool: Pool): Router {
         }
       }
 
-      // ── Mensagens do atendente (fromMe=true) → pausar IA ─────────────────────
+      // Log de diagnóstico de mapeamento
+      console.log(`[WEBHOOK] userId=${userId} | temAgente=${temAgente} | instancia="${instancia}"`);
+      if (userId && !temAgente) {
+        const agentesDoUser = await pool.query(
+          `SELECT nome, evolution_instancia, ativo FROM agentes WHERE user_id = $1`,
+          [userId]
+        ).catch(() => ({ rows: [] as any[] }));
+        console.log(`[WEBHOOK] Agentes do user:`, JSON.stringify(agentesDoUser.rows));
+      }
+
+      // ── Mensagens do atendente (fromMe=true) → pausar IA ou reativar ─────────
       if (fromMe) {
-        // Ignorar respostas do próprio bot
-        if (messageId.startsWith('resp_') || messageId.startsWith('manual_')) return;
+        // Correção 2 — antiloop: ignorar respostas enviadas pelo próprio bot
+        if (messageId.startsWith('resp_') || messageId.startsWith('manual_')) {
+          console.log(`[WEBHOOK] Mensagem de bot (prefixo) ignorada: ${messageId}`);
+          return;
+        }
+        if (botMessageIds.has(messageId)) {
+          console.log(`[WEBHOOK] Mensagem de bot (botMessageIds) ignorada — antiloop: ${messageId}`);
+          return;
+        }
+        if (isGroup) return;
 
         if (userId) {
-          // Atualiza IA como pausada; se contato não existir ainda, cria
-          pool.query(
-            `UPDATE contatos SET atendente_pausou_ia = true WHERE user_id = $1 AND telefone ILIKE $2`,
-            [userId, `%${telefone.slice(-11)}`]
-          ).then(async (r: any) => {
-            if (!r.rowCount) {
-              await pool.query(
-                `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, atendente_pausou_ia)
-                 VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', true)`,
-                [userId, telefone, telefone, pushName || null]
-              ).catch(() => {});
-            }
-          }).catch(() => {});
-
-          await pool.query(
-            `UPDATE dados_cliente SET atendimento_ia = 'pause'
-             WHERE user_id = $1 AND telefone ILIKE $2`,
-            [userId, `%${telefone.slice(-11)}`]
-          ).catch(() => {});
-
-          const texto = extrairTexto(payload.data);
+          const textoFromMe = extrairTexto(payload.data);
+          const textoNormFromMe = (textoFromMe || '').trim().toLowerCase();
           const tipo  = extrairTipo(payload.data);
           const ts    = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
           const tsVal = ts > 1e10 ? Math.floor(ts / 1000) : ts;
+
+          // Buscar palavra_reativar dinâmica do agent_configs
+          const cfgReativar = await pool.query(
+            `SELECT palavra_reativar FROM agent_configs
+             WHERE user_id = $1 AND ativo = true LIMIT 1`,
+            [userId]
+          ).catch(() => ({ rows: [] as any[] }));
+          const palavraReativar = (cfgReativar.rows[0]?.palavra_reativar || 'Atendimento finalizado').toLowerCase();
+
+          if (textoNormFromMe === palavraReativar) {
+            await pool.query(
+              `UPDATE dados_cliente SET atendimento_ia = 'ativo'
+               WHERE user_id = $1 AND telefone ILIKE $2`,
+              [userId, `%${telefone.slice(-11)}`]
+            ).catch(() => {});
+            await pool.query(
+              `UPDATE contatos SET atendente_pausou_ia = false, updated_at = NOW()
+               WHERE user_id = $1 AND telefone ILIKE $2`,
+              [userId, `%${telefone.slice(-11)}`]
+            ).catch(() => {});
+            console.log(`[WEBHOOK] IA reativada (palavra_reativar): ${telefone}`);
+          } else {
+            pool.query(
+              `UPDATE contatos SET atendente_pausou_ia = true WHERE user_id = $1 AND telefone ILIKE $2`,
+              [userId, `%${telefone.slice(-11)}`]
+            ).then(async (r: any) => {
+              if (!r.rowCount) {
+                await pool.query(
+                  `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, atendente_pausou_ia)
+                   VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', true)`,
+                  [userId, telefone, telefone, pushName || null]
+                ).catch(() => {});
+              }
+            }).catch(() => {});
+
+            await pool.query(
+              `UPDATE dados_cliente SET atendimento_ia = 'pause'
+               WHERE user_id = $1 AND telefone ILIKE $2`,
+              [userId, `%${telefone.slice(-11)}`]
+            ).catch(() => {});
+
+            console.log(`[WEBHOOK HUMAN INTERVENTION] ${telefone} → IA pausada | msg: "${(textoFromMe || '').slice(0, 60)}"`);
+          }
 
           await pool.query(
             `INSERT INTO whatsapp_messages
                (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
              VALUES ($1, $2, $3, $4, true, $5, $6, 'sent', to_timestamp($7))
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
-            [userId, instancia, remoteJid, messageId, tipo, texto || null, tsVal]
-          ).catch(() => {});
-
-          console.log(`[WEBHOOK] Humano enviou para ${telefone} — IA pausada`);
+            [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
+          ).catch(err => console.error('[WEBHOOK INSERT fromMe whatsapp_messages]:', err.message));
         }
         return;
       }
@@ -274,9 +335,9 @@ export default function webhookRouter(pool: Pool): Router {
       if (jaExiste.rows.length) return;
 
       await pool.query(
-        'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2)',
+        'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [messageId, instancia]
-      );
+      ).catch(err => console.error('[WEBHOOK INSERT webhook_mensagens_processadas]:', err.message));
 
       // ── Extrair dados ─────────────────────────────────────────────────────────
       const texto    = extrairTexto(payload.data);
@@ -287,6 +348,11 @@ export default function webhookRouter(pool: Pool): Router {
 
       // ── Persistir mensagem recebida ───────────────────────────────────────────
       if (userId) {
+        // Em grupos guarda o remetente real (participant) no push_name
+        const pushNameFinal = isGroup
+          ? (pushName ? `${pushName} (grupo)` : senderPhone)
+          : pushName || null;
+
         await pool.query(
           `INSERT INTO whatsapp_messages
              (user_id, instance_name, remote_jid, message_id, from_me, message_type,
@@ -295,117 +361,123 @@ export default function webhookRouter(pool: Pool): Router {
            ON CONFLICT (message_id, instance_name) DO NOTHING`,
           [userId, instancia, remoteJid, messageId, tipo,
            texto || null, midia.url || null, midia.mime || null,
-           pushName || null, tsVal]
+           pushNameFinal, tsVal]
         ).catch(err => console.warn('[WEBHOOK] Falha ao salvar mensagem:', err.message));
 
-        // ── UPSERT de contato + foto de perfil ───────────────────────────────────
-        void (async () => {
-          try {
-            const suffix = `%${telefone.slice(-11)}`;
-            const nomeFinal = pushName || telefone;
-
-            // UPDATE se já existe; INSERT se é novo número
-            const upd = await pool.query(
-              `UPDATE contatos
-               SET push_name          = COALESCE($1, push_name),
-                   nome               = CASE WHEN nome = telefone THEN $1 ELSE nome END,
-                   ultima_mensagem_em = NOW()
-               WHERE user_id = $2 AND telefone ILIKE $3`,
-              [pushName || null, userId, suffix]
-            );
-
-            if (!upd.rowCount) {
-              await pool.query(
-                `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, ultima_mensagem_em, atendente_pausou_ia)
-                 VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)`,
-                [userId, nomeFinal, telefone, pushName || null]
-              ).catch(() => {}); // ignora race condition
-            }
-
-            // ── Buscar foto de perfil via Evolution API ────────────────────────
-            // Tenta sempre (não só quando tem pushName) para recuperar fotos de contatos sem nome
-            const cfg = await pool.query(
-              `SELECT url, api_key FROM integracoes_config WHERE user_id=$1 AND tipo='evolution' LIMIT 1`,
-              [userId]
-            );
-            const evoUrl = (cfg.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://fierceparrot-evolution.cloudfy.live').replace(/\/$/, '');
-            const evoKey = cfg.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
-
-            let picUrl: string | null = null;
-
-            // Tenta endpoint v2 (POST)
+        // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────
+        if (!isGroup) {
+          void (async () => {
             try {
-              const r = await fetch(`${evoUrl}/chat/fetchProfilePictureUrl/${instancia}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: evoKey },
-                body: JSON.stringify({ number: telefone }),
-              });
-              if (r.ok) {
-                const d: any = await r.json().catch(() => ({}));
-                picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
-              }
-            } catch {}
+              const suffix = `%${telefone.slice(-11)}`;
+              const nomeFinal = pushName || telefone;
 
-            // Tenta endpoint alternativo (GET) se v2 falhou
-            if (!picUrl) {
+              const upd = await pool.query(
+                `UPDATE contatos
+                 SET push_name          = COALESCE($1, push_name),
+                     nome               = CASE WHEN nome = telefone THEN $1 ELSE nome END,
+                     ultima_mensagem_em = NOW()
+                 WHERE user_id = $2 AND telefone ILIKE $3`,
+                [pushName || null, userId, suffix]
+              );
+
+              if (!upd.rowCount) {
+                await pool.query(
+                  `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, ultima_mensagem_em, atendente_pausou_ia)
+                   VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)`,
+                  [userId, nomeFinal, telefone, pushName || null]
+                ).catch(() => {});
+              }
+
+              // Foto de perfil via Evolution API
+              const cfg = await pool.query(
+                `SELECT url, api_key FROM integracoes_config WHERE user_id=$1 AND tipo='evolution' LIMIT 1`,
+                [userId]
+              );
+              const evoUrl = (cfg.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://fierceparrot-evolution.cloudfy.live').replace(/\/$/, '');
+              const evoKey = cfg.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+
+              let picUrl: string | null = null;
               try {
-                const r = await fetch(`${evoUrl}/fetchProfilePicture/${instancia}?number=${telefone}`, {
-                  headers: { apikey: evoKey },
+                const r = await fetch(`${evoUrl}/chat/fetchProfilePictureUrl/${instancia}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', apikey: evoKey },
+                  body: JSON.stringify({ number: telefone }),
                 });
                 if (r.ok) {
                   const d: any = await r.json().catch(() => ({}));
                   picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
                 }
               } catch {}
-            }
 
-            if (picUrl) {
-              await pool.query(
-                `UPDATE contatos SET profile_pic_url = $1 WHERE user_id = $2 AND telefone ILIKE $3`,
-                [picUrl, userId, suffix]
-              ).catch(() => {});
-              console.log(`[WEBHOOK] Foto de perfil atualizada para ${telefone}`);
+              if (!picUrl) {
+                try {
+                  const r = await fetch(`${evoUrl}/fetchProfilePicture/${instancia}?number=${telefone}`, {
+                    headers: { apikey: evoKey },
+                  });
+                  if (r.ok) {
+                    const d: any = await r.json().catch(() => ({}));
+                    picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
+                  }
+                } catch {}
+              }
+
+              if (picUrl) {
+                await pool.query(
+                  `UPDATE contatos SET profile_pic_url = $1, foto_perfil = $1 WHERE user_id = $2 AND telefone ILIKE $3`,
+                  [picUrl, userId, suffix]
+                ).catch(() => {});
+                console.log(`[WEBHOOK] Foto de perfil atualizada para ${telefone}`);
+              }
+            } catch (e: any) {
+              console.warn('[WEBHOOK] Falha ao upsert contato:', e.message);
             }
-          } catch (e: any) {
-            console.warn('[WEBHOOK] Falha ao upsert contato:', e.message);
-          }
-        })();
+          })();
+        }
       }
 
-      // ── Opt-out ───────────────────────────────────────────────────────────────
+      // ── Opt-out e reativação (apenas para contatos individuais) ──────────────
       const textoNorm = (texto || '').trim().toLowerCase();
-      if (userId && OPT_OUT_KEYWORDS.has(textoNorm)) {
-        await pool.query(
-          `UPDATE contatos SET opt_out = true, updated_at = NOW()
-           WHERE user_id = $1 AND telefone ILIKE $2`,
-          [userId, `%${telefone.slice(-11)}`]
-        ).catch(() => {});
-        await pool.query(
-          `INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`,
-          [userId, telefone, textoNorm]
-        ).catch(() => {});
-        console.log(`[WEBHOOK] Opt-out: ${telefone}`);
-        return;
+      if (!isGroup && userId) {
+        if (OPT_OUT_KEYWORDS.has(textoNorm)) {
+          await pool.query(
+            `UPDATE contatos SET opt_out = true, updated_at = NOW()
+             WHERE user_id = $1 AND telefone ILIKE $2`,
+            [userId, `%${telefone.slice(-11)}`]
+          ).catch(() => {});
+          await pool.query(
+            `INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`,
+            [userId, telefone, textoNorm]
+          ).catch(() => {});
+          console.log(`[WEBHOOK] Opt-out: ${telefone}`);
+          return;
+        }
+
+        if (REATIVAR_COMANDOS.has(textoNorm)) {
+          await pool.query(
+            `UPDATE dados_cliente SET atendimento_ia = 'ativo'
+             WHERE user_id = $1 AND telefone ILIKE $2`,
+            [userId, `%${telefone.slice(-11)}`]
+          ).catch(() => {});
+          await pool.query(
+            `UPDATE contatos SET atendente_pausou_ia = false, updated_at = NOW()
+             WHERE user_id = $1 AND telefone ILIKE $2`,
+            [userId, `%${telefone.slice(-11)}`]
+          ).catch(() => {});
+          console.log(`[WEBHOOK] IA reativada: ${telefone}`);
+          return;
+        }
       }
 
-      // ── Reativação da IA ──────────────────────────────────────────────────────
-      if (userId && REATIVAR_COMANDOS.has(textoNorm)) {
-        await pool.query(
-          `UPDATE dados_cliente SET atendimento_ia = 'ativo'
-           WHERE user_id = $1 AND telefone ILIKE $2`,
-          [userId, `%${telefone.slice(-11)}`]
-        ).catch(() => {});
-        await pool.query(
-          `UPDATE contatos SET atendente_pausou_ia = false, updated_at = NOW()
-           WHERE user_id = $1 AND telefone ILIKE $2`,
-          [userId, `%${telefone.slice(-11)}`]
-        ).catch(() => {});
-        console.log(`[WEBHOOK] IA reativada: ${telefone}`);
+      // ── Motor IA (apenas para contatos individuais) ───────────────────────────
+      if (!userId) {
+        console.warn(`[WEBHOOK] Nenhum userId encontrado para instância: ${instancia}`);
         return;
       }
-
-      // ── Motor IA ──────────────────────────────────────────────────────────────
-      if (!temAgente) return;
+      // Grupos não disparam IA automaticamente
+      if (isGroup) {
+        console.log(`[WEBHOOK] Grupo ${telefone} — mensagem salva, IA não processada`);
+        return;
+      }
       if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) return;
 
       processarComDebounce(pool, {
@@ -417,6 +489,7 @@ export default function webhookRouter(pool: Pool): Router {
         tipo,
         midiaUrl: midia.url || undefined,
         timestamp: tsVal,
+        userId: userId || undefined,
       }).catch(err => console.error(`[WEBHOOK] Erro ao processar ${messageId}:`, err));
 
     } catch (err) {

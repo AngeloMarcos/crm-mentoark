@@ -156,7 +156,7 @@ export async function criarProvider(
   pool: Pool,
   userId: string,
   providerId?: string | null
-): Promise<{ provider: AIProvider; modelo: string; providerSlug: string } | null> {
+): Promise<{ provider: AIProvider; modelo: string; providerSlug: string; apiKey: string } | null> {
   const query = providerId
     ? `SELECT * FROM ai_providers WHERE id = $1 AND user_id = $2 AND ativo = true LIMIT 1`
     : `SELECT * FROM ai_providers WHERE user_id = $1 AND ativo = true ORDER BY created_at LIMIT 1`;
@@ -192,5 +192,5 @@ export async function criarProvider(
       provider = new OpenAIProvider(apiKey);
   }
 
-  return { provider, modelo: cfg.modelo, providerSlug: cfg.slug };
+  return { provider, modelo: cfg.modelo, providerSlug: cfg.slug, apiKey };
 }

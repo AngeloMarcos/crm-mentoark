@@ -42,7 +42,7 @@ import { useAuth } from "@/hooks/useAuth";
 interface RespostaRapida {
   id: string;
   titulo: string;
-  conteudo: string;
+  mensagem: string;
   atalho: string | null;
   created_at: string;
 }
@@ -55,7 +55,7 @@ export default function RespostasRapidas() {
   const [modal, setModal] = useState(false);
   const [editando, setEditando] = useState<RespostaRapida | null>(null);
   const [salvando, setSalvando] = useState(false);
-  const [form, setForm] = useState({ titulo: "", conteudo: "", atalho: "" });
+  const [form, setForm] = useState({ titulo: "", mensagem: "", atalho: "" });
 
   const carregar = async () => {
     if (!user) return;
@@ -76,34 +76,34 @@ export default function RespostasRapidas() {
     if (!t) return respostas;
     return respostas.filter(r =>
       r.titulo.toLowerCase().includes(t) ||
-      r.conteudo.toLowerCase().includes(t) ||
+      r.mensagem.toLowerCase().includes(t) ||
       (r.atalho ?? "").toLowerCase().includes(t)
     );
   }, [respostas, searchTerm]);
 
   const abrirNova = () => {
     setEditando(null);
-    setForm({ titulo: "", conteudo: "", atalho: "" });
+    setForm({ titulo: "", mensagem: "", atalho: "" });
     setModal(true);
   };
 
   const abrirEdicao = (r: RespostaRapida) => {
     setEditando(r);
-    setForm({ titulo: r.titulo, conteudo: r.conteudo, atalho: r.atalho ?? "" });
+    setForm({ titulo: r.titulo, mensagem: r.mensagem, atalho: r.atalho ?? "" });
     setModal(true);
   };
 
   const salvar = async () => {
     if (!user) return;
-    if (!form.titulo.trim() || !form.conteudo.trim()) {
-      toast.error("Título e conteúdo são obrigatórios");
+    if (!form.titulo.trim() || !form.mensagem.trim()) {
+      toast.error("Título e mensagem são obrigatórios");
       return;
     }
     setSalvando(true);
     const payload = {
       user_id: user.id,
       titulo: form.titulo.trim(),
-      conteudo: form.conteudo.trim(),
+      mensagem: form.mensagem.trim(),
       atalho: form.atalho.trim() ? form.atalho.trim().replace(/^\/+/, "") : null,
     };
     const { error } = editando
@@ -123,8 +123,8 @@ export default function RespostasRapidas() {
     setRespostas(prev => prev.filter(r => r.id !== id));
   };
 
-  const copiar = (conteudo: string) => {
-    navigator.clipboard.writeText(conteudo);
+  const copiar = (mensagem: string) => {
+    navigator.clipboard.writeText(mensagem);
     toast.success("Copiado!");
   };
 
@@ -193,7 +193,7 @@ export default function RespostasRapidas() {
                       )}
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copiar(r.conteudo)} title="Copiar">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copiar(r.mensagem)} title="Copiar">
                         <Copy className="h-3.5 w-3.5" />
                       </Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => abrirEdicao(r)} title="Editar">
@@ -218,7 +218,7 @@ export default function RespostasRapidas() {
                       </AlertDialog>
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground line-clamp-3 whitespace-pre-wrap">{r.conteudo}</p>
+                  <p className="text-xs text-muted-foreground line-clamp-3 whitespace-pre-wrap">{r.mensagem}</p>
                   <p className="text-[10px] text-muted-foreground/50">
                     {new Date(r.created_at).toLocaleDateString("pt-BR")}
                   </p>
@@ -268,12 +268,12 @@ export default function RespostasRapidas() {
             <div className="space-y-1.5">
               <Label>Conteúdo *</Label>
               <Textarea
-                value={form.conteudo}
-                onChange={e => setForm(f => ({ ...f, conteudo: e.target.value }))}
+                value={form.mensagem}
+                onChange={e => setForm(f => ({ ...f, mensagem: e.target.value }))}
                 placeholder="Olá! Como posso ajudar você hoje?"
                 className="min-h-[140px] resize-y"
               />
-              <p className="text-xs text-muted-foreground">{form.conteudo.length} caracteres</p>
+              <p className="text-xs text-muted-foreground">{form.mensagem.length} caracteres</p>
             </div>
           </div>
 
