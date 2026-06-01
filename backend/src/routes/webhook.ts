@@ -11,7 +11,7 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import crypto from 'crypto';
-import { processarComDebounce, botMessageIds } from '../services/agentEngine';
+import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
 
 function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
   const assinaturaRecebida = req.headers['x-evolution-hmac'] as string;
@@ -112,7 +112,7 @@ export default function webhookRouter(pool: Pool): Router {
       instancia TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
-  `).catch(() => {});
+  `).catch(err => console.error('[WEBHOOK CREATE webhook_mensagens_processadas ERROR]:', err.message));
 
   const processados = new Set<string>();
 
@@ -131,14 +131,14 @@ export default function webhookRouter(pool: Pool): Router {
          ON CONFLICT (message_id, instance_name) DO UPDATE
            SET status = EXCLUDED.status, updated_at = NOW()`,
         [messageId, payload.instance, status]
-      ).catch(() => {});
-
+      ).catch(err => console.error('[WEBHOOK INSERT whatsapp_message_status ERROR]:', err.message));
+ 
       if (status === 'READ' || status === 'PLAYED') {
         await pool.query(
           `UPDATE whatsapp_messages SET is_read = true
            WHERE message_id = $1 AND instance_name = $2`,
           [messageId, payload.instance]
-        ).catch(() => {});
+        ).catch(err => console.error('[WEBHOOK UPDATE whatsapp_messages is_read ERROR]:', err.message));
       }
     }
   }
@@ -259,6 +259,16 @@ export default function webhookRouter(pool: Pool): Router {
           console.log(`[WEBHOOK] Mensagem de bot (botMessageIds) ignorada — antiloop: ${messageId}`);
           return;
         }
+        
+        const textoFromMe = extrairTexto(payload.data);
+        if (textoFromMe) {
+          const textKey = `${telefone}:${textoFromMe}`;
+          const textKeyTrimmed = `${telefone}:${textoFromMe.trim()}`;
+          if (botSentTexts.has(textKey) || botSentTexts.has(textKeyTrimmed)) {
+            console.log(`[WEBHOOK] Mensagem de bot (botSentTexts) ignorada — antiloop por conteúdo: ${messageId}`);
+            return;
+          }
+        }
         if (isGroup) return;
 
         if (userId) {
@@ -273,7 +283,10 @@ export default function webhookRouter(pool: Pool): Router {
             `SELECT palavra_reativar FROM agent_configs
              WHERE user_id = $1 AND ativo = true LIMIT 1`,
             [userId]
-          ).catch(() => ({ rows: [] as any[] }));
+          ).catch(err => {
+            console.error('[WEBHOOK SELECT agent_configs palavra_reativar ERROR]:', err.message);
+            return { rows: [] as any[] };
+          });
           const palavraReativar = (cfgReativar.rows[0]?.palavra_reativar || 'Atendimento finalizado').toLowerCase();
 
           if (textoNormFromMe === palavraReativar) {
@@ -281,12 +294,12 @@ export default function webhookRouter(pool: Pool): Router {
               `UPDATE dados_cliente SET atendimento_ia = 'ativo'
                WHERE user_id = $1 AND telefone ILIKE $2`,
               [userId, `%${telefone.slice(-11)}`]
-            ).catch(() => {});
+            ).catch(err => console.error('[WEBHOOK UPDATE dados_cliente reativar ERROR]:', err.message));
             await pool.query(
               `UPDATE contatos SET atendente_pausou_ia = false, updated_at = NOW()
                WHERE user_id = $1 AND telefone ILIKE $2`,
               [userId, `%${telefone.slice(-11)}`]
-            ).catch(() => {});
+            ).catch(err => console.error('[WEBHOOK UPDATE contatos reativar ERROR]:', err.message));
             console.log(`[WEBHOOK] IA reativada (palavra_reativar): ${telefone}`);
           } else {
             pool.query(
@@ -298,15 +311,15 @@ export default function webhookRouter(pool: Pool): Router {
                   `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, atendente_pausou_ia)
                    VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', true)`,
                   [userId, telefone, telefone, pushName || null]
-                ).catch(() => {});
+                ).catch(err => console.error('[WEBHOOK INSERT contatos atendente_pausou_ia ERROR]:', err.message));
               }
-            }).catch(() => {});
+            }).catch(err => console.error('[WEBHOOK UPDATE contatos atendente_pausou_ia ERROR]:', err.message));
 
             await pool.query(
               `UPDATE dados_cliente SET atendimento_ia = 'pause'
                WHERE user_id = $1 AND telefone ILIKE $2`,
               [userId, `%${telefone.slice(-11)}`]
-            ).catch(() => {});
+            ).catch(err => console.error('[WEBHOOK UPDATE dados_cliente pause ERROR]:', err.message));
 
             console.log(`[WEBHOOK HUMAN INTERVENTION] ${telefone} → IA pausada | msg: "${(textoFromMe || '').slice(0, 60)}"`);
           }
@@ -317,7 +330,7 @@ export default function webhookRouter(pool: Pool): Router {
              VALUES ($1, $2, $3, $4, true, $5, $6, 'sent', to_timestamp($7))
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
             [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
-          ).catch(err => console.error('[WEBHOOK INSERT fromMe whatsapp_messages]:', err.message));
+          ).catch(err => console.error('[WEBHOOK INSERT fromMe whatsapp_messages ERROR]:', err.message));
         }
         return;
       }

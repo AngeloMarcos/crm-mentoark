@@ -1,5 +1,5 @@
-import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
+import { botSentTexts, botMessageIds } from './agentEngine';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -102,6 +102,29 @@ export async function processarDisparos(pool: Pool) {
           };
         }
 
+        // Registrar em botSentTexts antes de enviar para evitar a condição de corrida do webhook (antiloop)
+        const keyText = textoFinal || '';
+        const keyLegenda = legendaFinal || '';
+        if (keyText) {
+          botSentTexts.add(`${digits}:${keyText}`);
+          botSentTexts.add(`${digits}:${keyText.trim()}`);
+        }
+        if (keyLegenda && keyLegenda !== keyText) {
+          botSentTexts.add(`${digits}:${keyLegenda}`);
+          botSentTexts.add(`${digits}:${keyLegenda.trim()}`);
+        }
+        // Configurar tempo limite para limpeza das chaves de antiloop
+        setTimeout(() => {
+          if (keyText) {
+            botSentTexts.delete(`${digits}:${keyText}`);
+            botSentTexts.delete(`${digits}:${keyText.trim()}`);
+          }
+          if (keyLegenda && keyLegenda !== keyText) {
+            botSentTexts.delete(`${digits}:${keyLegenda}`);
+            botSentTexts.delete(`${digits}:${keyLegenda.trim()}`);
+          }
+        }, 120_000);
+
         const resp = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', apikey: api_key },
@@ -112,6 +135,36 @@ export async function processarDisparos(pool: Pool) {
           const errBody = await resp.text().catch(() => '');
           throw new Error(`Evolution API ${resp.status}: ${errBody}`);
         }
+
+        const respData = await resp.json().catch(() => ({}));
+        const realMsgId = respData?.key?.id || `disparo_${log_id}`;
+
+        if (respData?.key?.id) {
+          botMessageIds.add(respData.key.id);
+          setTimeout(() => botMessageIds.delete(respData.key.id), 120_000);
+        }
+
+        // 5. Salvar na tabela whatsapp_messages para aparecer no painel de chat
+        const msgType = tipo_midia === 'texto' || !tipo_midia ? 'text' : tipo_midia === 'imagem' ? 'image' : tipo_midia === 'audio' ? 'audio' : 'document';
+        const msgContent = tipo_midia === 'texto' || !tipo_midia ? textoFinal : (legendaFinal || null);
+
+        await pool.query(
+          `INSERT INTO whatsapp_messages
+             (user_id, instance_name, remote_jid, message_id, from_me, message_type,
+              content, media_url, media_mimetype, status, timestamp_wa)
+           VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, 'sent', NOW())
+           ON CONFLICT (message_id, instance_name) DO NOTHING`,
+          [
+            user_id,
+            instancia,
+            `${digits}@s.whatsapp.net`,
+            realMsgId,
+            msgType,
+            msgContent,
+            tipo_midia !== 'texto' && url_midia ? url_midia : null,
+            tipo_midia === 'imagem' ? 'image/jpeg' : tipo_midia === 'audio' ? 'audio/ogg' : tipo_midia === 'documento' ? 'application/pdf' : null
+          ]
+        ).catch(err => console.error('[DISPARO INSERT whatsapp_messages ERROR]:', err.message));
 
         // 5. Atualizar status para enviado
         await pool.query(

@@ -92,8 +92,9 @@ function dividirMensagem(texto: string): string[] {
   return partes;
 }
 
-// ── IDs de mensagens enviadas pelo bot (previne auto-pausa da IA) ────────────
+// ── IDs e conteúdos de mensagens enviadas pelo bot (previne auto-pausa da IA) ────────────
 export const botMessageIds = new Set<string>();
+export const botSentTexts = new Set<string>();
 
 // ── Envio via Evolution API ───────────────────────────────────────────────────
 async function enviarResposta(
@@ -101,6 +102,17 @@ async function enviarResposta(
   instancia: string, telefone: string, texto: string
 ): Promise<void> {
   const base = serverUrl.replace(/\/$/, '');
+  
+  // Registra o conteúdo antes da requisição HTTP para evitar a condição de corrida no webhook (antiloop)
+  const textKey = `${telefone}:${texto}`;
+  botSentTexts.add(textKey);
+  const textKeyTrimmed = `${telefone}:${texto.trim()}`;
+  botSentTexts.add(textKeyTrimmed);
+  setTimeout(() => {
+    botSentTexts.delete(textKey);
+    botSentTexts.delete(textKeyTrimmed);
+  }, 120_000);
+
   const r = await fetch(`${base}/message/sendText/${instancia}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: apiKey },
@@ -202,13 +214,13 @@ async function upsertContato(
 
 // ── MOTOR PRINCIPAL ───────────────────────────────────────────────────────────
 async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<void> {
-  // Correção 5 — higienizar e validar telefone antes de qualquer operação
+  // Higienizar e validar o telefone com regex antes de qualquer operação
   const telefoneDigitos = entrada.telefone.replace(/\D/g, '');
   if (telefoneDigitos.length < 10 || telefoneDigitos.length > 13) {
     console.warn(`[ENGINE START] Telefone inválido, abortando: "${entrada.telefone}" → "${telefoneDigitos}" (${telefoneDigitos.length} dígitos)`);
     return;
   }
-  entrada = { ...entrada, telefone: telefoneDigitos };
+  entrada.telefone = telefoneDigitos;
 
   console.log(`[ENGINE START] instancia="${entrada.instancia}" telefone="${entrada.telefone}" tipo="${entrada.tipo}" userId="${entrada.userId || 'N/A'}"`);
 
@@ -257,11 +269,15 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
 
   // 3. Verificar pausa de atendimento humano
+  const trainSearchSuffix = `%${entrada.telefone.slice(-11)}`;
   const pausaRes = await pool.query(
     `SELECT atendimento_ia FROM dados_cliente
      WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
-    [userIdFinal, `%${entrada.telefone.slice(-11)}`]
-  ).catch(() => ({ rows: [] as any[] }));
+    [userIdFinal, trainSearchSuffix]
+  ).catch(err => {
+    console.error('[ENGINE SELECT dados_cliente atendimento_ia ERROR]:', err.message);
+    return { rows: [] as any[] };
+  });
   if (pausaRes.rows[0]?.atendimento_ia === 'pause') {
     console.log(`[ENGINE] IA pausada para ${entrada.telefone}`);
     return;
@@ -538,6 +554,14 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
 // ── Debounce — agrupa mensagens picotadas do mesmo contato ───────────────────
 export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada): Promise<void> {
+  // Higienizar e validar o telefone com regex antes de usar como chave do buffer
+  const telefoneDigitos = entrada.telefone.replace(/\D/g, '');
+  if (telefoneDigitos.length < 10 || telefoneDigitos.length > 13) {
+    console.warn(`[ENGINE DEBOUNCE] Telefone inválido, abortando: "${entrada.telefone}" → "${telefoneDigitos}" (${telefoneDigitos.length} dígitos)`);
+    return;
+  }
+  entrada.telefone = telefoneDigitos;
+
   const chave = `${entrada.instancia}:${entrada.telefone}`;
   const DEBOUNCE_MS = 3000;
 
