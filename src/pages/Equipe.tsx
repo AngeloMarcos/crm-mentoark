@@ -15,13 +15,15 @@ import { toast } from "sonner";
 import { 
   Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare, 
   Settings2, Copy, RefreshCw, Shield, LayoutGrid, MessageCircle, 
-  UserPlus2, Users2, BarChart3, Send, Loader2, Search
+  UserPlus2, Users2, BarChart3, Send, Loader2, Search, ListTodo
 } from "lucide-react";
 import { useEquipe, type Membro } from "@/hooks/useEquipe";
 import { useAuth } from "@/hooks/useAuth";
 import { ChatEquipe } from "@/components/equipe/ChatEquipe";
 import { api } from "@/integrations/database/client";
 import { cn } from "@/lib/utils";
+import KanbanBoard from "@/components/kanban/KanbanBoard";
+
 
 function iniciais(nome?: string, email?: string) {
   const base = (nome || email || "?").trim();
@@ -54,7 +56,10 @@ export default function EquipePage() {
             <div className="flex items-center justify-between">
               <TabsList>
                 <TabsTrigger value="geral" className="gap-2">
-                  <Users2 className="w-4 h-4" /> Geral
+                  <Users2 className="w-4 h-4" /> Minha Equipe
+                </TabsTrigger>
+                <TabsTrigger value="tarefas" className="gap-2">
+                  <ListTodo className="w-4 h-4" /> Tarefas
                 </TabsTrigger>
                 {(user?.role === 'admin' || user?.role === 'gerente') && (
                   <TabsTrigger value="membros" className="gap-2">
@@ -71,6 +76,16 @@ export default function EquipePage() {
                 onAdicionar={adicionarMembro}
                 onRemover={removerMembro}
               />
+            </TabsContent>
+
+            <TabsContent value="tarefas">
+              <div className="h-[calc(100vh-12rem)]">
+                <KanbanBoard
+                  titulo="Tarefas da Equipe"
+                  subtitulo="Quadro estilo Trello — inclui tarefas vindas do WhatsApp"
+                  filtroOrigemInicial="ia"
+                />
+              </div>
             </TabsContent>
 
             <TabsContent value="membros">
