@@ -56,7 +56,10 @@ export default function EquipePage() {
             <div className="flex items-center justify-between">
               <TabsList>
                 <TabsTrigger value="geral" className="gap-2">
-                  <Users2 className="w-4 h-4" /> Geral
+                  <Users2 className="w-4 h-4" /> Minha Equipe
+                </TabsTrigger>
+                <TabsTrigger value="tarefas" className="gap-2">
+                  <ListTodo className="w-4 h-4" /> Tarefas
                 </TabsTrigger>
                 {(user?.role === 'admin' || user?.role === 'gerente') && (
                   <TabsTrigger value="membros" className="gap-2">
@@ -73,6 +76,16 @@ export default function EquipePage() {
                 onAdicionar={adicionarMembro}
                 onRemover={removerMembro}
               />
+            </TabsContent>
+
+            <TabsContent value="tarefas">
+              <div className="h-[calc(100vh-12rem)]">
+                <KanbanBoard
+                  titulo="Tarefas da Equipe"
+                  subtitulo="Quadro estilo Trello — inclui tarefas vindas do WhatsApp"
+                  filtroOrigemInicial="ia"
+                />
+              </div>
             </TabsContent>
 
             <TabsContent value="membros">
