@@ -1,6 +1,12 @@
-import { Pool } from 'pg';
+import { Pool, types } from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
+
+// OID 1700 = NUMERIC — pg retorna como string por padrão; forçar float
+types.setTypeParser(1700, (val: string) => parseFloat(val));
+// OID 700/701 = FLOAT4/FLOAT8 — já vêm como number, mas garantir
+types.setTypeParser(700,  (val: string) => parseFloat(val));
+types.setTypeParser(701,  (val: string) => parseFloat(val));
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
