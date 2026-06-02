@@ -241,9 +241,16 @@ for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
 
-// Agentes: campos enviados pelo frontend que não existem na tabela são ignorados silenciosamente
+// Agentes: campos do Lovable que não existem na tabela são ignorados silenciosamente
 app.use('/api/agentes', makeCrud(pool, 'agentes', {
-  stripFields: ['provider', 'modelo_id', 'modalidade_audio', 'modalidade_imagem', 'modalidade_video', 'mcp_tools'],
+  stripFields: [
+    // Campos que o Lovable envia mas não existem em agentes
+    'tipo', 'config', 'provider_slug', 'instancia', 'active',
+    // Campos de outras versões/aliases
+    'provider', 'modelo_id', 'modalidade_audio', 'modalidade_imagem',
+    'modalidade_video', 'mcp_tools', 'name', 'description',
+    'is_active', 'enabled', 'settings', 'metadata',
+  ],
 }));
 
 // Tabelas compartilhadas (REALMENTE globais, sem user_id)
