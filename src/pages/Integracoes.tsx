@@ -112,11 +112,11 @@ const TEMPLATES: Template[] = [
   },
   {
     tipo: "evolution",
-    nome: "WhatsApp",
-    descricao: "Conecte seu WhatsApp para enviar e receber mensagens",
+    nome: "Evolution API",
+    descricao: "URL e API Key do servidor Evolution para envio/recebimento de mensagens",
     icone: "MessageCircle",
-    campos: {},
-    urlLabel: "",
+    campos: { url: true, api_key: true },
+    urlLabel: "URL da Evolution API",
   },
   {
     tipo: "database_vector",
@@ -434,7 +434,7 @@ export default function IntegracoesPage() {
     setShowKey(false);
     setForm({
       nome: row?.nome ?? tpl.nome,
-      url: row?.url ?? "",
+      url: row?.url ?? (tpl.tipo === "evolution" ? "https://disparo.mentoark.com.br" : ""),
       api_key: row?.api_key ?? "",
       instancia: row?.instancia ?? "",
       status: (row?.status as IntegStatus) ?? "inativo",
@@ -883,11 +883,10 @@ export default function IntegracoesPage() {
                 const st = statusConfig[status];
                 const StIcon = st.icon;
                 
-                // Formatação especial para WhatsApp Conectado
                 const isWhatsapp = tpl.tipo === "evolution";
                 const isConectado = status === "conectado";
-                const displayStatusLabel = isWhatsapp && isConectado ? "● Conectado" : st.label;
-                const displayStatusColor = isWhatsapp && isConectado ? "bg-green-100 text-green-700" : st.color;
+                const displayStatusLabel = isConectado ? "● Conectado" : st.label;
+                const displayStatusColor = isConectado ? "bg-green-100 text-green-700" : st.color;
 
                 return (
                   <Card
@@ -904,9 +903,9 @@ export default function IntegracoesPage() {
                             <p className="font-semibold text-sm">
                               {row?.nome ?? tpl.nome}
                             </p>
-                            <p className="text-xs text-muted-foreground">
-                              {isWhatsapp && isConectado && row?.instancia ? (
-                                <span className="text-primary font-medium">{row.instancia}</span>
+                            <p className="text-xs text-muted-foreground truncate max-w-[160px]">
+                              {isWhatsapp && row?.url ? (
+                                <span className="font-mono text-[10px] text-muted-foreground">{row.url.replace('https://', '')}</span>
                               ) : tpl.descricao}
                             </p>
                           </div>
@@ -935,8 +934,7 @@ export default function IntegracoesPage() {
                         className="w-full"
                         onClick={() => abrirConfig(tpl, row)}
                       >
-                        {isWhatsapp && isConectado ? "Gerenciar" : 
-                         status === "erro" ? "Reconectar" : "Configurar"}
+                        {isConectado ? "Editar" : status === "erro" ? "Reconectar" : "Configurar"}
                       </Button>
                     </CardContent>
                   </Card>
@@ -973,119 +971,14 @@ export default function IntegracoesPage() {
               </DialogHeader>
 
               <div className="space-y-4">
-                {template.tipo === "evolution" && step === 1 && (
-                  <>
-                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-2">
-                      <div className="flex items-center gap-2 text-amber-800 font-bold text-sm">
-                        <ShieldCheck className="h-4 w-4" /> 🛡️ ATENÇÃO — ANTI-BAN
-                      </div>
-                      <ul className="text-xs text-amber-700 space-y-1 list-disc list-inside">
-                        <li>Nunca conecte no WhatsApp Web simultaneamente</li>
-                        <li>Desligue o Wi-Fi/4G do celular logo após escanear o QR Code</li>
-                      </ul>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label>Nome da Identificação *</Label>
-                      <Input
-                        placeholder="Ex: Vendas Matriz"
-                        value={form.nome}
-                        onChange={(e) => setForm({ ...form, nome: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="space-y-1.5">
-                        <Label>País *</Label>
-                        <Select 
-                          value={whatsappForm.pais} 
-                          onValueChange={(v) => setWhatsappForm({ ...whatsappForm, pais: v })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="55">🇧🇷 Brasil (+55)</SelectItem>
-                            <SelectItem value="1">🇺🇸 EUA (+1)</SelectItem>
-                            <SelectItem value="351">🇵🇹 Portugal (+351)</SelectItem>
-                            <SelectItem value="54">🇦🇷 Argentina (+54)</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="col-span-2 space-y-1.5">
-                        <Label>Número do WhatsApp *</Label>
-                        <Input
-                          type="tel"
-                          placeholder="(11) 99999-9999"
-                          value={whatsappForm.numero}
-                          onChange={(e) => setWhatsappForm({ ...whatsappForm, numero: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {template.tipo === "evolution" && step === 2 && (
-                  <div className="space-y-6">
-                    <p className="text-sm text-muted-foreground text-center">
-                      Escaneie o QR Code ou use o Código de Pareamento
-                    </p>
-
-                    <Card className="border-border/50 bg-muted/30">
-                      <CardContent className="p-4 space-y-3">
-                        <div className="flex items-center gap-2 font-semibold text-sm">
-                          <Smartphone className="h-4 w-4 text-primary" /> Opção 1 — Código de Pareamento
-                        </div>
-                        <p className="text-[11px] text-muted-foreground leading-tight">
-                          No WhatsApp: Configurações {">"} Aparelhos Conectados {">"} Conectar {">"} Conectar com número de telefone
-                        </p>
-                        <div className="bg-white border rounded-lg p-3 text-center">
-                          <span className="text-2xl font-mono font-bold tracking-[0.2em]">
-                            {pairingCode || "------"}
-                          </span>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    <div className="relative flex items-center justify-center py-2">
-                      <div className="absolute inset-0 flex items-center">
-                        <span className="w-full border-t border-border" />
-                      </div>
-                      <span className="relative bg-white px-3 text-xs text-muted-foreground uppercase font-medium">ou</span>
-                    </div>
-
-                    <Card className="border-border/50 bg-muted/30">
-                      <CardContent className="p-4 space-y-3 flex flex-col items-center">
-                        <div className="flex items-center gap-2 font-semibold text-sm w-full">
-                          <MessageCircle className="h-4 w-4 text-green-500" /> Opção 2 — Escanear QR Code
-                        </div>
-                        {qrCode ? (
-                          <div className="bg-white p-2 rounded-lg border">
-                            <img src={qrCode} alt="WhatsApp QR Code" className="w-[180px] h-[180px]" />
-                          </div>
-                        ) : (
-                          <div className="w-[180px] h-[180px] bg-white rounded-lg border flex items-center justify-center">
-                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/30" />
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
-
-                    <div className="flex gap-3">
-                      <Button variant="outline" className="flex-1 gap-2" onClick={gerarQRCode} disabled={loadingQr}>
-                        <RefreshCw className={`h-4 w-4 ${loadingQr ? "animate-spin" : ""}`} />
-                        Atualizar Códigos
-                      </Button>
-                      {form.status === "conectado" && (
-                        <Button variant="destructive" className="flex-1" onClick={desconectarWhatsApp}>
-                          Desconectar
-                        </Button>
-                      )}
-                    </div>
+                {template.tipo === "evolution" && (
+                  <div className="rounded-md border border-blue-100 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-xs text-blue-700 dark:text-blue-300">
+                    Configure a conexão com seu servidor Evolution API. A URL e API Key serão usadas
+                    por todos os agentes para enviar e receber mensagens no WhatsApp.
                   </div>
                 )}
 
-                {template.tipo !== "evolution" && (
+                {(
                   <>
                     <div className="space-y-1.5">
                       <Label>Nome</Label>
