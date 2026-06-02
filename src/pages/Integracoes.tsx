@@ -238,15 +238,14 @@ export default function IntegracoesPage() {
     status: "inativo" as IntegStatus,
   });
   
-  // WhatsApp connection states
+  // Evolution modal state
   const [step, setStep] = useState<1 | 2>(1);
+  const [evoTestStatus, setEvoTestStatus] = useState<null | "ok" | "erro" | "testando">(null);
+  // Legacy WhatsApp states (mantidos para não quebrar o polling useEffect)
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [loadingQr, setLoadingQr] = useState(false);
-  const [whatsappForm, setWhatsappForm] = useState({
-    pais: "55",
-    numero: "",
-  });
+  const [whatsappForm, setWhatsappForm] = useState({ pais: "55", numero: "" });
 
   // ── AI Providers ─────────────────────────────────────────────────────────────
   interface AiProvider {
@@ -441,14 +440,8 @@ export default function IntegracoesPage() {
     });
     setModal(true);
     if (tpl.tipo === "evolution") {
-      setStep(row?.status === "conectado" ? 2 : 1);
-      setQrCode(null);
-      setPairingCode(null);
-      const config = row?.config || {};
-      setWhatsappForm({
-        pais: config.pais || "55",
-        numero: config.numero || "",
-      });
+      setStep(1); // nunca vai para step 2 — remove o polling automático
+      setEvoTestStatus(null);
     }
   };
 
@@ -495,17 +488,22 @@ export default function IntegracoesPage() {
         }
       } else if (template.tipo === "evolution") {
         if (!form.api_key || !form.url) { toast.error("Informe URL e API Key."); setTestando(false); return; }
-        const url = form.url.replace(/\/$/, "") + "/instance/fetchInstances";
-        const res = await fetch(url, {
+        setEvoTestStatus("testando");
+        const baseUrl = form.url.trim().replace(/\/$/, "");
+        const res = await fetch(`${baseUrl}/instance/fetchInstances`, {
           method: "GET",
-          headers: { "apikey": form.api_key },
+          headers: { apikey: form.api_key.trim() },
         });
         if (res.ok) {
+          const instances = await res.json().catch(() => []);
+          const count = Array.isArray(instances) ? instances.length : 0;
+          setEvoTestStatus("ok");
           setForm((f) => ({ ...f, status: "conectado" }));
-          toast.success("Evolution API conectada ✅");
+          toast.success(`Evolution API conectada ✅ — ${count} instância(s) encontrada(s)`);
         } else {
+          setEvoTestStatus("erro");
           setForm((f) => ({ ...f, status: "erro" }));
-          toast.error(`Falha: HTTP ${res.status} — verifique URL e API Key`);
+          toast.error(`Falha HTTP ${res.status} — verifique a URL e a API Key`);
         }
       } else if (form.url) {
         const res = await fetch(form.url, { method: "GET" });
@@ -901,11 +899,11 @@ export default function IntegracoesPage() {
                           </div>
                           <div>
                             <p className="font-semibold text-sm">
-                              {row?.nome ?? tpl.nome}
+                              {tpl.nome}
                             </p>
                             <p className="text-xs text-muted-foreground truncate max-w-[160px]">
                               {isWhatsapp && row?.url ? (
-                                <span className="font-mono text-[10px] text-muted-foreground">{row.url.replace('https://', '')}</span>
+                                <span className="font-mono text-[10px]">{row.url.replace('https://', '')}</span>
                               ) : tpl.descricao}
                             </p>
                           </div>
@@ -959,24 +957,32 @@ export default function IntegracoesPage() {
           {template && (
             <>
               <DialogHeader>
-                <DialogTitle>
-                  {template.tipo === "evolution" 
-                    ? (step === 1 ? "Nova Conexão WhatsApp" : `Conectar Instância: ${form.nome}`)
-                    : `Configurar ${template.nome}`
-                  }
+                <DialogTitle className="flex items-center justify-between gap-3">
+                  <span>{`Configurar ${template.nome}`}</span>
+                  {template.tipo === "evolution" && (
+                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${
+                      form.status === "conectado" || evoTestStatus === "ok"
+                        ? "bg-green-100 text-green-700 border-green-200"
+                        : evoTestStatus === "erro" || form.status === "erro"
+                        ? "bg-red-100 text-red-700 border-red-200"
+                        : evoTestStatus === "testando"
+                        ? "bg-blue-100 text-blue-700 border-blue-200 animate-pulse"
+                        : "bg-gray-100 text-gray-500 border-gray-200"
+                    }`}>
+                      {form.status === "conectado" || evoTestStatus === "ok"
+                        ? "● Conectado"
+                        : evoTestStatus === "erro" || form.status === "erro"
+                        ? "● Erro"
+                        : evoTestStatus === "testando"
+                        ? "● Testando..."
+                        : "○ Não testado"}
+                    </span>
+                  )}
                 </DialogTitle>
-                {template.tipo !== "evolution" && (
-                  <DialogDescription>{template.descricao}</DialogDescription>
-                )}
+                <DialogDescription>{template.descricao}</DialogDescription>
               </DialogHeader>
 
               <div className="space-y-4">
-                {template.tipo === "evolution" && (
-                  <div className="rounded-md border border-blue-100 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-xs text-blue-700 dark:text-blue-300">
-                    Configure a conexão com seu servidor Evolution API. A URL e API Key serão usadas
-                    por todos os agentes para enviar e receber mensagens no WhatsApp.
-                  </div>
-                )}
 
                 {(
                   <>
@@ -1099,7 +1105,7 @@ export default function IntegracoesPage() {
                   </div>
                 )}
 
-                {template.tipo !== "evolution" && (template.urlLabel || template.campos.api_key || template.tipo === "elevenlabs") && (
+                {(template.urlLabel || template.campos.api_key || template.tipo === "elevenlabs" || template.tipo === "evolution") && (
                   <Button
                     variant="secondary"
                     className="w-full"
@@ -1111,7 +1117,7 @@ export default function IntegracoesPage() {
                     ) : (
                       <Plug className="h-4 w-4 mr-2" />
                     )}
-                    Testar conexão
+                    {template.tipo === "evolution" ? "Testar e validar conexão" : "Testar conexão"}
                   </Button>
                 )}
               </div>
