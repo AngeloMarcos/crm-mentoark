@@ -25,7 +25,7 @@ export default function n8nRouter(pool: Pool): Router {
                 rag_ativo, rag_threshold, rag_resultados,
                 n8n_webhook_url, evolution_api_key, evolution_server_url, ativo
          FROM agentes
-         WHERE evolution_instancia = $1 AND ativo = true
+         WHERE LOWER(evolution_instancia) = LOWER($1) AND ativo = true
          LIMIT 1`,
         [req.params.instancia]
       );

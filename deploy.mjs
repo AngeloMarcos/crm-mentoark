@@ -11,7 +11,7 @@ import path from 'path';
 const VPS_HOST = '147.93.9.172';
 const VPS_USER = 'root';
 const VPS_PASS = 'Mentoark@2025';
-const PROJECT  = 'C:\\Users\\angel\\Desktop\\claudio\\cris\\crm-mentoark';
+const PROJECT  = path.resolve('.');
 
 const FILES_FRONTEND = [
   'src/hooks/useAuth.tsx',
@@ -45,7 +45,7 @@ console.log('\n🔧 PASSO 1 — Git commit + push\n');
 try {
   execSync(`git -C "${PROJECT}" add -A`, { stdio: 'inherit' });
   execSync(
-    `git -C "${PROJECT}" commit -m "fix: integracoes_config upsert + equipe + kanban + ai routes\n\n- fix: equipe_membros coluna convidado_por adicionada (causa da tela branca)\n- fix: equipe.ts queries com COALESCE(name, display_name) + ON CONFLICT DO UPDATE\n- feat: kanban.ts webhook publico n8n (kanbanWebhookN8n export)\n- feat: ai-providers.ts rota completa com criptografia AES-256-CBC\n- feat: ai-uso.ts dashboard de uso e custo por provider\n- feat: index.ts registra kanban webhook antes do authMiddleware\n- fix: migrations.ts tabelas equipes/equipe_membros/kanban/tarefas com colunas completas\n- fix: migrations.ts ai_providers + ai_uso_diario + views vw_ai_uso_30d\n- fix: migrations.ts tarefas colunas kanban (contato_nome, remote_jid, etc)\n- feat: PROMPT-MOTOR-INDEPENDENTE.md para abandonar n8n\n- feat: PROMPT-FIX-EQUIPE.md diagnostico e correcao de equipes\n- feat: PROMPT-LOVABLE-KANBAN-TAREFAS.md kanban visual\n- feat: CRiS-workflow-com-kanban.json workflow com card automatico\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"`,
+    `git -C "${PROJECT}" commit -m "fix: core engine & webhook integration bugs\n\n- fix: loop de auto-pausa (antiloop) with botSentTexts\n- fix: case-sensitivity of instances in n8n routes\n- fix: empty catch blocks on database operations for proper logging\n- feat: phone hygiene & digits validation in agent engine\n- feat: log sent disparos in whatsapp_messages and connect antiloop\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"`,
     { stdio: 'inherit', cwd: PROJECT }
   );
   execSync(`git -C "${PROJECT}" push origin main`, { stdio: 'inherit' });
@@ -117,6 +117,9 @@ const backendFiles = [
   { local: path.join(PROJECT, 'backend/src/routes/modulos.ts'),         remote: '/opt/crm/backend/src/routes/modulos.ts' },
   { local: path.join(PROJECT, 'backend/src/migrations.ts'),             remote: '/opt/crm/backend/src/migrations.ts' },
   { local: path.join(PROJECT, 'backend/src/services/disparoProcessor.ts'), remote: '/opt/crm/backend/src/services/disparoProcessor.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/webhook.ts'),         remote: '/opt/crm/backend/src/routes/webhook.ts' },
+  { local: path.join(PROJECT, 'backend/src/routes/n8n.ts'),             remote: '/opt/crm/backend/src/routes/n8n.ts' },
+  { local: path.join(PROJECT, 'backend/src/services/agentEngine.ts'),   remote: '/opt/crm/backend/src/services/agentEngine.ts' },
 ];
 
 (async () => {
