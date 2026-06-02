@@ -1190,9 +1190,15 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS horario_fim       TIME`).catch(() => {});
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS dias_semana       TEXT[]`).catch(() => {});
 
-  await pool.query(`ALTER TABLE agentes       ADD COLUMN IF NOT EXISTS auto_distribute  BOOLEAN DEFAULT false`).catch(() => {});
-  await pool.query(`ALTER TABLE agentes       ADD COLUMN IF NOT EXISTS linked_agent_id  UUID`).catch(() => {});
-  await pool.query(`ALTER TABLE agent_prompts ADD COLUMN IF NOT EXISTS updated_at       TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes       ADD COLUMN IF NOT EXISTS auto_distribute   BOOLEAN DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes       ADD COLUMN IF NOT EXISTS linked_agent_id   UUID`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_prompts ADD COLUMN IF NOT EXISTS updated_at        TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
+
+  // ── Score de Saúde do número WhatsApp ────────────────────────────────────────
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS score_updated_at  TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS health_score       INT DEFAULT 100`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS score_details      TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS score_metadata     JSONB`).catch(() => {});
 
   console.log('[MIGRATIONS] agentes advanced columns OK');
 
