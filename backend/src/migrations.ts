@@ -1200,6 +1200,22 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS score_details      TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS score_metadata     JSONB`).catch(() => {});
 
+  // ── agent_configs: colunas adicionais + constraint UNIQUE(user_id) ────────────
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS evolution_server_url TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS evolution_api_key    TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS operation_mode       TEXT DEFAULT 'agente_ia'`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS distribution_mode    BOOLEAN DEFAULT false`).catch(() => {});
+  // Garante constraint única para o UPSERT por user_id funcionar
+  await pool.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'unique_user_config'
+      ) THEN
+        ALTER TABLE agent_configs ADD CONSTRAINT unique_user_config UNIQUE (user_id);
+      END IF;
+    END $$;
+  `).catch(() => {});
+
   console.log('[MIGRATIONS] agentes advanced columns OK');
 
   console.log('[MIGRATIONS] OK');

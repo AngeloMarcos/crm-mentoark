@@ -289,10 +289,12 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
   if (!textoFinal) return;
 
-  // 6. System prompt — busca agent_configs primeiro, fallback para agent_prompts
+  // 6. Configuração unificada — fonte única: agent_configs (por user_id)
   const configRes = await pool.query(
     `SELECT prompt_sistema, nome_agente, sinal_pausa, palavra_reativar,
-            modelo_llm, saudacao_inicial, bloco_qualificacao,
+            modelo_llm, evolution_server_url, evolution_api_key,
+            operation_mode, distribution_mode,
+            saudacao_inicial, bloco_qualificacao,
             mensagem_encaminhamento, mensagem_encerramento
      FROM agent_configs
      WHERE user_id = $1 AND ativo = true
@@ -300,20 +302,27 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     [userIdFinal]
   );
 
-  let systemPromptBase = 'Você é um assistente prestativo.';
-  if (configRes.rows.length && configRes.rows[0].prompt_sistema) {
-    systemPromptBase = configRes.rows[0].prompt_sistema;
+  const agentConfig = configRes.rows[0] ?? null;
+
+  // Prompt do sistema: usa agent_configs.prompt_sistema como fonte principal.
+  // Fallback para agent_prompts apenas para compatibilidade com contas antigas sem migração.
+  let systemPromptBase: string;
+  if (agentConfig?.prompt_sistema) {
+    systemPromptBase = agentConfig.prompt_sistema;
   } else {
-    const promptRes = await pool.query(
+    const legacyRes = await pool.query(
       `SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`,
       [userIdFinal]
     );
-    if (promptRes.rows[0]?.conteudo) systemPromptBase = promptRes.rows[0].conteudo;
+    systemPromptBase = legacyRes.rows[0]?.conteudo ?? 'Você é um assistente prestativo.';
   }
 
-  const agentConfig = configRes.rows[0] || null;
   const nomeAgente = agentConfig?.nome_agente || agente.nome || 'Assistente';
   const sinalPausa = agentConfig?.sinal_pausa || '251213';
+
+  // Override de Evolution a partir do agent_configs (tem precedência sobre o agente)
+  if (agentConfig?.evolution_server_url) agente.evolution_server_url = agentConfig.evolution_server_url;
+  if (agentConfig?.evolution_api_key)    agente.evolution_api_key    = agentConfig.evolution_api_key;
 
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;

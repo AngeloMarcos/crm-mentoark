@@ -44,6 +44,7 @@ import authRouter from './auth';
 import contatosRouter from './routes/contatos';
 import disparosRouter from './routes/disparos';
 import agentPromptsRouter from './routes/agent_prompts';
+import agentConfigRouter from './routes/agent-config';
 import documentsRouter from './routes/documents';
 import n8nChatRouter from './routes/n8n_chat_histories';
 import dashboardRouter from './routes/dashboard';
@@ -250,6 +251,7 @@ for (const table of SHARED_TABLES) {
 app.use('/api/contatos', contatosRouter(pool));
 app.use('/api/disparos', disparosRouter(pool));
 app.use('/api/agent_prompts', agentPromptsRouter(pool));
+app.use('/api/agent-config',  agentConfigRouter(pool));
 app.use('/api/documents', documentsRouter(pool));
 app.use('/api/n8n_chat_histories', n8nChatRouter(pool));
 app.use('/api/dashboard', dashboardRouter(pool));
