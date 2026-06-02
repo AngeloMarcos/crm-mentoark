@@ -315,24 +315,26 @@ export default function AgentesPage() {
   };
 
   const testarEvolution = async () => {
-    if (!form.evolution_server_url || !form.evolution_api_key) {
-      toast.error("Informe URL e API Key.");
+    if (!form.evolution_instancia) {
+      toast.error("Informe o nome da instância antes de testar.");
       return;
     }
     setTestando(true);
     try {
-      const url = form.evolution_server_url.replace(/\/$/, "") + "/instance/fetchInstances";
-      const res = await fetch(url, {
-        method: "GET",
-        headers: { apikey: form.evolution_api_key },
+      // Usa a config global de Conectores (integracoes_config) via backend
+      const token = localStorage.getItem("crm_access_token");
+      const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
+      const res = await fetch(`${API_URL}/api/whatsapp/status`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        toast.success("✅ Conexão estabelecida");
+        const data = await res.json();
+        toast.success(`✅ Evolution conectada — instância: ${data.instancia ?? form.evolution_instancia}`);
       } else {
-        toast.error("❌ Falha na conexão — verifique URL e API Key");
+        toast.error("❌ Falha na conexão — configure a Evolution em Conectores");
       }
     } catch (e: any) {
-      toast.error(`❌ Falha na conexão: ${e?.message ?? "erro de rede"}`);
+      toast.error(`❌ Erro: ${e?.message ?? "sem resposta do servidor"}`);
     } finally {
       setTestando(false);
     }
@@ -828,40 +830,15 @@ export default function AgentesPage() {
             </TabsContent>
 
             <TabsContent value="whatsapp" className="space-y-4 pt-4">
-              <div className="space-y-1.5">
-                <Label>URL do Servidor Evolution</Label>
-                <Input
-                  value={form.evolution_server_url}
-                  onChange={(e) =>
-                    setForm({ ...form, evolution_server_url: e.target.value })
-                  }
-                  placeholder="https://api.evolution.mentoark.com"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>API Key Evolution</Label>
-                <div className="relative">
-                  <Input
-                    type={showKey ? "text" : "password"}
-                    value={form.evolution_api_key}
-                    onChange={(e) =>
-                      setForm({ ...form, evolution_api_key: e.target.value })
-                    }
-                    placeholder="••••••••••••"
-                    className="pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    {showKey ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
+              <div className="rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-700 dark:text-blue-300 flex items-start gap-2">
+                <span className="mt-0.5">🔗</span>
+                <span>
+                  A URL e API Key da Evolution são configuradas globalmente em{" "}
+                  <a href="/integracoes" className="font-semibold underline underline-offset-2 hover:text-blue-900 dark:hover:text-blue-100">
+                    Conectores
+                  </a>
+                  . Aqui você define apenas o nome da instância usada por este agente.
+                </span>
               </div>
               <div className="space-y-1.5">
                 <Label>Nome da Instância</Label>
