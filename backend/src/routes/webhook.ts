@@ -229,7 +229,7 @@ export default function webhookRouter(pool: Pool): Router {
         if (agtRes.rows.length) userId = agtRes.rows[0].user_id;
       }
 
-      // 3. Fallback final: prefixo UUID no nome da instância (ex: crm_435ee4720fc3)
+      // 3. Fallback: prefixo UUID no nome da instância (ex: crm_435ee4720fc3)
       if (!userId && instancia.startsWith('crm_')) {
         const prefixo = instancia.slice(4);
         const uRes = await pool.query(
@@ -237,6 +237,27 @@ export default function webhookRouter(pool: Pool): Router {
           [`${prefixo}%`]
         ).catch(() => ({ rows: [] as any[] }));
         if (uRes.rows.length) userId = uRes.rows[0].id;
+      }
+
+      // 4. Fallback final: busca em integracoes_config por instância (qualquer user)
+      if (!userId) {
+        const icRes = await pool.query(
+          `SELECT user_id FROM integracoes_config
+           WHERE LOWER(instancia) = LOWER($1) LIMIT 1`,
+          [instancia]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (icRes.rows.length) userId = icRes.rows[0].user_id;
+      }
+
+      // 5. Fallback final: único admin ativo do sistema (evita perder mensagens quando instância não registrada)
+      if (!userId) {
+        const adminRes = await pool.query(
+          `SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`
+        ).catch(() => ({ rows: [] as any[] }));
+        if (adminRes.rows.length) {
+          userId = adminRes.rows[0].id;
+          wlog('WEBHOOK_FALLBACK', `userId resolvido via admin fallback: ${userId} para instancia="${instancia}"`);
+        }
       }
 
       wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);

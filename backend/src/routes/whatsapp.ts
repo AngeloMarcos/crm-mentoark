@@ -98,18 +98,19 @@ export default function whatsappRouter(pool: Pool): Router {
     userId: string, agenteId: string | null,
     url: string, api_key: string, instancia: string
   ) {
-    // 1. Sempre salvar em integracoes_config (fonte da verdade do status)
-    await pool.query(
-      `INSERT INTO integracoes_config (user_id, tipo, url, api_key, instancia, status, updated_at)
-       VALUES ($1, 'evolution', $2, $3, $4, 'conectado', NOW())
-       ON CONFLICT (user_id, tipo) DO UPDATE SET
-         url = EXCLUDED.url,
-         api_key = EXCLUDED.api_key,
-         instancia = EXCLUDED.instancia,
-         status = 'conectado',
-         updated_at = NOW()`,
+    // 1. Atualiza registro existente; se não existir, insere novo
+    const upd = await pool.query(
+      `UPDATE integracoes_config SET url=$2, api_key=$3, instancia=$4, status='conectado', updated_at=NOW()
+       WHERE user_id=$1 AND tipo='evolution' AND instancia=$4`,
       [userId, url, api_key, instancia]
     );
+    if (!upd.rowCount) {
+      await pool.query(
+        `INSERT INTO integracoes_config (user_id, tipo, nome, url, api_key, instancia, status, updated_at)
+         VALUES ($1, 'evolution', 'WhatsApp', $2, $3, $4, 'conectado', NOW())`,
+        [userId, url, api_key, instancia]
+      );
+    }
 
     // 2. Sincronizar com Agente se existir
     if (agenteId) {
@@ -1047,6 +1048,110 @@ export default function whatsappRouter(pool: Pool): Router {
       return res.json({ ok: true });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ── Proxy para Evolution API — resolve CORS, lê config do banco ─────────────
+
+  // POST /api/whatsapp/evo/test — valida conexão usando config do banco
+  // Aceita url+api_key no body para testar antes de salvar (opcional)
+  router.post('/evo/test', async (req: AuthRequest, res: Response) => {
+    try {
+      const bodyUrl    = (req.body?.url    as string | undefined)?.trim();
+      const bodyApiKey = (req.body?.api_key as string | undefined)?.trim();
+
+      // Usa parâmetros do body se fornecidos (teste antes de salvar)
+      // Caso contrário lê da tabela integracoes_config (fonte de verdade)
+      let url = bodyUrl;
+      let api_key = bodyApiKey;
+      if (!url || !api_key) {
+        const cfg = await getEvolutionConfig(req.userId!);
+        url     = cfg.url;
+        api_key = cfg.api_key;
+      }
+      if (!url || !api_key) return res.status(400).json({ message: 'Configure a URL e API Key em Conectores primeiro.' });
+
+      const base = url.replace(/\/$/, '');
+      const r = await fetch(`${base}/instance/fetchInstances`, { headers: { apikey: api_key } });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        return res.status(r.status).json({ message: `Evolution retornou HTTP ${r.status}`, detail: txt.slice(0, 300) });
+      }
+      const instances: any[] = await r.json().catch(() => []);
+      return res.json({ ok: true, instances: Array.isArray(instances) ? instances : [] });
+    } catch (err: any) {
+      return res.status(502).json({ message: `Sem resposta do servidor Evolution: ${err.message}` });
+    }
+  });
+
+  // POST /api/whatsapp/evo/connect — conecta instância usando config salva no banco
+  router.post('/evo/connect', async (req: AuthRequest, res: Response) => {
+    try {
+      // Lê tudo do banco — nenhum parâmetro sensível vem do body
+      const cfg = await getEvolutionConfig(req.userId!);
+      const base = cfg.url.replace(/\/$/, '');
+      const key  = cfg.api_key;
+
+      if (!base || !key) return res.status(400).json({ message: 'Configure URL e API Key em Conectores antes de conectar.' });
+
+      // 1. Verificar se já está conectado
+      const stateR = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
+      if (stateR?.ok) {
+        const sd: any = await stateR.json();
+        const state = sd?.instance?.state || sd?.state || 'close';
+        if (state === 'open') {
+          await registrarWebhook(base, key, cfg.instancia);
+          return res.json({ state: 'open', instancia: cfg.instancia });
+        }
+      }
+
+      // 2. Tentar conectar instância existente
+      const connR = await fetch(`${base}/instance/connect/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
+      if (connR?.ok) {
+        const cd: any = await connR.json();
+        const qrRaw = cd?.base64 || cd?.qrcode?.base64 || cd?.code || null;
+        if (qrRaw) {
+          await registrarWebhook(base, key, cfg.instancia);
+          return res.json({ state: 'connecting', qrCode: normalizeQr(qrRaw), pairingCode: cd?.pairingCode || null, instancia: cfg.instancia });
+        }
+      }
+
+      // 3. Criar nova instância (primeira vez)
+      const createR = await fetch(`${base}/instance/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: key },
+        body: JSON.stringify({
+          instanceName: cfg.instancia, qrcode: true, integration: 'WHATSAPP-BAILEYS',
+          groupsIgnore: true, alwaysOnline: true, readMessages: true,
+          webhook: webhookPayload(),
+        }),
+      });
+      const created: any = await createR.json().catch(() => ({}));
+
+      await new Promise(r => setTimeout(r, 1500));
+      const qrR = await fetch(`${base}/instance/connect/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
+      const qd: any = qrR?.ok ? await qrR.json().catch(() => ({})) : {};
+      const qrCode = created?.qrcode?.base64 || qd?.base64 || qd?.code || null;
+      await registrarWebhook(base, key, cfg.instancia);
+
+      return res.json({ state: 'connecting', qrCode: normalizeQr(qrCode), pairingCode: qd?.pairingCode || null, instancia: cfg.instancia });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/evo/status — verifica estado da instância usando config do banco
+  router.get('/evo/status', async (req: AuthRequest, res: Response) => {
+    try {
+      const cfg  = await getEvolutionConfig(req.userId!);
+      if (!cfg.url || !cfg.api_key) return res.json({ state: 'nao_configurado' });
+      const base = cfg.url.replace(/\/$/, '');
+      const r    = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, { headers: { apikey: cfg.api_key } }).catch(() => null);
+      if (!r?.ok) return res.json({ state: 'close', instancia: cfg.instancia });
+      const d: any = await r.json();
+      return res.json({ state: d?.instance?.state || d?.state || 'close', instancia: cfg.instancia });
+    } catch (err: any) {
+      return res.status(502).json({ message: err.message });
     }
   });
 

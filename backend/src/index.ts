@@ -221,7 +221,7 @@ const SIMPLE_TABLES = [
   'tarefas',
   'campanhas',
   'disparo_logs',
-  'agentes',
+  // 'agentes' — registrado separadamente abaixo com stripFields
   'conhecimento',
   // 'integracoes_config' — removido do CRUD genérico: usa rota dedicada com upsert (ON CONFLICT)
   'catalogos',
@@ -240,6 +240,11 @@ const SIMPLE_TABLES = [
 for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
+
+// Agentes: campos enviados pelo frontend que não existem na tabela são ignorados silenciosamente
+app.use('/api/agentes', makeCrud(pool, 'agentes', {
+  stripFields: ['provider', 'modelo_id', 'modalidade_audio', 'modalidade_imagem', 'modalidade_video', 'mcp_tools'],
+}));
 
 // Tabelas compartilhadas (REALMENTE globais, sem user_id)
 const SHARED_TABLES: string[] = [];

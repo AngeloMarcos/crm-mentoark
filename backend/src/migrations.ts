@@ -1228,5 +1228,32 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   console.log('[MIGRATIONS] agentes advanced columns OK');
 
+  // ── agent_configs: colunas de compatibilidade com frontend ───────────────────
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS health_score     INTEGER DEFAULT 100`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS score_updated_at TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS provider         VARCHAR`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS provider_id      VARCHAR`).catch(() => {});
+
+  console.log('[MIGRATIONS] agent_configs compat columns OK');
+
+  // ── users.owner_id: vincula usuários comuns ao admin que os criou ─────────
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
+  // Admins são donos deles mesmos
+  await pool.query(`UPDATE users SET owner_id = id WHERE role = 'admin' AND owner_id IS NULL`).catch(() => {});
+  // Usuários sem owner ficam vinculados ao admin mais antigo do sistema
+  await pool.query(`
+    UPDATE users u
+    SET owner_id = (SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1)
+    WHERE u.role = 'user' AND u.owner_id IS NULL
+  `).catch(() => {});
+
+  console.log('[MIGRATIONS] users.owner_id OK');
+
+  // ── integracoes_config: remover UNIQUE(user_id, tipo) para permitir múltiplas instâncias ──
+  await pool.query(`DROP INDEX IF EXISTS idx_integracoes_user_tipo`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_integracoes_user_tipo ON integracoes_config(user_id, tipo)`).catch(() => {});
+
+  console.log('[MIGRATIONS] integracoes_config multi-instancia OK');
+
   console.log('[MIGRATIONS] OK');
 }

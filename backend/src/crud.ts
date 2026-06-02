@@ -5,6 +5,7 @@ import { AuthRequest } from './middleware';
 export interface CrudOptions {
   userIdCol?: string | null; // null = no user scoping (e.g. n8n_chat_histories)
   idCol?: string;
+  stripFields?: string[]; // fields to silently ignore on writes (don't exist in table)
 }
 
 const RESERVED_PARAMS = new Set(['order', 'asc', 'limit', 'page', 'head', 'select', 'count']);
@@ -73,6 +74,14 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
   const router = Router();
   const userIdCol = options.userIdCol !== undefined ? options.userIdCol : 'user_id';
   const idCol = options.idCol ?? 'id';
+  const stripSet = new Set(options.stripFields ?? []);
+
+  const sanitize = (obj: any): any => {
+    if (!stripSet.size) return obj;
+    const out = { ...obj };
+    for (const f of stripSet) delete out[f];
+    return out;
+  };
 
   const wrap = (fn: Function) => async (req: AuthRequest, res: Response) => {
     try {
@@ -151,7 +160,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     
     // Se for apenas 1 item, usa o modo tradicional para manter compatibilidade com o retorno de objeto único
     if (items.length === 1) {
-      const item = { ...items[0] };
+      const item = sanitize({ ...items[0] });
       if (userIdCol && userId) item[userIdCol] = userId;
       if (!item[idCol]) delete item[idCol];
       delete item.created_at;
@@ -167,7 +176,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
     // Para múltiplos itens, usa inserção em lote (bulk insert) eficiente
     // Assume que todos os itens têm as mesmas colunas (padrão do app)
-    const first = { ...items[0] };
+    const first = sanitize({ ...items[0] });
     if (userIdCol && userId) first[userIdCol] = userId;
     const cols = Object.keys(first).filter(k => /^[a-z_]+$/.test(k));
     
@@ -195,7 +204,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
   // PUT /:id (update by primary key)
   router.put('/:id', wrap(async (req: AuthRequest, res: Response) => {
     const userId = userIdCol ? req.userId ?? null : null;
-    const data: any = { ...req.body };
+    const data: any = sanitize({ ...req.body });
     delete data[idCol];
     delete data[userIdCol ?? ''];
     delete data.created_at;
@@ -229,7 +238,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
       return res.status(400).json({ message: 'Bulk update requer pelo menos um filtro' });
     }
 
-    const data: any = { ...req.body };
+    const data: any = sanitize({ ...req.body });
     delete data[idCol];
     delete data[userIdCol ?? ''];
     delete data.created_at;

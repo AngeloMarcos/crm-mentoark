@@ -14,120 +14,99 @@ export default function integracoesRouter(pool: Pool): Router {
     }
   };
 
-  // GET /api/integracoes_config  — lista todas as integrações do usuário
+  // Sincroniza instância Evolution com agent_configs (fonte de verdade do webhook)
+  async function syncEvolutionToAgentConfig(
+    userId: string, instancia: string, url: string, apiKey: string, status: string
+  ) {
+    if (status !== 'conectado') return;
+    await pool.query(
+      `INSERT INTO agent_configs (user_id, evolution_instancia, evolution_server_url, evolution_api_key, ativo)
+       VALUES ($1, $2, $3, $4, true)
+       ON CONFLICT (user_id) DO UPDATE SET
+         evolution_instancia  = EXCLUDED.evolution_instancia,
+         evolution_server_url = EXCLUDED.evolution_server_url,
+         evolution_api_key    = EXCLUDED.evolution_api_key,
+         updated_at           = NOW()`,
+      [userId, instancia, url, apiKey]
+    ).catch(err => console.warn('[integracoes] sync agent_configs:', err.message));
+  }
+
+  // GET /api/integracoes_config
   router.get('/', wrap(async (req: AuthRequest, res: Response) => {
     const r = await pool.query(
-      `SELECT * FROM integracoes_config WHERE user_id = $1 ORDER BY tipo`,
+      `SELECT * FROM integracoes_config WHERE user_id = $1 ORDER BY tipo, created_at`,
       [req.userId]
     );
     return res.json(r.rows);
   }));
 
-  // GET /api/integracoes_config/:id
-  router.get('/:id', wrap(async (req: AuthRequest, res: Response) => {
-    const r = await pool.query(
-      `SELECT * FROM integracoes_config WHERE id = $1 AND user_id = $2`,
-      [req.params.id, req.userId]
-    );
-    if (!r.rows.length) return res.status(404).json({ message: 'Não encontrado' });
-    return res.json(r.rows[0]);
-  }));
-
-  // POST /api/integracoes_config  — UPSERT por (user_id, tipo)
-  // Sempre usa ON CONFLICT para evitar duplicidade com a constraint UNIQUE(user_id, tipo)
+  // POST /api/integracoes_config — cria nova integração (sem UPSERT, permite múltiplas por tipo)
   router.post('/', wrap(async (req: AuthRequest, res: Response) => {
     const { tipo, nome, url, api_key, instancia, token, status, config } = req.body;
-    if (!tipo) return res.status(400).json({ message: 'Campo tipo é obrigatório' });
+    if (!tipo) return res.status(400).json({ message: 'tipo é obrigatório' });
 
     const r = await pool.query(
       `INSERT INTO integracoes_config
          (user_id, tipo, nome, url, api_key, instancia, token, status, config, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-       ON CONFLICT (user_id, tipo) DO UPDATE SET
-         nome       = EXCLUDED.nome,
-         url        = EXCLUDED.url,
-         api_key    = EXCLUDED.api_key,
-         instancia  = EXCLUDED.instancia,
-         token      = EXCLUDED.token,
-         status     = EXCLUDED.status,
-         config     = EXCLUDED.config,
-         updated_at = NOW()
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
        RETURNING *`,
       [
-        req.userId,
-        tipo,
+        req.userId, tipo,
         nome      || tipo,
         url       || null,
         api_key   || null,
         instancia || null,
         token     || null,
-        status    || 'ativo',
-        config    ? (typeof config === 'string' ? config : JSON.stringify(config)) : '{}',
+        status    || 'inativo',
+        config ? (typeof config === 'string' ? config : JSON.stringify(config)) : '{}',
       ]
     );
-    return res.status(201).json(r.rows[0]);
+
+    const row = r.rows[0];
+    if (tipo === 'evolution' && instancia && url && api_key) {
+      await syncEvolutionToAgentConfig(req.userId!, instancia, url, api_key, row.status);
+    }
+
+    return res.status(201).json(row);
   }));
 
-  // PUT /api/integracoes_config/:id  — atualiza por ID
+  // PUT /api/integracoes_config/:id — atualiza por ID
   router.put('/:id', wrap(async (req: AuthRequest, res: Response) => {
-    const { url, api_key, instancia, token, status, config } = req.body;
+    const { nome, url, api_key, instancia, token, status, config } = req.body;
 
     const r = await pool.query(
       `UPDATE integracoes_config SET
-         url        = COALESCE($1, url),
-         api_key    = COALESCE($2, api_key),
-         instancia  = COALESCE($3, instancia),
-         token      = COALESCE($4, token),
-         status     = COALESCE($5, status),
-         config     = COALESCE($6, config),
+         nome       = COALESCE($1, nome),
+         url        = COALESCE($2, url),
+         api_key    = COALESCE($3, api_key),
+         instancia  = COALESCE($4, instancia),
+         token      = COALESCE($5, token),
+         status     = COALESCE($6, status),
+         config     = COALESCE($7, config),
          updated_at = NOW()
-       WHERE id = $7 AND user_id = $8
+       WHERE id = $8 AND user_id = $9
        RETURNING *`,
       [
+        nome      ?? null,
         url       ?? null,
         api_key   ?? null,
         instancia ?? null,
         token     ?? null,
         status    ?? null,
-        config    ? (typeof config === 'string' ? config : JSON.stringify(config)) : null,
+        config ? (typeof config === 'string' ? config : JSON.stringify(config)) : null,
         req.params.id,
         req.userId,
       ]
     );
+
     if (!r.rows.length) return res.status(404).json({ message: 'Não encontrado' });
-    return res.json(r.rows[0]);
-  }));
 
-  // PATCH /api/integracoes_config/tipo/:tipo  — upsert direto pelo tipo (mais conveniente pro frontend)
-  router.patch('/tipo/:tipo', wrap(async (req: AuthRequest, res: Response) => {
-    const { tipo } = req.params;
-    const { url, api_key, instancia, token, status, config } = req.body;
+    const row = r.rows[0];
+    if (row.tipo === 'evolution' && row.instancia && row.url && row.api_key) {
+      await syncEvolutionToAgentConfig(req.userId!, row.instancia, row.url, row.api_key, row.status);
+    }
 
-    const r = await pool.query(
-      `INSERT INTO integracoes_config
-         (user_id, tipo, url, api_key, instancia, token, status, config, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-       ON CONFLICT (user_id, tipo) DO UPDATE SET
-         url        = COALESCE(EXCLUDED.url,       integracoes_config.url),
-         api_key    = COALESCE(EXCLUDED.api_key,   integracoes_config.api_key),
-         instancia  = COALESCE(EXCLUDED.instancia, integracoes_config.instancia),
-         token      = COALESCE(EXCLUDED.token,     integracoes_config.token),
-         status     = COALESCE(EXCLUDED.status,    integracoes_config.status),
-         config     = COALESCE(EXCLUDED.config,    integracoes_config.config),
-         updated_at = NOW()
-       RETURNING *`,
-      [
-        req.userId,
-        tipo,
-        url       || null,
-        api_key   || null,
-        instancia || null,
-        token     || null,
-        status    || 'ativo',
-        config    ? (typeof config === 'string' ? config : JSON.stringify(config)) : '{}',
-      ]
-    );
-    return res.json(r.rows[0]);
+    return res.json(row);
   }));
 
   // DELETE /api/integracoes_config/:id

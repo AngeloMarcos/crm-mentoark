@@ -123,11 +123,11 @@ export default function usuarios(pool: Pool): Router {
                 (SELECT array_agg(modulo) FROM user_modulos WHERE user_id = u.id AND ativo = true) as modulos
          FROM users u
          LEFT JOIN cargos c ON c.id = u.cargo_id
-         WHERE (u.owner_id = $1)
-           AND ($2::text IS NULL OR u.email ILIKE $2 OR u.display_name ILIKE $2)
+         WHERE ($1::text IS NULL OR u.email ILIKE $1 OR u.display_name ILIKE $1)
+           AND u.deleted_at IS NULL
          ORDER BY u.created_at DESC
-         LIMIT $3 OFFSET $4`,
-        [adminId, search, limit, offset]
+         LIMIT $2 OFFSET $3`,
+        [search, limit, offset]
       );
       return res.json(r.rows);
     } catch (err: any) {
@@ -286,13 +286,13 @@ export default function usuarios(pool: Pool): Router {
 
       if (fields.length === 0) return res.status(400).json({ message: 'Nada para atualizar' });
 
-      values.push(user_id, adminId);
+      values.push(user_id);
       const r = await pool.query(
-        `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx++} AND owner_id = $${idx} RETURNING id`,
+        `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx++} RETURNING id`,
         values
       );
 
-      if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado ou você não tem permissão.' });
+      if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado.' });
       return res.json({ ok: true });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });

@@ -2,6 +2,18 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
 
+const API_KEY_MASK = '••••••••••••';
+
+// Colunas que existem em agent_configs — qualquer campo fora dessa lista é ignorado silenciosamente
+const ALLOWED_COLS = new Set([
+  'prompt_sistema', 'nome_agente', 'sinal_pausa', 'palavra_reativar',
+  'modelo_llm', 'saudacao_inicial', 'bloco_qualificacao',
+  'mensagem_encaminhamento', 'mensagem_encerramento',
+  'evolution_server_url', 'evolution_api_key', 'evolution_instancia',
+  'operation_mode', 'distribution_mode', 'ativo',
+  'health_score', 'score_updated_at', 'provider', 'provider_id',
+]);
+
 export default function agentConfigRouter(pool: Pool): Router {
   const router = Router();
 
@@ -79,7 +91,8 @@ export default function agentConfigRouter(pool: Pool): Router {
         mensagem_encaminhamento ?? null,
         mensagem_encerramento ?? null,
         evolution_server_url ?? null,
-        evolution_api_key ?? null,
+        // Se vier a máscara de proteção, passa null → COALESCE preserva o valor gravado
+        (evolution_api_key === API_KEY_MASK ? null : evolution_api_key) ?? null,
         operation_mode ?? null,
         distribution_mode ?? null,
         ativo ?? true,
@@ -100,8 +113,10 @@ export default function agentConfigRouter(pool: Pool): Router {
     delete data.id;
     delete data.user_id;
     delete data.created_at;
+    // Ignora a máscara de proteção para não sobrescrever a chave real
+    if (data.evolution_api_key === API_KEY_MASK) delete data.evolution_api_key;
 
-    const cols = Object.keys(data).filter(k => /^[a-z_]+$/.test(k));
+    const cols = Object.keys(data).filter(k => /^[a-z_]+$/.test(k) && ALLOWED_COLS.has(k));
     if (!cols.length) return res.status(400).json({ message: 'Nenhum campo enviado' });
 
     const setClauses = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
