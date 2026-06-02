@@ -198,64 +198,48 @@ export default function webhookRouter(pool: Pool): Router {
       const pushName   = payload.data?.pushName || (isGroup ? senderPhone : telefone);
       const fromMe     = payload.data?.key?.fromMe === true;
 
-      // ── Busca agente UMA VEZ com fallbacks ───────────────────────────────────
-      // Aceita tanto o ID completo (crm_435ee4720fc3) quanto o nome amigável (Mento, Cris)
-      const agenteRes = await pool.query(
-        `SELECT user_id, id as agente_id FROM agentes
-         WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
-           AND ativo = true AND user_id IS NOT NULL
-         ORDER BY updated_at DESC LIMIT 1`,
-        [instancia]
-      );
-
+      // ── Lookup unificado: agent_configs (fonte principal) → agentes (legado) ──
       let userId: string | null = null;
-      let temAgente = false;
+      let palavraReativar = 'atendimento finalizado'; // valor padrão
 
-      if (agenteRes.rows.length) {
-        userId = agenteRes.rows[0].user_id;
-        temAgente = true;
-      } else {
-        // Fallback 1: integracoes_config
-        const ic = await pool.query(
-          `SELECT user_id FROM integracoes_config
-           WHERE LOWER(instancia) = LOWER($1) AND tipo = 'evolution' AND user_id IS NOT NULL
+      // 1. agent_configs — busca por evolution_instancia ou nome_agente, obtém palavra_reativar junto
+      const cfgRes = await pool.query(
+        `SELECT user_id, palavra_reativar
+         FROM agent_configs
+         WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome_agente) = LOWER($1))
+           AND ativo = true
+         LIMIT 1`,
+        [instancia]
+      ).catch(() => ({ rows: [] as any[] }));
+
+      if (cfgRes.rows.length) {
+        userId = cfgRes.rows[0].user_id;
+        palavraReativar = (cfgRes.rows[0].palavra_reativar || palavraReativar).toLowerCase();
+      }
+
+      // 2. Fallback legado: tabela agentes (migração gradual)
+      if (!userId) {
+        const agtRes = await pool.query(
+          `SELECT user_id FROM agentes
+           WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
+             AND ativo = true AND user_id IS NOT NULL
            ORDER BY updated_at DESC LIMIT 1`,
           [instancia]
         ).catch(() => ({ rows: [] as any[] }));
-
-        if (ic.rows.length) {
-          userId = ic.rows[0].user_id;
-        } else {
-          // Fallback 2: whatsapp_instances
-          const wi = await pool.query(
-            `SELECT user_id FROM whatsapp_instances WHERE LOWER(instance_name) = LOWER($1) LIMIT 1`,
-            [instancia]
-          ).catch(() => ({ rows: [] as any[] }));
-
-          if (wi.rows.length) {
-            userId = wi.rows[0].user_id;
-          } else if (instancia.startsWith('crm_')) {
-            // Fallback 3: prefixo UUID no nome da instância
-            const prefixo = instancia.slice(4);
-            const u = await pool.query(
-              `SELECT id FROM users
-               WHERE replace(id::text, '-', '') LIKE $1 OR id::text LIKE $2 LIMIT 1`,
-              [`${prefixo}%`, `${prefixo}%`]
-            ).catch(() => ({ rows: [] as any[] }));
-            if (u.rows.length) userId = u.rows[0].id;
-          }
-        }
+        if (agtRes.rows.length) userId = agtRes.rows[0].user_id;
       }
 
-      // Log de diagnóstico de mapeamento
-      wlog('WEBHOOK', `userId=${userId} | temAgente=${temAgente} | instancia="${instancia}"`);
-      if (userId && !temAgente) {
-        const agentesDoUser = await pool.query(
-          `SELECT nome, evolution_instancia, ativo FROM agentes WHERE user_id = $1`,
-          [userId]
+      // 3. Fallback final: prefixo UUID no nome da instância (ex: crm_435ee4720fc3)
+      if (!userId && instancia.startsWith('crm_')) {
+        const prefixo = instancia.slice(4);
+        const uRes = await pool.query(
+          `SELECT id FROM users WHERE replace(id::text, '-', '') LIKE $1 LIMIT 1`,
+          [`${prefixo}%`]
         ).catch(() => ({ rows: [] as any[] }));
-        wlog('WEBHOOK', `Agentes do user: ${JSON.stringify(agentesDoUser.rows)}`);
+        if (uRes.rows.length) userId = uRes.rows[0].id;
       }
+
+      wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);
 
       // ── Mensagens do atendente (fromMe=true) → pausar IA ou reativar ─────────
       if (fromMe) {
@@ -297,14 +281,7 @@ export default function webhookRouter(pool: Pool): Router {
           const ts    = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
           const tsVal = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
-          // Buscar palavra_reativar dinâmica do agent_configs
-          const cfgReativar = await pool.query(
-            `SELECT palavra_reativar FROM agent_configs
-             WHERE user_id = $1 AND ativo = true LIMIT 1`,
-            [userId]
-          ).catch(() => ({ rows: [] as any[] }));
-          const palavraReativar = (cfgReativar.rows[0]?.palavra_reativar || 'Atendimento finalizado').toLowerCase();
-
+          // palavraReativar já foi obtida no lookup principal (acima)
           if (textoNormFromMe === palavraReativar) {
             await pool.query(
               `UPDATE dados_cliente SET atendimento_ia = 'ativo'
@@ -426,13 +403,14 @@ export default function webhookRouter(pool: Pool): Router {
                 ).catch(() => {});
               }
 
-              // Foto de perfil via Evolution API
-              const cfg = await pool.query(
-                `SELECT url, api_key FROM integracoes_config WHERE user_id=$1 AND tipo='evolution' LIMIT 1`,
+              // Foto de perfil via Evolution API — usa agent_configs como fonte
+              const cfgEvo = await pool.query(
+                `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+                 FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
                 [userId]
-              );
-              const evoUrl = (cfg.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://fierceparrot-evolution.cloudfy.live').replace(/\/$/, '');
-              const evoKey = cfg.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+              ).catch(() => ({ rows: [] as any[] }));
+              const evoUrl = (cfgEvo.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br').replace(/\/$/, '');
+              const evoKey = cfgEvo.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
 
               let picUrl: string | null = null;
               try {

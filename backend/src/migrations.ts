@@ -1201,10 +1201,20 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS score_metadata     JSONB`).catch(() => {});
 
   // ── agent_configs: colunas adicionais + constraint UNIQUE(user_id) ────────────
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS evolution_instancia  TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS evolution_server_url TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS evolution_api_key    TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS operation_mode       TEXT DEFAULT 'agente_ia'`).catch(() => {});
   await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS distribution_mode    BOOLEAN DEFAULT false`).catch(() => {});
+  // Copiar evolution_instancia de agentes → agent_configs (migração de dados automática)
+  await pool.query(`
+    UPDATE agent_configs ac
+    SET evolution_instancia  = COALESCE(ac.evolution_instancia, a.evolution_instancia),
+        evolution_server_url = COALESCE(ac.evolution_server_url, a.evolution_server_url),
+        evolution_api_key    = COALESCE(ac.evolution_api_key, a.evolution_api_key)
+    FROM agentes a
+    WHERE ac.user_id = a.user_id AND a.evolution_instancia IS NOT NULL AND a.ativo = true
+  `).catch(() => {});
   // Garante constraint única para o UPSERT por user_id funcionar
   await pool.query(`
     DO $$ BEGIN
