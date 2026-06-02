@@ -25,6 +25,9 @@ const bufferMensagens = new Map<string, {
   entrada: MensagemEntrada;
 }>();
 
+// ── Lock de concorrência — impede duas respostas simultâneas ao mesmo número ─
+const atendimentosAtivos = new Set<string>();
+
 // ── Cria cliente OpenAI com chave do provider (fallback para env) ─────────────
 function criarClienteOpenAI(apiKey?: string): OpenAI {
   const key = apiKey || process.env.OPENAI_API_KEY || '';
@@ -92,8 +95,9 @@ function dividirMensagem(texto: string): string[] {
   return partes;
 }
 
-// ── IDs de mensagens enviadas pelo bot (previne auto-pausa da IA) ────────────
+// ── IDs e textos de mensagens enviadas pelo bot (previne auto-pausa da IA) ───
 export const botMessageIds = new Set<string>();
+export const botSentTexts  = new Set<string>();
 
 // ── Envio via Evolution API ───────────────────────────────────────────────────
 async function enviarResposta(
@@ -101,6 +105,14 @@ async function enviarResposta(
   instancia: string, telefone: string, texto: string
 ): Promise<void> {
   const base = serverUrl.replace(/\/$/, '');
+
+  // Registra o conteúdo ANTES de enviar para evitar condição de corrida no antiloop
+  const textKey = `${telefone}:${texto}`;
+  const textKeyTrimmed = `${telefone}:${texto.trim()}`;
+  botSentTexts.add(textKey);
+  botSentTexts.add(textKeyTrimmed);
+  setTimeout(() => { botSentTexts.delete(textKey); botSentTexts.delete(textKeyTrimmed); }, 120_000);
+
   const r = await fetch(`${base}/message/sendText/${instancia}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: apiKey },
@@ -129,57 +141,25 @@ async function salvarHistorico(
   ).catch(err => console.error('[ENGINE INSERT n8n_chat_histories]:', err.message));
 }
 
-// ── Parser de resposta (replica o Parser Chain do n8n) ─────────────────────────
-const PARSER_SYSTEM_PROMPT = `# PARSE CHAIN — WHATSAPP
+// ── Parser nativo — sem segunda chamada à API (zero custo, zero latência) ──────
+// A IA deve usar [QUEBRA] no prompt para indicar onde dividir mensagens.
+// Também detecta o sinal de pausa 251213 no texto.
+function parsearRespostaNativo(texto: string, sinalPausa: string): { messages: string[]; pausar: boolean } {
+  const SEPARADOR = '[QUEBRA]';
+  const pausar = texto.includes('251213') || (sinalPausa !== '251213' && texto.includes(sinalPausa));
+  const limpo = texto
+    .replace(/251213/g, '')
+    .replace(sinalPausa !== '251213' ? sinalPausa : '', '')
+    .replace(/\*\*(.*?)\*\*/g, '*$1*') // **negrito** → *negrito* (WhatsApp)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 
-## Objetivo
-Processar a resposta em 3 passos: detectar pausa, limpar o texto e formatar para WhatsApp.
-
-## PASSO 1 — DETECTAR PAUSA
-- Se contiver "251213" → "pausar": true
-- Caso contrário → "pausar": false
-
-## PASSO 2 — LIMPEZA
-- Remova "251213" completamente do texto
-- Remova linhas em branco após a remoção
-
-## PASSO 3 — FORMATAR
-- Máximo 2 mensagens, nunca cortar frases no meio
-- Preservar emojis e texto original
-- Converter **negrito** → *negrito* (formato WhatsApp)
-
-## Formato de Saída OBRIGATÓRIO
-Retorne APENAS JSON válido:
-{"messages": ["mensagem1"], "pausar": false, "status": "ok"}
-
-- messages: array com 1 ou 2 strings (nunca vazio)
-- pausar: true se havia 251213, false se não
-- status: sempre "ok"`;
-
-async function parsearResposta(
-  texto: string, provider: { complete: Function }, modelo: string
-): Promise<{ messages: string[]; pausar: boolean }> {
-  try {
-    const resp = await provider.complete(
-      [{ role: 'user', content: `Mensagem para formatar no WhatsApp:\n${texto}` }],
-      PARSER_SYSTEM_PROMPT,
-      [], // sem tools
-      { model: modelo, temperature: 0, maxTokens: 1024 }
-    );
-    const content = resp?.text || '';
-    // Tenta extrair JSON da resposta (pode vir com markdown ```json ... ```)
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-    return {
-      messages: Array.isArray(parsed.messages) && parsed.messages.length ? parsed.messages : [texto],
-      pausar: parsed.pausar === true,
-    };
-  } catch (err) {
-    console.warn('[ENGINE] Parser fallback:', (err as Error).message);
-    const pausar = texto.includes('251213');
-    const limpo = texto.replace('251213', '').replace(/\n{3,}/g, '\n\n').trim();
-    return { messages: [limpo], pausar };
-  }
+  const partes = limpo.split(SEPARADOR).map(p => p.trim()).filter(Boolean);
+  // Máximo 2 partes; se não usou [QUEBRA], tenta dividir em parágrafos naturais
+  if (partes.length >= 2) return { messages: partes.slice(0, 2), pausar };
+  const paragrafos = limpo.split(/\n\n+/).filter(p => p.trim());
+  if (paragrafos.length >= 2) return { messages: [paragrafos.slice(0,-1).join('\n\n'), paragrafos[paragrafos.length-1]], pausar };
+  return { messages: [limpo], pausar };
 }
 
 // ── Upsert de contato ─────────────────────────────────────────────────────────
@@ -202,7 +182,7 @@ async function upsertContato(
 
 // ── MOTOR PRINCIPAL ───────────────────────────────────────────────────────────
 async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<void> {
-  // Correção 5 — higienizar e validar telefone antes de qualquer operação
+  // Higienizar e validar telefone antes de qualquer operação
   const telefoneDigitos = entrada.telefone.replace(/\D/g, '');
   if (telefoneDigitos.length < 10 || telefoneDigitos.length > 13) {
     console.warn(`[ENGINE START] Telefone inválido, abortando: "${entrada.telefone}" → "${telefoneDigitos}" (${telefoneDigitos.length} dígitos)`);
@@ -210,14 +190,25 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
   entrada = { ...entrada, telefone: telefoneDigitos };
 
+  // ── Lock de concorrência: evita duas respostas simultâneas ao mesmo número ──
+  const lockKey = `${entrada.instancia}:${telefoneDigitos}`;
+  if (atendimentosAtivos.has(lockKey)) {
+    console.log(`[ENGINE] Concorrência detectada para ${telefoneDigitos} — reagendando após 4s`);
+    setTimeout(() => processarMensagem(pool, entrada).catch(() => {}), 4000);
+    return;
+  }
+  atendimentosAtivos.add(lockKey);
+
+  try {
   console.log(`[ENGINE START] instancia="${entrada.instancia}" telefone="${entrada.telefone}" tipo="${entrada.tipo}" userId="${entrada.userId || 'N/A'}"`);
 
-  // 1. Buscar agente pela instância com fallback por userId
+  // 1. Buscar agente — prioriza o agente do usuário correto, depois qualquer um da instância
   const r1 = await pool.query(
     `SELECT * FROM agentes
      WHERE LOWER(evolution_instancia) = LOWER($1) AND ativo = true
+     ORDER BY CASE WHEN user_id = $2 THEN 0 ELSE 1 END, updated_at DESC
      LIMIT 1`,
-    [entrada.instancia]
+    [entrada.instancia, entrada.userId || '']
   );
   let agenteRows = r1.rows;
 
@@ -256,14 +247,21 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     return;
   }
 
-  // 3. Verificar pausa de atendimento humano
+  // 3. Verificar pausa de atendimento humano (dados_cliente E contatos)
   const pausaRes = await pool.query(
-    `SELECT atendimento_ia FROM dados_cliente
-     WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+    `SELECT d.atendimento_ia, c.atendente_pausou_ia
+     FROM contatos c
+     LEFT JOIN dados_cliente d
+       ON d.user_id = c.user_id AND d.telefone ILIKE '%' || RIGHT(c.telefone, 11)
+     WHERE c.user_id = $1 AND c.telefone ILIKE $2
+     LIMIT 1`,
     [userIdFinal, `%${entrada.telefone.slice(-11)}`]
   ).catch(() => ({ rows: [] as any[] }));
-  if (pausaRes.rows[0]?.atendimento_ia === 'pause') {
-    console.log(`[ENGINE] IA pausada para ${entrada.telefone}`);
+  if (
+    pausaRes.rows[0]?.atendimento_ia === 'pause' ||
+    pausaRes.rows[0]?.atendente_pausou_ia === true
+  ) {
+    console.log(`[ENGINE] IA pausada para ${entrada.telefone} (atendimento_ia=${pausaRes.rows[0]?.atendimento_ia} / atendente_pausou_ia=${pausaRes.rows[0]?.atendente_pausou_ia})`);
     return;
   }
 
@@ -320,27 +318,39 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
 
-  // 7. Histórico (com filtro por user_id para multi-tenant correto)
+  // 7. Histórico — session_id sempre com dígitos puros (sem @s.whatsapp.net)
+  const histSessionId = entrada.telefone.replace(/\D/g, '');
   const histRes = await pool.query(
     `SELECT message FROM n8n_chat_histories
      WHERE session_id = $1 AND user_id = $2
      ORDER BY created_at DESC LIMIT 20`,
-    [entrada.telefone, userIdFinal]
+    [histSessionId, userIdFinal]
   );
   const historico: AIMessage[] = histRes.rows.reverse().flatMap((r: any) => {
-    const m = typeof r.message === 'string' ? JSON.parse(r.message) : r.message;
-    const content = (m.content || m.text || '').trim();
-    if (!content) return [];
-    const role: 'user' | 'assistant' =
-      m.role === 'user' || m.type === 'human' ? 'user' :
-      m.role === 'assistant' || m.type === 'ai' ? 'assistant' : 'user';
-    return [{ role, content } as AIMessage];
+    try {
+      const m = typeof r.message === 'string' ? JSON.parse(r.message) : r.message;
+      const content = (m.content || m.text || '').trim();
+      if (!content) return [];
+      // Mapeamento estrito: qualquer indicador de IA → 'assistant', resto → 'user'
+      const rawRole = String(m.role || m.type || '').toLowerCase();
+      const isAssistant = rawRole === 'assistant' || rawRole === 'ai'
+        || rawRole === 'bot' || rawRole === 'system';
+      const role: 'user' | 'assistant' = isAssistant ? 'assistant' : 'user';
+      // Ignorar mensagens de sistema puras que não devem ir ao modelo
+      if (rawRole === 'system') return [];
+      return [{ role, content } as AIMessage];
+    } catch {
+      return []; // JSON inválido — descartar sem travar
+    }
   });
 
   const mensagens: AIMessage[] = [
     ...historico,
     { role: 'user', content: textoFinal },
   ];
+
+  // sessionId sempre com dígitos puros (sem @s.whatsapp.net)
+  const sessionId = entrada.telefone.replace(/\D/g, '');
 
   // 8. Finalizar configuração do provider
   const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
@@ -398,29 +408,22 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     return;
   }
 
-  // 9. Parser de resposta — replica o Parser Chain do n8n
-  //    (split em 1-2 mensagens + detecção de 251213 / sinalPausa)
-  // Usa o mesmo provider autenticado para o parser (sem 401)
+  // 9. Parser nativo — sem segunda chamada de API (zero custo, zero latência extra)
   let parserMessages: string[] = [respostaFinal];
   let parserPausou = false;
 
   if (respostaFinal) {
-    if (sinalPausa !== '251213' && respostaFinal.includes(sinalPausa)) {
-      parserPausou = true;
-      respostaFinal = respostaFinal.replace(sinalPausa, '').trim();
-    }
-    const parsed = await parsearResposta(respostaFinal, provider, modelo);
+    const parsed = parsearRespostaNativo(respostaFinal, sinalPausa);
     parserMessages = parsed.messages;
-    if (parsed.pausar) parserPausou = true;
+    parserPausou = parsed.pausar;
     if (parserPausou) pausaAtivada = true;
-    // Usa o texto limpo (sem 251213) para salvar no histórico
     respostaFinal = parserMessages.join('\n\n');
   }
 
-  // 10. Persistir histórico (formato n8n Langchain)
-  await salvarHistorico(pool, entrada.telefone, userIdFinal, entrada.instancia, 'user', textoFinal);
+  // 10. Persistir histórico — session_id sempre dígitos puros
+  await salvarHistorico(pool, histSessionId, userIdFinal, entrada.instancia, 'user', textoFinal);
   if (respostaFinal) {
-    await salvarHistorico(pool, entrada.telefone, userIdFinal, entrada.instancia, 'assistant', respostaFinal);
+    await salvarHistorico(pool, histSessionId, userIdFinal, entrada.instancia, 'assistant', respostaFinal);
   }
 
   // 11. Persistir em whatsapp_messages para o painel de chat
@@ -502,7 +505,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         `SELECT message FROM n8n_chat_histories
          WHERE session_id = $1 AND user_id = $2
          ORDER BY created_at DESC LIMIT 10`,
-        [entrada.telefone, userIdFinal]
+        [histSessionId, userIdFinal]
       ).catch(() => ({ rows: [] as any[] }));
 
       const resumo = historicoRes.rows
@@ -534,6 +537,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
 
   console.log(`[ENGINE] ✓ ${entrada.telefone} | ${providerSlug}/${modelo} | msgs: ${parserMessages.length} | pausa: ${pausaAtivada}`);
+
+  } finally {
+    // Liberar lock independente de sucesso ou erro
+    atendimentosAtivos.delete(lockKey);
+  }
 }
 
 // ── Debounce — agrupa mensagens picotadas do mesmo contato ───────────────────

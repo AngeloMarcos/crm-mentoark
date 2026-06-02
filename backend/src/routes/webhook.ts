@@ -11,7 +11,14 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import crypto from 'crypto';
-import { processarComDebounce, botMessageIds } from '../services/agentEngine';
+import fs from 'fs';
+import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
+
+function wlog(tag: string, msg: string) {
+  const line = `[${new Date().toISOString()}] [${tag}] ${msg}`;
+  console.log(line);
+  try { fs.appendFileSync('/opt/crm/backend/log_geral.txt', line + '\n'); } catch {}
+}
 
 function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
   const assinaturaRecebida = req.headers['x-evolution-hmac'] as string;
@@ -192,9 +199,11 @@ export default function webhookRouter(pool: Pool): Router {
       const fromMe     = payload.data?.key?.fromMe === true;
 
       // ── Busca agente UMA VEZ com fallbacks ───────────────────────────────────
+      // Aceita tanto o ID completo (crm_435ee4720fc3) quanto o nome amigável (Mento, Cris)
       const agenteRes = await pool.query(
         `SELECT user_id, id as agente_id FROM agentes
-         WHERE LOWER(evolution_instancia) = LOWER($1) AND ativo = true AND user_id IS NOT NULL
+         WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
+           AND ativo = true AND user_id IS NOT NULL
          ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       );
@@ -239,24 +248,44 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // Log de diagnóstico de mapeamento
-      console.log(`[WEBHOOK] userId=${userId} | temAgente=${temAgente} | instancia="${instancia}"`);
+      wlog('WEBHOOK', `userId=${userId} | temAgente=${temAgente} | instancia="${instancia}"`);
       if (userId && !temAgente) {
         const agentesDoUser = await pool.query(
           `SELECT nome, evolution_instancia, ativo FROM agentes WHERE user_id = $1`,
           [userId]
         ).catch(() => ({ rows: [] as any[] }));
-        console.log(`[WEBHOOK] Agentes do user:`, JSON.stringify(agentesDoUser.rows));
+        wlog('WEBHOOK', `Agentes do user: ${JSON.stringify(agentesDoUser.rows)}`);
       }
 
       // ── Mensagens do atendente (fromMe=true) → pausar IA ou reativar ─────────
       if (fromMe) {
-        // Correção 2 — antiloop: ignorar respostas enviadas pelo próprio bot
+        // Proteção multicamada contra falso-positivo humano
+        // (cobre atrasos de rede: o ID pode chegar depois do botMessageIds já ter sido limpo)
         if (messageId.startsWith('resp_') || messageId.startsWith('manual_')) {
-          console.log(`[WEBHOOK] Mensagem de bot (prefixo) ignorada: ${messageId}`);
+          wlog('WEBHOOK_ANTILOOP', `Prefixo de bot detectado — ignorando: ${messageId}`);
           return;
         }
         if (botMessageIds.has(messageId)) {
-          console.log(`[WEBHOOK] Mensagem de bot (botMessageIds) ignorada — antiloop: ${messageId}`);
+          wlog('WEBHOOK_ANTILOOP', `ID de bot no registro — antiloop: ${messageId}`);
+          return;
+        }
+        const textoFromMeAntiloop = extrairTexto(payload.data);
+        if (textoFromMeAntiloop) {
+          const tk1 = `${telefone}:${textoFromMeAntiloop}`;
+          const tk2 = `${telefone}:${textoFromMeAntiloop.trim()}`;
+          if (botSentTexts.has(tk1) || botSentTexts.has(tk2)) {
+            wlog('WEBHOOK_ANTILOOP', `Conteúdo de bot detectado — antiloop por texto: ${messageId}`);
+            return;
+          }
+        }
+        // Proteção extra: mensagens muito recentes (< 5s) com ID no padrão WA real (3EB...) e timestamp recente
+        // são provavelmente ecos do bot; verificar no banco se já temos esse messageId como from_me=true
+        const jaExisteBot = await pool.query(
+          `SELECT 1 FROM whatsapp_messages WHERE message_id = $1 AND from_me = true LIMIT 1`,
+          [messageId]
+        ).catch(() => ({ rows: [] }));
+        if (jaExisteBot.rows.length) {
+          wlog('WEBHOOK_ANTILOOP', `Mensagem de bot já salva no banco — ignorando: ${messageId}`);
           return;
         }
         if (isGroup) return;
@@ -303,10 +332,19 @@ export default function webhookRouter(pool: Pool): Router {
             }).catch(() => {});
 
             await pool.query(
-              `UPDATE dados_cliente SET atendimento_ia = 'pause'
-               WHERE user_id = $1 AND telefone ILIKE $2`,
-              [userId, `%${telefone.slice(-11)}`]
-            ).catch(() => {});
+              `INSERT INTO dados_cliente (user_id, telefone, atendimento_ia, pausa_timestamp)
+               VALUES ($1, $2, 'pause', NOW())
+               ON CONFLICT (user_id, telefone) DO UPDATE
+                 SET atendimento_ia = 'pause', pausa_timestamp = NOW()`,
+              [userId, telefone]
+            ).catch(() =>
+              // fallback sem UPSERT caso não exista constraint única
+              pool.query(
+                `UPDATE dados_cliente SET atendimento_ia = 'pause', pausa_timestamp = NOW()
+                 WHERE user_id = $1 AND telefone ILIKE $2`,
+                [userId, `%${telefone.slice(-11)}`]
+              ).catch(() => {})
+            );
 
             console.log(`[WEBHOOK HUMAN INTERVENTION] ${telefone} → IA pausada | msg: "${(textoFromMe || '').slice(0, 60)}"`);
           }
@@ -470,7 +508,7 @@ export default function webhookRouter(pool: Pool): Router {
 
       // ── Motor IA (apenas para contatos individuais) ───────────────────────────
       if (!userId) {
-        console.warn(`[WEBHOOK] Nenhum userId encontrado para instância: ${instancia}`);
+        wlog('WEBHOOK_REJECT', `NENHUM userId para instância: "${instancia}" — mensagem descartada`);
         return;
       }
       // Grupos não disparam IA automaticamente

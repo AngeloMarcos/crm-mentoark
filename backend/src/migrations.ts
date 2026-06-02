@@ -1180,5 +1180,21 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   console.log('[MIGRATIONS] whatsapp_message_status + patches OK');
 
+  // ── Colunas de configuração avançada de agentes (modo de operação, distribuição, etc.) ──
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS operation_mode    TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS distribution_mode BOOLEAN DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS score_fatores     JSONB`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS prompt_sistema    TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ativo_horario     BOOLEAN DEFAULT true`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS horario_inicio    TIME`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS horario_fim       TIME`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS dias_semana       TEXT[]`).catch(() => {});
+
+  await pool.query(`ALTER TABLE agentes       ADD COLUMN IF NOT EXISTS auto_distribute  BOOLEAN DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes       ADD COLUMN IF NOT EXISTS linked_agent_id  UUID`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_prompts ADD COLUMN IF NOT EXISTS updated_at       TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
+
+  console.log('[MIGRATIONS] agentes advanced columns OK');
+
   console.log('[MIGRATIONS] OK');
 }

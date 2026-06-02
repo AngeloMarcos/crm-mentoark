@@ -141,12 +141,14 @@ export async function executarFerramenta(
 
       case 'buscar_historico': {
         const limite = Math.min(args.limite || 10, 30);
+        // Garantir session_id sempre com dígitos puros (sem @s.whatsapp.net)
+        const sessionPhone = String(args.telefone || '').replace(/\D/g, '');
         const r = await pool.query(
           `SELECT message->>'role' as role, message->>'content' as content, created_at
            FROM n8n_chat_histories
            WHERE session_id = $1 AND user_id = $2
            ORDER BY created_at DESC LIMIT $3`,
-          [args.telefone, userId, limite]
+          [sessionPhone, userId, limite]
         );
         if (!r.rows.length) return 'Sem histórico anterior com este contato.';
         return r.rows.reverse()
