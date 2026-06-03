@@ -227,6 +227,11 @@ export default function IntegracoesPage() {
       toast.error("URL, API Key e Nome da Instância são obrigatórios para Evolution");
       return;
     }
+    if (form.tipo === "evolution" && /fierceparrot/i.test(form.url)) {
+      toast.error("Este servidor foi desativado. Use disparo.mentoark.com.br");
+      return;
+    }
+
     setSaving(true);
     try {
       const body = {
@@ -560,14 +565,20 @@ export default function IntegracoesPage() {
 
             {["evolution", "n8n", "webhook_in", "webhook_out", "database_vector"].includes(form.tipo) && (
               <div className="space-y-1.5">
-                <Label>URL</Label>
+                <Label>URL{form.tipo === "evolution" && " (Servidor Evolution)"}</Label>
                 <Input
                   value={form.url}
                   onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
-                  placeholder="https://..."
+                  placeholder={form.tipo === "evolution" ? "https://disparo.mentoark.com.br" : "https://..."}
                 />
+                {form.tipo === "evolution" && /fierceparrot/i.test(form.url) && (
+                  <p className="text-xs text-destructive">
+                    Este servidor foi desativado. Use disparo.mentoark.com.br
+                  </p>
+                )}
               </div>
             )}
+
 
             {["evolution", "openai", "gemini", "elevenlabs", "meta_ads", "telegram", "instagram", "database_vector", "google_places"].includes(form.tipo) && (
               <div className="space-y-1.5">
