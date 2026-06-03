@@ -1,56 +1,60 @@
-import { Component, ErrorInfo, ReactNode } from "react";
+import React, { Component, ErrorInfo, ReactNode } from "react";
+import { AlertTriangle, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 
 interface Props {
   children: ReactNode;
+  fallback?: ReactNode;
+  name?: string;
 }
+
 interface State {
   hasError: boolean;
-  error: Error | null;
+  error?: Error;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  constructor(props: Props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
+  public state: State = {
+    hasError: false,
+  };
 
-  static getDerivedStateFromError(error: Error): State {
+  public static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("ErrorBoundary caught:", error, info);
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error(`Error in ${this.props.name || "Component"}:`, error, errorInfo);
   }
 
-  handleReload = () => {
-    this.setState({ hasError: false, error: null });
-    window.location.reload();
-  };
-
-  render() {
+  public render() {
     if (this.state.hasError) {
+      if (this.props.fallback) return this.props.fallback;
+
       return (
-        <div className="min-h-[60vh] flex items-center justify-center p-6">
-          <div className="glass card-gradient-border max-w-md w-full p-8 text-center space-y-4">
-            <div className="mx-auto w-14 h-14 rounded-full bg-destructive/15 text-destructive flex items-center justify-center">
-              <AlertTriangle className="h-7 w-7" />
-            </div>
+        <Card className="border-destructive/50 bg-destructive/5 my-4">
+          <CardContent className="pt-6 pb-6 flex flex-col items-center text-center space-y-3">
+            <AlertTriangle className="h-10 w-10 text-destructive" />
             <div className="space-y-1">
-              <h2 className="text-xl font-bold">Algo deu errado</h2>
-              <p className="text-sm text-muted-foreground">
-                {this.state.error?.message ??
-                  "Erro inesperado. Tente recarregar a página."}
+              <h3 className="font-semibold text-lg text-destructive">Algo deu errado</h3>
+              <p className="text-sm text-muted-foreground max-w-xs mx-auto">
+                {this.props.name ? `Ocorreu um erro no módulo ${this.props.name}.` : "Não foi possível carregar este componente."}
               </p>
             </div>
-            <Button onClick={this.handleReload} className="w-full">
-              Recarregar página
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => this.setState({ hasError: false })}
+              className="gap-2"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              Tentar novamente
             </Button>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       );
     }
+
     return this.props.children;
   }
 }
