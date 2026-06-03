@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 
 // Default Evolution server (VPS local — disparo.mentoark.com.br)
 const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
@@ -21,15 +22,16 @@ function webhookPayload() {
 // Registra (ou atualiza) o webhook da instância no Evolution.
 // Idempotente — pode ser chamado várias vezes sem efeito colateral.
 async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
+  const cleanBase = sanitizeEvolutionUrl(base);
   try {
-    const res = await fetch(`${base}/webhook/set/${instancia}`, {
+    const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
       body: JSON.stringify({ webhook: webhookPayload() }),
     });
     if (!res.ok) {
       // Algumas versões aceitam payload flat em vez de aninhado
-      await fetch(`${base}/webhook/set/${instancia}`, {
+      await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: apiKey },
         body: JSON.stringify(webhookPayload()),
@@ -986,16 +988,16 @@ export default function whatsappRouter(pool: Pool): Router {
 
         const targetUrl = `${base}/message/${endpoint}/${instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
-        let evoRes: Awaited<ReturnType<typeof fetch>>;
+        let evoRes: Response;
         try {
-          evoRes = await fetch(targetUrl, {
+          evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
             body: JSON.stringify(mediaPayload),
           });
         } catch (err: any) {
-          console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (mídia):', err.message, err.response?.data);
-          throw err;
+          console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (mídia):', err.message);
+          return res.status(502).json({ message: `Sem resposta da Evolution API: ${err.message}` });
         }
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
@@ -1007,16 +1009,16 @@ export default function whatsappRouter(pool: Pool): Router {
         // Envio de texto
         const targetUrl = `${base}/message/sendText/${instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
-        let evoRes: Awaited<ReturnType<typeof fetch>>;
+        let evoRes: Response;
         try {
-          evoRes = await fetch(targetUrl, {
+          evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
             body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
           });
         } catch (err: any) {
-          console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message, err.response?.data);
-          throw err;
+          console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message);
+          return res.status(502).json({ message: `Sem resposta da Evolution API: ${err.message}` });
         }
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));

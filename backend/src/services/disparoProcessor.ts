@@ -1,5 +1,7 @@
+import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
 import { botSentTexts, botMessageIds } from './agentEngine';
+import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -60,20 +62,29 @@ export async function processarDisparos(pool: Pool) {
         const api_key = config?.api_key || process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
         const instancia = config?.instancia || `crm_${String(user_id).slice(0, 8)}`;
         
-        const baseUrl = url.replace(/\/$/, '');
+        const baseUrl = sanitizeEvolutionUrl(url);
 
 
         // 3. Normalizar telefone
         const digits = telefone.replace(/\D/g, '');
 
-        // 3.1. Humanizar mensagem via Claude se a campanha tiver a flag ligada
+        // 3.1. Humanizar mensagem via IA — withAiFallback garante que erros 401/429
+        //      não travam o disparo; a mensagem original é usada como contingência.
         let textoFinal: string = mensagem;
         let legendaFinal: string = legenda_midia || mensagem;
         if (await deveHumanizar(pool, disparo_id)) {
           if (tipo_midia === 'texto' || !tipo_midia) {
-            textoFinal = await humanizarMensagem(mensagem);
+            textoFinal = await withAiFallback(
+              () => humanizarMensagem(mensagem),
+              mensagem,
+              'humanizarMensagem(texto)',
+            );
           } else if (legenda_midia) {
-            legendaFinal = await humanizarMensagem(legenda_midia);
+            legendaFinal = await withAiFallback(
+              () => humanizarMensagem(legenda_midia),
+              legenda_midia,
+              'humanizarMensagem(legenda)',
+            );
           }
         }
 
@@ -125,7 +136,7 @@ export async function processarDisparos(pool: Pool) {
           }
         }, 120_000);
 
-        const resp = await fetch(endpoint, {
+        const resp = await evolutionFetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', apikey: api_key },
           body: JSON.stringify(body),

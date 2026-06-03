@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { Pool } from 'pg';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
+import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
 
 // Cliente global — usado como fallback; substituído pela chave do banco sempre que possível
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -104,7 +105,7 @@ async function enviarResposta(
   serverUrl: string, apiKey: string,
   instancia: string, telefone: string, texto: string
 ): Promise<void> {
-  const base = serverUrl.replace(/\/$/, '');
+  const base = sanitizeEvolutionUrl(serverUrl);
 
   // Registra o conteúdo ANTES de enviar para evitar condição de corrida no antiloop
   const textKey = `${telefone}:${texto}`;
@@ -113,7 +114,7 @@ async function enviarResposta(
   botSentTexts.add(textKeyTrimmed);
   setTimeout(() => { botSentTexts.delete(textKey); botSentTexts.delete(textKeyTrimmed); }, 120_000);
 
-  const r = await fetch(`${base}/message/sendText/${instancia}`, {
+  const r = await evolutionFetch(`${base}/message/sendText/${instancia}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: apiKey },
     body: JSON.stringify({ number: telefone, text: texto, delay: 1200 }),
@@ -376,11 +377,19 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
     console.log(`[ENGINE LLM CALL] iter=${iter} | modelo=${modelo} | histLen=${mensagens.length} | telefone=${entrada.telefone}`);
-    const resp = await provider.complete(mensagens, systemPrompt, MCP_TOOLS, {
-      model: modelo,
-      temperature: Number(agente.temperatura) || 0.7,
-      maxTokens: agente.max_tokens || 1024,
-    });
+    const resp = await withAiFallback(
+      () => provider.complete(mensagens, systemPrompt, MCP_TOOLS, {
+        model: modelo,
+        temperature: Number(agente.temperatura) || 0.7,
+        maxTokens: agente.max_tokens || 1024,
+      }),
+      null,   // fallback: null → engine detecta e sai do loop
+      `ENGINE provider.complete (${modelo})`,
+    );
+    if (!resp) {
+      console.warn(`[ENGINE] Provider retornou fallback (401/429) — abortando processamento para ${entrada.telefone}`);
+      return;
+    }
 
     tokensEntrada += resp.inputTokens;
     tokensSaida += resp.outputTokens;
