@@ -7,7 +7,7 @@ import {
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
   Activity, Webhook, Database, Sparkles,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/mentoark-logo.png";
 import { NavLink } from "@/components/NavLink";
