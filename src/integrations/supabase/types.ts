@@ -19,6 +19,9 @@ export type Database = {
           ativo: boolean | null
           bloco_qualificacao: string | null
           created_at: string | null
+          evolution_api_key: string | null
+          evolution_instancia: string | null
+          evolution_server_url: string | null
           grupo_notificacao: string | null
           id: string
           mensagem_encaminhamento: string | null
@@ -39,6 +42,9 @@ export type Database = {
           ativo?: boolean | null
           bloco_qualificacao?: string | null
           created_at?: string | null
+          evolution_api_key?: string | null
+          evolution_instancia?: string | null
+          evolution_server_url?: string | null
           grupo_notificacao?: string | null
           id?: string
           mensagem_encaminhamento?: string | null
@@ -59,6 +65,9 @@ export type Database = {
           ativo?: boolean | null
           bloco_qualificacao?: string | null
           created_at?: string | null
+          evolution_api_key?: string | null
+          evolution_instancia?: string | null
+          evolution_server_url?: string | null
           grupo_notificacao?: string | null
           id?: string
           mensagem_encaminhamento?: string | null
