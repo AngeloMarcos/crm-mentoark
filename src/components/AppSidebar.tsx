@@ -210,6 +210,30 @@ function isRouteActive(pathname: string, url: string) {
   return pathname === base || pathname.startsWith(base + "/");
 }
 
+function ExternalHealthBadge({ url }: { url: string }) {
+  const [status, setStatus] = useState<"checking" | "online" | "pending">("checking");
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 4000);
+    fetch(url, { mode: "no-cors", signal: controller.signal })
+      .then(() => { if (!cancelled) setStatus("online"); })
+      .catch(() => { if (!cancelled) setStatus("pending"); })
+      .finally(() => clearTimeout(t));
+    return () => { cancelled = true; controller.abort(); };
+  }, [url]);
+  if (status === "checking") return null;
+  return status === "online" ? (
+    <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
+      Online
+    </span>
+  ) : (
+    <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500 border border-amber-500/30">
+      DNS pendente
+    </span>
+  );
+
+
 // ── Subgrupo colapsável ───────────────────────────────────────────────────────
 
 function NavSubgroupSection({
