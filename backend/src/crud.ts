@@ -11,6 +11,28 @@ export interface CrudOptions {
 
 const RESERVED_PARAMS = new Set(['order', 'asc', 'limit', 'page', 'head', 'select', 'count']);
 
+/**
+ * Resolve o userId efetivo para o scoping da query.
+ * Admin recebe null → buildWhere não adiciona cláusula user_id,
+ * dando acesso a todas as linhas da tabela.
+ * Usuário comum recebe req.userId (comportamento original).
+ */
+function resolveUserId(req: AuthRequest, userIdCol: string | null | undefined): string | null {
+  if (!userIdCol) return null;
+  if (req.userRole === 'admin') return null;   // bypass: admin vê/edita tudo
+  return req.userId ?? null;
+}
+
+/**
+ * Retorna true quando a request tem autorização para prosseguir.
+ * Admin sempre passa; usuário comum precisa ter userId no token.
+ */
+function hasAccess(req: AuthRequest, userIdCol: string | null | undefined, userId: string | null): boolean {
+  if (!userIdCol) return true;
+  if (req.userRole === 'admin') return true;
+  return !!userId;
+}
+
 function buildWhere(
   query: Record<string, any>,
   userIdCol: string | null,
@@ -99,8 +121,8 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // GET all (with optional count=only)
   router.get('/', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = userIdCol ? req.userId ?? null : null;
-    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
+    const userId = resolveUserId(req, userIdCol);
+    if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
     const { conditions, params, nextIdx } = buildWhere(req.query as any, userIdCol, userId);
 
     const whereClause = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
@@ -142,8 +164,8 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // GET by id
   router.get('/:id', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = userIdCol ? req.userId ?? null : null;
-    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
+    const userId = resolveUserId(req, userIdCol);
+    if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
     const params: any[] = [req.params.id];
     let sql = `SELECT * FROM ${tableName} WHERE ${idCol} = $1`;
     if (userIdCol && userId) {
@@ -157,7 +179,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // POST (create single or bulk)
   router.post('/', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = userIdCol ? req.userId ?? null : null;
+    const userId = resolveUserId(req, userIdCol);
     const items: any[] = Array.isArray(req.body) ? req.body : [req.body];
     if (!items.length) return res.status(201).json([]);
 
@@ -208,7 +230,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // PUT /:id (update by primary key)
   router.put('/:id', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = userIdCol ? req.userId ?? null : null;
+    const userId = resolveUserId(req, userIdCol);
     const data: any = sanitize({ ...req.body });
     delete data[idCol];
     delete data[userIdCol ?? ''];
@@ -235,8 +257,8 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // PUT / (bulk update with query filters)
   router.put('/', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = userIdCol ? req.userId ?? null : null;
-    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
+    const userId = resolveUserId(req, userIdCol);
+    if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
     const { conditions, params: whereParams, nextIdx } = buildWhere(req.query as any, userIdCol, userId);
 
     if (!conditions.length) {
@@ -262,9 +284,8 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // DELETE /:id
   router.delete('/:id', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = userIdCol ? req.userId ?? null : null;
-    // Segurança: nunca executar sem userId em tabelas protegidas
-    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
+    const userId = resolveUserId(req, userIdCol);
+    if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
     const params: any[] = [req.params.id];
     let sql = `DELETE FROM ${tableName} WHERE ${idCol} = $1`;
     if (userIdCol && userId) {
@@ -277,8 +298,8 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // DELETE / (bulk delete por filtros de query string)
   router.delete('/', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = userIdCol ? req.userId ?? null : null;
-    if (userIdCol && !userId) return res.status(401).json({ message: 'userId ausente' });
+    const userId = resolveUserId(req, userIdCol);
+    if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
 
     const { conditions, params } = buildWhere(req.query as any, userIdCol, userId);
 
