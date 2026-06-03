@@ -89,7 +89,14 @@ const AI_PROVIDERS = [
   { slug: "gemini",  label: "Google Gemini",   icon: Zap,      modelos: ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"] },
 ] as const;
 
-const EMPTY_FORM = { tipo: "evolution", nome: "", url: "", api_key: "", instancia: "", status: "inativo" as Status };
+const EMPTY_FORM = { 
+  tipo: "evolution", 
+  nome: "", 
+  url: "https://disparo.mentoark.com.br", 
+  api_key: "mentoark2025evolutionkey", 
+  instancia: "crm_435ee4720fc3", 
+  status: "inativo" as Status 
+};
 
 function StatusBadge({ status }: { status: Status }) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.inativo;

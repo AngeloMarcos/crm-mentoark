@@ -60,6 +60,12 @@ const navGroups: NavGroup[] = [
           { title: "Central de BI", url: "/bi", icon: BarChart3, modulo: "dashboard", color: "text-cyan-500" },
         ],
       },
+    ],
+  },
+  {
+    label: "🛡️ SUPER ADMIN",
+    adminOnly: true,
+    subgroups: [
       {
         label: "Infraestrutura",
         icon: ShieldCheck,

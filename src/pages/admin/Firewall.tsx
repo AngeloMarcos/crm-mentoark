@@ -133,15 +133,13 @@ export default function FirewallPage() {
             <h1 className="text-2xl font-bold">Firewall de Rede</h1>
           </div>
           <div className="flex gap-2">
-            {config?.modo_simulacao && (
-              <Badge className="bg-emerald-600 hover:bg-emerald-600 text-white">
-                Simulação Ativa
-              </Badge>
-            )}
+            <Badge className="bg-emerald-600 hover:bg-emerald-600 text-white">
+              Simulação Ativa
+            </Badge>
             {config?.firewall_ligado ? (
               <Badge variant="destructive">Firewall Ligado</Badge>
             ) : (
-              <Badge variant="secondary">Firewall Desligado</Badge>
+              <Badge variant="secondary" className="bg-slate-200 text-slate-600">Firewall Desligado</Badge>
             )}
           </div>
         </div>
