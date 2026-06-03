@@ -115,7 +115,7 @@ export const BuscarContatoArgsSchema = z.object({
 }).refine(
   obj => obj.telefone || obj.nome,
   'Pelo menos telefone ou nome é obrigatório'
-).strict();
+);
 
 export type BuscarContatoArgs = z.infer<typeof BuscarContatoArgsSchema>;
 
@@ -153,7 +153,7 @@ export const BuscarProdutosArgsSchema = z.object({
 }).refine(
   obj => !obj.preco_min || !obj.preco_max || obj.preco_min <= obj.preco_max,
   'preco_min deve ser menor ou igual a preco_max'
-).strict();
+);
 
 export type BuscarProdutosArgs = z.infer<typeof BuscarProdutosArgsSchema>;
 

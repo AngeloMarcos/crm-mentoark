@@ -24,7 +24,6 @@ import { Pool } from 'pg';
 import OpenAI from 'openai';
 import type { AuthRequest } from '../middleware';
 import {
-  parseAndValidateArgs,
   validateUserIdIsolation,
   validateNoDestructiveSql,
   createSuccessResult,
@@ -32,7 +31,6 @@ import {
   VerificarStatusSistemaArgsSchema,
   AtualizarUrlIntegracaoArgsSchema,
   ReativarIaContatoArgsSchema,
-  DESTRUCTIVE_SQL_KEYWORDS,
 } from '../services/functionCallingSecurity';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -155,25 +153,6 @@ interface ToolResult {
   error?: string;
 }
 
-/**
- * Bloqueia explicitamente comandos SQL destructivos.
- * Causa: proteger contra injection de SQL via argumentos de função.
- * Garantia: + proteção de placeholders paramétricos ($1, $2...) que já estão nos queries.
- */
-function checkNoDestructiveSql(args: Record<string, unknown>): void {
-  for (const [key, value] of Object.entries(args)) {
-    if (typeof value !== 'string') continue;
-    const upper = value.toUpperCase();
-    for (const keyword of DESTRUCTIVE_SQL_KEYWORDS) {
-      if (upper.includes(keyword)) {
-        throw new Error(
-          `SEGURANÇA: Argumento "${key}" contém comando SQL perigoso "${keyword}". ` +
-          `Operações destructivas (DROP TABLE, DELETE, TRUNCATE, etc.) são bloqueadas.`
-        );
-      }
-    }
-  }
-}
 
 async function executarFerramenta(
   pool: Pool,
@@ -191,10 +170,7 @@ async function executarFerramenta(
     }
 
     // Validação de segurança: bloqueia comandos SQL destrutivos nos argumentos
-    checkNoDestructiveSql(args);
-  } catch (err: any) {
-    return createErrorResult(err.message || 'Validação de segurança falhou');
-  }
+    validateNoDestructiveSql(args);
 
   switch (nomeFerramenta) {
     // ── verificar_status_sistema ──────────────────────────────────────────────
@@ -377,11 +353,10 @@ async function executarFerramenta(
     default:
       return createErrorResult(`Ferramenta não implementada: "${nomeFerramenta}"`);
   }
-} catch (err: any) {
-  // Erro não capturado na validação inicial — bloqueia com log
-  console.error('[SUPORTE FERRAMENTA ERROR]', err.message);
-  return createErrorResult(`Erro ao executar ferramenta: ${err.message}`);
-}
+  } catch (err: any) {
+    console.error('[SUPORTE FERRAMENTA ERROR]', err.message);
+    return createErrorResult(`Erro ao executar ferramenta: ${err.message}`);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
