@@ -232,6 +232,9 @@ function ExternalHealthBadge({ url }: { url: string }) {
       DNS pendente
     </span>
   );
+}
+
+
 
 
 // ── Subgrupo colapsável ───────────────────────────────────────────────────────
