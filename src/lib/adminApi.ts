@@ -101,6 +101,10 @@ export async function adminFetch<T = any>(
   }
 
   if (res.status === 503) {
+    const msg = parsed?.message || "Serviço indisponível";
+    if (!silent) toast.error(msg);
+    throw new AdminApiError(503, msg, parsed);
+  }
 
   if (!res.ok) {
     const msg = parsed?.message || parsed?.error || `Erro ${res.status}`;
