@@ -52,6 +52,14 @@ export default function CopilotoPage() {
       { role: "assistant", content: "", pending: true },
     ]);
     setLoading(true);
+    setLoadingProgress(0);
+    const interval = setInterval(() => {
+      setLoadingProgress(prev => {
+        if (prev >= 95) return prev;
+        return prev + (100 / 40); // 10s base
+      });
+    }, 250);
+
     try {
       const res = await adminFetch<{
         resposta: string;
@@ -80,6 +88,8 @@ export default function CopilotoPage() {
       });
     } finally {
       setLoading(false);
+      setLoadingProgress(100);
+      clearInterval(interval);
     }
   };
 
@@ -176,7 +186,18 @@ function MessageBubble({ msg }: { msg: Msg }) {
       <div className="max-w-[80%] space-y-2">
         <div className="rounded-2xl rounded-bl-sm bg-muted px-4 py-2.5">
           {msg.pending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <div className="flex flex-col gap-2 py-2 min-w-[200px]">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-xs font-medium">Analisando infraestrutura...</span>
+              </div>
+              <div className="w-full bg-primary/10 h-1 rounded-full overflow-hidden">
+                <div 
+                  className="bg-primary h-full transition-all duration-300" 
+                  style={{ width: `${loadingProgress}%` }}
+                />
+              </div>
+            </div>
           ) : (
             <div className="prose prose-sm dark:prose-invert max-w-none [&_p]:my-1">
               <ReactMarkdown>{msg.content}</ReactMarkdown>
