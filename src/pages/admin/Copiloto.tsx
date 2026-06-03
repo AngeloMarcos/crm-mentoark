@@ -36,6 +36,7 @@ export default function CopilotoPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,10 +54,11 @@ export default function CopilotoPage() {
     ]);
     setLoading(true);
     setLoadingProgress(0);
+    
     const interval = setInterval(() => {
       setLoadingProgress(prev => {
         if (prev >= 95) return prev;
-        return prev + (100 / 40); // 10s base
+        return prev + (100 / 40); // Slower progress for long operations
       });
     }, 250);
 
@@ -121,7 +123,7 @@ export default function CopilotoPage() {
             </div>
           )}
           {messages.map((m, i) => (
-            <MessageBubble key={i} msg={m} />
+            <MessageBubble key={i} msg={m} loadingProgress={loadingProgress} />
           ))}
         </div>
 
@@ -165,7 +167,7 @@ export default function CopilotoPage() {
   );
 }
 
-function MessageBubble({ msg }: { msg: Msg }) {
+function MessageBubble({ msg, loadingProgress }: { msg: Msg; loadingProgress: number }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end gap-2">
