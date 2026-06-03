@@ -26,7 +26,10 @@ interface NavItem {
   modulo: string;
   color: string;
   adminOnly?: boolean;
+  external?: boolean;
+  healthCheck?: string;
 }
+
 
 interface NavSubgroup {
   label: string;
@@ -179,7 +182,25 @@ const navGroups: NavGroup[] = [
       },
     ],
   },
+  {
+    label: "🛡️ SUPER ADMIN",
+    adminOnly: true,
+    subgroups: [
+      {
+        label: "Infraestrutura",
+        icon: ShieldCheck,
+        color: "text-red-500",
+        adminOnly: true,
+        items: [
+          { title: "Firewall", url: "/admin/firewall", icon: ShieldCheck, modulo: "usuarios", color: "text-red-500", adminOnly: true },
+          { title: "Copiloto", url: "/admin/copiloto", icon: Sparkles, modulo: "usuarios", color: "text-violet-500", adminOnly: true },
+          { title: "Mentoark AI", url: "https://ai.mentoark.com.br", icon: Bot, modulo: "usuarios", color: "text-emerald-500", adminOnly: true, external: true, healthCheck: "https://ai.mentoark.com.br/health" },
+        ],
+      },
+    ],
+  },
 ];
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
