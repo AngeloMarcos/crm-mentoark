@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { authHeader } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -153,7 +154,8 @@ export default function IntegracoesPage() {
     try {
       const res = await fetch(`${API_URL}/api/integracoes_config`, { headers: authHeader() });
       if (!res.ok) throw new Error("Erro ao carregar");
-      setRows(await res.json());
+      const data = await res.json();
+      setRows(Array.isArray(data) ? data : (data?.items ?? []));
     } catch (e: any) {
       toast.error(e.message);
     } finally {
@@ -230,13 +232,19 @@ export default function IntegracoesPage() {
 
   const salvar = async () => {
     if (!form.nome.trim()) { toast.error("Nome é obrigatório"); return; }
-    if (form.tipo === "evolution" && (!form.url || !form.api_key || !form.instancia)) {
-      toast.error("URL, API Key e Nome da Instância são obrigatórios para Evolution");
-      return;
-    }
-    if (form.tipo === "evolution" && /fierceparrot/i.test(form.url)) {
-      toast.error("Este servidor foi desativado. Use disparo.mentoark.com.br");
-      return;
+    if (form.tipo === "evolution") {
+      if (!form.url || !form.api_key || !form.instancia) {
+        toast.error("URL, API Key e Nome da Instância são obrigatórios para Evolution");
+        return;
+      }
+      if (/[^a-zA-Z0-9-._~:/?#[\]@!$&'()*+,;=%]/.test(form.url) || /\s/.test(form.url)) {
+        toast.error("A URL do servidor contém caracteres inválidos ou espaços");
+        return;
+      }
+      if (/fierceparrot/i.test(form.url)) {
+        toast.error("Este servidor foi desativado. Use disparo.mentoark.com.br");
+        return;
+      }
     }
 
     setSaving(true);
@@ -335,12 +343,13 @@ export default function IntegracoesPage() {
     }
   };
 
-  const evolutionRows = rows.filter(r => r.tipo === "evolution");
-  const otherRows = rows.filter(r => r.tipo !== "evolution");
+  const evolutionRows = useMemo(() => rows.filter(r => r?.tipo === "evolution"), [rows]);
+  const otherRows = useMemo(() => rows.filter(r => r?.tipo !== "evolution"), [rows]);
 
   return (
     <CRMLayout>
-      <div className="space-y-6">
+      <ErrorBoundary name="Conectores">
+        <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Conectores</h1>
