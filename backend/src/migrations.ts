@@ -1260,71 +1260,60 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // INVARIANTE DE SEGURANÇA OPERACIONAL:
   //   firewall_ligado  DEFAULT false → bypass total por padrão
   //   modo_simulacao   DEFAULT true  → nunca bloqueia, só registra
-  //
-  // Qualquer middleware que leia firewall_config DEVE verificar
-  // firewall_ligado ANTES de qualquer lógica de bloqueio.
-  // Se firewall_ligado = false → retorno imediato sem inspecionar IPs.
-  // Se modo_simulacao  = true  → apenas log, nunca retorna 403.
-  // Isso garante que OpenAI, Evolution e todos os webhooks continuem
-  // funcionando enquanto o painel é construído e testado.
+  //   ativo            DEFAULT false → IPs precisam ser ativados explicitamente
 
-  // Tabela de IPs gerenciados pelo Super Admin
+  // Se firewall_ips ainda usa BIGSERIAL (versão anterior), recria com UUID
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'firewall_ips' AND column_name = 'id'
+          AND data_type IN ('integer', 'bigint')
+      ) THEN
+        DROP TABLE IF EXISTS firewall_ips;
+      END IF;
+    END $$;
+  `).catch(() => {});
+
+  // Tabela de IPs — id UUID conforme spec do painel Super Admin
   await pool.query(`
     CREATE TABLE IF NOT EXISTS firewall_ips (
-      id          BIGSERIAL    PRIMARY KEY,
-      ip          TEXT         NOT NULL,
-      tipo        TEXT         NOT NULL DEFAULT 'blocked'
-                               CHECK (tipo IN ('blocked', 'allowed', 'monitored')),
-      motivo      TEXT,
-      ativo       BOOLEAN      NOT NULL DEFAULT false,
-      criado_por  UUID         REFERENCES users(id) ON DELETE SET NULL,
-      created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      id         UUID         NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+      ip         VARCHAR(50)  NOT NULL,
+      tipo       TEXT         NOT NULL DEFAULT 'blocked'
+                              CHECK (tipo IN ('blocked', 'allowed', 'monitored')),
+      motivo     TEXT,
+      ativo      BOOLEAN      NOT NULL DEFAULT false,
+      criado_por UUID         REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
       UNIQUE (ip)
     )
   `).catch(() => {});
 
-  // Garante coluna ativo se a tabela já existia sem ela
-  await pool.query(`
-    ALTER TABLE firewall_ips
-      ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT false
-  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_firewall_ips_ativo ON firewall_ips (ip) WHERE ativo = true`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_firewall_ips_tipo  ON firewall_ips (tipo, ativo)`).catch(() => {});
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_firewall_ips_ip
-    ON firewall_ips (ip)
-    WHERE ativo = true
-  `).catch(() => {});
-
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_firewall_ips_tipo_ativo
-    ON firewall_ips (tipo, ativo)
-  `).catch(() => {});
-
-  // Tabela singleton de configuração global do firewall
+  // Tabela singleton de configuração global (id=1 sempre)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS firewall_config (
-      id               SERIAL       PRIMARY KEY,
-      firewall_ligado  BOOLEAN      NOT NULL DEFAULT false,
-      modo_simulacao   BOOLEAN      NOT NULL DEFAULT true,
-      updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      updated_by       UUID         REFERENCES users(id) ON DELETE SET NULL,
+      id              SERIAL      PRIMARY KEY,
+      firewall_ligado BOOLEAN     NOT NULL DEFAULT false,
+      modo_simulacao  BOOLEAN     NOT NULL DEFAULT true,
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by      UUID        REFERENCES users(id) ON DELETE SET NULL,
       CONSTRAINT chk_singleton CHECK (id = 1)
     )
   `).catch(() => {});
 
-  // Garante que a linha singleton existe com os valores seguros.
-  // ON CONFLICT DO NOTHING: não sobrescreve se admin já configurou.
+  await pool.query(`ALTER TABLE firewall_config ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
+
+  // Linha singleton — ON CONFLICT DO NOTHING preserva configuração existente
   await pool.query(`
     INSERT INTO firewall_config (id, firewall_ligado, modo_simulacao)
     VALUES (1, false, true)
     ON CONFLICT (id) DO NOTHING
-  `).catch(() => {});
-
-  // Garante as colunas se a tabela foi criada numa versão anterior sem elas
-  await pool.query(`
-    ALTER TABLE firewall_config
-      ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL
   `).catch(() => {});
 
   console.log('[MIGRATIONS] Super Admin firewall_ips + firewall_config OK');

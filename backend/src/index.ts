@@ -68,8 +68,8 @@ import aiProvidersRouter from './routes/ai-providers';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
-import suporteRouter from './routes/suporte';
-import adminInfraRouter, { createFirewallMiddleware } from './routes/admin_infra';
+import adminFirewallRouter, { createFirewallMiddleware } from './routes/admin_firewall';
+import suporteCopilotoRouter from './routes/suporte_copiloto';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -300,8 +300,8 @@ app.use('/api/ai-providers', aiProvidersRouter(pool));
 app.use('/api/ai', aiUsoRouter(pool));
 app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));
-app.use('/api/suporte', adminMiddleware, suporteRouter(pool));
-app.use('/api/admin/firewall', adminMiddleware, adminInfraRouter(pool));
+app.use('/api/suporte',        suporteCopilotoRouter(pool));
+app.use('/api/admin/firewall', adminFirewallRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
