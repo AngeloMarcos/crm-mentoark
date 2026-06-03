@@ -389,20 +389,60 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   let pausaAtivada = false;
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
-    console.log(`[ENGINE LLM CALL] iter=${iter} | modelo=${modelo} | histLen=${mensagens.length} | telefone=${entrada.telefone}`);
-    const resp = await withAiFallback(
-      () => provider.complete(mensagens, systemPrompt, MCP_TOOLS, {
-        model: modelo,
-        temperature: Number(agente.temperatura) || 0.7,
-        maxTokens: agente.max_tokens || 1024,
-      }),
-      null,   // fallback: null → engine detecta e sai do loop
-      `ENGINE provider.complete (${modelo})`,
+    // ── [RASTREIO IA] Log pré-chamada ────────────────────────────────────────
+    console.log(
+      '[RASTREIO IA] Enviando para OpenAI',
+      '| Telefone:', entrada.telefone,
+      '| Provider:', providerSlug + '/' + modelo,
+      '| Iter:', iter,
+      '| HistLen:', mensagens.length,
+      '| ApiKey:', openaiApiKey ? `OK (${openaiApiKey.slice(0, 8)}...)` : 'VAZIA ← PROBLEMA',
+      '| System Prompt:', systemPrompt.slice(0, 150).replace(/\n/g, ' '),
+      '| Mensagem do Usuário:', textoFinal?.slice(0, 200),
     );
+
+    let resp: Awaited<ReturnType<typeof provider.complete>> | null = null;
+    try {
+      resp = await withAiFallback(
+        () => provider.complete(mensagens, systemPrompt, MCP_TOOLS, {
+          model: modelo,
+          temperature: Number(agente.temperatura) || 0.7,
+          maxTokens: agente.max_tokens || 1024,
+        }),
+        null,
+        `ENGINE provider.complete (${modelo})`,
+      );
+    } catch (err: any) {
+      console.error(
+        '[RASTREIO IA - ERRO] Chamada OpenAI falhou',
+        '| Telefone:', entrada.telefone,
+        '| Provider:', providerSlug + '/' + modelo,
+        '| Status HTTP:', err?.status ?? err?.statusCode ?? 'N/A',
+        '| Código:', err?.code ?? 'N/A',
+        '| Mensagem:', err?.message,
+      );
+      throw err; // propaga para o caller registrar e liberar o lock
+    }
+
     if (!resp) {
-      console.warn(`[ENGINE] Provider retornou fallback (401/429) — abortando processamento para ${entrada.telefone}`);
+      console.error(
+        '[RASTREIO IA - ERRO] Provider retornou null (401/429)',
+        '| Telefone:', entrada.telefone,
+        '| Provider:', providerSlug + '/' + modelo,
+        '| Diagnóstico: verifique OPENAI_API_KEY no .env do servidor',
+      );
       return;
     }
+
+    // ── [RASTREIO IA] Log pós-resposta ───────────────────────────────────────
+    console.log(
+      '[RASTREIO IA] Resposta OpenAI recebida',
+      '| Telefone:', entrada.telefone,
+      '| TokensIn:', resp.inputTokens,
+      '| TokensOut:', resp.outputTokens,
+      '| ToolCalls:', resp.toolCalls.length,
+      '| Resposta:', resp.text?.slice(0, 120),
+    );
 
     tokensEntrada += resp.inputTokens;
     tokensSaida += resp.outputTokens;

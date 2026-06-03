@@ -16,7 +16,12 @@ REGRAS:
 
 export async function humanizarMensagem(mensagemBase: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey || !mensagemBase?.trim()) return mensagemBase;
+
+  if (!apiKey) {
+    console.error('[RASTREIO IA - ERRO] humanizarMensagem: OPENAI_API_KEY ausente no ambiente — retornando original');
+    return mensagemBase;
+  }
+  if (!mensagemBase?.trim()) return mensagemBase;
 
   const cacheKey = mensagemBase.trim().substring(0, 100);
   const variacoes = cache.get(cacheKey) || [];
@@ -24,6 +29,15 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
   if (variacoes.length >= 5 && Math.random() < 0.7) {
     return variacoes[Math.floor(Math.random() * variacoes.length)];
   }
+
+  // ── [RASTREIO IA] Log pré-chamada ──────────────────────────────────────────
+  console.log(
+    '[RASTREIO IA] Enviando para OpenAI (humanização)',
+    '| Modelo:', MODEL,
+    '| ApiKey:', `OK (${apiKey.slice(0, 8)}...)`,
+    '| System Prompt:', SYSTEM_PROMPT.slice(0, 100).replace(/\n/g, ' '),
+    '| Mensagem do Usuário:', mensagemBase.slice(0, 150),
+  );
 
   try {
     const resp = await fetch(OPENAI_API_URL, {
@@ -45,13 +59,31 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
-      console.error('[HUMANIZACAO] Falha OpenAI', resp.status, errText.slice(0, 200));
+      console.error(
+        '[RASTREIO IA - ERRO] humanizarMensagem: OpenAI retornou erro',
+        '| Status HTTP:', resp.status,
+        '| Diagnóstico:', resp.status === 401 ? 'Chave inválida/expirada'
+          : resp.status === 429 ? 'Rate limit ou sem saldo'
+          : 'Erro no servidor OpenAI',
+        '| Detalhe:', errText.slice(0, 200),
+      );
       return mensagemBase;
     }
 
     const data: any = await resp.json();
     const texto = data?.choices?.[0]?.message?.content?.trim();
-    if (!texto) return mensagemBase;
+
+    if (!texto) {
+      console.warn('[RASTREIO IA - ERRO] humanizarMensagem: resposta vazia da OpenAI — usando original');
+      return mensagemBase;
+    }
+
+    // ── [RASTREIO IA] Log pós-resposta ─────────────────────────────────────
+    console.log(
+      '[RASTREIO IA] Resposta OpenAI recebida (humanização)',
+      '| TokensUsados:', data?.usage?.total_tokens ?? 'N/A',
+      '| Resultado:', texto.slice(0, 100),
+    );
 
     variacoes.push(texto);
     if (variacoes.length > CACHE_MAX) variacoes.shift();
@@ -59,7 +91,12 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
 
     return texto;
   } catch (err: any) {
-    console.error('[HUMANIZACAO] Erro', err.message);
+    console.error(
+      '[RASTREIO IA - ERRO] humanizarMensagem: exceção na chamada OpenAI',
+      '| Tipo:', err?.name ?? 'Error',
+      '| Mensagem:', err?.message,
+      '| Stack:', err?.stack?.split('\n')[1]?.trim() ?? 'N/A',
+    );
     return mensagemBase;
   }
 }
