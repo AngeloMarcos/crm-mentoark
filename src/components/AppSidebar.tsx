@@ -60,6 +60,17 @@ const navGroups: NavGroup[] = [
           { title: "Central de BI", url: "/bi", icon: BarChart3, modulo: "dashboard", color: "text-cyan-500" },
         ],
       },
+      {
+        label: "Infraestrutura",
+        icon: ShieldCheck,
+        color: "text-red-500",
+        adminOnly: true,
+        items: [
+          { title: "Firewall", url: "/admin/firewall", icon: ShieldCheck, modulo: "usuarios", color: "text-red-500", adminOnly: true },
+          { title: "Copiloto", url: "/admin/copiloto", icon: Sparkles, modulo: "usuarios", color: "text-violet-500", adminOnly: true },
+          { title: "Mentoark AI", url: "https://ai.mentoark.com.br", icon: Bot, modulo: "usuarios", color: "text-emerald-500", adminOnly: true, external: true, healthCheck: "https://ai.mentoark.com.br/health" },
+        ],
+      },
     ],
   },
   {
@@ -178,23 +189,6 @@ const navGroups: NavGroup[] = [
           { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600" },
           { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400" },
           { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
-        ],
-      },
-    ],
-  },
-  {
-    label: "🛡️ SUPER ADMIN",
-    adminOnly: true,
-    subgroups: [
-      {
-        label: "Infraestrutura",
-        icon: ShieldCheck,
-        color: "text-red-500",
-        adminOnly: true,
-        items: [
-          { title: "Firewall", url: "/admin/firewall", icon: ShieldCheck, modulo: "usuarios", color: "text-red-500", adminOnly: true },
-          { title: "Copiloto", url: "/admin/copiloto", icon: Sparkles, modulo: "usuarios", color: "text-violet-500", adminOnly: true },
-          { title: "Mentoark AI", url: "https://ai.mentoark.com.br", icon: Bot, modulo: "usuarios", color: "text-emerald-500", adminOnly: true, external: true, healthCheck: "https://ai.mentoark.com.br/health" },
         ],
       },
     ],
