@@ -649,6 +649,7 @@ export default function IntegracoesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </ErrorBoundary>
     </CRMLayout>
   );
 }
