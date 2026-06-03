@@ -6,6 +6,7 @@ export interface CrudOptions {
   userIdCol?: string | null; // null = no user scoping (e.g. n8n_chat_histories)
   idCol?: string;
   stripFields?: string[]; // fields to silently ignore on writes (don't exist in table)
+  transformRow?: (row: any) => any;
 }
 
 const RESERVED_PARAMS = new Set(['order', 'asc', 'limit', 'page', 'head', 'select', 'count']);
@@ -92,6 +93,10 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     }
   };
 
+  const transformRow = options.transformRow;
+  const applyTransform = (row: any) => transformRow ? transformRow(row) : row;
+  const applyTransformMany = (rows: any[]) => transformRow ? rows.map(transformRow) : rows;
+
   // GET all (with optional count=only)
   router.get('/', wrap(async (req: AuthRequest, res: Response) => {
     const userId = userIdCol ? req.userId ?? null : null;
@@ -132,7 +137,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     params.push(limit, offset);
 
     const r = await pool.query(sql, params);
-    return res.json(r.rows);
+    return res.json(applyTransformMany(r.rows));
   }));
 
   // GET by id
@@ -147,7 +152,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     }
     const r = await pool.query(sql, params);
     if (!r.rows.length) return res.status(404).json({ message: 'Não encontrado' });
-    return res.json(r.rows[0]);
+    return res.json(applyTransform(r.rows[0]));
   }));
 
   // POST (create single or bulk)
@@ -171,7 +176,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
       const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ');
       const sql = `INSERT INTO ${tableName} (${cols.join(', ')}) VALUES (${placeholders}) RETURNING *`;
       const r = await pool.query(sql, vals);
-      return res.status(201).json(r.rows[0]);
+      return res.status(201).json(applyTransform(r.rows[0]));
     }
 
     // Para múltiplos itens, usa inserção em lote (bulk insert) eficiente
@@ -197,7 +202,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
     const sql = `INSERT INTO ${tableName} (${cols.join(', ')}) VALUES ${placeholders.join(', ')} RETURNING *`;
     const r = await pool.query(sql, vals);
-    return res.status(201).json(r.rows);
+    return res.status(201).json(applyTransformMany(r.rows));
   }));
 
 
@@ -225,7 +230,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
     const r = await pool.query(sql, vals);
     if (!r.rows.length) return res.status(404).json({ message: 'Não encontrado' });
-    return res.json(r.rows[0]);
+    return res.json(applyTransform(r.rows[0]));
   }));
 
   // PUT / (bulk update with query filters)
@@ -252,7 +257,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     const sql = `UPDATE ${tableName} SET ${setClauses}, updated_at = NOW() WHERE ${conditions.join(' AND ')} RETURNING *`;
 
     const r = await pool.query(sql, allParams);
-    return res.json(r.rows);
+    return res.json(applyTransformMany(r.rows));
   }));
 
   // DELETE /:id

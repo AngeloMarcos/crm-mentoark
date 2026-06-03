@@ -927,9 +927,10 @@ export default function whatsappRouter(pool: Pool): Router {
 
   // POST /api/whatsapp/send — envia mensagem manual (texto ou mídia)
   router.post('/send', async (req: AuthRequest, res: Response) => {
-    console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId, phone: req.body?.phone, hasText: !!req.body?.text });
+    const userId = req.userId!;
+    console.log('[DEBUG SEND] Payload recebido do Lovable:', JSON.stringify(req.body, null, 2));
+    console.log('[DEBUG SEND] userId:', userId);
     try {
-      const userId = req.userId!;
       const {
         phone, text, instancia: instanciaParam,
         mediaUrl, mediaType, mediaCaption, mediaFilename,
@@ -942,7 +943,7 @@ export default function whatsappRouter(pool: Pool): Router {
       // Normaliza o telefone — remove tudo exceto dígitos
       const phoneClean = (phone || '').replace(/\D/g, '');
       if (!phoneClean || phoneClean.length < 8 || phoneClean.length > 15) {
-        console.warn('[WHATSAPP] /send — telefone inválido:', phone);
+        console.warn('[DEBUG SEND] telefone inválido:', phone);
         return res.status(400).json({ message: `Número de telefone inválido: "${phone}"` });
       }
       if (!text && !mediaUrl) {
@@ -950,9 +951,16 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       const cfg = await getEvolutionConfig(userId);
+      console.log('[DEBUG SEND] Instância encontrada para o usuário:', {
+        instancia: cfg.instancia,
+        url: cfg.url,
+        isGlobal: cfg.isGlobal,
+        agenteId: cfg.agenteId,
+        tokenPresente: !!cfg.api_key,
+      });
+
       const instancia = instanciaParam || cfg.instancia;
       const base = cfg.url.replace(/\/$/, '');
-      console.log(`[WHATSAPP] /send → instancia=${instancia} phone=${phoneClean} base=${base}`);
 
       let evolutionResp: any;
       let msgType = 'text';
@@ -976,31 +984,47 @@ export default function whatsappRouter(pool: Pool): Router {
         if (mediaCaption) mediaPayload.caption = mediaCaption;
         if (mediaFilename) mediaPayload.fileName = mediaFilename;
 
-        const r = await fetch(`${base}/message/${endpoint}/${instancia}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-          body: JSON.stringify(mediaPayload),
-        });
-        if (!r.ok) {
-          const errText = await r.text().catch(() => r.status.toString());
-          console.error(`[WHATSAPP] /send mídia falhou — Evolution ${r.status}: ${errText.slice(0, 400)}`);
-          return res.status(502).json({ message: `Evolution ${r.status}: ${errText.slice(0, 200)}` });
+        const targetUrl = `${base}/message/${endpoint}/${instancia}`;
+        console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
+        let evoRes: Awaited<ReturnType<typeof fetch>>;
+        try {
+          evoRes = await fetch(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+            body: JSON.stringify(mediaPayload),
+          });
+        } catch (err: any) {
+          console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (mídia):', err.message, err.response?.data);
+          throw err;
         }
-        evolutionResp = await r.json().catch(() => ({}));
+        if (!evoRes.ok) {
+          const errText = await evoRes.text().catch(() => String(evoRes.status));
+          console.error(`[DEBUG SEND] Evolution mídia falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
+          return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
+        }
+        evolutionResp = await evoRes.json().catch(() => ({}));
       } else {
         // Envio de texto
-        const r = await fetch(`${base}/message/sendText/${instancia}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-          body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
-        });
-        if (!r.ok) {
-          const errText = await r.text().catch(() => r.status.toString());
-          console.error(`[WHATSAPP] /send texto falhou — Evolution ${r.status}: ${errText.slice(0, 400)}`);
-          return res.status(502).json({ message: `Evolution ${r.status}: ${errText.slice(0, 200)}` });
+        const targetUrl = `${base}/message/sendText/${instancia}`;
+        console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
+        let evoRes: Awaited<ReturnType<typeof fetch>>;
+        try {
+          evoRes = await fetch(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+            body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+          });
+        } catch (err: any) {
+          console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message, err.response?.data);
+          throw err;
         }
-        evolutionResp = await r.json().catch(() => ({}));
-        console.log(`[WHATSAPP] /send ok — messageId=${evolutionResp?.key?.id}`);
+        if (!evoRes.ok) {
+          const errText = await evoRes.text().catch(() => String(evoRes.status));
+          console.error(`[DEBUG SEND] Evolution texto falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
+          return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
+        }
+        evolutionResp = await evoRes.json().catch(() => ({}));
+        console.log(`[DEBUG SEND] Evolution respondeu ok — messageId=${evolutionResp?.key?.id}`);
       }
 
       const messageId = evolutionResp?.key?.id || `manual_${Date.now()}`;

@@ -68,6 +68,8 @@ import aiProvidersRouter from './routes/ai-providers';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
+import suporteRouter from './routes/suporte';
+import adminInfraRouter, { createFirewallMiddleware } from './routes/admin_infra';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -102,6 +104,11 @@ app.use('/uploads', (req, res, next) => {
   console.log(`[UPLOAD_ACCESS] ${new Date().toISOString()} ${ip} ${req.path}`);
   next();
 }, express.static(UPLOADS_DIR));
+
+// ── Firewall passivo (no-op enquanto firewall_ligado = false) ───────────────
+// Montado antes de TODAS as rotas. Com firewall_ligado=false (padrão do banco),
+// retorna next() imediatamente — zero impacto em OpenAI, Evolution e webhooks.
+app.use(createFirewallMiddleware(pool));
 
 // ── Public routes ───────────────────────────────────────────
 const marketing = marketingRouter(pool);
@@ -251,6 +258,16 @@ app.use('/api/agentes', makeCrud(pool, 'agentes', {
     'modalidade_video', 'mcp_tools', 'name', 'description',
     'is_active', 'enabled', 'settings', 'metadata',
   ],
+  transformRow: (row: any) => {
+    const threshold = row.rag_threshold;
+    const parsed = typeof threshold === 'string' && threshold.trim() !== ''
+      ? parseFloat(threshold)
+      : threshold;
+    return {
+      ...row,
+      rag_threshold: Number.isFinite(parsed) ? parsed : null,
+    };
+  },
 }));
 
 // Tabelas compartilhadas (REALMENTE globais, sem user_id)
@@ -283,6 +300,8 @@ app.use('/api/ai-providers', aiProvidersRouter(pool));
 app.use('/api/ai', aiUsoRouter(pool));
 app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));
+app.use('/api/suporte', adminMiddleware, suporteRouter(pool));
+app.use('/api/admin/firewall', adminMiddleware, adminInfraRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));

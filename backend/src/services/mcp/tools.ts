@@ -1,4 +1,15 @@
 import { Pool } from 'pg';
+import {
+  validateUserIdIsolation,
+  validateNoDestructiveSql,
+  BuscarContatoArgsSchema,
+  CriarOuAtualizarContatoArgsSchema,
+  BuscarHistoricoArgsSchema,
+  RegistrarPausaArgsSchema,
+  BuscarProdutosArgsSchema,
+  CriarAgendamentoArgsSchema,
+  ConsultarFaqArgsSchema,
+} from '../functionCallingSecurity';
 
 export interface MCPTool {
   name: string;
@@ -108,12 +119,20 @@ export async function executarFerramenta(
   args: Record<string, any>
 ): Promise<string> {
   try {
+    // Validação de segurança: userId deve ser UUID (isolamento multi-tenant)
+    validateUserIdIsolation(userId);
+
+    // Validação de segurança: argumentos não podem conter SQL destrutivo
+    validateNoDestructiveSql(args);
+
     switch (nome) {
       case 'buscar_contato': {
-        const where = args.telefone ? `telefone ILIKE $2` : `nome ILIKE $2`;
-        const val = args.telefone
-          ? `%${args.telefone.slice(-11)}`
-          : `%${args.nome}%`;
+        // Valida argumentos com zod schema
+        const validatedArgs = BuscarContatoArgsSchema.parse(args);
+        const where = validatedArgs.telefone ? `telefone ILIKE $2` : `nome ILIKE $2`;
+        const val = validatedArgs.telefone
+          ? `%${validatedArgs.telefone.slice(-11)}`
+          : `%${validatedArgs.nome}%`;
         const r = await pool.query(
           `SELECT nome, telefone, email, status, observacoes, created_at
            FROM contatos WHERE user_id = $1 AND ${where} LIMIT 3`,
@@ -124,7 +143,9 @@ export async function executarFerramenta(
       }
 
       case 'criar_ou_atualizar_contato': {
-        const { telefone, nome, email, observacao, estagio } = args;
+        // Valida argumentos com zod schema
+        const validatedArgs = CriarOuAtualizarContatoArgsSchema.parse(args);
+        const { telefone, nome, email, observacao, estagio } = validatedArgs;
         await pool.query(
           `INSERT INTO contatos (user_id, telefone, nome, email, observacoes, status)
            VALUES ($1, $2, $3, $4, $5, $6)
@@ -140,9 +161,10 @@ export async function executarFerramenta(
       }
 
       case 'buscar_historico': {
-        const limite = Math.min(args.limite || 10, 30);
-        // Garantir session_id sempre com dígitos puros (sem @s.whatsapp.net)
-        const sessionPhone = String(args.telefone || '').replace(/\D/g, '');
+        // Valida argumentos com zod schema
+        const validatedArgs = BuscarHistoricoArgsSchema.parse(args);
+        const limite = validatedArgs.limite || 10;
+        const sessionPhone = validatedArgs.telefone.replace(/\D/g, '');
         const r = await pool.query(
           `SELECT message->>'role' as role, message->>'content' as content, created_at
            FROM n8n_chat_histories
@@ -157,11 +179,13 @@ export async function executarFerramenta(
       }
 
       case 'registrar_pausa': {
+        // Valida argumentos com zod schema
+        const validatedArgs = RegistrarPausaArgsSchema.parse(args);
         await pool.query(
           `UPDATE dados_cliente SET atendimento_ia = 'pause',
              pausa_timestamp = NOW(), pausa_duracao_min = 60
            WHERE user_id = $1 AND telefone ILIKE $2`,
-          [userId, `%${args.telefone.slice(-11)}`]
+          [userId, `%${validatedArgs.telefone.slice(-11)}`]
         ).catch(() => {});
 
         const backendUrl = process.env.BACKEND_URL || 'https://api.mentoark.com.br';
@@ -171,19 +195,21 @@ export async function executarFerramenta(
           headers: { 'Content-Type': 'application/json', 'x-webhook-secret': secret },
           body: JSON.stringify({
             user_id: userId,
-            titulo: `Lead ${args.motivo}: ${args.telefone}`,
-            resumo: args.resumo || `Pausa: ${args.motivo}`,
-            contato_telefone: args.telefone,
-            remote_jid: `${args.telefone}@s.whatsapp.net`,
-            prioridade: args.motivo === 'qualificado' ? 'alta' : 'media',
+            titulo: `Lead ${validatedArgs.motivo}: ${validatedArgs.telefone}`,
+            resumo: validatedArgs.resumo || `Pausa: ${validatedArgs.motivo}`,
+            contato_telefone: validatedArgs.telefone,
+            remote_jid: `${validatedArgs.telefone}@s.whatsapp.net`,
+            prioridade: validatedArgs.motivo === 'qualificado' ? 'alta' : 'media',
           }),
         }).catch(() => {});
 
-        return `PAUSA_ATIVADA:${args.motivo}`;
+        return `PAUSA_ATIVADA:${validatedArgs.motivo}`;
       }
 
       case 'buscar_produtos': {
-        const termos = args.busca ? `%${args.busca}%` : '%';
+        // Valida argumentos com zod schema
+        const validatedArgs = BuscarProdutosArgsSchema.parse(args);
+        const termos = validatedArgs.busca ? `%${validatedArgs.busca}%` : '%';
         const r = await pool.query(
           `SELECT p.nome, p.descricao, p.preco, c.nome as catalogo
            FROM produtos p
@@ -193,7 +219,7 @@ export async function executarFerramenta(
              AND ($3::numeric IS NULL OR p.preco <= $3)
              AND ($4::numeric IS NULL OR p.preco >= $4)
            ORDER BY p.preco ASC LIMIT 5`,
-          [userId, termos, args.preco_max || null, args.preco_min || null]
+          [userId, termos, validatedArgs.preco_max || null, validatedArgs.preco_min || null]
         );
         if (!r.rows.length) return 'Nenhum produto encontrado com esses critérios.';
         return r.rows
@@ -202,34 +228,38 @@ export async function executarFerramenta(
       }
 
       case 'criar_agendamento': {
+        // Valida argumentos com zod schema
+        const validatedArgs = CriarAgendamentoArgsSchema.parse(args);
         await pool.query(
           `INSERT INTO follow_ups (user_id, contato_id, data_retorno, motivo, observacao, status)
            SELECT $1, c.id, $2, $3, $4, 'pendente'
            FROM contatos c
            WHERE c.user_id = $1 AND c.telefone ILIKE $5
            LIMIT 1`,
-          [userId, args.data_hora, args.tipo, args.observacao || null, `%${args.telefone.slice(-11)}`]
+          [userId, validatedArgs.data_hora, validatedArgs.tipo, validatedArgs.observacao || null, `%${validatedArgs.telefone.slice(-11)}`]
         );
-        return `Agendamento de ${args.tipo} criado para ${args.data_hora}.`;
+        return `Agendamento de ${validatedArgs.tipo} criado para ${validatedArgs.data_hora}.`;
       }
 
       case 'consultar_faq': {
+        // Valida argumentos com zod schema
+        const validatedArgs = ConsultarFaqArgsSchema.parse(args);
         const r = await pool.query(
           `SELECT conteudo FROM conhecimento
            WHERE user_id = $1
              AND (conteudo ILIKE $2 OR campo ILIKE $2)
            ORDER BY created_at DESC LIMIT 3`,
-          [userId, `%${args.pergunta.split(' ').slice(0, 3).join('%')}%`]
+          [userId, `%${validatedArgs.pergunta.split(' ').slice(0, 3).join('%')}%`]
         );
         if (!r.rows.length) return 'Não encontrei essa informação na base de conhecimento.';
         return r.rows.map((k: any) => k.conteudo).join('\n---\n');
       }
 
       default:
-        return `Ferramenta "${nome}" não reconhecida.`;
+        throw new Error(`Ferramenta "${nome}" não reconhecida`);
     }
   } catch (err: any) {
-    console.error(`[MCP] Erro na ferramenta ${nome}:`, err.message);
+    console.error(`[MCP SEC] Erro na ferramenta ${nome} userId=${userId}:`, err.message);
     return `Erro ao executar ${nome}: ${err.message}`;
   }
 }

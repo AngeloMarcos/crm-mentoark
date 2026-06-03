@@ -18,6 +18,31 @@ services:
       traefik.http.routers.crm.tls.certresolver: "letsencrypt"
       traefik.http.services.crm.loadbalancer.server.port: "80"
 
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      - WEBUI_SECRET_KEY=mentoark_super_secret_key_2026
+    expose:
+      - "8080"
+    volumes:
+      - open-webui:/app/data
+    networks:
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "proxy"
+      traefik.http.routers.open-webui.rule: "Host(`ai.mentoark.com.br`)"
+      traefik.http.routers.open-webui.entrypoints: "websecure"
+      traefik.http.routers.open-webui.tls.certresolver: "letsencrypt"
+      traefik.http.services.open-webui.loadbalancer.server.port: "8080"
+
+volumes:
+  open-webui:
+
 networks:
   proxy:
     external: true
