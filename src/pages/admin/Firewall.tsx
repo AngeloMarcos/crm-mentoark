@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CRMLayout } from "@/components/CRMLayout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -120,11 +121,12 @@ export default function FirewallPage() {
 
   const config = configQ.data ?? statsQ.data?.config;
   const counts = statsQ.data?.counts;
-  const items = ipsQ.data?.items ?? [];
+  const items = useMemo(() => ipsQ.data?.items ?? [], [ipsQ.data?.items]);
   const total = ipsQ.data?.total ?? 0;
 
   return (
     <CRMLayout>
+      <ErrorBoundary name="Firewall">
       <div className="space-y-6 max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -330,6 +332,7 @@ export default function FirewallPage() {
           </CardContent>
         </Card>
       </div>
+      </ErrorBoundary>
     </CRMLayout>
   );
 }

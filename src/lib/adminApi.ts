@@ -95,6 +95,11 @@ export async function adminFetch<T = any>(
     throw new AdminApiError(403, "forbidden", parsed);
   }
 
+  if (res.status === 502) {
+    if (!silent) toast.error("Conexão lenta com o servidor de mensagens. Tentando reconectar...", { id: "api-502" });
+    throw new AdminApiError(502, "Bad Gateway", parsed);
+  }
+
   if (res.status === 503) {
     const msg = parsed?.message || "Serviço indisponível";
     if (!silent) toast.error(msg);

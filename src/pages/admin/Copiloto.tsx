@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, KeyboardEvent } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -104,7 +105,8 @@ export default function CopilotoPage() {
 
   return (
     <CRMLayout>
-      <div className="flex flex-col h-[calc(100vh-8rem)] max-w-3xl mx-auto w-full">
+      <ErrorBoundary name="Copiloto">
+        <div className="flex flex-col h-[calc(100vh-8rem)] max-w-3xl mx-auto w-full">
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b">
           <div className="flex items-center gap-2">
@@ -163,6 +165,7 @@ export default function CopilotoPage() {
           </Button>
         </div>
       </div>
+      </ErrorBoundary>
     </CRMLayout>
   );
 }
