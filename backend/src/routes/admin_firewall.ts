@@ -27,11 +27,50 @@ import type { AuthRequest } from '../middleware';
 
 const TIPOS_VALIDOS = new Set(['blocked', 'allowed', 'monitored']);
 
-/** Aceita IPv4, IPv4 CIDR, IPv6 simples. Sem sistema de arquivos ou chamadas de SO. */
-const RE_IP = /^(?:(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?|[0-9a-fA-F:]{2,45})$/;
+const RE_IPV4_OCTET = /^(25[0-5]|2[0-4]\d|1?\d?\d)$/;
+const RE_CIDR_PREFIX = /^\d{1,2}$/;
+
+const isValidIPv4 = (value: string) => {
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every((part) => RE_IPV4_OCTET.test(part));
+};
+
+const isValidIPv4Cidr = (value: string) => {
+  const [ip, prefix] = value.split('/');
+  return (
+    prefix !== undefined &&
+    isValidIPv4(ip) &&
+    RE_CIDR_PREFIX.test(prefix) &&
+    Number(prefix) >= 0 &&
+    Number(prefix) <= 32
+  );
+};
+
+const isValidIPv6 = (value: string) => {
+  const s = value.trim();
+  if (!s || s.length > 45) return false;
+  const parts = s.split('::');
+  if (parts.length > 2) return false;
+
+  const validateSegment = (seg: string) => /^[0-9A-Fa-f]{1,4}$/.test(seg);
+  const validateParts = (items: string[]) => items.every((item) => item === '' || validateSegment(item));
+
+  if (parts.length === 1) {
+    const groups = parts[0].split(':');
+    return groups.length === 8 && validateParts(groups);
+  }
+
+  const [head, tail] = parts;
+  const headGroups = head ? head.split(':') : [];
+  const tailGroups = tail ? tail.split(':') : [];
+  if (headGroups.length + tailGroups.length >= 8) return false;
+  return validateParts(headGroups) && validateParts(tailGroups);
+};
 
 function validarIp(ip: unknown): ip is string {
-  return typeof ip === 'string' && RE_IP.test(ip.trim());
+  if (typeof ip !== 'string') return false;
+  const s = ip.trim();
+  return isValidIPv4(s) || isValidIPv4Cidr(s) || isValidIPv6(s);
 }
 
 function sanitize(v: unknown, max = 500): string {

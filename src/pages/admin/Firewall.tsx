@@ -44,12 +44,49 @@ interface FwStats {
 
 const PAGE_SIZE = 50;
 
-const RE_IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/;
-const RE_IPV6 = /^[0-9a-fA-F:]{2,39}$/;
-const RE_CIDR = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
+const RE_IPV4_OCTET = /^(25[0-5]|2[0-4]\d|1?\d?\d)$/;
+const RE_CIDR_PREFIX = /^\d{1,2}$/;
+
+const isValidIPv4 = (value: string) => {
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every((part) => RE_IPV4_OCTET.test(part));
+};
+
+const isValidIPv4Cidr = (value: string) => {
+  const [ip, prefix] = value.split('/');
+  return (
+    prefix !== undefined &&
+    isValidIPv4(ip) &&
+    RE_CIDR_PREFIX.test(prefix) &&
+    Number(prefix) >= 0 &&
+    Number(prefix) <= 32
+  );
+};
+
+const isValidIPv6 = (value: string) => {
+  const s = value.trim();
+  if (!s || s.length > 45) return false;
+  const parts = s.split('::');
+  if (parts.length > 2) return false;
+
+  const validateSegment = (seg: string) => /^[0-9A-Fa-f]{1,4}$/.test(seg);
+  const validateParts = (items: string[]) => items.every((item) => item === '' || validateSegment(item));
+
+  if (parts.length === 1) {
+    const groups = parts[0].split(':');
+    return groups.length === 8 && validateParts(groups);
+  }
+
+  const [head, tail] = parts;
+  const headGroups = head ? head.split(':') : [];
+  const tailGroups = tail ? tail.split(':') : [];
+  if (headGroups.length + tailGroups.length >= 8) return false;
+  return validateParts(headGroups) && validateParts(tailGroups);
+};
+
 const isValidIp = (v: string) => {
   const s = v.trim();
-  return RE_IPV4.test(s) || RE_IPV6.test(s) || RE_CIDR.test(s);
+  return isValidIPv4(s) || isValidIPv4Cidr(s) || isValidIPv6(s);
 };
 
 function tipoBadge(tipo: FwIp["tipo"]) {
