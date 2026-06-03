@@ -130,15 +130,28 @@ async function enviarResposta(
 }
 
 // ── Persistência de histórico (formato Langchain — compatível com n8n) ─────────
+// Popula também as colunas de auditoria: contato_telefone, papel, conteudo, tokens_consumidos.
 async function salvarHistorico(
   pool: Pool, sessionId: string, userId: string,
-  instancia: string, role: 'user' | 'assistant', content: string
+  instancia: string, role: 'user' | 'assistant', content: string,
+  tokensConsumidos?: number,
 ): Promise<void> {
   const type = role === 'user' ? 'human' : 'ai';
   await pool.query(
-    `INSERT INTO n8n_chat_histories (session_id, message, user_id, instancia)
-     VALUES ($1, $2, $3, $4)`,
-    [sessionId, JSON.stringify({ type, content, additional_kwargs: {}, response_metadata: {} }), userId, instancia]
+    `INSERT INTO n8n_chat_histories
+       (session_id, message, user_id, instancia,
+        contato_telefone, papel, conteudo, tokens_consumidos)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      sessionId,
+      JSON.stringify({ type, content, additional_kwargs: {}, response_metadata: {} }),
+      userId,
+      instancia,
+      sessionId.slice(0, 30),          // contato_telefone (= telefone/session_id)
+      role,                             // papel: 'user' | 'assistant'
+      content.slice(0, 10000),          // conteudo: texto puro (limite seguro)
+      tokensConsumidos ?? null,         // tokens_consumidos: só preenchido na resposta
+    ],
   ).catch(err => console.error('[ENGINE INSERT n8n_chat_histories]:', err.message));
 }
 
@@ -439,9 +452,13 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
 
   // 10. Persistir histórico — session_id sempre dígitos puros
+  // Passa tokens_consumidos somente na linha do assistente (custo real da chamada)
   await salvarHistorico(pool, histSessionId, userIdFinal, entrada.instancia, 'user', textoFinal);
   if (respostaFinal) {
-    await salvarHistorico(pool, histSessionId, userIdFinal, entrada.instancia, 'assistant', respostaFinal);
+    await salvarHistorico(
+      pool, histSessionId, userIdFinal, entrada.instancia, 'assistant', respostaFinal,
+      tokensEntrada + tokensSaida || undefined,
+    );
   }
 
   // 11. Persistir em whatsapp_messages para o painel de chat

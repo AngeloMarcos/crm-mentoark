@@ -1318,5 +1318,62 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   console.log('[MIGRATIONS] Super Admin firewall_ips + firewall_config OK');
 
+  // ── Auditoria de IA: colunas estruturadas para rastrear respostas do modelo ─
+  //
+  // n8n_chat_histories armazena o histórico em message (JSONB) que dificulta
+  // queries de observabilidade. Adicionamos colunas explícitas para:
+  //   - contato_telefone : quem enviou a mensagem (= session_id / telefone)
+  //   - papel            : 'system' | 'user' | 'assistant'
+  //   - conteudo         : texto puro extraído do JSONB
+  //   - tokens_consumidos: tokens usados na chamada à IA (preenche o agentEngine)
+  //
+  // chat_messages também recebe as mesmas colunas para uniformidade.
+
+  await pool.query(`ALTER TABLE n8n_chat_histories ADD COLUMN IF NOT EXISTS contato_telefone VARCHAR(30)`).catch(() => {});
+  await pool.query(`ALTER TABLE n8n_chat_histories ADD COLUMN IF NOT EXISTS papel           VARCHAR(20) CHECK (papel IN ('system','user','assistant'))`).catch(() => {});
+  await pool.query(`ALTER TABLE n8n_chat_histories ADD COLUMN IF NOT EXISTS conteudo        TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE n8n_chat_histories ADD COLUMN IF NOT EXISTS tokens_consumidos INTEGER`).catch(() => {});
+
+  // Índice para auditoria por contato + período
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_n8n_chat_auditoria
+    ON n8n_chat_histories (user_id, contato_telefone, created_at DESC)
+    WHERE contato_telefone IS NOT NULL
+  `).catch(() => {});
+
+  // Backfill: popula colunas novas a partir do JSONB em registros existentes
+  await pool.query(`
+    UPDATE n8n_chat_histories
+    SET
+      contato_telefone = LEFT(session_id, 30),
+      papel = CASE
+        WHEN message->>'type' = 'human' OR message->>'role' = 'user'      THEN 'user'
+        WHEN message->>'type' = 'ai'    OR message->>'role' = 'assistant' THEN 'assistant'
+        WHEN message->>'role' = 'system'                                  THEN 'system'
+        ELSE 'user'
+      END,
+      conteudo = LEFT(COALESCE(message->>'content', message->>'text', ''), 10000)
+    WHERE contato_telefone IS NULL
+      AND message IS NOT NULL
+  `).catch(err => console.warn('[MIGRATIONS] backfill n8n_chat_histories:', err.message));
+
+  // ── chat_messages: mesmas colunas para uniformidade ──────────────────────
+  await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS contato_telefone VARCHAR(30)`).catch(() => {});
+  await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS papel           VARCHAR(20) CHECK (papel IN ('system','user','assistant'))`).catch(() => {});
+  await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS conteudo        TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS tokens_consumidos INTEGER`).catch(() => {});
+
+  // Backfill: chat_messages usa bot_message / user_message (par separado por linha)
+  await pool.query(`
+    UPDATE chat_messages
+    SET
+      contato_telefone = LEFT(phone, 30),
+      papel   = CASE WHEN bot_message IS NOT NULL AND bot_message <> '' THEN 'assistant' ELSE 'user' END,
+      conteudo = COALESCE(bot_message, user_message, '')
+    WHERE contato_telefone IS NULL
+  `).catch(err => console.warn('[MIGRATIONS] backfill chat_messages:', err.message));
+
+  console.log('[MIGRATIONS] Auditoria IA: colunas papel/conteudo/tokens OK');
+
   console.log('[MIGRATIONS] OK');
 }
