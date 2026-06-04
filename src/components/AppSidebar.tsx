@@ -7,7 +7,7 @@ import {
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
   Activity, Webhook, Database, Sparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/mentoark-logo.png";
 import { NavLink } from "@/components/NavLink";
@@ -26,10 +26,7 @@ interface NavItem {
   modulo: string;
   color: string;
   adminOnly?: boolean;
-  external?: boolean;
-  healthCheck?: string;
 }
-
 
 interface NavSubgroup {
   label: string;
@@ -58,23 +55,6 @@ const navGroups: NavGroup[] = [
         items: [
           { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, modulo: "dashboard", color: "text-blue-500" },
           { title: "Central de BI", url: "/bi", icon: BarChart3, modulo: "dashboard", color: "text-cyan-500" },
-        ],
-      },
-    ],
-  },
-  {
-    label: "🛡️ SUPER ADMIN",
-    adminOnly: true,
-    subgroups: [
-      {
-        label: "Infraestrutura",
-        icon: ShieldCheck,
-        color: "text-red-500",
-        adminOnly: true,
-        items: [
-          { title: "Firewall", url: "/admin/firewall", icon: ShieldCheck, modulo: "usuarios", color: "text-red-500", adminOnly: true },
-          { title: "Copiloto", url: "/admin/copiloto", icon: Sparkles, modulo: "usuarios", color: "text-violet-500", adminOnly: true },
-          { title: "Mentoark AI", url: "https://ai.mentoark.com.br", icon: Bot, modulo: "usuarios", color: "text-emerald-500", adminOnly: true, external: true, healthCheck: "https://ai.mentoark.com.br/health" },
         ],
       },
     ],
@@ -201,7 +181,6 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function isRouteActive(pathname: string, url: string) {
@@ -209,33 +188,6 @@ function isRouteActive(pathname: string, url: string) {
   if (base === "/dashboard") return pathname === "/dashboard";
   return pathname === base || pathname.startsWith(base + "/");
 }
-
-function ExternalHealthBadge({ url }: { url: string }) {
-  const [status, setStatus] = useState<"checking" | "online" | "pending">("checking");
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 4000);
-    fetch(url, { mode: "no-cors", signal: controller.signal })
-      .then(() => { if (!cancelled) setStatus("online"); })
-      .catch(() => { if (!cancelled) setStatus("pending"); })
-      .finally(() => clearTimeout(t));
-    return () => { cancelled = true; controller.abort(); };
-  }, [url]);
-  if (status === "checking") return null;
-  return status === "online" ? (
-    <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
-      Online
-    </span>
-  ) : (
-    <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500 border border-amber-500/30">
-      DNS pendente
-    </span>
-  );
-}
-
-
-
 
 // ── Subgrupo colapsável ───────────────────────────────────────────────────────
 
@@ -283,29 +235,26 @@ function NavSubgroupSection({
     return (
       <SidebarMenu className="px-1">
         {visibleItems.map((item) => {
-          const active = !item.external && isRouteActive(location.pathname, item.url);
-          const linkClass = `group relative flex items-center justify-center px-2 py-2 rounded-lg transition-all ${
-            active
-              ? "gradient-brand-subtle shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.18),0_0_12px_hsl(217_91%_45%/0.12)]"
-              : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.05)]"
-          }`;
+          const active = isRouteActive(location.pathname, item.url);
           return (
             <SidebarMenuItem key={item.title}>
               <SidebarMenuButton asChild>
-                {item.external ? (
-                  <a href={item.url} target="_blank" rel="noopener noreferrer" title={item.title} className={linkClass}>
-                    <item.icon className={`h-5 w-5 ${item.color}`} />
-                  </a>
-                ) : (
-                  <NavLink to={item.url} end={item.url === "/dashboard"} title={item.title} className={linkClass}>
-                    <item.icon className={`h-5 w-5 ${active ? item.color : "text-muted-foreground"}`} />
-                  </NavLink>
-                )}
+                  <NavLink
+                    to={item.url}
+                    end={item.url === "/dashboard"}
+                    title={item.title}
+                    className={`group relative flex items-center justify-center px-2 py-2 rounded-lg transition-all ${
+                      active
+                        ? "gradient-brand-subtle shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.18),0_0_12px_hsl(217_91%_45%/0.12)]"
+                        : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.05)]"
+                    }`}
+                  >
+                  <item.icon className={`h-5 w-5 ${active ? item.color : "text-muted-foreground"}`} />
+                </NavLink>
               </SidebarMenuButton>
             </SidebarMenuItem>
           );
         })}
-
       </SidebarMenu>
     );
   }
@@ -333,43 +282,33 @@ function NavSubgroupSection({
         <div className="relative mt-1 ml-[18px] pl-3 border-l border-sidebar-border/60">
           <SidebarMenu className="gap-0.5">
             {visibleItems.map((item) => {
-              const active = !item.external && isRouteActive(location.pathname, item.url);
-              const linkClass = `group relative flex items-center gap-2.5 px-2.5 py-2 rounded-md transition-all duration-200 ${
-                active
-                  ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.14),0_0_14px_hsl(217_91%_45%/0.10)]"
-                  : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.04)]"
-              }`;
-              const inner = (
-                <>
-                  {active && (
-                    <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(217_91%_45%/0.7)]" />
-                  )}
-                  <item.icon
-                    className={`h-4 w-4 shrink-0 transition-all duration-300 ${
-                      active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(217_91%_45%/0.3)]" : "text-muted-foreground group-hover:" + item.color
-                    }`}
-                  />
-                  <span className={`text-[13px] ${active ? "gradient-brand-text" : ""}`}>{item.title}</span>
-                  {item.healthCheck && <ExternalHealthBadge url={item.healthCheck} />}
-                </>
-              );
+              const active = isRouteActive(location.pathname, item.url);
               return (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
-                    {item.external ? (
-                      <a href={item.url} target="_blank" rel="noopener noreferrer" className={linkClass}>
-                        {inner}
-                      </a>
-                    ) : (
-                      <NavLink to={item.url} end={item.url === "/dashboard"} className={linkClass}>
-                        {inner}
-                      </NavLink>
-                    )}
+                    <NavLink
+                      to={item.url}
+                      end={item.url === "/dashboard"}
+                      className={`group relative flex items-center gap-2.5 px-2.5 py-2 rounded-md transition-all duration-200 ${
+                        active
+                          ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.14),0_0_14px_hsl(217_91%_45%/0.10)]"
+                          : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.04)]"
+                      }`}
+                    >
+                      {active && (
+                        <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(217_91%_45%/0.7)]" />
+                      )}
+                      <item.icon
+                        className={`h-4 w-4 shrink-0 transition-all duration-300 ${
+                          active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(217_91%_45%/0.3)]" : "text-muted-foreground group-hover:" + item.color
+                        }`}
+                      />
+                      <span className={`text-[13px] ${active ? "gradient-brand-text" : ""}`}>{item.title}</span>
+                    </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               );
             })}
-
           </SidebarMenu>
         </div>
       )}

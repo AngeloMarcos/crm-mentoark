@@ -5,6 +5,8 @@ services:
     build: .
     container_name: crm-api
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://mentoark:Mentoark@2025@147.93.9.172:5432/crm}
       JWT_SECRET: ${JWT_SECRET:-mentoark2025jwtsecretkey32chars!!}
