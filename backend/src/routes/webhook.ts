@@ -1,4 +1,4 @@
-/**
+﻿/**
  * webhook.ts — Receptor de eventos da Evolution API (WhatsApp)
  *
  * Melhorias v3:
@@ -229,7 +229,7 @@ export default function webhookRouter(pool: Pool): Router {
         if (agtRes.rows.length) userId = agtRes.rows[0].user_id;
       }
 
-      // 3. Fallback: prefixo UUID no nome da instância (ex: crm_435ee4720fc3)
+      // 3. Fallback final: prefixo UUID no nome da instância (ex: crm_435ee4720fc3)
       if (!userId && instancia.startsWith('crm_')) {
         const prefixo = instancia.slice(4);
         const uRes = await pool.query(
@@ -237,27 +237,6 @@ export default function webhookRouter(pool: Pool): Router {
           [`${prefixo}%`]
         ).catch(() => ({ rows: [] as any[] }));
         if (uRes.rows.length) userId = uRes.rows[0].id;
-      }
-
-      // 4. Fallback final: busca em integracoes_config por instância (qualquer user)
-      if (!userId) {
-        const icRes = await pool.query(
-          `SELECT user_id FROM integracoes_config
-           WHERE LOWER(instancia) = LOWER($1) LIMIT 1`,
-          [instancia]
-        ).catch(() => ({ rows: [] as any[] }));
-        if (icRes.rows.length) userId = icRes.rows[0].user_id;
-      }
-
-      // 5. Fallback final: único admin ativo do sistema (evita perder mensagens quando instância não registrada)
-      if (!userId) {
-        const adminRes = await pool.query(
-          `SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`
-        ).catch(() => ({ rows: [] as any[] }));
-        if (adminRes.rows.length) {
-          userId = adminRes.rows[0].id;
-          wlog('WEBHOOK_FALLBACK', `userId resolvido via admin fallback: ${userId} para instancia="${instancia}"`);
-        }
       }
 
       wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);
@@ -485,7 +464,39 @@ export default function webhookRouter(pool: Pool): Router {
             `INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`,
             [userId, telefone, textoNorm]
           ).catch(() => {});
-          console.log(`[WEBHOOK] Opt-out: ${telefone}`);
+
+          try {
+            const cfgOptOut = await pool.query(
+              `SELECT COALESCE(evolution_server_url, $2) AS url,
+                      COALESCE(evolution_api_key,    $3) AS api_key,
+                      COALESCE(evolution_instancia,  $4) AS inst
+               FROM agentes
+               WHERE user_id = $1 AND ativo = true
+               ORDER BY updated_at DESC LIMIT 1`,
+              [
+                userId,
+                process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br',
+                process.env.EVOLUTION_API_KEY || '',
+                instancia,
+              ]
+            ).catch(() => ({ rows: [] as any[] }));
+
+            if (cfgOptOut.rows.length) {
+              const { url, api_key, inst } = cfgOptOut.rows[0];
+              const base = (url || '').trim().replace(/\/+$/, '');
+              await fetch(`${base}/message/sendText/${inst}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: api_key },
+                body: JSON.stringify({
+                  number: telefone,
+                  text: 'Você foi removido da nossa lista. Para se reinscrever, envie *reativar*.',
+                  delay: 1000,
+                }),
+              }).catch(() => {});
+            }
+          } catch {}
+
+          console.log(`[WEBHOOK] Opt-out confirmado: ${telefone}`);
           return;
         }
 

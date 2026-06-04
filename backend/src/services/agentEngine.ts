@@ -509,7 +509,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
           message_type, content, status, timestamp_wa)
        VALUES ($1,$2,$3,$4,true,'text',$5,'sent',to_timestamp($6))
        ON CONFLICT (message_id, instance_name) DO NOTHING`,
-      [userIdFinal, entrada.instancia,
+      [userIdFinal, agente.evolution_instancia || entrada.instancia,
        `${entrada.telefone}@s.whatsapp.net`,
        `resp_${entrada.messageId}`,
        respostaFinal,
