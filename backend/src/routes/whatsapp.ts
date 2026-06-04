@@ -8,13 +8,14 @@ const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoa
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
 const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
-const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 function webhookPayload() {
   return {
+    enabled: true,
     url: WEBHOOK_URL,
-    byEvents: false,
-    base64: false,
+    webhookByEvents: false,
+    webhookBase64: false,
     events: WEBHOOK_EVENTS,
   };
 }
@@ -27,16 +28,10 @@ async function registrarWebhook(base: string, apiKey: string, instancia: string)
     const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
-      body: JSON.stringify({ webhook: webhookPayload() }),
+      body: JSON.stringify(webhookPayload()),
     });
-    if (!res.ok) {
-      // Algumas versões aceitam payload flat em vez de aninhado
-      await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: apiKey },
-        body: JSON.stringify(webhookPayload()),
-      }).catch(() => null);
-    }
+    const body = await res.json().catch(() => ({}));
+    console.log(`[whatsapp] webhook registrado para ${instancia}:`, JSON.stringify(body).slice(0, 120));
   } catch (err) {
     console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
   }
