@@ -267,21 +267,30 @@ export function InstanceManagementPanel() {
   };
 
   const carregarStatus = async (lista: Agente[]) => {
-    // Reusa endpoint global (uma única instância ativa por usuário no fluxo atual)
-    try {
-      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-      const t = getAuthToken();
-      const res = await fetch(`${API_BASE}/api/whatsapp/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
-      });
-      if (!res.ok) return;
-      const json = await res.json();
-      const state: ConnState = json.state ?? "close";
-      const map: Record<string, ConnState> = {};
-      for (const a of lista) if (a.evolution_instancia) map[a.id] = state;
-      setStatuses(map);
-    } catch {}
+    const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+    const t = getAuthToken();
+    const map: Record<string, ConnState> = {};
+    await Promise.all(
+      lista
+        .filter(a => !!a.evolution_instancia)
+        .map(async (a) => {
+          try {
+            const res = await fetch(
+              `${API_BASE}/api/whatsapp/evo/status/${encodeURIComponent(a.evolution_instancia!)}`,
+              { headers: t ? { Authorization: `Bearer ${t}` } : {} }
+            );
+            if (res.ok) {
+              const json = await res.json();
+              map[a.id] = (json.state ?? "close") as ConnState;
+            } else {
+              map[a.id] = "close";
+            }
+          } catch {
+            map[a.id] = "close";
+          }
+        })
+    );
+    setStatuses(map);
   };
 
   useEffect(() => {
@@ -291,6 +300,13 @@ export function InstanceManagementPanel() {
 
   useEffect(() => {
     if (agentes.length > 0) carregarStatus(agentes);
+  }, [agentes]);
+
+  // Auto-refresh de status a cada 30s sem recarregar a página
+  useEffect(() => {
+    if (agentes.length === 0) return;
+    const id = setInterval(() => carregarStatus(agentes), 30_000);
+    return () => clearInterval(id);
   }, [agentes]);
 
   const instancias = useMemo(

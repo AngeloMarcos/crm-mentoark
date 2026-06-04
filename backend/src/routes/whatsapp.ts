@@ -1181,6 +1181,26 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // GET /api/whatsapp/evo/status/:instance — estado de instância específica direto da Evolution
+  router.get('/evo/status/:instance', async (req: AuthRequest, res: Response) => {
+    try {
+      const cfg      = await getEvolutionConfig(req.userId!);
+      const instancia = req.params.instance;
+      if (!cfg.url || !cfg.api_key) return res.json({ state: 'nao_configurado', instancia });
+      const base = cfg.url.replace(/\/$/, '');
+      const r = await fetch(`${base}/instance/connectionState/${instancia}`, {
+        headers: { apikey: cfg.api_key },
+      }).catch(() => null);
+      if (!r?.ok) return res.json({ state: 'close', instancia });
+      const d: any = await r.json();
+      const state: string = d?.instance?.state || d?.state || 'close';
+      if (state === 'open') registrarWebhook(base, cfg.api_key, instancia).catch(() => {});
+      return res.json({ state, instancia });
+    } catch (err: any) {
+      return res.status(502).json({ message: err.message });
+    }
+  });
+
   return router;
 }
 
