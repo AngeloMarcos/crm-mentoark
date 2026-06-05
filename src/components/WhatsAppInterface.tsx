@@ -1798,14 +1798,20 @@ export function WhatsAppInterface() {
                           </div>
                         </div>
                       )}
-                      <div className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
+                      <div 
+                        className={`flex-1 flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          if (!isNote) toggleMessageSelection(m.id);
+                        }}
+                      >
                         <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
                           isOut
                             ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
                             : isNote
                               ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
                               : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
-                        }`}>
+                        } ${isSelectMode && selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10" : ""}`}>
                           {/* Menu de Resposta (Reply) */}
                           {!isNote && (
                             <button
