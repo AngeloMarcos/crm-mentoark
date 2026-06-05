@@ -828,51 +828,6 @@ export function WhatsAppInterface() {
       fetchMensagens(currentId, activeChatNameRef.current, false);
     }, 3000);
     return () => clearInterval(tMsgs);
-  }, [activeChatId]);
-  
-  // Realtime subscription para mensagens do chat ativo
-  useEffect(() => {
-    if (!user?.id || !activeChatId) return;
-
-    console.log(`[REALTIME] Iniciando listener para user_id=${user.id} e chat=${activeChatId}`);
-    
-    const channel = supabase
-      .channel(`chat_${activeChatId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'whatsapp_messages',
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          const newMsg = payload.new as any;
-          const oldMsg = payload.old as any;
-          
-          // Se for DELETE ou UPDATE (ex: soft delete), ou INSERT
-          // Verificamos se pertence à conversa ativa (activeChatId é o telefone sem @)
-          const msg = newMsg || oldMsg;
-          if (msg && msg.remote_jid && msg.remote_jid.includes(activeChatId)) {
-            console.log('[REALTIME] Mudança detectada na conversa ativa, recarregando...');
-            fetchMensagens(activeChatId, activeChatNameRef.current, false);
-          }
-        }
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('[REALTIME] Conectado com sucesso ao canal');
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error('[REALTIME] Erro na conexão do canal');
-          toast.error("Conexão Realtime falhou (403/401?). Usando polling.");
-        }
-      });
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id, activeChatId]);
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeChatId, chats]);
