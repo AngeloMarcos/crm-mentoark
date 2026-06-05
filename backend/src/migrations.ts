@@ -145,6 +145,29 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ON webhook_mensagens_processadas (criado_em)
   `).catch(() => {});
 
+  // Permitir o mesmo message_id em instâncias diferentes (PK antiga era só message_id).
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'webhook_mensagens_processadas_pkey'
+      ) THEN
+        BEGIN
+          ALTER TABLE webhook_mensagens_processadas
+            DROP CONSTRAINT webhook_mensagens_processadas_pkey;
+        EXCEPTION WHEN others THEN NULL;
+        END;
+      END IF;
+    END $$;
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_dedup_msgid_inst
+    ON webhook_mensagens_processadas (message_id, COALESCE(instancia, ''))
+  `).catch(() => {});
+
+
   // ── Sprint 3: Database Audit Fixes ─────────────────────────────────────────
 
   // 1. Criar refresh_tokens se não existir (necessário para auth.ts)
