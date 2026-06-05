@@ -1109,6 +1109,14 @@ export function WhatsAppInterface() {
     const currentChat = activeChat;
     if (!currentChat) return;
 
+    console.log('🚀 [RASTREIO EXCLUSÃO - INÍCIO]', {
+      tipoExclusao: 'mim',
+      quantidadeMensagens: count,
+      idsParaDeletar: Array.from(selectedMessageIds),
+      userIdAtivo: user?.id,
+      instanciaEvolution: currentChat.source
+    });
+
     setIsActionLoading(true);
     const idsToDelete = Array.from(selectedMessageIds);
 
@@ -1120,7 +1128,7 @@ export function WhatsAppInterface() {
           : c
       ));
 
-      await Promise.all(idsToDelete.map(id => 
+      const responses = await Promise.all(idsToDelete.map(id => 
         fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
           method: 'DELETE',
           headers: apiHeaders(),
@@ -1131,8 +1139,19 @@ export function WhatsAppInterface() {
           })
         })
       ));
+
+      responses.forEach(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        console.log('✅ [RASTREIO API - SUCESSO]', { status: response.status, data });
+      });
+
       toast.success(`${count} mensagens removidas para você`);
-    } catch {
+    } catch (err: any) {
+      console.error('❌ [RASTREIO API - ERRO CRÍTICO]', { 
+        mensagem: err.message, 
+        response404_500: err.response?.status, 
+        payloadEnviado: err.config?.data 
+      });
       toast.error("Erro ao ocultar mensagens");
     } finally {
       setIsActionLoading(false);
