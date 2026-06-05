@@ -480,7 +480,42 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // DELETE /api/whatsapp/messages/:messageId — apaga mensagem
+  router.delete('/messages/:messageId', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const messageId = req.params.messageId;
+      const { forEveryone, instancia, remoteJid } = req.body;
+
+      if (forEveryone && instancia && remoteJid) {
+        const cfg = await getEvolutionConfig(userId);
+        const base = cfg.url.replace(/\/$/, '');
+        const targetUrl = `${base}/message/delete/${instancia}`;
+        
+        await evolutionFetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+          body: JSON.stringify({ id: messageId, remoteJid }),
+        }).catch(err => console.warn('[DELETE-EVO] Falhou:', err.message));
+      }
+
+      await pool.query(
+        `UPDATE whatsapp_messages 
+         SET content = null, 
+             message_type = 'deleted',
+             deleted_at = NOW()
+         WHERE message_id = $1 AND user_id = $2`,
+        [messageId, userId]
+      );
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // POST /api/whatsapp/chat-prefs/:phone — atualiza preferências de conversa (pin, archive, mute)
+
   router.post('/chat-prefs/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
