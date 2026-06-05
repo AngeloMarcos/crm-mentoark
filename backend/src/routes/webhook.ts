@@ -388,6 +388,13 @@ export default function webhookRouter(pool: Pool): Router {
       const ts       = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
       const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
+      // Extrair informações de resposta (reply/quote)
+      const contextInfo = (payload.data as any)?.message?.extendedTextMessage?.contextInfo || (payload.data as any)?.message?.imageMessage?.contextInfo || (payload.data as any)?.message?.videoMessage?.contextInfo || (payload.data as any)?.message?.documentMessage?.contextInfo;
+      const replyToId = contextInfo?.stanzaId || contextInfo?.participant ? contextInfo?.stanzaId : null;
+      const replyToContent = contextInfo?.quotedMessage?.conversation || contextInfo?.quotedMessage?.extendedTextMessage?.text || null;
+      const replyToSender = contextInfo?.participant ? (contextInfo.participant.includes('@s.whatsapp.net') ? 'user' : 'assistant') : null;
+
+
       // ── Persistir mensagem recebida ───────────────────────────────────────────
       if (userId) {
         // Em grupos guarda o remetente real (participant) no push_name
