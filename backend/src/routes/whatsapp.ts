@@ -949,10 +949,12 @@ export default function whatsappRouter(pool: Pool): Router {
       const {
         phone, text, instancia: instanciaParam,
         mediaUrl, mediaType, mediaCaption, mediaFilename,
+        replyToMessageId,
       } = req.body as {
         phone: string; text?: string; instancia?: string;
         mediaUrl?: string; mediaType?: 'image' | 'audio' | 'video' | 'document';
         mediaCaption?: string; mediaFilename?: string;
+        replyToMessageId?: string;
       };
 
       // Normaliza o telefone — remove tudo exceto dígitos
