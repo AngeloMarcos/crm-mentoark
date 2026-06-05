@@ -820,6 +820,74 @@ export function WhatsAppInterface() {
     setContatoResults([]);
   };
 
+  // Lógica de busca na conversa
+  const handleChatSearch = (term: string) => {
+    setChatSearchTerm(term);
+    if (!term.trim() || !activeChat) {
+      setChatSearchResults([]);
+      setCurrentSearchIndex(-1);
+      return;
+    }
+
+    const results: number[] = [];
+    const lowerTerm = term.toLowerCase();
+    activeChat.messages.forEach((m, idx) => {
+      if (m.content.toLowerCase().includes(lowerTerm)) {
+        results.push(idx);
+      }
+    });
+
+    setChatSearchResults(results);
+    if (results.length > 0) {
+      setCurrentSearchIndex(results.length - 1); // Começa do mais recente
+      scrollToMessage(results[results.length - 1]);
+    } else {
+      setCurrentSearchIndex(-1);
+    }
+  };
+
+  const navigateSearch = (direction: 'next' | 'prev') => {
+    if (chatSearchResults.length === 0) return;
+    
+    let newIndex = currentSearchIndex;
+    if (direction === 'next') {
+      newIndex = currentSearchIndex > 0 ? currentSearchIndex - 1 : chatSearchResults.length - 1;
+    } else {
+      newIndex = currentSearchIndex < chatSearchResults.length - 1 ? currentSearchIndex + 1 : 0;
+    }
+    
+    setCurrentSearchIndex(newIndex);
+    scrollToMessage(chatSearchResults[newIndex]);
+  };
+
+  const scrollToMessage = (msgIndex: number) => {
+    if (!activeChat) return;
+    const msg = activeChat.messages[msgIndex];
+    if (msg) {
+      const el = messageRefs.current.get(msg.id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
+
+  const highlightText = (text: string, term: string) => {
+    if (!term.trim()) return text;
+    const parts = text.split(new RegExp(`(${term})`, 'gi'));
+    return (
+      <>
+        {parts.map((part, i) => 
+          part.toLowerCase() === term.toLowerCase() ? (
+            <mark key={i} className="bg-yellow-300 text-black px-0.5 rounded-sm animate-pulse font-bold">
+              {part}
+            </mark>
+          ) : part
+        )}
+      </>
+    );
+  };
+
+
   const isConnected = connectionStatus?.state === "open";
 
   return (
