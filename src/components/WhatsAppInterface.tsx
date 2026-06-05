@@ -90,6 +90,7 @@ interface Chat {
   is_muted?: boolean;
   is_archived?: boolean;
   source?: string;
+  push_name?: string;
   messages: Message[];
   notes?: string;
   profile_pic?: string;
