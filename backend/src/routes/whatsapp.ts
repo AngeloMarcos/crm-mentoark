@@ -976,7 +976,6 @@ export default function whatsappRouter(pool: Pool): Router {
           number: phoneClean,
           mediatype: mediaType,
           media: mediaUrl,
-          delay: 1200,
         };
         if (mediaCaption) mediaPayload.caption = mediaCaption;
         if (mediaFilename) mediaPayload.fileName = mediaFilename;
@@ -1054,7 +1053,7 @@ export default function whatsappRouter(pool: Pool): Router {
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-            body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+            body: JSON.stringify({ number: phoneClean, text }),
           });
         } catch (err: any) {
           console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message);
@@ -1075,7 +1074,7 @@ export default function whatsappRouter(pool: Pool): Router {
               const retry = await evolutionFetch(targetUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+                body: JSON.stringify({ number: phoneClean, text }),
               });
               if (!retry.ok) {
                 return res.status(503).json({
@@ -1099,7 +1098,7 @@ export default function whatsappRouter(pool: Pool): Router {
             const retry = await evolutionFetch(targetUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-              body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+              body: JSON.stringify({ number: phoneClean, text }),
             }).catch(() => null);
             if (!retry?.ok) {
               return res.status(503).json({ message: 'WhatsApp ainda inicializando. Tente novamente em alguns segundos.' });
