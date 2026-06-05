@@ -412,7 +412,31 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // PATCH /api/whatsapp/conversas/:phone/read — marca mensagens como lidas
+  router.patch('/conversas/:phone/read', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      if (!phone) return res.status(400).json({ message: 'phone inválido' });
+
+      await pool.query(
+        `UPDATE whatsapp_messages 
+         SET is_read = true 
+         WHERE (split_part(remote_jid,'@',1) = $1 OR split_part(remote_jid,'@',1) = '55' || $1)
+           AND user_id = $2 
+           AND from_me = false 
+           AND is_read = false`,
+        [phone, userId]
+      );
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/ia-status/:phone — lê se IA está pausada para esse contato
+
   router.get('/ia-status/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
