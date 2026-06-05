@@ -822,9 +822,11 @@ export function WhatsAppInterface() {
             </div>
           )}
           {!loadingChats && filteredChats.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground text-sm">
+            <div className="flex flex-col items-center justify-center py-12 px-6 text-center text-muted-foreground text-sm">
               <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
-              Nenhuma conversa
+              {searchTerm 
+                ? "Nenhuma conversa encontrada para esta busca."
+                : "Nenhuma mensagem recebida ainda. Quando clientes enviarem mensagens para seu WhatsApp, elas aparecerão aqui automaticamente."}
             </div>
           )}
           <div className="divide-y divide-border/50">
