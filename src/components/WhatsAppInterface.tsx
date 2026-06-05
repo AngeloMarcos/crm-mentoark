@@ -275,6 +275,8 @@ export function WhatsAppInterface() {
   // Estados para seleção múltipla
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [starredMessageIds, setStarredMessageIds] = useState<Set<string>>(new Set());
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
