@@ -1,4 +1,11 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1288,8 +1295,8 @@ export function WhatsAppInterface() {
             {filteredChats.map(chat => {
               const isActive = activeChatId === chat.id;
               return (
-                <DropdownMenu key={chat.id}>
-                  <DropdownMenuTrigger asChild>
+                <ContextMenu key={chat.id}>
+                  <ContextMenuTrigger>
                     <div
                       onClick={() => {
                         setActiveChatId(chat.id);
@@ -1348,27 +1355,27 @@ export function WhatsAppInterface() {
                         </div>
                       </div>
                     </div>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-56 rounded-xl shadow-xl border-border/50">
-                    <DropdownMenuItem onClick={() => markAsUnread(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-56 rounded-xl shadow-xl border-border/50">
+                    <ContextMenuItem onClick={() => markAsUnread(chat.id)} className="gap-2 py-2.5 cursor-pointer">
                       <MessageCircle className="h-4 w-4 text-muted-foreground" />
                       <span>Marcar como não lida</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => togglePin(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => togglePin(chat.id)} className="gap-2 py-2.5 cursor-pointer">
                       <Pin className={`h-4 w-4 ${chat.is_pinned ? 'text-primary fill-primary/10' : 'text-muted-foreground'}`} />
                       <span>{chat.is_pinned ? "Desafixar" : "Fixar conversa"}</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => toggleMute(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => toggleMute(chat.id)} className="gap-2 py-2.5 cursor-pointer">
                       <BellOff className={`h-4 w-4 ${chat.is_muted ? 'text-orange-500' : 'text-muted-foreground'}`} />
                       <span>{chat.is_muted ? "Ativar notificações" : "Silenciar"}</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => toggleArchive(chat.id)} className="gap-2 py-2.5 cursor-pointer text-destructive focus:text-destructive">
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onClick={() => toggleArchive(chat.id)} className="gap-2 py-2.5 cursor-pointer text-destructive focus:text-destructive">
                       <Archive className="h-4 w-4" />
                       <span>{chat.is_archived ? "Desarquivar" : "Arquivar conversa"}</span>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               );
             })}
 
