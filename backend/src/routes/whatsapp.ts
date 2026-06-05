@@ -310,7 +310,8 @@ export default function whatsappRouter(pool: Pool): Router {
                ORDER BY m.created_at DESC
              ) AS rn
            FROM whatsapp_messages m
-           WHERE m.user_id = $1
+           WHERE m.user_id = $1 AND (m.is_hidden = false OR m.is_hidden IS NULL)
+
          ),
          contato_unico AS (
            SELECT DISTINCT ON (RIGHT(telefone, 11))
@@ -406,8 +407,8 @@ export default function whatsappRouter(pool: Pool): Router {
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
          LEFT JOIN users u ON u.id = m.sent_by_user_id
          WHERE (split_part(m.remote_jid, '@', 1) = $1 OR split_part(m.remote_jid, '@', 1) = '55' || $1)
-
            AND m.user_id = $2
+           AND (m.is_hidden = false OR m.is_hidden IS NULL)
          ORDER BY COALESCE(m.timestamp_wa, m.created_at) ASC
          LIMIT $3 OFFSET $4`,
         [phone, userId, limit, offset]
@@ -498,16 +499,25 @@ export default function whatsappRouter(pool: Pool): Router {
           headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
           body: JSON.stringify({ id: messageId, remoteJid }),
         }).catch(err => console.warn('[DELETE-EVO] Falhou:', err.message));
-      }
 
-      await pool.query(
-        `UPDATE whatsapp_messages 
-         SET content = null, 
-             message_type = 'deleted',
-             deleted_at = NOW()
-         WHERE message_id = $1 AND user_id = $2`,
-        [messageId, userId]
-      );
+        // Soft delete (Placeholder no WhatsApp)
+        await pool.query(
+          `UPDATE whatsapp_messages 
+           SET content = null, 
+               message_type = 'deleted',
+               deleted_at = NOW()
+           WHERE message_id = $1 AND user_id = $2`,
+          [messageId, userId]
+        );
+      } else {
+        // Excluir para mim (Ocultar da interface)
+        await pool.query(
+          `UPDATE whatsapp_messages 
+           SET is_hidden = true 
+           WHERE message_id = $1 AND user_id = $2`,
+          [messageId, userId]
+        );
+      }
 
       return res.json({ ok: true });
     } catch (err: any) {

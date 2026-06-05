@@ -2346,6 +2346,7 @@ export type Database = {
           from_me: boolean
           id: string
           instancia: string
+          is_hidden: boolean | null
           midia_mime: string | null
           midia_nome: string | null
           midia_url: string | null
@@ -2367,6 +2368,7 @@ export type Database = {
           from_me?: boolean
           id: string
           instancia: string
+          is_hidden?: boolean | null
           midia_mime?: string | null
           midia_nome?: string | null
           midia_url?: string | null
@@ -2388,6 +2390,7 @@ export type Database = {
           from_me?: boolean
           id?: string
           instancia?: string
+          is_hidden?: boolean | null
           midia_mime?: string | null
           midia_nome?: string | null
           midia_url?: string | null
