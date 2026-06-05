@@ -498,16 +498,25 @@ export default function whatsappRouter(pool: Pool): Router {
           headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
           body: JSON.stringify({ id: messageId, remoteJid }),
         }).catch(err => console.warn('[DELETE-EVO] Falhou:', err.message));
-      }
 
-      await pool.query(
-        `UPDATE whatsapp_messages 
-         SET content = null, 
-             message_type = 'deleted',
-             deleted_at = NOW()
-         WHERE message_id = $1 AND user_id = $2`,
-        [messageId, userId]
-      );
+        // Soft delete (Placeholder no WhatsApp)
+        await pool.query(
+          `UPDATE whatsapp_messages 
+           SET content = null, 
+               message_type = 'deleted',
+               deleted_at = NOW()
+           WHERE message_id = $1 AND user_id = $2`,
+          [messageId, userId]
+        );
+      } else {
+        // Excluir para mim (Ocultar da interface)
+        await pool.query(
+          `UPDATE whatsapp_messages 
+           SET is_hidden = true 
+           WHERE message_id = $1 AND user_id = $2`,
+          [messageId, userId]
+        );
+      }
 
       return res.json({ ok: true });
     } catch (err: any) {
