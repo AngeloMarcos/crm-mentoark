@@ -10,9 +10,16 @@ import {
   UserPlus, Check, Smartphone,
   ShieldAlert, Tag, Sparkles, Zap,
   BotOff, Bot, ImageIcon, Reply,
-  ChevronUp,
+  ChevronUp, Pin, Archive, BellOff, MessageCircle,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
