@@ -430,6 +430,15 @@ export function WhatsAppInterface() {
           };
         });
 
+        // Toasts para novas mensagens
+        newArrivals.forEach(id => {
+          if (id !== activeChatIdRef.current) {
+            const row = rows.find(r => r.session_id === id);
+            const nome = row?.nome || id;
+            toast.info(`💬 Nova mensagem de ${nome}`, { duration: 4000 });
+          }
+        });
+
         // Preserva chat local ativo que ainda não chegou ao banco (ex: nova conversa antes do 1º envio)
         const activeId = activeChatIdRef.current;
         if (activeId && !dbChats.find(c => c.id === activeId)) {
