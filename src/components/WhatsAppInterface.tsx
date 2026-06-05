@@ -986,19 +986,62 @@ export function WhatsAppInterface() {
   const isConnected = connectionStatus?.state === "open";
 
   // Funções para Context Menu
-  const togglePin = (chatId: string) => {
-    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_pinned: !c.is_pinned } : c));
-    toast.success("Conversa atualizada");
+  const togglePin = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_pinned;
+    
+    // Otimista
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_pinned: nextVal } : c));
+    toast.success(nextVal ? "Conversa fixada" : "Conversa desafixada");
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ pinned: nextVal })
+      });
+    } catch {
+      // Reverter em caso de erro real se necessário
+    }
   };
 
-  const toggleMute = (chatId: string) => {
-    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_muted: !c.is_muted } : c));
-    toast.success("Status de notificação alterado");
+  const toggleMute = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_muted;
+
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_muted: nextVal } : c));
+    toast.success(nextVal ? "Notificações silenciadas" : "Notificações ativadas");
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ muted_until: nextVal ? new Date(Date.now() + 365*24*60*60*1000).toISOString() : null })
+      });
+    } catch {}
   };
 
-  const toggleArchive = (chatId: string) => {
-    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_archived: !c.is_archived } : c));
-    toast.success("Conversa arquivada");
+  const toggleArchive = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_archived;
+
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_archived: nextVal } : c));
+    toast.success(nextVal ? "Conversa arquivada" : "Conversa desarquivada");
+    
+    if (nextVal && activeChatId === chatId) {
+      setActiveChatId(null);
+    }
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ archived: nextVal })
+      });
+    } catch {}
   };
 
   const markAsUnread = (chatId: string) => {
