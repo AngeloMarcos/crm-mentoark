@@ -347,8 +347,10 @@ export default function whatsappRouter(pool: Pool): Router {
            m.id, m.message_id, m.from_me, m.message_type, m.content,
            m.media_url, m.media_mimetype, m.status, m.push_name,
            m.timestamp_wa, m.created_at,
+           m.reply_to_message_id, m.reply_to_content, m.reply_to_sender,
            COALESCE(s.status, m.status) AS delivery_status,
            u.display_name AS sender_name
+
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
