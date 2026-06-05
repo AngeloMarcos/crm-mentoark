@@ -892,6 +892,46 @@ export function WhatsAppInterface() {
     scrollToMessage(chatSearchResults[newIndex]);
   };
 
+  const toggleMessageSelection = (messageId: string) => {
+    if (!isSelectMode) setIsSelectMode(true);
+    setSelectedMessageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+        if (next.size === 0) setIsSelectMode(false);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  };
+
+  const handleCopySelected = () => {
+    if (!activeChat) return;
+    const texts = activeChat.messages
+      .filter(m => selectedMessageIds.has(m.id))
+      .map(m => `[${m.timestamp}] ${m.senderName || 'Desconhecido'}: ${m.content}`)
+      .join('\n');
+    
+    navigator.clipboard.writeText(texts);
+    toast.success(`${selectedMessageIds.size} mensagens copiadas`);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+  };
+
+  const handleDeleteSelected = () => {
+    const count = selectedMessageIds.size;
+    setChats(prev => prev.map(c => 
+      c.id === activeChatId 
+        ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
+        : c
+    ));
+    toast.success(`${count} mensagens removidas localmente`);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+  };
+
+
   const scrollToMessage = (msgIndex: number) => {
     if (!activeChat) return;
     const msg = activeChat.messages[msgIndex];
