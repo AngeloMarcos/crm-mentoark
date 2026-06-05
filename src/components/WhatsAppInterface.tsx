@@ -516,6 +516,12 @@ export function WhatsAppInterface() {
         midia_nome: m.midia_nome,
         status: m.status || m.delivery_status,
         is_read: m.is_read,
+        reply_to: m.reply_to_message_id ? {
+          message_id: m.reply_to_message_id,
+          content: m.quoted_message?.content || m.quoted_message?.conteudo || 'Mensagem original',
+          senderName: m.quoted_message?.sender_name || (m.quoted_message?.from_me ? 'Você' : (m.push_name || chatName)),
+          role: m.quoted_message?.from_me ? 'assistant' : 'user'
+        } : undefined
       }));
       // Só atualiza se houver mudança real (evita re-render/flickering)
       setChats(prev => {
