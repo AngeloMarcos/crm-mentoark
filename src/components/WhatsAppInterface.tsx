@@ -428,9 +428,10 @@ export function WhatsAppInterface() {
   
   const filteredChats = useMemo(() => {
     let list = chats.filter(c =>
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.phone.includes(searchTerm)
+      c.name.toLowerCase().includes(globalSearchTerm.toLowerCase()) ||
+      c.phone.includes(globalSearchTerm)
     );
+
 
     // Filtra pela aba (Arquivadas ou Principal)
     if (activeTab === "todos") {
