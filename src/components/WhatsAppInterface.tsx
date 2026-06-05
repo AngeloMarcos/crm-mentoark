@@ -1529,7 +1529,10 @@ export function WhatsAppInterface() {
                   const showNameOut = isOut && !isNote && (prevRole !== "assistant" || prevMsg?.senderName !== m.senderName);
 
                   return (
-                    <div key={m.id}>
+                    <div 
+                      key={m.id}
+                      ref={el => { if (el) messageRefs.current.set(m.id, el); }}
+                    >
                       {dateLabel && (
                         <div className="flex justify-center my-6 sticky top-2 z-10">
                           <div className="bg-background/80 backdrop-blur-sm border border-border/50 px-4 py-1.5 rounded-full shadow-sm">
