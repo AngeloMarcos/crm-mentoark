@@ -673,7 +673,7 @@ export function WhatsAppInterface() {
 
   useEffect(() => {
     const ms = activeChatId ? 2000 : 5000;
-    const t = setInterval(fetchConversas, ms);
+    const t = setInterval(() => fetchConversas(false), ms);
     return () => clearInterval(t);
   }, [activeChatId]);
 
