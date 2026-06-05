@@ -153,11 +153,12 @@ export default function webhookRouter(pool: Pool): Router {
   router.post('/evolution', async (req: Request, res: Response) => {
     const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
     if (webhookSecret && !verificarAssinaturaEvolution(req, webhookSecret)) {
-      console.warn('[WEBHOOK] Assinatura inválida — requisição rejeitada');
+      wlog('WEBHOOK_AUTH_ERROR', 'Assinatura inválida — requisição rejeitada');
       return res.status(401).json({ error: 'Assinatura inválida' });
     }
 
     res.status(200).json({ ok: true });
+
 
     try {
       const payload = req.body as EvolutionPayload;
@@ -353,10 +354,11 @@ export default function webhookRouter(pool: Pool): Router {
              VALUES ($1, $2, $3, $4, true, $5, $6, 'sent', to_timestamp($7))
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
             [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
-          ).catch(err => console.error('[WEBHOOK INSERT fromMe whatsapp_messages]:', err.message));
+          ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao salvar msg fromMe: ${err.message}`));
         }
         return;
       }
+
 
       // ── Deduplicação em memória (escopo por instância) ───────────────────────
       const memKey = `${instancia}:${messageId}`;
@@ -374,7 +376,8 @@ export default function webhookRouter(pool: Pool): Router {
       await pool.query(
         'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [messageId, instancia]
-      ).catch(err => console.error('[WEBHOOK INSERT webhook_mensagens_processadas]:', err.message));
+      ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao inserir dedup banco: ${err.message}`));
+
 
 
       // ── Extrair dados ─────────────────────────────────────────────────────────
@@ -400,7 +403,7 @@ export default function webhookRouter(pool: Pool): Router {
           [userId, instancia, remoteJid, messageId, tipo,
            texto || null, midia.url || null, midia.mime || null,
            pushNameFinal, tsVal]
-        ).catch(err => console.warn('[WEBHOOK] Falha ao salvar mensagem:', err.message));
+        ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao salvar mensagem recebida: ${err.message}`));
 
         // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────
         if (!isGroup) {
@@ -468,7 +471,7 @@ export default function webhookRouter(pool: Pool): Router {
                 console.log(`[WEBHOOK] Foto de perfil atualizada para ${telefone}`);
               }
             } catch (e: any) {
-              console.warn('[WEBHOOK] Falha ao upsert contato:', e.message);
+              wlog('WEBHOOK_ERROR', `Falha ao upsert contato: ${e.message}`);
             }
           })();
         }
