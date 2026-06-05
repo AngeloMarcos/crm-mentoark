@@ -1464,6 +1464,21 @@ export function WhatsAppInterface() {
                 })}
                 <div ref={messagesEndRef} />
               </div>
+
+              {/* Botão flutuante para rolar ao final */}
+              {showScrollButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-6 right-6 z-20 w-11 h-11 bg-background border border-border/50 rounded-full shadow-xl flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-muted transition-all animate-in zoom-in-50 duration-300"
+                >
+                  <ChevronDown className="h-6 w-6" />
+                  {activeChat.unread && activeChat.unread > 0 ? (
+                    <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 bg-green-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-lg border-2 border-background animate-in fade-in zoom-in duration-500">
+                      {activeChat.unread}
+                    </span>
+                  ) : null}
+                </button>
+              )}
             </ScrollArea>
 
             {/* Input */}
