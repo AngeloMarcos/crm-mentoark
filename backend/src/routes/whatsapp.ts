@@ -253,10 +253,13 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // PARTITION BY phone (não por instância) — evita duplicatas quando o mesmo
       // número existiu em duas instâncias diferentes
+      const showArchived = req.query.archived === 'true';
+
       const r = await pool.query(
         `WITH ranked AS (
            SELECT
              split_part(m.remote_jid,'@',1) AS phone,
+             m.remote_jid,
              m.instance_name,
              m.content,
              m.from_me,
@@ -286,23 +289,27 @@ export default function whatsappRouter(pool: Pool): Router {
          )
          SELECT
            r.phone AS session_id,
-            r.instance_name AS instancia,
-            r.created_at AS ultima_atividade,
-            r.total::int AS total,
-            r.unread_count::int AS unread,
-            r.content AS ultima_mensagem,
-            r.is_group,
-            r.last_sender,
-            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
-            cu.push_name,
-            cu.nome_contato,
-            cu.profile_pic_url
+           r.instance_name AS instancia,
+           r.created_at AS ultima_atividade,
+           r.total::int AS total,
+           r.unread_count::int AS unread,
+           r.content AS ultima_mensagem,
+           r.is_group,
+           r.last_sender,
+           CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
+           cu.push_name,
+           cu.nome_contato,
+           cu.profile_pic_url,
+           COALESCE(wcp.pinned, false) as pinned,
+           COALESCE(wcp.archived, false) as archived,
+           wcp.muted_until
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
-         WHERE r.rn = 1
-         ORDER BY r.created_at DESC
+         LEFT JOIN whatsapp_chat_prefs wcp ON wcp.user_id = $1 AND wcp.remote_jid = r.remote_jid
+         WHERE r.rn = 1 AND (COALESCE(wcp.archived, false) = $2)
+         ORDER BY COALESCE(wcp.pinned, false) DESC, r.created_at DESC
          LIMIT 300`,
-        [userId]
+        [userId, showArchived]
       );
 
       const conversas = r.rows.map(row => {
