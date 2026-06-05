@@ -2021,25 +2021,10 @@ export function WhatsAppInterface() {
                     <div 
                       key={m.id}
                       ref={el => { if (el) messageRefs.current.set(m.id, el); }}
-                      className="flex items-center gap-4 group/row"
+                      className="group/row flex flex-col w-full"
                     >
-                      {isSelectMode && !isNote && (
-                        <div 
-                          className="shrink-0 cursor-pointer"
-                          onClick={() => toggleMessageSelection(m.id)}
-                        >
-                          <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
-                            selectedMessageIds.has(m.id) 
-                              ? "bg-primary border-primary" 
-                              : "border-muted-foreground/30 bg-background"
-                          }`}>
-                            {selectedMessageIds.has(m.id) && <Check className="h-3.5 w-3.5 text-white stroke-[4px]" />}
-                          </div>
-                        </div>
-                      )}
-
                       {dateLabel && (
-                        <div className="flex justify-center my-6 sticky top-2 z-10">
+                        <div className="flex justify-center my-6 sticky top-2 z-10 pointer-events-none">
                           <div className="bg-background/80 backdrop-blur-sm border border-border/50 px-4 py-1.5 rounded-full shadow-sm">
                             <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/80">
                               {dateLabel}
@@ -2047,20 +2032,50 @@ export function WhatsAppInterface() {
                           </div>
                         </div>
                       )}
-                      <div 
-                        className={`flex-1 flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          if (!isNote) toggleMessageSelection(m.id);
-                        }}
-                      >
-                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
-                          isOut
-                            ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
-                            : isNote
-                              ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
-                              : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
-                        } ${isSelectMode && selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10" : ""}`}>
+
+                      <div className="flex items-center gap-4 w-full">
+                        {/* Checkbox (Visível em modo seleção ou hover) */}
+                        {!isNote && (
+                          <div 
+                            className={`shrink-0 cursor-pointer transition-all duration-300 ${
+                              isSelectMode 
+                                ? "opacity-100 translate-x-0" 
+                                : "opacity-0 -translate-x-2 group-hover/row:opacity-100 group-hover/row:translate-x-0"
+                            }`}
+                            onClick={() => toggleMessageSelection(m.id)}
+                          >
+                            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+                              selectedMessageIds.has(m.id) 
+                                ? "bg-primary border-primary shadow-lg shadow-primary/20" 
+                                : "border-muted-foreground/30 bg-background hover:border-primary/50"
+                            }`}>
+                              {selectedMessageIds.has(m.id) && <Check className="h-3.5 w-3.5 text-white stroke-[4px]" />}
+                            </div>
+                          </div>
+                        )}
+                        
+                        <div 
+                          className={`flex-1 flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            if (!isNote) toggleMessageSelection(m.id);
+                          }}
+                        >
+                          <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
+                            isOut
+                              ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
+                              : isNote
+                                ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
+                                : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
+                          } ${selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10 brightness-95 scale-[0.98] origin-center transition-all" : ""}`}>
+                            
+                            {/* Ícone de Favorito (Star) */}
+                            {starredMessageIds.has(m.id) && (
+                              <div className={`absolute -top-1 ${isOut ? '-left-1' : '-right-1'} bg-background rounded-full p-1 shadow-sm border border-amber-200 z-10`}>
+                                <Star className="h-2.5 w-2.5 text-amber-500 fill-amber-500" />
+                              </div>
+                            )}
+
                           {/* Menu de Resposta (Reply) */}
                           {!isNote && (
                             <button
