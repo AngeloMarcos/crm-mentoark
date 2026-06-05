@@ -175,6 +175,20 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
+      if (eventClean === 'messagesdelete') {
+        const deletedId = payload.data?.key?.id;
+        if (deletedId) {
+          await pool.query(
+            `UPDATE whatsapp_messages 
+             SET content = null, message_type = 'deleted', deleted_at = NOW()
+             WHERE message_id = $1`,
+            [deletedId]
+          ).catch(() => {});
+        }
+        return;
+      }
+
+
       // Aceita 'messagesupsert' (cobre MESSAGES_UPSERT, messages.upsert, messages_upsert etc.)
       if (eventClean !== 'messagesupsert') {
         wlog('WEBHOOK_DROP', `evento ignorado: "${eventClean}"`);
