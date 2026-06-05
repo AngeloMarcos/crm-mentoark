@@ -1901,6 +1901,72 @@ export function WhatsAppInterface() {
               ref={scrollAreaRef}
               onScroll={handleScroll}
             >
+              {/* Barra de Ferramentas Suspensa (Seleção) */}
+              {isSelectMode && (
+                <div className="sticky top-0 left-0 right-0 z-40 px-6 py-3 bg-background/95 backdrop-blur-md border-b shadow-md flex items-center justify-between animate-in slide-in-from-top duration-300">
+                  <div className="flex items-center gap-4">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={() => { setIsSelectMode(false); setSelectedMessageIds(new Set()); }}
+                      className="rounded-full h-8 w-8 hover:bg-muted"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                    <span className="text-sm font-bold text-primary">{selectedMessageIds.size} selecionada(s)</span>
+                  </div>
+                  
+                  <div className="flex items-center gap-1.5">
+                    <Button 
+                      variant="ghost" 
+                      onClick={handleCopySelected}
+                      disabled={isActionLoading}
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-primary/5 hover:text-primary transition-all text-xs font-bold uppercase tracking-tight"
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copiar
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      onClick={handleToggleStar}
+                      disabled={isActionLoading}
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-all text-xs font-bold uppercase tracking-tight"
+                    >
+                      <Star className="h-4 w-4" />
+                      Favoritar
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button 
+                          variant="ghost" 
+                          disabled={isActionLoading}
+                          className="h-9 px-3 gap-2 rounded-xl hover:bg-destructive/5 hover:text-destructive transition-all text-xs font-bold uppercase tracking-tight"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Excluir
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-56 rounded-xl shadow-xl">
+                        <DropdownMenuItem onClick={handleDeleteForMe} className="gap-2 py-2.5 cursor-pointer">
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
+                          <span>Excluir para Mim</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={handleDeleteForEveryone} className="gap-2 py-2.5 cursor-pointer text-destructive focus:text-destructive">
+                          <Trash2 className="h-4 w-4" />
+                          <span>Excluir para Todos</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  
+                  {isActionLoading && (
+                    <div className="absolute inset-0 bg-background/50 flex items-center justify-center rounded-xl z-50">
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="px-8 py-6 space-y-1 relative z-1">
                 {loadingMessages && (
                   <div className="flex items-center justify-center py-12 text-muted-foreground">
