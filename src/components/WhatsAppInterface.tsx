@@ -220,6 +220,7 @@ export function WhatsAppInterface() {
   const [syncingProfiles, setSyncingProfiles] = useState(false);
   // Cache de sessão: phone → foto_perfil buscada (evita repetir chamadas)
   const prevConversasRef = useRef<Map<string, { ts: string; role: string }>>(new Map());
+  const prevUltimaAtividadeRef = useRef<Map<string, string>>(new Map());
   const lastOpenedRef = useRef<Map<string, string>>(new Map());
   const picCacheRef = useRef<Map<string, string | null>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -400,31 +401,24 @@ export function WhatsAppInterface() {
       const rows: any[] = await res.json();
       
       const newArrivals: string[] = [];
-      const newContacts: string[] = [];
+      for (const row of rows) {
+        const prev = prevUltimaAtividadeRef.current.get(row.session_id);
+        const isNew = !prev || new Date(row.ultima_atividade) > new Date(prev);
+        const fromClient = row.ultimo_role === 'user';
+        const notActive = activeChatIdRef.current !== row.session_id;
+        if (isNew && fromClient && notActive && prev) {
+          newArrivals.push(row.session_id);
+        }
+        prevUltimaAtividadeRef.current.set(row.session_id, row.ultima_atividade);
+      }
 
       setChats(prev => {
         const prevMap = new Map(prev.map(c => [c.id, c]));
         
-        rows.forEach(row => {
-          const prevInfo = prevMap.get(row.session_id);
-          const prevMeta = prevConversasRef.current.get(row.session_id);
-          
-          if (row.ultima_atividade !== prevMeta?.ts && row.ultimo_role === 'user' && row.session_id !== activeChatIdRef.current) {
-            newArrivals.push(row.session_id);
-          }
-          
-          if (!prevMeta && row.ultimo_role === 'user') {
-            newContacts.push(row.session_id);
-          }
-          
-          prevConversasRef.current.set(row.session_id, { ts: row.ultima_atividade, role: row.ultimo_role });
-        });
-
         const dbChats = rows.map(row => {
-          const prevMeta = prevConversasRef.current.get(row.session_id);
-          const lastOpened = lastOpenedRef.current.get(row.session_id);
-          const unread = (newArrivals.includes(row.session_id) || 
-            (prevMeta?.role === 'user' && (!lastOpened || lastOpened < row.ultima_atividade))) ? 1 : 0;
+          const lastOpened = lastOpenedRef.current.get(row.session_id) ?? '';
+          const hasUnread = row.ultimo_role === 'user'
+            && new Date(row.ultima_atividade) > new Date(lastOpened);
 
           return {
             id: row.session_id,
@@ -438,26 +432,29 @@ export function WhatsAppInterface() {
             messages: prevMap.get(row.session_id)?.messages || [],
             notes: prevMap.get(row.session_id)?.notes || '',
             profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
-            unread: unread,
+            unread: hasUnread ? 1 : 0,
           };
         });
 
         // Toasts para novas mensagens
-        newArrivals.forEach(id => {
-          if (id !== activeChatIdRef.current) {
-            const row = rows.find(r => r.session_id === id);
-            const nome = row?.nome || id;
-            toast.info(`💬 Nova mensagem de ${nome}`, { duration: 4000 });
-          }
-        });
+        for (const sid of newArrivals) {
+          const chat = rows.find(r => r.session_id === sid);
+          const nome = chat?.nome || sid;
+          toast.info(`💬 ${nome}`, {
+            description: chat?.ultima_mensagem?.slice(0, 60) || 'Nova mensagem',
+            duration: 5000,
+          });
+        }
 
-        // Lógica para novos contatos
-        newContacts.forEach(id => {
-          if (!activeChatIdRef.current) {
-            setActiveChatId(id);
-          } else {
-            const row = rows.find(r => r.session_id === id);
-            toast.success(`📱 Novo contato: ${row?.nome || id}`);
+        // Auto-selecionar novos contatos se não houver chat ativo
+        rows.forEach(row => {
+          const isNewContact = !prevMap.has(row.session_id);
+          if (isNewContact && row.ultimo_role === 'user') {
+            if (!activeChatIdRef.current) {
+              setActiveChatId(row.session_id);
+            } else {
+              toast.success(`📱 Novo contato: ${row.nome || row.session_id}`);
+            }
           }
         });
 
@@ -504,8 +501,9 @@ export function WhatsAppInterface() {
         const newIds     = msgs.map(m => m.id + (m.status || ''));
         if (JSON.stringify(currentIds) === JSON.stringify(newIds)) return prev;
         
-        if (msgs.length > (atual?.messages.length ?? 0)) {
-          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+        const prevLen = prev.find(c => c.id === phone)?.messages.length ?? 0;
+        if (msgs.length > prevLen) {
+          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 80);
         }
 
         const now = new Date().toISOString();
@@ -580,8 +578,13 @@ export function WhatsAppInterface() {
 
   useEffect(() => {
     const tStatus = setInterval(checkStatus, 30000);
-    const tConversas = setInterval(fetchConversas, activeChatId ? 2000 : 5000);
-    return () => { clearInterval(tStatus); clearInterval(tConversas); };
+    return () => clearInterval(tStatus);
+  }, []);
+
+  useEffect(() => {
+    const ms = activeChatId ? 2000 : 5000;
+    const t = setInterval(fetchConversas, ms);
+    return () => clearInterval(t);
   }, [activeChatId]);
 
   useEffect(() => {
