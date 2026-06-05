@@ -68,11 +68,14 @@ export default function OpenClawPage() {
         </TabsContent>
 
 
-        <TabsContent value="config">
-          <Card className="p-4 bg-[#111] border-[#222]">
-            <h2 className="text-lg font-bold mb-4">Workspace Files</h2>
-          </Card>
+        <TabsContent value="config" className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+             <FileConfigCard filename="SOUL.md" description="Identidade do agente" contentPreview="Você é o agente MentoArk..." onSave={async () => {}} />
+             <FileConfigCard filename="USER.md" description="Perfil do operador" contentPreview="Operador principal..." onSave={async () => {}} />
+             <FileConfigCard filename="TOOLS.md" description="Ferramentas configuradas" contentPreview="docker logs, df -h..." onSave={async () => {}} />
+          </div>
         </TabsContent>
+
       </Tabs>
     </div>
   );
