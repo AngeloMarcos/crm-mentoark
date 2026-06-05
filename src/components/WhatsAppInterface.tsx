@@ -1527,77 +1527,124 @@ export function WhatsAppInterface() {
         {activeChat ? (
           <>
             {/* Chat header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b bg-background/40 backdrop-blur-md shrink-0 z-10 shadow-sm">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
-                  className={activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}
-                  title={activeChat.profile_pic ? 'Ampliar foto' : ''}
-                >
-                  <ChatAvatar name={activeChat.name} url={activeChat.profile_pic} size="md" rounded="2xl" className="border border-primary/20 shadow-inner" />
-                </button>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
-                    <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+            <div className="h-16 shrink-0 border-b flex items-center justify-between px-6 bg-background/60 backdrop-blur-md z-20 shadow-sm">
+              {isSelectMode ? (
+                <div className="flex-1 flex items-center justify-between animate-in slide-in-from-top duration-300">
+                  <div className="flex items-center gap-4">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={() => { setIsSelectMode(false); setSelectedMessageIds(new Set()); }}
+                      className="rounded-full h-9 w-9"
+                    >
+                      <X className="h-5 w-5" />
+                    </Button>
+                    <span className="text-sm font-bold">{selectedMessageIds.size} selecionada(s)</span>
                   </div>
-                  <p className="text-[11px] font-medium text-muted-foreground">
-                    <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span> · {activeChat.phone}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={handleCopySelected}
+                      className="h-9 w-9 rounded-xl hover:text-primary transition-colors"
+                      title="Copiar texto"
+                    >
+                      <Copy className="h-4.5 w-4.5" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-9 w-9 rounded-xl hover:text-primary transition-colors"
+                      title="Encaminhar"
+                    >
+                      <Forward className="h-4.5 w-4.5" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={handleDeleteSelected}
+                      className="h-9 w-9 rounded-xl hover:text-destructive transition-colors"
+                      title="Apagar"
+                    >
+                      <Trash2 className="h-4.5 w-4.5" />
+                    </Button>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {/* Toggle IA — não interfere no envio/recebimento de mensagens */}
-                <button
-                  onClick={toggleIA}
-                  disabled={togglingIA}
-                  title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
-                    iaPausada
-                      ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
-                      : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                  }`}
-                >
-                  {togglingIA ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : iaPausada ? (
-                    <BotOff className="h-3.5 w-3.5" />
-                  ) : (
-                    <Bot className="h-3.5 w-3.5" />
-                  )}
-                  <span className="hidden sm:inline">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
-                </button>
+              ) : (
+                <>
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
+                      className={activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}
+                      title={activeChat.profile_pic ? 'Ampliar foto' : ''}
+                    >
+                      <ChatAvatar name={activeChat.name} url={activeChat.profile_pic} size="md" rounded="2xl" className="border border-primary/20 shadow-inner" />
+                    </button>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
+                        <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+                      </div>
+                      <p className="text-[11px] font-medium text-muted-foreground">
+                        <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span> · {activeChat.phone}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={toggleIA}
+                      disabled={togglingIA}
+                      title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                        iaPausada
+                          ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
+                          : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                      }`}
+                    >
+                      {togglingIA ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : iaPausada ? (
+                        <BotOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Bot className="h-3.5 w-3.5" />
+                      )}
+                      <span className="hidden sm:inline">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
+                    </button>
 
-                <Button
-                  variant="outline"
-                  className="h-9 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
-                  onClick={() => handleCriarTarefaIA(activeChat.id)}
-                >
-                  <Sparkles className="h-4 w-4" />
-                  <span className="hidden sm:inline">Criar Tarefa</span>
-                </Button>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className={`h-9 w-9 rounded-xl transition-colors ${isSearchingInChat ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
-                  onClick={() => {
-                    setIsSearchingInChat(!isSearchingInChat);
-                    if (!isSearchingInChat) {
-                      setTimeout(() => document.getElementById('chat-search-input')?.focus(), 100);
-                    } else {
-                      setChatSearchTerm("");
-                      setChatSearchResults([]);
-                      setCurrentSearchIndex(-1);
-                    }
-                  }}
-                >
-                  <Search className="h-4.5 w-4.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
-                  <Info className="h-4.5 w-4.5" />
-                </Button>
-              </div>
+                    <Button
+                      variant="outline"
+                      className="h-9 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
+                      onClick={() => handleCriarTarefaIA(activeChat.id)}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      <span className="hidden sm:inline">Criar Tarefa</span>
+                    </Button>
+                    
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className={`h-9 w-9 rounded-xl transition-colors ${isSearchingInChat ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
+                      onClick={() => {
+                        setIsSearchingInChat(!isSearchingInChat);
+                        if (!isSearchingInChat) {
+                          setTimeout(() => document.getElementById('chat-search-input')?.focus(), 100);
+                        } else {
+                          setChatSearchTerm("");
+                          setChatSearchResults([]);
+                          setCurrentSearchIndex(-1);
+                        }
+                      }}
+                    >
+                      <Search className="h-4.5 w-4.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
+                      <Info className="h-4.5 w-4.5" />
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
+
 
             {/* Painel de Busca */}
             {isSearchingInChat && (
