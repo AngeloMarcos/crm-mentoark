@@ -544,10 +544,13 @@ export function WhatsAppInterface() {
     checkStatus();
     fetchConversas();
     fetchRespostasRapidas();
-    const tStatus = setInterval(checkStatus, 30000);
-    const tConversas = setInterval(fetchConversas, 5000);
-    return () => { clearInterval(tStatus); clearInterval(tConversas); };
   }, [fetchRespostasRapidas]);
+
+  useEffect(() => {
+    const tStatus = setInterval(checkStatus, 30000);
+    const tConversas = setInterval(fetchConversas, activeChatId ? 2000 : 5000);
+    return () => { clearInterval(tStatus); clearInterval(tConversas); };
+  }, [activeChatId]);
 
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
