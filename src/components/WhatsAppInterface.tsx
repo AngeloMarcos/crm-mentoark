@@ -1055,57 +1055,90 @@ export function WhatsAppInterface() {
             {filteredChats.map(chat => {
               const isActive = activeChatId === chat.id;
               return (
-                <div
-                  key={chat.id}
-                  onClick={() => {
-                    setActiveChatId(chat.id);
-                    lastOpenedRef.current.set(chat.phone, new Date().toISOString());
-                  }}
-                  className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
-                    isActive
-                      ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary"
-                      : chat.unread
-                      ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
-                      : "hover:bg-muted/30"
-                  }`}
-                >
-                  <div className="relative shrink-0">
-                    <ChatAvatar
-                      name={chat.name}
-                      url={chat.profile_pic}
-                      size="md"
-                      className={`transition-transform group-hover:scale-105 ${isActive ? 'shadow-lg ring-2 ring-primary/30' : ''}`}
-                    />
-                    {chat.online && (
-                      <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-background rounded-full shadow-sm" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0 py-0.5">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>{chat.name}</span>
-                      <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
+                <DropdownMenu key={chat.id}>
+                  <DropdownMenuTrigger asChild>
+                    <div
+                      onClick={() => {
+                        setActiveChatId(chat.id);
+                        lastOpenedRef.current.set(chat.phone, new Date().toISOString());
+                      }}
+                      className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
+                        isActive
+                          ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary"
+                          : chat.unread
+                          ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
+                          : "hover:bg-muted/30"
+                      }`}
+                    >
+                      <div className="relative shrink-0">
+                        <ChatAvatar
+                          name={chat.name}
+                          url={chat.profile_pic}
+                          size="md"
+                          className={`transition-transform group-hover:scale-105 ${isActive ? 'shadow-lg ring-2 ring-primary/30' : ''}`}
+                        />
+                        {chat.online && (
+                          <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-background rounded-full shadow-sm" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0 py-0.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>
+                              {chat.name}
+                            </span>
+                            {chat.is_pinned && <Pin className="h-3 w-3 text-muted-foreground rotate-45 shrink-0" />}
+                            {chat.is_muted && <BellOff className="h-3 w-3 text-muted-foreground shrink-0" />}
+                          </div>
+                          <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          {chat.is_group && (
+                            <span className="text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase">Grupo</span>
+                          )}
+                          {chat.source && (
+                            <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
+                          )}
+                          {chat.tag && (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>{chat.tag}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={`text-xs truncate flex-1 ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>
+                            {chat.lastMessage.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}
+                          </p>
+                          {chat.unread ? (
+                            <span className="min-w-[18px] h-[18px] px-1 bg-green-500 text-white text-[10px] font-black rounded-full flex items-center justify-center shadow-sm shrink-0">
+                              {chat.unread}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      {chat.is_group && (
-                        <span className="text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase">Grupo</span>
-                      )}
-                      {chat.source && (
-                        <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
-                      )}
-                      {chat.tag && (
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>{chat.tag}</span>
-                      )}
-                    </div>
-                    <p className={`text-xs truncate ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>{chat.lastMessage.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>
-                  </div>
-                  {chat.unread ? (
-                    <div className="min-w-[20px] h-5 px-1.5 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center font-black shadow-lg shadow-green-500/20 shrink-0 animate-in zoom-in">
-                      {chat.unread}
-                    </div>
-                  ) : null}
-                </div>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56 rounded-xl shadow-xl border-border/50">
+                    <DropdownMenuItem onClick={() => markAsUnread(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                      <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                      <span>Marcar como não lida</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => togglePin(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                      <Pin className={`h-4 w-4 ${chat.is_pinned ? 'text-primary fill-primary/10' : 'text-muted-foreground'}`} />
+                      <span>{chat.is_pinned ? "Desafixar" : "Fixar conversa"}</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => toggleMute(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                      <BellOff className={`h-4 w-4 ${chat.is_muted ? 'text-orange-500' : 'text-muted-foreground'}`} />
+                      <span>{chat.is_muted ? "Ativar notificações" : "Silenciar"}</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => toggleArchive(chat.id)} className="gap-2 py-2.5 cursor-pointer text-destructive focus:text-destructive">
+                      <Archive className="h-4 w-4" />
+                      <span>{chat.is_archived ? "Desarquivar" : "Arquivar conversa"}</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               );
             })}
+
           </div>
         </ScrollArea>
       </div>
