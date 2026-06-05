@@ -377,6 +377,9 @@ export default function whatsappRouter(pool: Pool): Router {
         sender_name: row.sender_name || null,
         created_at: row.created_at,
         timestamp_wa: row.timestamp_wa,
+        reply_to_message_id: row.reply_to_message_id,
+        reply_to_content: row.reply_to_content,
+        reply_to_sender: row.reply_to_sender,
       }));
 
       return res.json(mensagens);
