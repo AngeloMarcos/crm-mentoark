@@ -977,16 +977,41 @@ export function WhatsAppInterface() {
     setSelectedMessageIds(new Set());
   };
 
-  const handleDeleteForMe = () => {
+  const handleDeleteForMe = async () => {
     const count = selectedMessageIds.size;
-    setChats(prev => prev.map(c => 
-      c.id === activeChatId 
-        ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
-        : c
-    ));
-    toast.success(`${count} mensagens removidas para você`);
-    setIsSelectMode(false);
-    setSelectedMessageIds(new Set());
+    const currentChat = activeChat;
+    if (!currentChat) return;
+
+    setIsActionLoading(true);
+    const idsToDelete = Array.from(selectedMessageIds);
+
+    try {
+      // Otimista
+      setChats(prev => prev.map(c => 
+        c.id === activeChatId 
+          ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
+          : c
+      ));
+
+      await Promise.all(idsToDelete.map(id => 
+        fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: apiHeaders(),
+          body: JSON.stringify({ 
+            forEveryone: false,
+            instancia: currentChat.source, 
+            remoteJid: `${currentChat.phone}@s.whatsapp.net` 
+          })
+        })
+      ));
+      toast.success(`${count} mensagens removidas para você`);
+    } catch {
+      toast.error("Erro ao ocultar mensagens");
+    } finally {
+      setIsActionLoading(false);
+      setIsSelectMode(false);
+      setSelectedMessageIds(new Set());
+    }
   };
 
   const handleDeleteForEveryone = async () => {
