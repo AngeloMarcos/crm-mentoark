@@ -1114,13 +1114,16 @@ export function WhatsAppInterface() {
 
           {/* Tabs */}
           <div className="flex gap-1 p-1 bg-muted/40 rounded-lg">
-            {(["Meus", "Fila", "Todos"] as const).map(t => {
-              const key = t.toLowerCase() as ChatTab;
-              const isActive = activeTab === key;
+            {(["Meus", "Fila", "Todos", "Arquivadas"] as const).map(t => {
+              const key = t.toLowerCase() as ChatTab | "arquivadas";
+              const isActive = (key === "arquivadas" ? activeTab === "arquivadas" : activeTab === key);
               return (
                 <button
                   key={t}
-                  onClick={() => setActiveTab(key)}
+                  onClick={() => {
+                    setActiveTab(key as any);
+                    fetchConversas(key === "arquivadas");
+                  }}
                   className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
                     isActive
                       ? "bg-white shadow-sm text-primary ring-1 ring-black/5"
