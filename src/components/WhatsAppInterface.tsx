@@ -2377,7 +2377,7 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5">
               <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 mb-2">Sobre / Recado</p>
               <p className="text-sm font-medium text-foreground/80 leading-relaxed italic">
-                {activeChat.is_group ? "Grupo de conversa" : "Disponível"}
+                {activeChat.is_group ? "Grupo de conversa" : (activeChat.push_name ? `~${activeChat.push_name}` : "Disponível")}
               </p>
             </div>
 
