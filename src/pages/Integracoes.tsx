@@ -32,7 +32,7 @@ import {
 import {
   Bot, Workflow, MessageCircle, Zap, Sparkles,
   Eye, EyeOff, Plus, Pencil, Trash2, Loader2,
-  CheckCircle2, XCircle, Power, AlertTriangle, Plug,
+  CheckCircle2, XCircle, Power, AlertTriangle, Plug, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 
