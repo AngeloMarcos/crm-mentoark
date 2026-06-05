@@ -1152,7 +1152,8 @@ export function WhatsAppInterface() {
             {(["Meus", "Fila", "Todos", "Arquivadas"] as const).map(t => {
               const key = t.toLowerCase() as ChatTab;
               const isActive = activeTab === key;
-              const hasUnreadInTab = key === "todos" && chats.some(c => !c.is_archived && (c.unread || 0) > 0);
+              const hasUnreadInTab = (key === "todos" || key === "meus") && chats.some(c => !c.is_archived && (c.unread || 0) > 0);
+
 
               return (
                 <button
