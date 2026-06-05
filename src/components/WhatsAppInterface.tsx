@@ -1121,7 +1121,7 @@ export function WhatsAppInterface() {
                 <button
                   key={t}
                   onClick={() => {
-                    setActiveTab(key as any);
+                    setActiveTab(key);
                     fetchConversas(key === "arquivadas");
                   }}
                   className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
