@@ -869,6 +869,7 @@ export default function whatsappRouter(pool: Pool): Router {
         alwaysOnline: true,
         readMessages: true,
         readStatus: false,
+        syncFullHistory: false, // Evita sobrecarga no primeiro sync
         ...(phoneNumber ? { number: phoneNumber } : {}),
         webhook: webhookPayload(),
       };
