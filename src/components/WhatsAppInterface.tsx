@@ -1584,6 +1584,20 @@ export function WhatsAppInterface() {
                 <div className="p-2 flex items-end gap-2">
                   <div className="flex-1 relative">
                     {inputMode === "nota" ? (
+                      <textarea
+                        placeholder="Adicione uma nota privada sobre esta conversa..."
+                        className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-amber-50/50 border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
+                        value={noteInput}
+                        onChange={e => setNoteInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendMessage();
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="relative">
                         {/* Preview de Resposta */}
                         {replyTo && (
                           <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 animate-in slide-in-from-bottom-2 duration-200 overflow-hidden">
@@ -1610,22 +1624,9 @@ export function WhatsAppInterface() {
                           </div>
                         )}
 
-                        <textarea
-                        placeholder="Adicione uma nota privada sobre esta conversa..."
-                        className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-amber-50/50 border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
-                        value={noteInput}
-                        onChange={e => setNoteInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSendMessage();
-                          }
-                        }}
-                      />
-                    ) : (
-                      <div className="relative">
                         {/* Popup de Respostas Rápidas */}
                         {showQR && qrFiltradas.length > 0 && (
+
                           <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 max-h-52 overflow-y-auto">
                             <div className="px-3 py-2 border-b flex items-center gap-2">
                               <Zap className="h-3.5 w-3.5 text-amber-500" />
