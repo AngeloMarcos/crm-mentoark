@@ -9,7 +9,7 @@ import {
   Mic, LayoutGrid, MessageSquare, SlidersHorizontal,
   UserPlus, Check, Smartphone,
   ShieldAlert, Tag, Sparkles, Zap,
-  BotOff, Bot, ImageIcon,
+  BotOff, Bot, ImageIcon, Reply,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
@@ -57,6 +57,12 @@ interface Message {
   midia_nome?: string;
   status?: DeliveryStatus;
   is_read?: boolean;
+  reply_to?: {
+    message_id: string;
+    content: string;
+    senderName: string;
+    role: "user" | "assistant";
+  };
 }
 
 interface Chat {
@@ -230,6 +236,7 @@ export function WhatsAppInterface() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [replyTo, setReplyTo] = useState<{ message_id: string; content: string; senderName: string; role: "user" | "assistant" } | null>(null);
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
@@ -509,6 +516,12 @@ export function WhatsAppInterface() {
         midia_nome: m.midia_nome,
         status: m.status || m.delivery_status,
         is_read: m.is_read,
+        reply_to: m.reply_to_message_id ? {
+          message_id: m.reply_to_message_id,
+          content: m.quoted_message?.content || m.quoted_message?.conteudo || 'Mensagem original',
+          senderName: m.quoted_message?.sender_name || (m.quoted_message?.from_me ? 'Você' : (m.push_name || chatName)),
+          role: m.quoted_message?.from_me ? 'assistant' : 'user'
+        } : undefined
       }));
       // Só atualiza se houver mudança real (evita re-render/flickering)
       setChats(prev => {
@@ -671,14 +684,34 @@ export function WhatsAppInterface() {
     if (!messageInput.trim() || !activeChatId) return;
 
     const text = messageInput.trim();
+    const currentReplyTo = replyTo; // Captura para o corpo do POST
     setMessageInput("");
+    setReplyTo(null);
 
     // Atualização otimista — aparece imediatamente
     const tempId = `local_${Date.now()}`;
     const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     setChats(prev => prev.map(c =>
       c.id === activeChatId
-        ? { ...c, messages: [...c.messages, { id: tempId, role: "assistant" as const, content: text, timestamp: ts, senderName: currentUserName, status: "sent" }], lastMessage: text, timestamp: ts }
+        ? { 
+            ...c, 
+            messages: [...c.messages, { 
+              id: tempId, 
+              role: "assistant" as const, 
+              content: text, 
+              timestamp: ts, 
+              senderName: currentUserName, 
+              status: "sent",
+              reply_to: currentReplyTo ? {
+                message_id: currentReplyTo.message_id,
+                content: currentReplyTo.content,
+                senderName: currentReplyTo.senderName,
+                role: currentReplyTo.role
+              } : undefined
+            }], 
+            lastMessage: text, 
+            timestamp: ts 
+          }
         : c
     ));
 
@@ -687,7 +720,12 @@ export function WhatsAppInterface() {
       const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
         method: 'POST',
         headers: apiHeaders(),
-        body: JSON.stringify({ phone: activeChatId, text, instancia: chat?.source }),
+        body: JSON.stringify({ 
+          phone: activeChatId, 
+          text, 
+          instancia: chat?.source,
+          replyToMessageId: currentReplyTo?.message_id
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: 'Erro ao enviar' }));
@@ -1400,13 +1438,48 @@ export function WhatsAppInterface() {
                         </div>
                       )}
                       <div className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
-                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
+                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
                           isOut
                             ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
                             : isNote
                               ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
                               : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
                         }`}>
+                          {/* Menu de Resposta (Reply) */}
+                          {!isNote && (
+                            <button
+                              onClick={() => {
+                                setReplyTo({
+                                  message_id: m.message_id || m.id,
+                                  content: m.content,
+                                  senderName: m.senderName || (isOut ? 'Você' : activeChat.name),
+                                  role: isOut ? "assistant" : "user"
+                                });
+                                textareaRef.current?.focus();
+                              }}
+                              className={`absolute top-2 ${isOut ? '-left-8' : '-right-8'} p-1.5 rounded-full bg-background border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-muted text-muted-foreground hover:text-primary z-20`}
+                              title="Responder"
+                            >
+                              <Reply className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+
+                          {/* Quote (Citação) */}
+                          {m.reply_to && (
+                            <div className={`mb-2 p-2 rounded-lg border-l-4 bg-black/5 text-left text-[11px] flex flex-col gap-0.5 ${
+                              m.reply_to.role === "assistant" ? "border-primary" : "border-green-500"
+                            }`}>
+                              <p className={`font-black uppercase tracking-widest text-[9px] ${
+                                m.reply_to.role === "assistant" ? (isOut ? "text-primary-foreground/80" : "text-primary") : "text-green-600"
+                              }`}>
+                                {m.reply_to.senderName}
+                              </p>
+                              <p className={`line-clamp-2 italic ${isOut ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                                {m.reply_to.content}
+                              </p>
+                            </div>
+                          )}
+
                           {showNameIn && (
                             <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
                           )}
@@ -1525,8 +1598,35 @@ export function WhatsAppInterface() {
                       />
                     ) : (
                       <div className="relative">
+                        {/* Preview de Resposta */}
+                        {replyTo && (
+                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 animate-in slide-in-from-bottom-2 duration-200 overflow-hidden">
+                            <div className={`p-3 border-l-4 flex items-start justify-between gap-3 bg-muted/20 ${
+                              replyTo.role === "assistant" ? "border-primary" : "border-green-500"
+                            }`}>
+                              <div className="min-w-0 flex-1">
+                                <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${
+                                  replyTo.role === "assistant" ? "text-primary" : "text-green-600"
+                                }`}>
+                                  {replyTo.senderName}
+                                </p>
+                                <p className="text-xs text-muted-foreground line-clamp-2 italic">
+                                  {replyTo.content}
+                                </p>
+                              </div>
+                              <button 
+                                onClick={() => setReplyTo(null)}
+                                className="p-1 rounded-full hover:bg-muted text-muted-foreground transition-colors"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Popup de Respostas Rápidas */}
                         {showQR && qrFiltradas.length > 0 && (
+
                           <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 max-h-52 overflow-y-auto">
                             <div className="px-3 py-2 border-b flex items-center gap-2">
                               <Zap className="h-3.5 w-3.5 text-amber-500" />
