@@ -1220,6 +1220,13 @@ export function WhatsAppInterface() {
     const currentChat = activeChat;
     if (!currentChat) return;
 
+    console.log('🚀 [RASTREIO EXCLUSÃO - INÍCIO]', {
+      tipoExclusao: 'todos',
+      quantidadeMensagens: count,
+      idsParaDeletar: Array.from(selectedMessageIds),
+      userIdAtivo: user?.id,
+      instanciaEvolution: currentChat.source
+    });
 
     setIsActionLoading(true);
     const idsToDelete = Array.from(selectedMessageIds);
@@ -1232,7 +1239,7 @@ export function WhatsAppInterface() {
           : c
       ));
 
-      await Promise.all(idsToDelete.map(id => {
+      const responses = await Promise.all(idsToDelete.map(id => {
         const msg = currentChat.messages.find(m => m.id === id);
         const mId = msg?.message_id || id; // Fallback para UUID se não tiver message_id
         
@@ -1246,8 +1253,19 @@ export function WhatsAppInterface() {
           })
         });
       }));
+
+      responses.forEach(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        console.log('✅ [RASTREIO API - SUCESSO]', { status: response.status, data });
+      });
+
       toast.success(`${count} mensagens apagadas para todos`);
-    } catch (err) {
+    } catch (err: any) {
+      console.error('❌ [RASTREIO API - ERRO CRÍTICO]', { 
+        mensagem: err.message, 
+        response404_500: err.response?.status, 
+        payloadEnviado: err.config?.data 
+      });
       toast.error("Erro ao apagar mensagens no servidor");
     } finally {
       setIsActionLoading(false);
