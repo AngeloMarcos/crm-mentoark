@@ -175,7 +175,42 @@ export default function whatsappRouter(pool: Pool): Router {
     ).catch(() => {});
   }
 
+  // GET /api/whatsapp/search — busca global de mensagens
+  router.get('/search', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const q = (req.query.q as string || '').trim();
+      const limit = Math.min(Number(req.query.limit) || 20, 100);
+
+      if (!q || q.length < 2) return res.json([]);
+
+      const r = await pool.query(
+        `SELECT 
+           m.id, m.message_id, m.remote_jid,
+           split_part(m.remote_jid,'@',1) AS phone,
+           m.content, m.from_me, m.timestamp_wa, m.message_type,
+           COALESCE(c.push_name, c.nome, split_part(m.remote_jid,'@',1)) AS contact_name,
+           COALESCE(c.foto_perfil, c.profile_pic_url) AS profile_pic
+         FROM whatsapp_messages m
+         LEFT JOIN contatos c 
+           ON c.user_id = m.user_id 
+           AND c.telefone ILIKE '%' || RIGHT(split_part(m.remote_jid,'@',1), 11)
+         WHERE m.user_id = $1
+           AND m.content ILIKE $2
+           AND m.message_type = 'text'
+         ORDER BY m.timestamp_wa DESC
+         LIMIT $3`,
+        [userId, `%${q}%`, limit]
+      );
+
+      return res.json(r.rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/profile-pic/:phone — busca foto de perfil on-demand
+
   router.get('/profile-pic/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
