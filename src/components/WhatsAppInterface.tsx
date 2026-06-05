@@ -684,14 +684,34 @@ export function WhatsAppInterface() {
     if (!messageInput.trim() || !activeChatId) return;
 
     const text = messageInput.trim();
+    const currentReplyTo = replyTo; // Captura para o corpo do POST
     setMessageInput("");
+    setReplyTo(null);
 
     // Atualização otimista — aparece imediatamente
     const tempId = `local_${Date.now()}`;
     const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     setChats(prev => prev.map(c =>
       c.id === activeChatId
-        ? { ...c, messages: [...c.messages, { id: tempId, role: "assistant" as const, content: text, timestamp: ts, senderName: currentUserName, status: "sent" }], lastMessage: text, timestamp: ts }
+        ? { 
+            ...c, 
+            messages: [...c.messages, { 
+              id: tempId, 
+              role: "assistant" as const, 
+              content: text, 
+              timestamp: ts, 
+              senderName: currentUserName, 
+              status: "sent",
+              reply_to: currentReplyTo ? {
+                message_id: currentReplyTo.message_id,
+                content: currentReplyTo.content,
+                senderName: currentReplyTo.senderName,
+                role: currentReplyTo.role
+              } : undefined
+            }], 
+            lastMessage: text, 
+            timestamp: ts 
+          }
         : c
     ));
 
@@ -700,7 +720,12 @@ export function WhatsAppInterface() {
       const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
         method: 'POST',
         headers: apiHeaders(),
-        body: JSON.stringify({ phone: activeChatId, text, instancia: chat?.source }),
+        body: JSON.stringify({ 
+          phone: activeChatId, 
+          text, 
+          instancia: chat?.source,
+          replyToMessageId: currentReplyTo?.message_id
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: 'Erro ao enviar' }));
