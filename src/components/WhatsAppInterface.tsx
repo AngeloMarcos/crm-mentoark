@@ -817,7 +817,7 @@ export function WhatsAppInterface() {
                   </div>
                   <div className="flex-1 min-w-0 py-0.5">
                     <div className="flex items-center justify-between mb-1">
-                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : "text-foreground"}`}>{chat.name}</span>
+                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>{chat.name}</span>
                       <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
                     </div>
                     <div className="flex items-center gap-1.5 mb-1.5">
