@@ -85,6 +85,9 @@ interface Chat {
   rawTimestamp: string;
   unread?: number;
   online?: boolean;
+  is_pinned?: boolean;
+  is_muted?: boolean;
+  is_archived?: boolean;
   source?: string;
   messages: Message[];
   notes?: string;
