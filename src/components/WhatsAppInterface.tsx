@@ -1033,7 +1033,7 @@ export function WhatsAppInterface() {
             text: msg.content, 
             instancia: targetSource,
             mediaUrl: msg.midia_url,
-            mediaType: msg.tipo === 'image' || msg.tipo === 'video' || msg.tipo === 'audio' || msg.tipo === 'document' ? msg.tipo : undefined
+            mediaType: ['image', 'video', 'audio', 'document'].includes(msg.tipo || '') ? msg.tipo as any : undefined
           }),
         });
       }
