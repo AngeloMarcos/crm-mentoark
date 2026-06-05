@@ -701,6 +701,7 @@ export function WhatsAppInterface() {
         phone: cleanPhone,
         lastMessage: '',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        rawTimestamp: new Date().toISOString(),
         messages: [],
         notes: '',
       };
