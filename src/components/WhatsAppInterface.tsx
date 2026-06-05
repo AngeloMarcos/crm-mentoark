@@ -200,7 +200,7 @@ export function WhatsAppInterface() {
   const currentUserName = user?.display_name || user?.email?.split('@')[0] || 'Agente';
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
-  const [searchTerm, setSearchTerm] = useState("");
+  
   const [messageInput, setMessageInput] = useState("");
   const [inputMode, setInputMode] = useState<"responder" | "nota">("responder");
   const [connectionStatus, setConnectionStatus] = useState<StatusResult | null>(null);
