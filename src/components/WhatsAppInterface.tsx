@@ -583,9 +583,9 @@ export function WhatsAppInterface() {
         is_read: m.is_read,
         reply_to: m.reply_to_message_id ? {
           message_id: m.reply_to_message_id,
-          content: m.quoted_message?.content || m.quoted_message?.conteudo || 'Mensagem original',
-          senderName: m.quoted_message?.sender_name || (m.quoted_message?.from_me ? 'Você' : (m.push_name || chatName)),
-          role: m.quoted_message?.from_me ? 'assistant' : 'user'
+          content: m.reply_to_content || 'Mensagem original',
+          senderName: m.reply_to_sender === 'assistant' ? 'Você' : (m.push_name || chatName),
+          role: (m.reply_to_sender || 'user') as 'user' | 'assistant'
         } : undefined
       }));
       // Só atualiza se houver mudança real (evita re-render/flickering)
@@ -668,25 +668,32 @@ export function WhatsAppInterface() {
   useEffect(() => {
     if (!user?.id) return;
 
-    console.log('[REALTIME] Iniciando subscrição para usuário:', user.id);
+    console.log('[REALTIME] Iniciando subscrição de mensagens para:', user.id);
     
+    // Escuta mudanças em whatsapp_messages (INSERT, UPDATE, DELETE)
     const channel = supabase
-      .channel('public:whatsapp_messages')
+      .channel('realtime_whatsapp_v2')
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*', // Escuta TUDO (Insert, Update, Delete)
           schema: 'public',
           table: 'whatsapp_messages',
           filter: `user_id=eq.${user.id}`
         },
         (payload) => {
-          console.log('[REALTIME] Nova mensagem recebida:', payload);
-          // Recarrega conversas e mensagens se for o chat ativo
+          console.log('[REALTIME] Mudança em whatsapp_messages:', payload.eventType, payload);
+          
+          // Sempre atualizamos a lista de conversas para refletir unread_count ou última msg
           fetchConversas(activeTab === "arquivadas");
+          
           if (activeChatIdRef.current) {
-            const phone = payload.new.remote_jid?.split('@')[0];
-            if (phone === activeChatIdRef.current) {
+            const msg = (payload.new as any) || (payload.old as any);
+            const phone = msg?.remote_jid?.split('@')[0];
+            
+            // Verifica se a mensagem pertence ao chat aberto (incluindo variações de DDI)
+            if (phone && (phone === activeChatIdRef.current || activeChatIdRef.current?.includes(phone))) {
+              console.log('[REALTIME] Atualizando chat ativo:', activeChatIdRef.current);
               fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
             }
           }
@@ -695,39 +702,29 @@ export function WhatsAppInterface() {
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*', 
           schema: 'public',
           table: 'n8n_chat_histories',
           filter: `user_id=eq.${user.id}`
         },
         (payload) => {
-          console.log('[REALTIME] Novo log de IA recebido:', payload);
-          // IA também gerou mensagem, atualizamos a conversa
+          console.log('[REALTIME] Mudança em n8n_chat_histories:', payload.eventType);
           fetchConversas(activeTab === "arquivadas");
           if (activeChatIdRef.current) {
             fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
           }
         }
       )
-      .subscribe((status, err) => {
-        console.log(`[REALTIME] Status da conexão: ${status}`);
-        if (err) {
-          console.error('[REALTIME] Erro na conexão:', err);
-          if (err.message?.includes('401') || err.message?.includes('403')) {
-            toast.error("Erro de autenticação no Realtime (401/403). Verifique sua sessão.");
-          }
-        }
-        
+      .subscribe((status) => {
+        console.log(`[REALTIME] Status: ${status}`);
         if (status === 'CHANNEL_ERROR') {
-          toast.error("Falha na conexão em tempo real. O sistema usará o modo de contingência (polling).", {
-            icon: <AlertCircle className="h-4 w-4 text-destructive" />,
-            duration: 5000
-          });
+          console.error('[REALTIME] Erro crítico no canal (401/403/Timeout). Polling ativo.');
+          toast.error("Erro na sincronização em tempo real. Polling ativo.");
         }
       });
 
     return () => {
-      console.log('[REALTIME] Removendo subscrição');
+      console.log('[REALTIME] Desconectando canal');
       supabase.removeChannel(channel);
     };
   }, [user?.id, activeTab]);
@@ -1142,8 +1139,11 @@ export function WhatsAppInterface() {
           : c
       ));
 
-      await Promise.all(idsToDelete.map(id => 
-        fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
+      await Promise.all(idsToDelete.map(id => {
+        const msg = currentChat.messages.find(m => m.id === id);
+        const mId = msg?.message_id || id; // Fallback para UUID se não tiver message_id
+        
+        return fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(mId)}`, {
           method: 'DELETE',
           headers: apiHeaders(),
           body: JSON.stringify({ 
@@ -1151,8 +1151,8 @@ export function WhatsAppInterface() {
             instancia: currentChat.source, 
             remoteJid: `${currentChat.phone}@s.whatsapp.net` 
           })
-        })
-      ));
+        });
+      }));
       toast.success(`${count} mensagens apagadas para todos`);
     } catch (err) {
       toast.error("Erro ao apagar mensagens no servidor");

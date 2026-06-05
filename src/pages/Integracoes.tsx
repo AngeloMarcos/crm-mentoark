@@ -233,7 +233,7 @@ export default function IntegracoesPage() {
         tipo: form.tipo,
         nome: form.nome.trim(),
         url: form.url.trim() || null,
-        api_key: form.api_key.trim() || null,
+        api_key: (form.api_key.trim() && !form.api_key.startsWith('****')) ? form.api_key.trim() : undefined,
         instancia: form.instancia.trim() || null,
         status: form.status,
       };

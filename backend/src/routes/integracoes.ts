@@ -141,9 +141,13 @@ export default function integracoesRouter(pool: Pool): Router {
       status, config,
     } = req.body;
 
-    const resolvedKey       = api_key !== undefined ? api_key
-                            : token  !== undefined ? token
-                            : undefined;
+    // Se o valor enviado começar com a máscara, ignoramos para não sobrescrever a chave real
+    const isMasked = (val: string | undefined) => typeof val === 'string' && val.startsWith('****');
+
+    const resolvedKey = (api_key !== undefined && !isMasked(api_key)) ? api_key
+                      : (token !== undefined && !isMasked(token)) ? token
+                      : undefined;
+                      
     const resolvedInstancia = instancia     !== undefined ? instancia
                             : name          !== undefined ? name
                             : instance_name !== undefined ? instance_name

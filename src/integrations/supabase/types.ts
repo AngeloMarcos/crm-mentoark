@@ -2338,71 +2338,104 @@ export type Database = {
           },
         ]
       }
+      whatsapp_message_status: {
+        Row: {
+          id: string
+          instance_name: string
+          message_id: string
+          status: string
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          instance_name: string
+          message_id: string
+          status: string
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          instance_name?: string
+          message_id?: string
+          status?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       whatsapp_messages: {
         Row: {
-          conteudo: string | null
+          content: string | null
           created_at: string | null
           deleted_at: string | null
           from_me: boolean
           id: string
-          instancia: string
+          instance_name: string
           is_hidden: boolean | null
-          midia_mime: string | null
+          is_read: boolean | null
+          media_mimetype: string | null
+          media_url: string | null
+          message_id: string | null
+          message_type: string
           midia_nome: string | null
-          midia_url: string | null
           push_name: string | null
           remote_jid: string
           reply_to_content: string | null
           reply_to_message_id: string | null
           reply_to_sender: string | null
+          sent_by_user_id: string | null
           session_id: string
           status: string | null
           timestamp_unix: number | null
-          tipo: string
           user_id: string
         }
         Insert: {
-          conteudo?: string | null
+          content?: string | null
           created_at?: string | null
           deleted_at?: string | null
           from_me?: boolean
           id: string
-          instancia: string
+          instance_name: string
           is_hidden?: boolean | null
-          midia_mime?: string | null
+          is_read?: boolean | null
+          media_mimetype?: string | null
+          media_url?: string | null
+          message_id?: string | null
+          message_type?: string
           midia_nome?: string | null
-          midia_url?: string | null
           push_name?: string | null
           remote_jid: string
           reply_to_content?: string | null
           reply_to_message_id?: string | null
           reply_to_sender?: string | null
+          sent_by_user_id?: string | null
           session_id: string
           status?: string | null
           timestamp_unix?: number | null
-          tipo?: string
           user_id: string
         }
         Update: {
-          conteudo?: string | null
+          content?: string | null
           created_at?: string | null
           deleted_at?: string | null
           from_me?: boolean
           id?: string
-          instancia?: string
+          instance_name?: string
           is_hidden?: boolean | null
-          midia_mime?: string | null
+          is_read?: boolean | null
+          media_mimetype?: string | null
+          media_url?: string | null
+          message_id?: string | null
+          message_type?: string
           midia_nome?: string | null
-          midia_url?: string | null
           push_name?: string | null
           remote_jid?: string
           reply_to_content?: string | null
           reply_to_message_id?: string | null
           reply_to_sender?: string | null
+          sent_by_user_id?: string | null
           session_id?: string
           status?: string | null
           timestamp_unix?: number | null
-          tipo?: string
           user_id?: string
         }
         Relationships: []
