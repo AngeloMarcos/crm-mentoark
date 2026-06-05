@@ -1142,8 +1142,11 @@ export function WhatsAppInterface() {
           : c
       ));
 
-      await Promise.all(idsToDelete.map(id => 
-        fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
+      await Promise.all(idsToDelete.map(id => {
+        const msg = currentChat.messages.find(m => m.id === id);
+        const mId = msg?.message_id || id; // Fallback para UUID se não tiver message_id
+        
+        return fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(mId)}`, {
           method: 'DELETE',
           headers: apiHeaders(),
           body: JSON.stringify({ 
@@ -1151,8 +1154,8 @@ export function WhatsAppInterface() {
             instancia: currentChat.source, 
             remoteJid: `${currentChat.phone}@s.whatsapp.net` 
           })
-        })
-      ));
+        });
+      }));
       toast.success(`${count} mensagens apagadas para todos`);
     } catch (err) {
       toast.error("Erro ao apagar mensagens no servidor");
