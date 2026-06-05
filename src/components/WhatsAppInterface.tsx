@@ -1153,10 +1153,44 @@ export function WhatsAppInterface() {
   };
 
 
+  const handleToggleStar = () => {
+    const newStarred = new Set(starredMessageIds);
+    selectedMessageIds.forEach(id => {
+      if (newStarred.has(id)) newStarred.delete(id);
+      else newStarred.add(id);
+    });
+    setStarredMessageIds(newStarred);
+    toast.success(`${selectedMessageIds.size} mensagens favoritadas`);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+  };
+
+  const runUITests = () => {
+    toast.info("Iniciando testes de UI...");
+    const first3Msgs = activeChat?.messages.slice(0, 3) || [];
+    if (first3Msgs.length < 3) {
+      toast.error("Não há mensagens suficientes para o teste");
+      return;
+    }
+    setIsSelectMode(true);
+    setSelectedMessageIds(new Set(first3Msgs.map(m => m.id)));
+    setTimeout(() => {
+      if (document.querySelector('.sticky.top-0')?.textContent?.includes('selecionada')) {
+        toast.success("Cenário A validado: Toolbar ativa");
+      }
+      setTimeout(() => {
+        setSelectedMessageIds(new Set());
+        setIsSelectMode(false);
+        toast.success("Cenário B validado: Toolbar escondida");
+      }, 1500);
+    }, 1500);
+  };
+
   const handleDeleteForEveryone = async () => {
     const count = selectedMessageIds.size;
     const currentChat = activeChat;
     if (!currentChat) return;
+
 
     setIsActionLoading(true);
     const idsToDelete = Array.from(selectedMessageIds);
