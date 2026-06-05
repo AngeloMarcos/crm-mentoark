@@ -393,7 +393,8 @@ export default function whatsappRouter(pool: Pool): Router {
       // Busca por sufixo do número + nome do remetente via JOIN com users
       const r = await pool.query(
         `SELECT
-           m.id, m.message_id, m.from_me, m.message_type, m.content,
+           m.id, m.message_id, m.from_me, m.message_type, m.content, m.deleted_at,
+
            m.media_url, m.media_mimetype, m.status, m.push_name,
            m.timestamp_wa, m.created_at,
            m.reply_to_message_id, m.reply_to_content, m.reply_to_sender,
