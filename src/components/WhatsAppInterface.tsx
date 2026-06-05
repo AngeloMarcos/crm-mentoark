@@ -660,8 +660,13 @@ export function WhatsAppInterface() {
   }, [activeChatId]);
 
   useEffect(() => {
-    if (!activeChatId) return;
+    if (!activeChatId) {
+      setIsSearchingInChat(false);
+      setChatSearchTerm("");
+      return;
+    }
     const chat = chats.find(c => c.id === activeChatId);
+
     const chatName = chat?.name || activeChatId;
     activeChatNameRef.current = chatName;
     if (chat) fetchMensagens(activeChatId, chatName, true);
