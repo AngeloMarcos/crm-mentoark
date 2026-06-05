@@ -663,12 +663,64 @@ export function WhatsAppInterface() {
       setConnecting(false);
     }
   };
+ 
+  // ── Supabase Realtime ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!user?.id) return;
+
+    console.log('[REALTIME] Iniciando subscrição para usuário:', user.id);
+    
+    const channel = supabase
+      .channel('public:whatsapp_messages')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'whatsapp_messages',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('[REALTIME] Nova mensagem recebida:', payload);
+          // Recarrega conversas e mensagens se for o chat ativo
+          fetchConversas(activeTab === "arquivadas");
+          if (activeChatIdRef.current) {
+            const phone = payload.new.remote_jid?.split('@')[0];
+            if (phone === activeChatIdRef.current) {
+              fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
+            }
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log(`[REALTIME] Status da conexão: ${status}`);
+        if (err) {
+          console.error('[REALTIME] Erro na conexão:', err);
+          if (err.message?.includes('401') || err.message?.includes('403')) {
+            toast.error("Erro de autenticação no Realtime (401/403). Verifique sua sessão.");
+          }
+        }
+        
+        if (status === 'CHANNEL_ERROR') {
+          toast.error("Falha na conexão em tempo real. O sistema usará o modo de contingência (polling).", {
+            icon: <AlertCircle className="h-4 w-4 text-destructive" />,
+            duration: 5000
+          });
+        }
+      });
+
+    return () => {
+      console.log('[REALTIME] Removendo subscrição');
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, activeTab]);
 
   useEffect(() => {
     checkStatus();
     fetchConversas();
     fetchRespostasRapidas();
   }, [fetchRespostasRapidas]);
+
 
   useEffect(() => {
     const tStatus = setInterval(checkStatus, 30000);
