@@ -265,6 +265,8 @@ export default function whatsappRouter(pool: Pool): Router {
              m.remote_jid LIKE '%@g.us' AS is_group,
              m.push_name AS last_sender,
              COUNT(*) OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS total,
+             COUNT(*) FILTER (WHERE NOT m.from_me AND NOT m.is_read) 
+               OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS unread_count,
              ROW_NUMBER() OVER (
                PARTITION BY split_part(m.remote_jid,'@',1)
                ORDER BY m.created_at DESC
