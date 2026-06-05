@@ -257,8 +257,9 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       if (!userId) {
-        wlog('WEBHOOK_DROP', `userId não encontrado para instancia="${instancia}". Verifique Configurações da IA ou Integrações. mid=${messageId}`);
+        wlog('WEBHOOK_DROP', `userId não encontrado para instancia="${instancia}". Verifique Configurações da IA ou Integrações. jid=${remoteJid} mid=${messageId}`);
       } else {
+
         wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);
       }
 
