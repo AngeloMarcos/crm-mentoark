@@ -54,7 +54,7 @@ export default function DiagnosticoWhatsApp() {
   );
 
   return (
-    <AppLayout>
+    <CRMLayout>
       <div className="container max-w-6xl py-8 space-y-6">
         <div>
           <h1 className="text-2xl font-semibold">Diagnóstico WhatsApp</h1>
@@ -162,6 +162,6 @@ export default function DiagnosticoWhatsApp() {
           </>
         )}
       </div>
-    </AppLayout>
+    </CRMLayout>
   );
 }
