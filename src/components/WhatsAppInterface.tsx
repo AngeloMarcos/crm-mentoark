@@ -618,11 +618,18 @@ export function WhatsAppInterface() {
 
   const checkStatus = async (silent = true) => {
     try {
-      const res = await fetchConnectionStatus();
+      // Se houver uma instância ativa no chat atual, priorizamos verificar o status dela
+      const activeInstance = activeChat?.source;
+      const res = await fetchConnectionStatus(activeInstance);
+      
       setConnectionStatus(res);
       if (res.state === "open") setQrData(null);
+      
+      if (!silent && res.state !== "open") {
+        toast.warning("WhatsApp desconectado ou em sincronização");
+      }
     } catch (e) {
-      if (!silent) toast.error("Erro ao verificar status");
+      if (!silent) toast.error("Erro ao verificar status da conexão");
     } finally {
       setLoadingStatus(false);
     }
@@ -936,10 +943,20 @@ export function WhatsAppInterface() {
         headers: apiHeaders(),
         body: JSON.stringify(payload),
       });
+
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: 'Erro ao enviar' }));
         console.error('[WHATSAPP] Erro no envio — Resposta do servidor:', err);
-        toast.error(err.message || 'Erro ao enviar mensagem');
+        
+        // Se o erro for o TypeError da Evolution, sugerimos reconexão
+        if (err.message?.includes("presenceSubscribe") || err.message?.includes("TypeError")) {
+          toast.error("Erro técnico na Evolution API. Tente desconectar e conectar o QR Code novamente.", {
+            duration: 8000
+          });
+        } else {
+          toast.error(err.message || 'Erro ao enviar mensagem');
+        }
+
         setChats(prev => prev.map(c =>
           c.id === activeChatId
             ? { ...c, messages: c.messages.filter(m => m.id !== tempId) }
