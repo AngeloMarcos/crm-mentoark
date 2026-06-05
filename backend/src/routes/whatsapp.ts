@@ -286,16 +286,17 @@ export default function whatsappRouter(pool: Pool): Router {
          )
          SELECT
            r.phone AS session_id,
-           r.instance_name AS instancia,
-           r.created_at AS ultima_atividade,
-           r.total::int AS total,
-           r.content AS ultima_mensagem,
-           r.is_group,
-           r.last_sender,
-           CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
-           cu.push_name,
-           cu.nome_contato,
-           cu.profile_pic_url
+            r.instance_name AS instancia,
+            r.created_at AS ultima_atividade,
+            r.total::int AS total,
+            r.unread_count::int AS unread,
+            r.content AS ultima_mensagem,
+            r.is_group,
+            r.last_sender,
+            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
+            cu.push_name,
+            cu.nome_contato,
+            cu.profile_pic_url
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          WHERE r.rn = 1
