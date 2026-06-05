@@ -692,6 +692,23 @@ export function WhatsAppInterface() {
           }
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'n8n_chat_histories',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('[REALTIME] Novo log de IA recebido:', payload);
+          // IA também gerou mensagem, atualizamos a conversa
+          fetchConversas(activeTab === "arquivadas");
+          if (activeChatIdRef.current) {
+            fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
+          }
+        }
+      )
       .subscribe((status, err) => {
         console.log(`[REALTIME] Status da conexão: ${status}`);
         if (err) {
