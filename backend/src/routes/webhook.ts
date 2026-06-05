@@ -533,7 +533,13 @@ export default function webhookRouter(pool: Pool): Router {
         console.log(`[WEBHOOK] Grupo ${telefone} — mensagem salva, IA não processada`);
         return;
       }
-      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) return;
+      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) {
+        wlog('WEBHOOK_DROP', `sem texto e sem mídia tipo=${tipo} mid=${messageId}`);
+        return;
+      }
+
+      wlog('WEBHOOK_OK', `enfileirando IA tel=${telefone} tipo=${tipo} mid=${messageId} texto="${(texto||'').slice(0,80)}"`);
+
 
       processarComDebounce(pool, {
         instancia,
