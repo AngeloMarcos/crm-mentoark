@@ -257,6 +257,10 @@ export function WhatsAppInterface() {
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
+  // Estados para seleção múltipla
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
     const term = qrSearch.toLowerCase();
