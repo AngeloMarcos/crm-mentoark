@@ -1,4 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
+import { ChatMessage } from '@/components/openclaw/ChatMessage';
+import { StatusCard } from '@/components/openclaw/StatusCard';
+import { FileConfigCard } from '@/components/openclaw/FileConfigCard';
+
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Terminal, Server, Bot, Database, Zap, RefreshCw, Copy, Send, LayoutGrid } from 'lucide-react';
@@ -54,21 +58,15 @@ export default function OpenClawPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="status">
+        <TabsContent value="status" className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <Card className="p-4 bg-[#111] border-[#222]">
-              <div className="flex justify-between items-center">
-                <h3 className="font-semibold">OpenClaw Gateway</h3>
-                <Badge className="bg-green-600">Ativo</Badge>
-              </div>
-              <p className="text-sm text-gray-400 mt-2">gpt-5.4-mini | Porta: 18789</p>
-            </Card>
-            <Card className="p-4 bg-[#111] border-[#222]">
-              <h3 className="font-semibold">Backend API</h3>
-              <p className="text-sm text-gray-400 mt-2">Status: OK</p>
-            </Card>
+            <StatusCard title="OpenClaw Gateway" status="online" info="gpt-5.4-mini" indicatorText="Ativo" />
+            <StatusCard title="Backend API" status="online" info="Online" indicatorText="Ativo" />
+            <StatusCard title="Evolution API" status="online" info="3 Instâncias" indicatorText="Conectado" />
+            <StatusCard title="Banco de Dados" status="online" info="PostgreSQL 16" indicatorText="Online" />
           </div>
         </TabsContent>
+
 
         <TabsContent value="config">
           <Card className="p-4 bg-[#111] border-[#222]">
