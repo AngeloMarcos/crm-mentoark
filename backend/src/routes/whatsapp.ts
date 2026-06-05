@@ -310,7 +310,8 @@ export default function whatsappRouter(pool: Pool): Router {
                ORDER BY m.created_at DESC
              ) AS rn
            FROM whatsapp_messages m
-           WHERE m.user_id = $1
+           WHERE m.user_id = $1 AND (m.is_hidden = false OR m.is_hidden IS NULL)
+
          ),
          contato_unico AS (
            SELECT DISTINCT ON (RIGHT(telefone, 11))
