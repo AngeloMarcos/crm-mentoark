@@ -277,6 +277,8 @@ export function WhatsAppInterface() {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [starredMessageIds, setStarredMessageIds] = useState<Set<string>>(new Set());
+  const [showForwardModal, setShowForwardModal] = useState(false);
+
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
