@@ -1,13 +1,27 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 
-export function makeOpenClawRouter(pool: Pool): Router {
+const ADMIN_KEY = process.env.OPENCLAW_ADMIN_KEY || 'openclaw-admin-2025';
+
+function checkAuth(req: Request, res: Response): boolean {
+  // Aceita JWT (via authMiddleware upstream) ou X-Openclaw-Key
+  const key = req.headers['x-openclaw-key'] as string | undefined;
+  if (key && key === ADMIN_KEY) return true;
+  // Se passou pelo authMiddleware o req.user já está definido
+  if ((req as any).user) return true;
+  res.status(401).json({ error: 'Autenticação necessária: envie X-Openclaw-Key ou JWT' });
+  return false;
+}
+
+export function makeOpenClawRouter(_pool: Pool): Router {
   const router = Router();
 
   // POST /api/openclaw/chat
   // Body: { message: string, sessionKey?: string }
   // Returns: { reply: string, toolCalls: number }
   router.post('/chat', async (req: Request, res: Response) => {
+    if (!checkAuth(req, res)) return;
+
     const { message, sessionKey } = req.body as { message?: string; sessionKey?: string };
 
     if (!message?.trim()) {

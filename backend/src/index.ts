@@ -137,6 +137,9 @@ app.use('/api/marketing', marketing.public); // Public part of marketing (callba
 // ── Rotas n8n (x-n8n-secret, sem JWT) ─────────────────────────────────────
 app.use('/api/n8n', n8nRouter(pool));
 
+// ── OpenClaw Admin (sem JWT — protegido por X-Openclaw-Key ou JWT) ──────────
+app.use('/api/openclaw', makeOpenClawRouter(pool));
+
 // Webhook público do Kanban (sem JWT, autenticado por x-webhook-secret)
 app.post('/api/kanban/webhook/n8n', kanbanWebhookN8n(pool));
 
@@ -303,7 +306,6 @@ app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));
 app.use('/api/suporte',        suporteCopilotoRouter(pool));
 app.use('/api/admin/firewall', adminFirewallRouter(pool));
-app.use('/api/openclaw',       makeOpenClawRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));
