@@ -11,7 +11,7 @@ import {
   ShieldAlert, Tag, Sparkles, Zap,
   BotOff, Bot, ImageIcon, Reply,
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
-  Copy, Video, FileText,
+  Copy, Video, FileText, Trash2, Forward,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -256,6 +256,10 @@ export function WhatsAppInterface() {
   const [chatSearchResults, setChatSearchResults] = useState<number[]>([]);
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Estados para seleção múltipla
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
@@ -647,10 +651,24 @@ export function WhatsAppInterface() {
   }, []);
 
   useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isSelectMode) {
+          setIsSelectMode(false);
+          setSelectedMessageIds(new Set());
+        }
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isSelectMode]);
+
+  useEffect(() => {
     const ms = activeChatId ? 2000 : 5000;
     const t = setInterval(fetchConversas, ms);
     return () => clearInterval(t);
   }, [activeChatId]);
+
 
   useEffect(() => {
     if (!messagesEndRef.current) return;
@@ -887,6 +905,46 @@ export function WhatsAppInterface() {
     setCurrentSearchIndex(newIndex);
     scrollToMessage(chatSearchResults[newIndex]);
   };
+
+  const toggleMessageSelection = (messageId: string) => {
+    if (!isSelectMode) setIsSelectMode(true);
+    setSelectedMessageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+        if (next.size === 0) setIsSelectMode(false);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  };
+
+  const handleCopySelected = () => {
+    if (!activeChat) return;
+    const texts = activeChat.messages
+      .filter(m => selectedMessageIds.has(m.id))
+      .map(m => `[${m.timestamp}] ${m.senderName || 'Desconhecido'}: ${m.content}`)
+      .join('\n');
+    
+    navigator.clipboard.writeText(texts);
+    toast.success(`${selectedMessageIds.size} mensagens copiadas`);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+  };
+
+  const handleDeleteSelected = () => {
+    const count = selectedMessageIds.size;
+    setChats(prev => prev.map(c => 
+      c.id === activeChatId 
+        ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
+        : c
+    ));
+    toast.success(`${count} mensagens removidas localmente`);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+  };
+
 
   const scrollToMessage = (msgIndex: number) => {
     if (!activeChat) return;
@@ -1483,77 +1541,124 @@ export function WhatsAppInterface() {
         {activeChat ? (
           <>
             {/* Chat header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b bg-background/40 backdrop-blur-md shrink-0 z-10 shadow-sm">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
-                  className={activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}
-                  title={activeChat.profile_pic ? 'Ampliar foto' : ''}
-                >
-                  <ChatAvatar name={activeChat.name} url={activeChat.profile_pic} size="md" rounded="2xl" className="border border-primary/20 shadow-inner" />
-                </button>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
-                    <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+            <div className="h-16 shrink-0 border-b flex items-center justify-between px-6 bg-background/60 backdrop-blur-md z-20 shadow-sm">
+              {isSelectMode ? (
+                <div className="flex-1 flex items-center justify-between animate-in slide-in-from-top duration-300">
+                  <div className="flex items-center gap-4">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={() => { setIsSelectMode(false); setSelectedMessageIds(new Set()); }}
+                      className="rounded-full h-9 w-9"
+                    >
+                      <X className="h-5 w-5" />
+                    </Button>
+                    <span className="text-sm font-bold">{selectedMessageIds.size} selecionada(s)</span>
                   </div>
-                  <p className="text-[11px] font-medium text-muted-foreground">
-                    <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span> · {activeChat.phone}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={handleCopySelected}
+                      className="h-9 w-9 rounded-xl hover:text-primary transition-colors"
+                      title="Copiar texto"
+                    >
+                      <Copy className="h-4.5 w-4.5" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-9 w-9 rounded-xl hover:text-primary transition-colors"
+                      title="Encaminhar"
+                    >
+                      <Forward className="h-4.5 w-4.5" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={handleDeleteSelected}
+                      className="h-9 w-9 rounded-xl hover:text-destructive transition-colors"
+                      title="Apagar"
+                    >
+                      <Trash2 className="h-4.5 w-4.5" />
+                    </Button>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {/* Toggle IA — não interfere no envio/recebimento de mensagens */}
-                <button
-                  onClick={toggleIA}
-                  disabled={togglingIA}
-                  title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
-                    iaPausada
-                      ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
-                      : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                  }`}
-                >
-                  {togglingIA ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : iaPausada ? (
-                    <BotOff className="h-3.5 w-3.5" />
-                  ) : (
-                    <Bot className="h-3.5 w-3.5" />
-                  )}
-                  <span className="hidden sm:inline">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
-                </button>
+              ) : (
+                <>
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
+                      className={activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}
+                      title={activeChat.profile_pic ? 'Ampliar foto' : ''}
+                    >
+                      <ChatAvatar name={activeChat.name} url={activeChat.profile_pic} size="md" rounded="2xl" className="border border-primary/20 shadow-inner" />
+                    </button>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
+                        <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+                      </div>
+                      <p className="text-[11px] font-medium text-muted-foreground">
+                        <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span> · {activeChat.phone}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={toggleIA}
+                      disabled={togglingIA}
+                      title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                        iaPausada
+                          ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
+                          : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                      }`}
+                    >
+                      {togglingIA ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : iaPausada ? (
+                        <BotOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Bot className="h-3.5 w-3.5" />
+                      )}
+                      <span className="hidden sm:inline">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
+                    </button>
 
-                <Button
-                  variant="outline"
-                  className="h-9 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
-                  onClick={() => handleCriarTarefaIA(activeChat.id)}
-                >
-                  <Sparkles className="h-4 w-4" />
-                  <span className="hidden sm:inline">Criar Tarefa</span>
-                </Button>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className={`h-9 w-9 rounded-xl transition-colors ${isSearchingInChat ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
-                  onClick={() => {
-                    setIsSearchingInChat(!isSearchingInChat);
-                    if (!isSearchingInChat) {
-                      setTimeout(() => document.getElementById('chat-search-input')?.focus(), 100);
-                    } else {
-                      setChatSearchTerm("");
-                      setChatSearchResults([]);
-                      setCurrentSearchIndex(-1);
-                    }
-                  }}
-                >
-                  <Search className="h-4.5 w-4.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
-                  <Info className="h-4.5 w-4.5" />
-                </Button>
-              </div>
+                    <Button
+                      variant="outline"
+                      className="h-9 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
+                      onClick={() => handleCriarTarefaIA(activeChat.id)}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      <span className="hidden sm:inline">Criar Tarefa</span>
+                    </Button>
+                    
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className={`h-9 w-9 rounded-xl transition-colors ${isSearchingInChat ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
+                      onClick={() => {
+                        setIsSearchingInChat(!isSearchingInChat);
+                        if (!isSearchingInChat) {
+                          setTimeout(() => document.getElementById('chat-search-input')?.focus(), 100);
+                        } else {
+                          setChatSearchTerm("");
+                          setChatSearchResults([]);
+                          setCurrentSearchIndex(-1);
+                        }
+                      }}
+                    >
+                      <Search className="h-4.5 w-4.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
+                      <Info className="h-4.5 w-4.5" />
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
+
 
             {/* Painel de Busca */}
             {isSearchingInChat && (
@@ -1681,7 +1786,23 @@ export function WhatsAppInterface() {
                     <div 
                       key={m.id}
                       ref={el => { if (el) messageRefs.current.set(m.id, el); }}
+                      className="flex items-center gap-4 group/row"
                     >
+                      {isSelectMode && !isNote && (
+                        <div 
+                          className="shrink-0 cursor-pointer"
+                          onClick={() => toggleMessageSelection(m.id)}
+                        >
+                          <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+                            selectedMessageIds.has(m.id) 
+                              ? "bg-primary border-primary" 
+                              : "border-muted-foreground/30 bg-background"
+                          }`}>
+                            {selectedMessageIds.has(m.id) && <Check className="h-3.5 w-3.5 text-white stroke-[4px]" />}
+                          </div>
+                        </div>
+                      )}
+
                       {dateLabel && (
                         <div className="flex justify-center my-6 sticky top-2 z-10">
                           <div className="bg-background/80 backdrop-blur-sm border border-border/50 px-4 py-1.5 rounded-full shadow-sm">
@@ -1691,14 +1812,20 @@ export function WhatsAppInterface() {
                           </div>
                         </div>
                       )}
-                      <div className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
+                      <div 
+                        className={`flex-1 flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          if (!isNote) toggleMessageSelection(m.id);
+                        }}
+                      >
                         <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
                           isOut
                             ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
                             : isNote
                               ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
                               : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
-                        }`}>
+                        } ${isSelectMode && selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10" : ""}`}>
                           {/* Menu de Resposta (Reply) */}
                           {!isNote && (
                             <button
