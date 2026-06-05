@@ -686,6 +686,10 @@ export function WhatsAppInterface() {
   }, [activeChatId, chats]);
 
   const handleSendMessage = async () => {
+    // Fecha busca ao enviar mensagem
+    setIsSearchingInChat(false);
+    setChatSearchTerm("");
+
     if (inputMode === "nota") {
       // Nota privada — salva internamente, não envia ao WhatsApp
       if (!noteInput.trim() || !activeChatId) return;
