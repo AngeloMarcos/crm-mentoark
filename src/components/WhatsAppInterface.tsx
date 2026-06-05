@@ -49,7 +49,7 @@ function formatTime(iso: string): string {
   } catch { return ''; }
 }
 
-type ChatTab = "todos" | "fila" | "meus";
+type ChatTab = "todos" | "fila" | "meus" | "arquivadas";
 
 type DeliveryStatus = "sent" | "SERVER_ACK" | "DELIVERY_ACK" | "READ" | "PLAYED" | "received" | string;
 
