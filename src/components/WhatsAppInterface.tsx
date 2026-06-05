@@ -756,11 +756,41 @@ export function WhatsAppInterface() {
 
   useEffect(() => {
     if (!activeChatId) return;
-    fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(activeChatId)}/read`, {
-      method: 'PATCH',
-      headers: apiHeaders()
-    }).catch(() => {});
-  }, [activeChatId]);
+    
+    const markAsRead = async () => {
+      try {
+        // Tenta a rota do backend primeiro
+        const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(activeChatId)}/read`, {
+          method: 'PATCH',
+          headers: apiHeaders()
+        });
+        
+        // Se 404, tenta via Supabase direto como fallback
+        if (res.status === 404) {
+          console.warn('[WA] Rota /read não encontrada no backend. Usando fallback Supabase.');
+          
+          const { error } = await supabase
+            .from('whatsapp_messages')
+            .update({ is_read: true })
+            .eq('user_id', user?.id)
+            .eq('remote_jid', `${activeChatId}@s.whatsapp.net`)
+            .eq('from_me', false)
+            .eq('is_read', false);
+
+          if (error) throw error;
+          
+          // Zera o contador visual local
+          setChats(prev => prev.map(c => 
+            c.id === activeChatId ? { ...c, unread: 0 } : c
+          ));
+        }
+      } catch (err) {
+        console.error('[WA] Erro ao marcar como lida:', err);
+      }
+    };
+
+    markAsRead();
+  }, [activeChatId, user?.id]);
 
   useEffect(() => {
     const ms = activeChatId ? 2000 : 5000;

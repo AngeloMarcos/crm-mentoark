@@ -22,13 +22,33 @@ export interface StatusResult {
   phoneNumber?: string;
 }
 
-export async function fetchConnectionStatus(): Promise<StatusResult> {
-  const res = await fetch(`${API_BASE}/api/whatsapp/status`, {
-    method: 'POST',
-    headers: authHeaders(),
-  });
-  if (!res.ok) return { state: 'close' };
-  return res.json();
+export async function fetchConnectionStatus(instancia?: string): Promise<StatusResult> {
+  const API_URL = instancia 
+    ? `${API_BASE}/api/integracoes_config`
+    : `${API_BASE}/api/whatsapp/status`;
+
+  try {
+    const res = await fetch(API_URL, {
+      method: instancia ? 'GET' : 'POST',
+      headers: authHeaders(),
+    });
+
+    if (!res.ok) return { state: 'close' };
+    
+    const data = await res.json();
+    
+    if (instancia && Array.isArray(data)) {
+      const config = data.find(i => i.tipo === 'evolution' && i.instancia === instancia);
+      return { 
+        state: config?.status === 'conectado' ? 'open' : 'close' 
+      };
+    }
+    
+    return data;
+  } catch (error) {
+    console.error(`[EvolutionService] Error fetching status for ${instancia || 'default'}:`, error);
+    return { state: 'close' };
+  }
 }
 
 export async function createInstance(instanceName?: string, phoneNumber?: string): Promise<CreateInstanceResult> {
