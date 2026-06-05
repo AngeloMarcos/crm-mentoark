@@ -1472,6 +1472,72 @@ export function WhatsAppInterface() {
               </div>
             </div>
 
+            {/* Painel de Busca */}
+            {isSearchingInChat && (
+              <div className="absolute top-0 left-0 right-0 z-30 bg-background/95 backdrop-blur-md border-b shadow-sm animate-in slide-in-from-top duration-300">
+                <div className="px-6 py-3 flex items-center gap-4">
+                  <div className="flex-1 relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="chat-search-input"
+                      placeholder="Buscar na conversa..."
+                      className="pl-10 h-10 rounded-xl bg-muted/50 border-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                      value={chatSearchTerm}
+                      onChange={(e) => handleChatSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setIsSearchingInChat(false);
+                          setChatSearchTerm("");
+                        } else if (e.key === 'Enter') {
+                          navigateSearch(e.shiftKey ? 'prev' : 'next');
+                        }
+                      }}
+                    />
+                  </div>
+                  
+                  {chatSearchTerm && (
+                    <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground whitespace-nowrap bg-muted/30 px-3 py-2 rounded-lg">
+                      {chatSearchResults.length > 0 ? (
+                        <>
+                          <span>{chatSearchResults.length - currentSearchIndex} de {chatSearchResults.length}</span>
+                          <div className="flex items-center border-l ml-2 pl-2 gap-1">
+                            <button 
+                              onClick={() => navigateSearch('prev')}
+                              className="p-1 hover:bg-background rounded-md transition-colors"
+                            >
+                              <ChevronUp className="h-4 w-4" />
+                            </button>
+                            <button 
+                              onClick={() => navigateSearch('next')}
+                              className="p-1 hover:bg-background rounded-md transition-colors"
+                            >
+                              <ChevronDown className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <span>Nenhum resultado</span>
+                      )}
+                    </div>
+                  )}
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 rounded-xl hover:bg-muted"
+                    onClick={() => {
+                      setIsSearchingInChat(false);
+                      setChatSearchTerm("");
+                      setChatSearchResults([]);
+                      setCurrentSearchIndex(-1);
+                    }}
+                  >
+                    <X className="h-4.5 w-4.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {/* Messages */}
             <ScrollArea 
               className="flex-1 bg-muted/10 relative" 
