@@ -583,9 +583,9 @@ export function WhatsAppInterface() {
         is_read: m.is_read,
         reply_to: m.reply_to_message_id ? {
           message_id: m.reply_to_message_id,
-          content: m.quoted_message?.content || m.quoted_message?.conteudo || 'Mensagem original',
-          senderName: m.quoted_message?.sender_name || (m.quoted_message?.from_me ? 'Você' : (m.push_name || chatName)),
-          role: m.quoted_message?.from_me ? 'assistant' : 'user'
+          content: m.reply_to_content || 'Mensagem original',
+          senderName: m.reply_to_sender === 'assistant' ? 'Você' : (m.push_name || chatName),
+          role: (m.reply_to_sender || 'user') as 'user' | 'assistant'
         } : undefined
       }));
       // Só atualiza se houver mudança real (evita re-render/flickering)
