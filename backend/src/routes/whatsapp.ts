@@ -1171,15 +1171,19 @@ export default function whatsappRouter(pool: Pool): Router {
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
         let evoRes: Response;
         try {
+          // Payload v2 preferencial (com linkJid)
+          const payload = {
+            number: phoneClean,
+            text,
+            delay: 1200,
+            linkJid: true, // Garante que a Evolution resolva o JID se necessário
+            quoted: replyToMessageId ? { key: { id: replyToMessageId } } : undefined
+          };
+
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-            body: JSON.stringify({ 
-              number: phoneClean, 
-              text, 
-              delay: 1200,
-              quoted: replyToMessageId ? { key: { id: replyToMessageId } } : undefined
-            }),
+            body: JSON.stringify(payload),
           });
         } catch (err: any) {
           console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message);
