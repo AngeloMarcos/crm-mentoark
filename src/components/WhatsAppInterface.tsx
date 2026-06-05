@@ -1291,6 +1291,11 @@ export function WhatsAppInterface() {
                 <DropdownMenu key={chat.id}>
                   <DropdownMenuTrigger asChild>
                     <div
+                      onContextMenu={(e) => {
+                        // O menu abre automaticamente pelo trigger, mas podemos usar este evento
+                        // para selecionar o chat se o usuário clicar com o botão direito sem ter clicado com o esquerdo antes
+                        setActiveChatId(chat.id);
+                      }}
                       onClick={() => {
                         setActiveChatId(chat.id);
                         lastOpenedRef.current.set(chat.phone, new Date().toISOString());
