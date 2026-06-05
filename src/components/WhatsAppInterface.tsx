@@ -651,10 +651,24 @@ export function WhatsAppInterface() {
   }, []);
 
   useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isSelectMode) {
+          setIsSelectMode(false);
+          setSelectedMessageIds(new Set());
+        }
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isSelectMode]);
+
+  useEffect(() => {
     const ms = activeChatId ? 2000 : 5000;
     const t = setInterval(fetchConversas, ms);
     return () => clearInterval(t);
   }, [activeChatId]);
+
 
   useEffect(() => {
     if (!messagesEndRef.current) return;
