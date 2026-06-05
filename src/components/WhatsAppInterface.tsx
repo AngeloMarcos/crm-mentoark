@@ -430,6 +430,15 @@ export function WhatsAppInterface() {
           };
         });
 
+        // Toasts para novas mensagens
+        newArrivals.forEach(id => {
+          if (id !== activeChatIdRef.current) {
+            const row = rows.find(r => r.session_id === id);
+            const nome = row?.nome || id;
+            toast.info(`💬 Nova mensagem de ${nome}`, { duration: 4000 });
+          }
+        });
+
         // Preserva chat local ativo que ainda não chegou ao banco (ex: nova conversa antes do 1º envio)
         const activeId = activeChatIdRef.current;
         if (activeId && !dbChats.find(c => c.id === activeId)) {
@@ -790,6 +799,8 @@ export function WhatsAppInterface() {
                   className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
                     isActive
                       ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary"
+                      : chat.unread
+                      ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
                       : "hover:bg-muted/30"
                   }`}
                 >
@@ -806,7 +817,7 @@ export function WhatsAppInterface() {
                   </div>
                   <div className="flex-1 min-w-0 py-0.5">
                     <div className="flex items-center justify-between mb-1">
-                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : "text-foreground"}`}>{chat.name}</span>
+                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>{chat.name}</span>
                       <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
                     </div>
                     <div className="flex items-center gap-1.5 mb-1.5">
