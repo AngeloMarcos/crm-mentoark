@@ -374,7 +374,37 @@ export default function IntegracoesPage() {
                       <TableCell className="text-xs text-muted-foreground truncate max-w-[200px]">
                         {row.url?.replace("https://", "") ?? "—"}
                       </TableCell>
-                      <TableCell><StatusBadge status={row.status} /></TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={row.status} />
+                          {row.status === "inativo" && (
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="h-7 text-[10px] px-2 gap-1"
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch(`${API_URL}/api/whatsapp/connect`, {
+                                    method: "POST",
+                                    headers: { ...authHeader(), "Content-Type": "application/json" },
+                                    body: JSON.stringify({ instance: row.instancia })
+                                  });
+                                  if (res.ok) {
+                                    toast.success("Solicitação enviada!");
+                                    fetchRows();
+                                  } else {
+                                    throw new Error();
+                                  }
+                                } catch {
+                                  toast.error("Erro ao solicitar reconexão");
+                                }
+                              }}
+                            >
+                              <RefreshCw className="h-3 w-3" /> Reconectar
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <div className="flex gap-1 justify-end">
                           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(row)}>
