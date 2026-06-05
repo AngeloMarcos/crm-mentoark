@@ -20,11 +20,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 
 interface DadoCliente {
-  id: string; // Changed to string to match table definitions
+  id: string;
   nomewpp: string | null;
+  push_name: string | null;
   telefone: string | null;
   Setor: string | null;
   atendimento_ia: string | null;
+  status: 'novo' | 'ativo' | 'inativo' | null;
+  origem: string | null;
   created_at: string;
 }
 
