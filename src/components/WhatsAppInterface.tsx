@@ -2173,7 +2173,8 @@ export function WhatsAppInterface() {
                         </div>
                       </div>
                     </div>
-                  );
+                  </div>
+                );
                 })}
                 <div ref={messagesEndRef} />
               </div>
