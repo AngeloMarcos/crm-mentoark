@@ -828,6 +828,8 @@ export function WhatsAppInterface() {
       fetchMensagens(currentId, activeChatNameRef.current, false);
     }, 3000);
     return () => clearInterval(tMsgs);
+  }, [activeChatId]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeChatId, chats]);
