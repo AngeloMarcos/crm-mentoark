@@ -310,17 +310,18 @@ export default function OpenClawPage() {
                     <tr>
                       <td className="p-3 font-mono">crm-api</td>
                       <td className="p-3"><Badge className="bg-green-500/20 text-green-500 border-green-500/30">Up 4 days</Badge></td>
-                      <td className="p-3 text-xs text-gray-500">0.0.0.0:3000->3000/tcp</td>
+                      <td className="p-3 text-xs text-gray-500">0.0.0.0:3000-&gt;3000/tcp</td>
                     </tr>
                     <tr>
                       <td className="p-3 font-mono">evolution-api</td>
                       <td className="p-3"><Badge className="bg-green-500/20 text-green-500 border-green-500/30">Up 12 days</Badge></td>
-                      <td className="p-3 text-xs text-gray-500">0.0.0.0:8080->8080/tcp</td>
+                      <td className="p-3 text-xs text-gray-500">0.0.0.0:8080-&gt;8080/tcp</td>
                     </tr>
                     <tr>
                       <td className="p-3 font-mono">openclaw-gateway</td>
                       <td className="p-3"><Badge className="bg-green-500/20 text-green-500 border-green-500/30">Up 48 hours</Badge></td>
-                      <td className="p-3 text-xs text-gray-500">0.0.0.0:18789->18789/tcp</td>
+                      <td className="p-3 text-xs text-gray-500">0.0.0.0:18789-&gt;18789/tcp</td>
+
                     </tr>
                   </tbody>
                 </table>
