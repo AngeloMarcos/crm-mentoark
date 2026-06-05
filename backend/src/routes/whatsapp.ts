@@ -393,7 +393,8 @@ export default function whatsappRouter(pool: Pool): Router {
       // Busca por sufixo do número + nome do remetente via JOIN com users
       const r = await pool.query(
         `SELECT
-           m.id, m.message_id, m.from_me, m.message_type, m.content,
+           m.id, m.message_id, m.from_me, m.message_type, m.content, m.deleted_at,
+
            m.media_url, m.media_mimetype, m.status, m.push_name,
            m.timestamp_wa, m.created_at,
            m.reply_to_message_id, m.reply_to_content, m.reply_to_sender,
@@ -416,11 +417,11 @@ export default function whatsappRouter(pool: Pool): Router {
         id: row.id,
         message_id: row.message_id,
         role: row.from_me ? 'assistant' : 'user',
-        content: row.content || '',
+        content: row.deleted_at ? null : (row.content || ''),
         push_name: row.push_name || null,
-        tipo: row.message_type,
-        midia_url: row.media_url,
-        midia_mime: row.media_mimetype,
+        tipo: row.deleted_at ? 'deleted' : row.message_type,
+        midia_url: row.deleted_at ? null : row.media_url,
+        midia_mime: row.deleted_at ? null : row.media_mimetype,
         midia_nome: null,
         status: row.delivery_status || row.status,
         sender_name: row.sender_name || null,
@@ -480,7 +481,42 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // DELETE /api/whatsapp/messages/:messageId — apaga mensagem
+  router.delete('/messages/:messageId', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const messageId = req.params.messageId;
+      const { forEveryone, instancia, remoteJid } = req.body;
+
+      if (forEveryone && instancia && remoteJid) {
+        const cfg = await getEvolutionConfig(userId);
+        const base = cfg.url.replace(/\/$/, '');
+        const targetUrl = `${base}/message/delete/${instancia}`;
+        
+        await evolutionFetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+          body: JSON.stringify({ id: messageId, remoteJid }),
+        }).catch(err => console.warn('[DELETE-EVO] Falhou:', err.message));
+      }
+
+      await pool.query(
+        `UPDATE whatsapp_messages 
+         SET content = null, 
+             message_type = 'deleted',
+             deleted_at = NOW()
+         WHERE message_id = $1 AND user_id = $2`,
+        [messageId, userId]
+      );
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // POST /api/whatsapp/chat-prefs/:phone — atualiza preferências de conversa (pin, archive, mute)
+
   router.post('/chat-prefs/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;

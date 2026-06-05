@@ -2342,6 +2342,7 @@ export type Database = {
         Row: {
           conteudo: string | null
           created_at: string | null
+          deleted_at: string | null
           from_me: boolean
           id: string
           instancia: string
@@ -2362,6 +2363,7 @@ export type Database = {
         Insert: {
           conteudo?: string | null
           created_at?: string | null
+          deleted_at?: string | null
           from_me?: boolean
           id: string
           instancia: string
@@ -2382,6 +2384,7 @@ export type Database = {
         Update: {
           conteudo?: string | null
           created_at?: string | null
+          deleted_at?: string | null
           from_me?: boolean
           id?: string
           instancia?: string

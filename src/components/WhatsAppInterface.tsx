@@ -956,15 +956,37 @@ export function WhatsAppInterface() {
 
   const handleDeleteSelected = () => {
     const count = selectedMessageIds.size;
+    const currentChat = activeChat;
+    if (!currentChat) return;
+
+    const idsToDelete = Array.from(selectedMessageIds);
+    
+    // Otimista
     setChats(prev => prev.map(c => 
       c.id === activeChatId 
         ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
         : c
     ));
-    toast.success(`${count} mensagens removidas localmente`);
+
+    Promise.all(idsToDelete.map(id => 
+      fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: apiHeaders(),
+        body: JSON.stringify({ 
+          forEveryone: true, 
+          instancia: currentChat.source, 
+          remoteJid: `${currentChat.phone}@s.whatsapp.net` 
+        })
+      })
+    )).catch(() => {
+      toast.error("Erro ao apagar algumas mensagens no servidor");
+    });
+
+    toast.success(`${count} mensagens apagadas`);
     setIsSelectMode(false);
     setSelectedMessageIds(new Set());
   };
+
 
 
   const scrollToMessage = (msgIndex: number) => {
@@ -2046,7 +2068,16 @@ export function WhatsAppInterface() {
                           ) : m.tipo === 'sticker' && m.midia_url ? (
                             <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
                           ) : null}
-                          {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}</p>}
+                          {m.tipo === 'deleted' ? (
+                            <p className="text-sm italic text-muted-foreground/60 flex items-center gap-1.5 py-1">
+                              <ShieldAlert className="h-3.5 w-3.5 opacity-50" /> Mensagem apagada
+                            </p>
+                          ) : m.content && (
+                            <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                              {highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}
+                            </p>
+                          )}
+
                           <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
                             <span className="text-[10px] font-bold">{formatTime(m.timestamp)}</span>
                             {isOut && (
