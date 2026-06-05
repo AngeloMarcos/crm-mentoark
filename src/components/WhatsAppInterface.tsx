@@ -227,6 +227,9 @@ export function WhatsAppInterface() {
   const activeChatIdRef = useRef<string | null>(null);
   const activeChatNameRef = useRef<string>('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
@@ -599,6 +602,37 @@ export function WhatsAppInterface() {
     const t = setInterval(fetchConversas, ms);
     return () => clearInterval(t);
   }, [activeChatId]);
+
+  useEffect(() => {
+    if (!messagesEndRef.current) return;
+    
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsAtBottom(entry.isIntersecting);
+        if (entry.isIntersecting) {
+          setShowScrollButton(false);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    
+    observer.observe(messagesEndRef.current);
+    return () => observer.disconnect();
+  }, [activeChatId]);
+
+  const handleScroll = (e: any) => {
+    // Para ScrollArea do Radix, o evento pode ser diferente, 
+    // mas aqui estamos pegando o viewport interno se possível
+    const target = e.target as HTMLDivElement;
+    const isBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 150;
+    setIsAtBottom(isBottom);
+    setShowScrollButton(!isBottom);
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
 
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
@@ -1299,7 +1333,11 @@ export function WhatsAppInterface() {
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 bg-muted/10 relative">
+            <ScrollArea 
+              className="flex-1 bg-muted/10 relative" 
+              ref={scrollAreaRef}
+              onScroll={handleScroll}
+            >
               <div className="px-8 py-6 space-y-1 relative z-1">
                 {loadingMessages && (
                   <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -1426,6 +1464,21 @@ export function WhatsAppInterface() {
                 })}
                 <div ref={messagesEndRef} />
               </div>
+
+              {/* Botão flutuante para rolar ao final */}
+              {showScrollButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-6 right-6 z-20 w-11 h-11 bg-background border border-border/50 rounded-full shadow-xl flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-muted transition-all animate-in zoom-in-50 duration-300"
+                >
+                  <ChevronDown className="h-6 w-6" />
+                  {activeChat.unread && activeChat.unread > 0 ? (
+                    <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 bg-green-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-lg border-2 border-background animate-in fade-in zoom-in duration-500">
+                      {activeChat.unread}
+                    </span>
+                  ) : null}
+                </button>
+              )}
             </ScrollArea>
 
             {/* Input */}
