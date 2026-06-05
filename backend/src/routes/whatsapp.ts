@@ -1055,11 +1055,11 @@ export default function whatsappRouter(pool: Pool): Router {
       await pool.query(
         `INSERT INTO whatsapp_messages
            (user_id, sent_by_user_id, instance_name, remote_jid, message_id, from_me, message_type,
-            content, media_url, status, timestamp_wa)
-         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW())
+            content, media_url, status, timestamp_wa, reply_to_message_id)
+         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW(), $9)
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
         [userId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
-         messageId, msgType, content, mediaUrl || null]
+         messageId, msgType, content, mediaUrl || null, replyToMessageId || null]
       ).catch(err => console.warn('[SEND] Falha ao salvar:', err.message));
 
       return res.json({ ok: true, messageId });
