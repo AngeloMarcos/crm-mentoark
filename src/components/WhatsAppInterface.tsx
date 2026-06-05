@@ -1584,7 +1584,33 @@ export function WhatsAppInterface() {
                 <div className="p-2 flex items-end gap-2">
                   <div className="flex-1 relative">
                     {inputMode === "nota" ? (
-                      <textarea
+                        {/* Preview de Resposta */}
+                        {replyTo && (
+                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 animate-in slide-in-from-bottom-2 duration-200 overflow-hidden">
+                            <div className={`p-3 border-l-4 flex items-start justify-between gap-3 bg-muted/20 ${
+                              replyTo.role === "assistant" ? "border-primary" : "border-green-500"
+                            }`}>
+                              <div className="min-w-0 flex-1">
+                                <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${
+                                  replyTo.role === "assistant" ? "text-primary" : "text-green-600"
+                                }`}>
+                                  {replyTo.senderName}
+                                </p>
+                                <p className="text-xs text-muted-foreground line-clamp-2 italic">
+                                  {replyTo.content}
+                                </p>
+                              </div>
+                              <button 
+                                onClick={() => setReplyTo(null)}
+                                className="p-1 rounded-full hover:bg-muted text-muted-foreground transition-colors"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        <textarea
                         placeholder="Adicione uma nota privada sobre esta conversa..."
                         className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-amber-50/50 border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
                         value={noteInput}
