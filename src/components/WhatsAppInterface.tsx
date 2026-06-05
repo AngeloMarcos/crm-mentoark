@@ -10,6 +10,7 @@ import {
   UserPlus, Check, Smartphone,
   ShieldAlert, Tag, Sparkles, Zap,
   BotOff, Bot, ImageIcon, Reply,
+  ChevronUp,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
