@@ -8,7 +8,7 @@ const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoa
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
 const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
-const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 function webhookPayload() {
   return {
@@ -21,29 +21,17 @@ function webhookPayload() {
 }
 
 // Registra (ou atualiza) o webhook da instância no Evolution.
-// Tenta payload flat (v2) primeiro; se o servidor exigir wrapper {webhook:...} (v1), usa esse.
+// Idempotente — pode ser chamado várias vezes sem efeito colateral.
 async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
   const cleanBase = sanitizeEvolutionUrl(base);
-  const url = `${cleanBase}/webhook/set/${instancia}`;
-  const headers = { 'Content-Type': 'application/json', apikey: apiKey };
   try {
-    // Tenta Evolution v2 — payload flat
-    const res = await evolutionFetch(url, {
-      method: 'POST', headers,
+    const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: apiKey },
       body: JSON.stringify(webhookPayload()),
     });
-    const body = await res.json().catch(() => ({})) as any;
-    if (!res.ok && JSON.stringify(body).includes('webhook')) {
-      // Evolution v1 — payload aninhado em {webhook:{...}}
-      const res2 = await evolutionFetch(url, {
-        method: 'POST', headers,
-        body: JSON.stringify({ webhook: webhookPayload() }),
-      });
-      const body2 = await res2.json().catch(() => ({}));
-      console.log(`[whatsapp] webhook (v1) registrado para ${instancia}:`, JSON.stringify(body2).slice(0, 120));
-      return;
-    }
-    console.log(`[whatsapp] webhook (v2) registrado para ${instancia}:`, JSON.stringify(body).slice(0, 120));
+    const body = await res.json().catch(() => ({}));
+    console.log(`[whatsapp] webhook registrado ${instancia} → enabled=${(body as any)?.webhook?.enabled ?? (body as any)?.enabled}`);
   } catch (err) {
     console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
   }
@@ -175,42 +163,7 @@ export default function whatsappRouter(pool: Pool): Router {
     ).catch(() => {});
   }
 
-  // GET /api/whatsapp/search — busca global de mensagens
-  router.get('/search', async (req: AuthRequest, res: Response) => {
-    try {
-      const userId = req.userId!;
-      const q = (req.query.q as string || '').trim();
-      const limit = Math.min(Number(req.query.limit) || 20, 100);
-
-      if (!q || q.length < 2) return res.json([]);
-
-      const r = await pool.query(
-        `SELECT 
-           m.id, m.message_id, m.remote_jid,
-           split_part(m.remote_jid,'@',1) AS phone,
-           m.content, m.from_me, m.timestamp_wa, m.message_type,
-           COALESCE(c.push_name, c.nome, split_part(m.remote_jid,'@',1)) AS contact_name,
-           COALESCE(c.foto_perfil, c.profile_pic_url) AS profile_pic
-         FROM whatsapp_messages m
-         LEFT JOIN contatos c 
-           ON c.user_id = m.user_id 
-           AND c.telefone ILIKE '%' || RIGHT(split_part(m.remote_jid,'@',1), 11)
-         WHERE m.user_id = $1
-           AND m.content ILIKE $2
-           AND m.message_type = 'text'
-         ORDER BY m.timestamp_wa DESC
-         LIMIT $3`,
-        [userId, `%${q}%`, limit]
-      );
-
-      return res.json(r.rows);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
   // GET /api/whatsapp/profile-pic/:phone — busca foto de perfil on-demand
-
   router.get('/profile-pic/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -288,13 +241,10 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // PARTITION BY phone (não por instância) — evita duplicatas quando o mesmo
       // número existiu em duas instâncias diferentes
-      const showArchived = req.query.archived === 'true';
-
       const r = await pool.query(
         `WITH ranked AS (
            SELECT
              split_part(m.remote_jid,'@',1) AS phone,
-             m.remote_jid,
              m.instance_name,
              m.content,
              m.from_me,
@@ -303,15 +253,12 @@ export default function whatsappRouter(pool: Pool): Router {
              m.remote_jid LIKE '%@g.us' AS is_group,
              m.push_name AS last_sender,
              COUNT(*) OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS total,
-             COUNT(*) FILTER (WHERE NOT m.from_me AND NOT m.is_read) 
-               OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS unread_count,
              ROW_NUMBER() OVER (
                PARTITION BY split_part(m.remote_jid,'@',1)
                ORDER BY m.created_at DESC
              ) AS rn
            FROM whatsapp_messages m
-           WHERE m.user_id = $1 AND (m.is_hidden = false OR m.is_hidden IS NULL)
-
+           WHERE m.user_id = $1
          ),
          contato_unico AS (
            SELECT DISTINCT ON (RIGHT(telefone, 11))
@@ -328,24 +275,19 @@ export default function whatsappRouter(pool: Pool): Router {
            r.instance_name AS instancia,
            r.created_at AS ultima_atividade,
            r.total::int AS total,
-           r.unread_count::int AS unread,
            r.content AS ultima_mensagem,
            r.is_group,
            r.last_sender,
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
            cu.push_name,
            cu.nome_contato,
-           cu.profile_pic_url,
-           COALESCE(wcp.pinned, false) as pinned,
-           COALESCE(wcp.archived, false) as archived,
-           wcp.muted_until
+           cu.profile_pic_url
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
-         LEFT JOIN whatsapp_chat_prefs wcp ON wcp.user_id = $1 AND wcp.remote_jid = r.remote_jid
-         WHERE r.rn = 1 AND (COALESCE(wcp.archived, false) = $2)
-         ORDER BY COALESCE(wcp.pinned, false) DESC, r.created_at DESC
+         WHERE r.rn = 1
+         ORDER BY r.created_at DESC
          LIMIT 300`,
-        [userId, showArchived]
+        [userId]
       );
 
       const conversas = r.rows.map(row => {
@@ -365,10 +307,6 @@ export default function whatsappRouter(pool: Pool): Router {
           ultima_mensagem: row.ultima_mensagem || '',
           ultimo_role: row.ultimo_role,
           total: Number(row.total),
-          unread: Number(row.unread || 0),
-          pinned: row.pinned === true,
-          archived: row.archived === true,
-          muted_until: row.muted_until,
           mensagens: [],
         };
       });
@@ -394,21 +332,17 @@ export default function whatsappRouter(pool: Pool): Router {
       // Busca por sufixo do número + nome do remetente via JOIN com users
       const r = await pool.query(
         `SELECT
-           m.id, m.message_id, m.from_me, m.message_type, m.content, m.deleted_at,
-
+           m.id, m.message_id, m.from_me, m.message_type, m.content,
            m.media_url, m.media_mimetype, m.status, m.push_name,
            m.timestamp_wa, m.created_at,
-           m.reply_to_message_id, m.reply_to_content, m.reply_to_sender,
            COALESCE(s.status, m.status) AS delivery_status,
            u.display_name AS sender_name
-
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
          LEFT JOIN users u ON u.id = m.sent_by_user_id
-         WHERE (split_part(m.remote_jid, '@', 1) = $1 OR split_part(m.remote_jid, '@', 1) = '55' || $1)
+         WHERE split_part(m.remote_jid, '@', 1) = $1
            AND m.user_id = $2
-           AND (m.is_hidden = false OR m.is_hidden IS NULL)
          ORDER BY COALESCE(m.timestamp_wa, m.created_at) ASC
          LIMIT $3 OFFSET $4`,
         [phone, userId, limit, offset]
@@ -418,19 +352,16 @@ export default function whatsappRouter(pool: Pool): Router {
         id: row.id,
         message_id: row.message_id,
         role: row.from_me ? 'assistant' : 'user',
-        content: row.deleted_at ? null : (row.content || ''),
+        content: row.content || '',
         push_name: row.push_name || null,
-        tipo: row.deleted_at ? 'deleted' : row.message_type,
-        midia_url: row.deleted_at ? null : row.media_url,
-        midia_mime: row.deleted_at ? null : row.media_mimetype,
+        tipo: row.message_type,
+        midia_url: row.media_url,
+        midia_mime: row.media_mimetype,
         midia_nome: null,
         status: row.delivery_status || row.status,
         sender_name: row.sender_name || null,
         created_at: row.created_at,
         timestamp_wa: row.timestamp_wa,
-        reply_to_message_id: row.reply_to_message_id,
-        reply_to_content: row.reply_to_content,
-        reply_to_sender: row.reply_to_sender,
       }));
 
       return res.json(mensagens);
@@ -449,7 +380,7 @@ export default function whatsappRouter(pool: Pool): Router {
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
-         WHERE (split_part(m.remote_jid, '@', 1) = $1 OR split_part(m.remote_jid, '@', 1) = '55' || $1) AND m.user_id = $2 AND m.from_me = true
+         WHERE split_part(m.remote_jid, '@', 1) = $1 AND m.user_id = $2 AND m.from_me = true
          ORDER BY m.created_at DESC LIMIT 50`,
         [phone, userId]
       );
@@ -459,101 +390,7 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // PATCH /api/whatsapp/conversas/:phone/read — marca mensagens como lidas
-  router.patch('/conversas/:phone/read', async (req: AuthRequest, res: Response) => {
-    try {
-      const userId = req.userId!;
-      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
-      if (!phone) return res.status(400).json({ message: 'phone inválido' });
-
-      await pool.query(
-        `UPDATE whatsapp_messages 
-         SET is_read = true 
-         WHERE (split_part(remote_jid,'@',1) = $1 OR split_part(remote_jid,'@',1) = '55' || $1)
-           AND user_id = $2 
-           AND from_me = false 
-           AND is_read = false`,
-        [phone, userId]
-      );
-
-      return res.json({ ok: true });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  // DELETE /api/whatsapp/messages/:messageId — apaga mensagem
-  router.delete('/messages/:messageId', async (req: AuthRequest, res: Response) => {
-    try {
-      const userId = req.userId!;
-      const messageId = req.params.messageId;
-      const { forEveryone, instancia, remoteJid } = req.body;
-
-      if (forEveryone && instancia && remoteJid) {
-        const cfg = await getEvolutionConfig(userId);
-        const base = cfg.url.replace(/\/$/, '');
-        const targetUrl = `${base}/message/delete/${instancia}`;
-        
-        await evolutionFetch(targetUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-          body: JSON.stringify({ id: messageId, remoteJid }),
-        }).catch(err => console.warn('[DELETE-EVO] Falhou:', err.message));
-
-        // Soft delete (Placeholder no WhatsApp)
-        await pool.query(
-          `UPDATE whatsapp_messages 
-           SET content = null, 
-               message_type = 'deleted',
-               deleted_at = NOW()
-           WHERE message_id = $1 AND user_id = $2`,
-          [messageId, userId]
-        );
-      } else {
-        // Excluir para mim (Ocultar da interface)
-        await pool.query(
-          `UPDATE whatsapp_messages 
-           SET is_hidden = true 
-           WHERE message_id = $1 AND user_id = $2`,
-          [messageId, userId]
-        );
-      }
-
-      return res.json({ ok: true });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  // POST /api/whatsapp/chat-prefs/:phone — atualiza preferências de conversa (pin, archive, mute)
-
-  router.post('/chat-prefs/:phone', async (req: AuthRequest, res: Response) => {
-    try {
-      const userId = req.userId!;
-      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
-      const { pinned, archived, muted_until } = req.body;
-      const remoteJid = `${phone}@s.whatsapp.net`; // TODO: suporte a grupos se phone contiver '-'
-
-      await pool.query(
-        `INSERT INTO whatsapp_chat_prefs (user_id, remote_jid, pinned, archived, muted_until, updated_at)
-         VALUES ($1, $2, COALESCE($3, false), COALESCE($4, false), $5, NOW())
-         ON CONFLICT (user_id, remote_jid) DO UPDATE SET
-           pinned = COALESCE($3, whatsapp_chat_prefs.pinned),
-           archived = COALESCE($4, whatsapp_chat_prefs.archived),
-           muted_until = COALESCE($5, whatsapp_chat_prefs.muted_until),
-           updated_at = NOW()`,
-        [userId, remoteJid, pinned, archived, muted_until]
-      );
-
-      return res.json({ ok: true });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
   // GET /api/whatsapp/ia-status/:phone — lê se IA está pausada para esse contato
-
-
   router.get('/ia-status/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -869,7 +706,6 @@ export default function whatsappRouter(pool: Pool): Router {
         alwaysOnline: true,
         readMessages: true,
         readStatus: false,
-        syncFullHistory: false, // Evita sobrecarga no primeiro sync
         ...(phoneNumber ? { number: phoneNumber } : {}),
         webhook: webhookPayload(),
       };
@@ -1095,12 +931,10 @@ export default function whatsappRouter(pool: Pool): Router {
       const {
         phone, text, instancia: instanciaParam,
         mediaUrl, mediaType, mediaCaption, mediaFilename,
-        replyToMessageId,
       } = req.body as {
         phone: string; text?: string; instancia?: string;
         mediaUrl?: string; mediaType?: 'image' | 'audio' | 'video' | 'document';
         mediaCaption?: string; mediaFilename?: string;
-        replyToMessageId?: string;
       };
 
       // Normaliza o telefone — remove tudo exceto dígitos
@@ -1162,29 +996,52 @@ export default function whatsappRouter(pool: Pool): Router {
         }
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
-          console.error(`[DEBUG SEND] Evolution mídia falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
-          return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
+
+          if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
+            console.log(`[SEND] Instância ${instancia} não existe na Evolution — recriando automaticamente...`);
+            try {
+              await evolutionFetch(`${base}/instance/create`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+                body: JSON.stringify({ instanceName: instancia, qrcode: false, integration: 'WHATSAPP-BAILEYS' }),
+              });
+              await new Promise(r => setTimeout(r, 2000));
+              const retry = await evolutionFetch(targetUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+                body: JSON.stringify(mediaPayload),
+              });
+              if (!retry.ok) {
+                return res.status(503).json({
+                  message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
+                  reconnect_required: true,
+                  instancia,
+                });
+              }
+              evolutionResp = await retry.json().catch(() => ({}));
+            } catch {
+              return res.status(503).json({
+                message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
+                reconnect_required: true,
+                instancia,
+              });
+            }
+          } else {
+            console.error(`[DEBUG SEND] Evolution mídia falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
+            return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
+          }
         }
-        evolutionResp = await evoRes.json().catch(() => ({}));
+        evolutionResp = evolutionResp ?? await evoRes.json().catch(() => ({}));
       } else {
         // Envio de texto
         const targetUrl = `${base}/message/sendText/${instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
         let evoRes: Response;
         try {
-          // Payload v2 preferencial (com linkJid)
-          const payload = {
-            number: phoneClean,
-            text,
-            delay: 1200,
-            linkJid: true, // Garante que a Evolution resolva o JID se necessário
-            quoted: replyToMessageId ? { key: { id: replyToMessageId } } : undefined
-          };
-
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
           });
         } catch (err: any) {
           console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message);
@@ -1192,10 +1049,43 @@ export default function whatsappRouter(pool: Pool): Router {
         }
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
-          console.error(`[DEBUG SEND] Evolution texto falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
-          return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
+
+          if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
+            console.log(`[SEND] Instância ${instancia} não existe na Evolution — recriando automaticamente...`);
+            try {
+              await evolutionFetch(`${base}/instance/create`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+                body: JSON.stringify({ instanceName: instancia, qrcode: false, integration: 'WHATSAPP-BAILEYS' }),
+              });
+              await new Promise(r => setTimeout(r, 2000));
+              const retry = await evolutionFetch(targetUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+                body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+              });
+              if (!retry.ok) {
+                return res.status(503).json({
+                  message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
+                  reconnect_required: true,
+                  instancia,
+                });
+              }
+              evolutionResp = await retry.json().catch(() => ({}));
+            } catch {
+              return res.status(503).json({
+                message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
+                reconnect_required: true,
+                instancia,
+              });
+            }
+          } else {
+            console.error(`[DEBUG SEND] Evolution texto falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
+            return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
+          }
+        } else {
+          evolutionResp = await evoRes.json().catch(() => ({}));
         }
-        evolutionResp = await evoRes.json().catch(() => ({}));
         console.log(`[DEBUG SEND] Evolution respondeu ok — messageId=${evolutionResp?.key?.id}`);
       }
 
@@ -1205,11 +1095,11 @@ export default function whatsappRouter(pool: Pool): Router {
       await pool.query(
         `INSERT INTO whatsapp_messages
            (user_id, sent_by_user_id, instance_name, remote_jid, message_id, from_me, message_type,
-            content, media_url, status, timestamp_wa, reply_to_message_id)
-         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW(), $9)
+            content, media_url, status, timestamp_wa)
+         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW())
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
         [userId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
-         messageId, msgType, content, mediaUrl || null, replyToMessageId || null]
+         messageId, msgType, content, mediaUrl || null]
       ).catch(err => console.warn('[SEND] Falha ao salvar:', err.message));
 
       return res.json({ ok: true, messageId });
@@ -1337,35 +1227,17 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // GET /api/whatsapp/evo/status — verifica estado da instância usando config do banco
+  // Aceita ?instancia= para checar uma instância específica (usado pelo painel multi-instância)
   router.get('/evo/status', async (req: AuthRequest, res: Response) => {
     try {
-      const cfg  = await getEvolutionConfig(req.userId!);
+      const cfg      = await getEvolutionConfig(req.userId!);
+      const instancia = (req.query['instancia'] as string | undefined) || cfg.instancia;
       if (!cfg.url || !cfg.api_key) return res.json({ state: 'nao_configurado' });
       const base = cfg.url.replace(/\/$/, '');
-      const r    = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, { headers: { apikey: cfg.api_key } }).catch(() => null);
-      if (!r?.ok) return res.json({ state: 'close', instancia: cfg.instancia });
-      const d: any = await r.json();
-      return res.json({ state: d?.instance?.state || d?.state || 'close', instancia: cfg.instancia });
-    } catch (err: any) {
-      return res.status(502).json({ message: err.message });
-    }
-  });
-
-  // GET /api/whatsapp/evo/status/:instance — estado de instância específica direto da Evolution
-  router.get('/evo/status/:instance', async (req: AuthRequest, res: Response) => {
-    try {
-      const cfg      = await getEvolutionConfig(req.userId!);
-      const instancia = req.params.instance;
-      if (!cfg.url || !cfg.api_key) return res.json({ state: 'nao_configurado', instancia });
-      const base = cfg.url.replace(/\/$/, '');
-      const r = await fetch(`${base}/instance/connectionState/${instancia}`, {
-        headers: { apikey: cfg.api_key },
-      }).catch(() => null);
+      const r    = await fetch(`${base}/instance/connectionState/${instancia}`, { headers: { apikey: cfg.api_key } }).catch(() => null);
       if (!r?.ok) return res.json({ state: 'close', instancia });
       const d: any = await r.json();
-      const state: string = d?.instance?.state || d?.state || 'close';
-      if (state === 'open') registrarWebhook(base, cfg.api_key, instancia).catch(() => {});
-      return res.json({ state, instancia });
+      return res.json({ state: d?.instance?.state || d?.state || 'close', instancia });
     } catch (err: any) {
       return res.status(502).json({ message: err.message });
     }

@@ -70,6 +70,7 @@ import integracoesRouter from './routes/integracoes';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
 import adminFirewallRouter, { createFirewallMiddleware } from './routes/admin_firewall';
 import suporteCopilotoRouter from './routes/suporte_copiloto';
+import { makeOpenClawRouter } from './routes/openclaw';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -302,6 +303,7 @@ app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));
 app.use('/api/suporte',        suporteCopilotoRouter(pool));
 app.use('/api/admin/firewall', adminFirewallRouter(pool));
+app.use('/api/openclaw',       makeOpenClawRouter(pool));
 
 // Virtual tables for Database compatibility
 app.use('/api', usuariosRouter(pool));

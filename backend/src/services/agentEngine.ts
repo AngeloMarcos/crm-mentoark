@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
+import { chamarOpenClawAgent } from '../routes/openclaw';
 
 // Cliente global — usado como fallback; substituído pela chave do banco sempre que possível
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -388,7 +389,29 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   let tokensSaida = 0;
   let pausaAtivada = false;
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
+  // ── Rota OpenClaw (motor_ia = 'openclaw' no agente ou agent_config) ───────
+  const usarOpenClaw = agente.motor_ia === 'openclaw' || agentConfig?.motor_ia === 'openclaw';
+  if (usarOpenClaw) {
+    console.log(`[ENGINE] Usando OpenClaw para ${entrada.telefone}`);
+    const prompt = systemPrompt + `\n\nHistórico:\n${
+      historico.map(m => `${m.role === 'user' ? 'Cliente' : 'IA'}: ${m.content}`).join('\n')
+    }\n\nCliente: ${textoFinal}`;
+    try {
+      respostaFinal = await chamarOpenClawAgent(
+        prompt,
+        sessionId,
+        openaiApiKey,
+        40_000,
+      );
+      console.log(`[ENGINE] OpenClaw respondeu: ${respostaFinal.slice(0, 100)}`);
+    } catch (err: any) {
+      console.error('[ENGINE] OpenClaw falhou, usando fallback OpenAI:', err.message);
+    }
+  }
+
+  if (!usarOpenClaw || !respostaFinal) {
+
+  for (let iter = 0; iter < MAX_ITER; iter++) { // eslint-disable-line no-lone-blocks
     // ── [RASTREIO IA] Log pré-chamada ────────────────────────────────────────
     console.log(
       '[RASTREIO IA] Enviando para OpenAI',
@@ -478,6 +501,8 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     console.warn('[ENGINE] Sem resposta após loop agêntico');
     return;
   }
+
+  } // fim if(!usarOpenClaw || !respostaFinal)
 
   // 9. Parser nativo — sem segunda chamada de API (zero custo, zero latência extra)
   let parserMessages: string[] = [respostaFinal];

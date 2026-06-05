@@ -1,4 +1,4 @@
-﻿/**
+/**
  * webhook.ts — Receptor de eventos da Evolution API (WhatsApp)
  *
  * Melhorias v3:
@@ -44,17 +44,17 @@ interface EvolutionPayload {
     };
     message?: {
       conversation?: string;
-      extendedTextMessage?: { text: string; contextInfo?: any };
-      imageMessage?: { caption?: string; url?: string; mimetype?: string; contextInfo?: any };
-      audioMessage?: { url?: string; mimetype?: string; seconds?: number; contextInfo?: any };
-      videoMessage?: { caption?: string; url?: string; mimetype?: string; seconds?: number; contextInfo?: any };
-      documentMessage?: { caption?: string; fileName?: string; url?: string; mimetype?: string; contextInfo?: any };
-      stickerMessage?: { url?: string; mimetype?: string; contextInfo?: any };
-      buttonsResponseMessage?: { selectedDisplayText: string; contextInfo?: any };
-      listResponseMessage?: { title: string; contextInfo?: any };
-      templateButtonReplyMessage?: { selectedDisplayText: string; contextInfo?: any };
+      extendedTextMessage?: { text: string };
+      imageMessage?: { caption?: string; url?: string; mimetype?: string };
+      audioMessage?: { url?: string; mimetype?: string; seconds?: number };
+      videoMessage?: { caption?: string; url?: string; mimetype?: string; seconds?: number };
+      documentMessage?: { caption?: string; fileName?: string; url?: string; mimetype?: string };
+      stickerMessage?: { url?: string; mimetype?: string };
+      buttonsResponseMessage?: { selectedDisplayText: string };
+      listResponseMessage?: { title: string };
+      templateButtonReplyMessage?: { selectedDisplayText: string };
     };
-    update?: { status: string; id?: string }[];
+    update?: { status: string }[];
     messageTimestamp?: number;
     pushName?: string;
     status?: string;
@@ -141,75 +141,70 @@ export default function webhookRouter(pool: Pool): Router {
       ).catch(() => {});
 
       if (status === 'READ' || status === 'PLAYED') {
-        // Quando status é READ/PLAYED, marca a mensagem como lida no banco
         await pool.query(
           `UPDATE whatsapp_messages SET is_read = true
            WHERE message_id = $1 AND instance_name = $2`,
           [messageId, payload.instance]
         ).catch(() => {});
       }
-
     }
   }
 
   router.post('/evolution', async (req: Request, res: Response) => {
+    // ── TRACE 0: chegou no servidor ──────────────────────────────────────────
+    const traceId = Date.now().toString(36);
+    console.log(`\n${'═'.repeat(60)}`);
+    console.log(`[WH:${traceId}] ENTRADA POST /webhook/evolution`);
+    console.log(`[WH:${traceId}] headers.content-type="${req.headers['content-type']}" | body_keys="${Object.keys(req.body || {}).join(',')}"`);
+
     const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
-    if (webhookSecret && !verificarAssinaturaEvolution(req, webhookSecret)) {
-      wlog('WEBHOOK_AUTH_ERROR', 'Assinatura inválida — requisição rejeitada');
-      return res.status(401).json({ error: 'Assinatura inválida' });
+    if (webhookSecret) {
+      const ok = verificarAssinaturaEvolution(req, webhookSecret);
+      console.log(`[WH:${traceId}] ASSINATURA secret=SET | válida=${ok}`);
+      if (!ok) {
+        console.warn(`[WH:${traceId}] Assinatura inválida — rejeitando`);
+        return res.status(401).json({ error: 'Assinatura inválida' });
+      }
+    } else {
+      console.log(`[WH:${traceId}] ASSINATURA secret=NOT_SET (aceitar tudo)`);
     }
 
     res.status(200).json({ ok: true });
 
-
     try {
       const payload = req.body as EvolutionPayload;
-      // Correção 1 — normalizar evento removendo qualquer separador (_, ., /) e caixa
       const eventClean = (payload.event || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const _rj = payload.data?.key?.remoteJid || '';
-      const _mid = payload.data?.key?.id || '';
-      wlog('WEBHOOK_IN', `event="${payload.event}" clean="${eventClean}" instance="${payload.instance}" jid="${_rj}" mid="${_mid}" fromMe=${payload.data?.key?.fromMe}`);
+
+      console.log(`[WH:${traceId}] EVENTO="${payload.event}" clean="${eventClean}" instance="${payload.instance}"`);
+      console.log(`[WH:${traceId}] DATA jid="${payload.data?.key?.remoteJid}" fromMe=${payload.data?.key?.fromMe} msgId="${payload.data?.key?.id}" pushName="${payload.data?.pushName}"`);
+      console.log(`[WH:${traceId}] TEXTO="${String(payload.data?.message?.conversation || payload.data?.message?.extendedTextMessage?.text || '').slice(0, 80)}"`);
 
       if (eventClean === 'messagesupdate') {
+        console.log(`[WH:${traceId}] → handleStatusUpdate`);
         await handleStatusUpdate(payload);
         return;
       }
 
-      if (eventClean === 'messagesdelete') {
-        const deletedId = payload.data?.key?.id;
-        if (deletedId) {
-          await pool.query(
-            `UPDATE whatsapp_messages 
-             SET content = null, message_type = 'deleted', deleted_at = NOW()
-             WHERE message_id = $1`,
-            [deletedId]
-          ).catch(() => {});
-        }
-        return;
-      }
-
-
-      // Aceita 'messagesupsert' (cobre MESSAGES_UPSERT, messages.upsert, messages_upsert etc.)
       if (eventClean !== 'messagesupsert') {
-        wlog('WEBHOOK_DROP', `evento ignorado: "${eventClean}"`);
+        console.log(`[WH:${traceId}] IGNORADO evento não é messagesupsert (é "${eventClean}")`);
         return;
       }
 
-      // Ignorar notificações de status sem conteúdo de mensagem
       const dataStatus = payload.data?.status;
       if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
-        wlog('WEBHOOK_DROP', `status-only (${dataStatus}) mid=${_mid}`);
+        console.log(`[WH:${traceId}] IGNORADO dataStatus="${dataStatus}"`);
         return;
       }
 
       const remoteJid = payload.data?.key?.remoteJid || '';
-      if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio mid=${_mid}`); return; }
-      if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}"`); return; }
+      console.log(`[WH:${traceId}] remoteJid="${remoteJid}"`);
+      if (!remoteJid) return;
+      if (!remoteJid.includes('@')) return;
+      // Aceitar grupos (@g.us) e contatos individuais (@s.whatsapp.net / @lid)
       const isGroup = remoteJid.endsWith('@g.us');
 
       const messageId = payload.data?.key?.id || '';
-      if (!messageId) { wlog('WEBHOOK_DROP', `messageId vazio jid=${remoteJid}`); return; }
-
+      if (!messageId) return;
 
       const instancia  = payload.instance;
       const telefone   = remoteJid.split('@')[0]; // phone ou groupId
@@ -220,11 +215,12 @@ export default function webhookRouter(pool: Pool): Router {
       const pushName   = payload.data?.pushName || (isGroup ? senderPhone : telefone);
       const fromMe     = payload.data?.key?.fromMe === true;
 
-      // ── Lookup unificado: agent_configs (fonte principal) → agentes (legado) ──
+      // ── Lookup unificado: agent_configs → agentes → prefixo → integracoes_config → admin ──
       let userId: string | null = null;
-      let palavraReativar = 'atendimento finalizado'; // valor padrão
+      let palavraReativar = 'atendimento finalizado';
+      let n8nWebhookUrl: string | null = null;
 
-      // 1. agent_configs — busca por evolution_instancia ou nome_agente, obtém palavra_reativar junto
+      // 1. agent_configs
       const cfgRes = await pool.query(
         `SELECT user_id, palavra_reativar
          FROM agent_configs
@@ -237,48 +233,102 @@ export default function webhookRouter(pool: Pool): Router {
       if (cfgRes.rows.length) {
         userId = cfgRes.rows[0].user_id;
         palavraReativar = (cfgRes.rows[0].palavra_reativar || palavraReativar).toLowerCase();
+        console.log(`[WH:${traceId}] USERID via agent_configs: ${userId}`);
+      } else {
+        console.log(`[WH:${traceId}] agent_configs: nenhum resultado para instancia="${instancia}"`);
       }
 
-      // 2. Fallback legado: tabela agentes (migração gradual)
+      // 2. Fallback legado: tabela agentes (também captura n8n_webhook_url)
       if (!userId) {
         const agtRes = await pool.query(
-          `SELECT user_id FROM agentes
+          `SELECT user_id, n8n_webhook_url FROM agentes
            WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
              AND ativo = true AND user_id IS NOT NULL
            ORDER BY updated_at DESC LIMIT 1`,
           [instancia]
         ).catch(() => ({ rows: [] as any[] }));
-        if (agtRes.rows.length) userId = agtRes.rows[0].user_id;
+        if (agtRes.rows.length) {
+          userId = agtRes.rows[0].user_id;
+          n8nWebhookUrl = agtRes.rows[0].n8n_webhook_url || null;
+          console.log(`[WH:${traceId}] USERID via agentes: ${userId} | n8n: ${n8nWebhookUrl ? 'SIM' : 'NÃO'}`);
+        } else {
+          console.log(`[WH:${traceId}] agentes: nenhum resultado`);
+        }
+      }
+      // Também verifica n8n_webhook_url se userId já foi resolvido via agent_configs
+      if (userId && !n8nWebhookUrl) {
+        const n8nRes = await pool.query(
+          `SELECT n8n_webhook_url FROM agentes
+           WHERE user_id = $1 AND (LOWER(evolution_instancia) = LOWER($2) OR evolution_instancia IS NULL)
+             AND ativo = true AND n8n_webhook_url IS NOT NULL
+           ORDER BY updated_at DESC LIMIT 1`,
+          [userId, instancia]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (n8nRes.rows.length) {
+          n8nWebhookUrl = n8nRes.rows[0].n8n_webhook_url;
+          console.log(`[WH:${traceId}] n8n_webhook_url via agentes: ${n8nWebhookUrl}`);
+        }
       }
 
-      // 3. Fallback final: prefixo UUID no nome da instância (ex: crm_435ee4720fc3)
+      // 3. Fallback: prefixo UUID na instância (ex: crm_435ee4720fc3)
       if (!userId && instancia.startsWith('crm_')) {
         const prefixo = instancia.slice(4);
         const uRes = await pool.query(
           `SELECT id FROM users WHERE replace(id::text, '-', '') LIKE $1 LIMIT 1`,
           [`${prefixo}%`]
         ).catch(() => ({ rows: [] as any[] }));
-        if (uRes.rows.length) userId = uRes.rows[0].id;
+        if (uRes.rows.length) {
+          userId = uRes.rows[0].id;
+          console.log(`[WH:${traceId}] USERID via prefixo UUID: ${userId}`);
+        } else {
+          console.log(`[WH:${traceId}] prefixo UUID "${prefixo}%": nenhum resultado`);
+        }
       }
 
-      // 4. Fallback Integracoes: busca na tabela integracoes_config
+      // 4. Fallback: integracoes_config
       if (!userId) {
-        const intRes = await pool.query(
+        const icRes = await pool.query(
           `SELECT user_id FROM integracoes_config
-           WHERE LOWER(instancia) = LOWER($1) AND tipo = 'whatsapp'
-           LIMIT 1`,
+           WHERE LOWER(instancia) = LOWER($1) LIMIT 1`,
           [instancia]
         ).catch(() => ({ rows: [] as any[] }));
-        if (intRes.rows.length) userId = intRes.rows[0].user_id;
+        if (icRes.rows.length) {
+          userId = icRes.rows[0].user_id;
+          console.log(`[WH:${traceId}] USERID via integracoes_config: ${userId}`);
+        } else {
+          console.log(`[WH:${traceId}] integracoes_config: nenhum resultado para instancia="${instancia}"`);
+        }
       }
 
+      // 5. Fallback: admin do sistema
       if (!userId) {
-        wlog('WEBHOOK_DROP', `userId não encontrado para instancia="${instancia}". Verifique Configurações da IA ou Integrações. jid=${remoteJid} mid=${messageId}`);
-      } else {
-
-        wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);
+        const adminRes = await pool.query(
+          `SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`
+        ).catch(() => ({ rows: [] as any[] }));
+        if (adminRes.rows.length) {
+          userId = adminRes.rows[0].id;
+          console.log(`[WH:${traceId}] USERID via admin-fallback: ${userId}`);
+        } else {
+          console.log(`[WH:${traceId}] FATAL: nenhum userId encontrado para instancia="${instancia}"`);
+        }
       }
 
+      console.log(`[WH:${traceId}] RESOLUCAO FINAL userId=${userId} | fromMe=${fromMe} | isGroup=${isGroup}`);
+
+      // ── UPSERT antecipado de contato — garante que contatos novos existam antes de qualquer branch ──
+      if (userId && !isGroup && remoteJid) {
+        const suffixEarly = `%${telefone.slice(-11)}`;
+        const nomeEarly = pushName || telefone;
+        pool.query(
+          `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, ultima_mensagem_em, atendente_pausou_ia)
+           VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)
+           ON CONFLICT (user_id, telefone) DO UPDATE
+             SET push_name = COALESCE(EXCLUDED.push_name, contatos.push_name),
+                 nome = CASE WHEN contatos.nome = contatos.telefone THEN EXCLUDED.nome ELSE contatos.nome END,
+                 ultima_mensagem_em = NOW()`,
+          [userId, nomeEarly, telefone, pushName || null]
+        ).catch(err => console.warn('[WEBHOOK UPSERT_CONTATO_EARLY]:', err.message));
+      }
 
       // ── Mensagens do atendente (fromMe=true) → pausar IA ou reativar ─────────
       if (fromMe) {
@@ -371,31 +421,27 @@ export default function webhookRouter(pool: Pool): Router {
              VALUES ($1, $2, $3, $4, true, $5, $6, 'sent', to_timestamp($7))
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
             [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
-          ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao salvar msg fromMe: ${err.message}`));
+          ).catch(err => console.error('[WEBHOOK INSERT fromMe whatsapp_messages]:', err.message));
         }
         return;
       }
 
+      // ── Deduplicação em memória ───────────────────────────────────────────────
+      if (processados.has(messageId)) return;
+      processados.add(messageId);
+      setTimeout(() => processados.delete(messageId), 60000);
 
-      // ── Deduplicação em memória (escopo por instância) ───────────────────────
-      const memKey = `${instancia}:${messageId}`;
-      if (processados.has(memKey)) { wlog('WEBHOOK_DROP', `dedup memória ${memKey}`); return; }
-      processados.add(memKey);
-      setTimeout(() => processados.delete(memKey), 60000);
-
-      // ── Deduplicação no banco (escopo por instância) ─────────────────────────
+      // ── Deduplicação no banco ─────────────────────────────────────────────────
       const jaExiste = await pool.query(
-        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
-        [messageId, instancia]
+        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
+        [messageId]
       );
-      if (jaExiste.rows.length) { wlog('WEBHOOK_DROP', `dedup banco mid=${messageId} inst=${instancia}`); return; }
+      if (jaExiste.rows.length) return;
 
       await pool.query(
         'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [messageId, instancia]
-      ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao inserir dedup banco: ${err.message}`));
-
-
+      ).catch(err => console.error('[WEBHOOK INSERT webhook_mensagens_processadas]:', err.message));
 
       // ── Extrair dados ─────────────────────────────────────────────────────────
       const texto    = extrairTexto(payload.data);
@@ -404,36 +450,28 @@ export default function webhookRouter(pool: Pool): Router {
       const ts       = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
       const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
-      // Extrair informações de resposta (reply/quote)
-      const contextInfo = payload.data?.message?.extendedTextMessage?.contextInfo || 
-                         payload.data?.message?.imageMessage?.contextInfo || 
-                         payload.data?.message?.videoMessage?.contextInfo || 
-                         payload.data?.message?.documentMessage?.contextInfo ||
-                         payload.data?.message?.stickerMessage?.contextInfo;
-      const replyToId = contextInfo?.stanzaId || null;
-      const replyToContent = contextInfo?.quotedMessage?.conversation || contextInfo?.quotedMessage?.extendedTextMessage?.text || null;
-      const replyToSender = contextInfo?.participant ? (contextInfo.participant.includes('@s.whatsapp.net') ? 'user' : 'assistant') : null;
-
-
-
       // ── Persistir mensagem recebida ───────────────────────────────────────────
       if (userId) {
-        // Em grupos guarda o remetente real (participant) no push_name
         const pushNameFinal = isGroup
           ? (pushName ? `${pushName} (grupo)` : senderPhone)
           : pushName || null;
 
-        await pool.query(
+        console.log(`[WH:${traceId}] INSERT whatsapp_messages userId=${userId} instancia="${instancia}" jid="${remoteJid}" msgId="${messageId}" tipo="${tipo}" texto="${(texto||'').slice(0,60)}"`);
+
+        const insertResult = await pool.query(
           `INSERT INTO whatsapp_messages
              (user_id, instance_name, remote_jid, message_id, from_me, message_type,
-              content, media_url, media_mimetype, push_name, status, timestamp_wa,
-              reply_to_message_id, reply_to_content, reply_to_sender)
-           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $9, 'received', to_timestamp($10), $11, $12, $13)
+              content, media_url, media_mimetype, push_name, status, timestamp_wa)
+           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $9, 'received', to_timestamp($10))
            ON CONFLICT (message_id, instance_name) DO NOTHING`,
           [userId, instancia, remoteJid, messageId, tipo,
            texto || null, midia.url || null, midia.mime || null,
-           pushNameFinal, tsVal, replyToId, replyToContent, replyToSender]
-        ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao salvar mensagem recebida: ${err.message}`));
+           pushNameFinal, tsVal]
+        ).catch(err => {
+          console.error(`[WH:${traceId}] ERRO INSERT whatsapp_messages:`, err.message);
+          return { rowCount: -1 };
+        });
+        console.log(`[WH:${traceId}] INSERT RESULT rowCount=${(insertResult as any).rowCount} (0=duplicata, 1=novo, -1=erro)`);
 
         // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────
         if (!isGroup) {
@@ -501,7 +539,7 @@ export default function webhookRouter(pool: Pool): Router {
                 console.log(`[WEBHOOK] Foto de perfil atualizada para ${telefone}`);
               }
             } catch (e: any) {
-              wlog('WEBHOOK_ERROR', `Falha ao upsert contato: ${e.message}`);
+              console.warn('[WEBHOOK] Falha ao upsert contato:', e.message);
             }
           })();
         }
@@ -520,39 +558,31 @@ export default function webhookRouter(pool: Pool): Router {
             `INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`,
             [userId, telefone, textoNorm]
           ).catch(() => {});
-
+          // Enviar confirmação via Evolution (busca config do agente)
           try {
             const cfgOptOut = await pool.query(
               `SELECT COALESCE(evolution_server_url, $2) AS url,
-                      COALESCE(evolution_api_key,    $3) AS api_key,
-                      COALESCE(evolution_instancia,  $4) AS inst
+                      COALESCE(evolution_api_key, $3)    AS api_key,
+                      COALESCE(evolution_instancia, $4)  AS instancia
                FROM agentes
                WHERE user_id = $1 AND ativo = true
                ORDER BY updated_at DESC LIMIT 1`,
-              [
-                userId,
-                process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br',
-                process.env.EVOLUTION_API_KEY || '',
-                instancia,
-              ]
+              [userId,
+               process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br',
+               process.env.EVOLUTION_API_KEY || '',
+               instancia]
             ).catch(() => ({ rows: [] as any[] }));
-
             if (cfgOptOut.rows.length) {
-              const { url, api_key, inst } = cfgOptOut.rows[0];
-              const base = (url || '').trim().replace(/\/+$/, '');
-              await fetch(`${base}/message/sendText/${inst}`, {
+              const { url: evoUrl, api_key: evoApiKey, instancia: evoInst } = cfgOptOut.rows[0];
+              const base = (evoUrl || '').trim().replace(/\/+$/, '');
+              await fetch(`${base}/message/sendText/${evoInst}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: api_key },
-                body: JSON.stringify({
-                  number: telefone,
-                  text: 'Você foi removido da nossa lista. Para se reinscrever, envie *reativar*.',
-                  delay: 1000,
-                }),
+                headers: { 'Content-Type': 'application/json', apikey: evoApiKey },
+                body: JSON.stringify({ number: telefone, text: 'Você foi removido da nossa lista. Para se reinscrever, envie "reativar".' }),
               }).catch(() => {});
             }
           } catch {}
-
-          console.log(`[WEBHOOK] Opt-out confirmado: ${telefone}`);
+          console.log(`[WEBHOOK] Opt-out: ${telefone}`);
           return;
         }
 
@@ -582,13 +612,29 @@ export default function webhookRouter(pool: Pool): Router {
         console.log(`[WEBHOOK] Grupo ${telefone} — mensagem salva, IA não processada`);
         return;
       }
-      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) {
-        wlog('WEBHOOK_DROP', `sem texto e sem mídia tipo=${tipo} mid=${messageId}`);
+      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) return;
+
+      // Rota N8N: se agente tem n8n_webhook_url configurado, encaminha para lá
+      if (n8nWebhookUrl) {
+        console.log(`[WEBHOOK] Roteando para N8N: ${n8nWebhookUrl}`);
+        fetch(n8nWebhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            instancia,
+            messageId,
+            telefone,
+            pushName,
+            texto,
+            tipo,
+            midiaUrl: midia.url || null,
+            timestamp: tsVal,
+            userId,
+            remoteJid,
+          }),
+        }).catch(err => console.error(`[WEBHOOK] Erro ao encaminhar para N8N: ${err.message}`));
         return;
       }
-
-      wlog('WEBHOOK_OK', `enfileirando IA tel=${telefone} tipo=${tipo} mid=${messageId} texto="${(texto||'').slice(0,80)}"`);
-
 
       processarComDebounce(pool, {
         instancia,
