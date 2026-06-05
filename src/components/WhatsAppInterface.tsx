@@ -449,7 +449,7 @@ export function WhatsAppInterface() {
       if (!a.is_pinned && b.is_pinned) return 1;
       return (b.rawTimestamp || "").localeCompare(a.rawTimestamp || "");
     });
-  }, [chats, searchTerm, activeTab]);
+  }, [chats, globalSearchTerm, activeTab]);
 
 
   const fetchConversas = async (isArchived = false) => {
