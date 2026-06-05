@@ -1058,12 +1058,21 @@ export function WhatsAppInterface() {
     if (!isSelectMode) setIsSelectMode(true);
     setSelectedMessageIds(prev => {
       const next = new Set(prev);
-      if (next.has(messageId)) {
+      const isAdded = !next.has(messageId);
+      
+      if (isAdded) {
+        next.add(messageId);
+      } else {
         next.delete(messageId);
         if (next.size === 0) setIsSelectMode(false);
-      } else {
-        next.add(messageId);
       }
+
+      console.log('--- [RASTREIO SELEÇÃO] ---', { 
+        mensagemId: messageId, 
+        acao: isAdded ? 'adicionado' : 'removido', 
+        listaAtual: Array.from(next)
+      });
+
       return next;
     });
   };
