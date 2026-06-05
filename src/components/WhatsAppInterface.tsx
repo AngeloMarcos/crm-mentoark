@@ -9,7 +9,7 @@ import {
   Mic, LayoutGrid, MessageSquare, SlidersHorizontal,
   UserPlus, Check, Smartphone,
   ShieldAlert, Tag, Sparkles, Zap,
-  BotOff, Bot, ImageIcon,
+  BotOff, Bot, ImageIcon, Reply,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
