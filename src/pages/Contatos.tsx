@@ -87,7 +87,7 @@ export default function ContatosPage() {
       setLoading(true);
       const { data, error } = await api
         .from("dados_cliente")
-        .select('id, user_id, nomewpp, telefone, "Setor", atendimento_ia, created_at')
+        .select('id, user_id, nomewpp, push_name, telefone, "Setor", atendimento_ia, status, origem, created_at')
         .order("created_at", { ascending: false });
       if (error) {
         toast({ title: "Erro ao carregar", description: error.message, variant: "destructive" });
