@@ -163,7 +163,9 @@ export default function webhookRouter(pool: Pool): Router {
       const payload = req.body as EvolutionPayload;
       // Correção 1 — normalizar evento removendo qualquer separador (_, ., /) e caixa
       const eventClean = (payload.event || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      console.log(`[WEBHOOK EVENTO] event="${payload.event}" → clean="${eventClean}" | instance="${payload.instance}"`);
+      const _rj = payload.data?.key?.remoteJid || '';
+      const _mid = payload.data?.key?.id || '';
+      wlog('WEBHOOK_IN', `event="${payload.event}" clean="${eventClean}" instance="${payload.instance}" jid="${_rj}" mid="${_mid}" fromMe=${payload.data?.key?.fromMe}`);
 
       if (eventClean === 'messagesupdate') {
         await handleStatusUpdate(payload);
@@ -171,23 +173,26 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // Aceita 'messagesupsert' (cobre MESSAGES_UPSERT, messages.upsert, messages_upsert etc.)
-      if (eventClean !== 'messagesupsert') return;
+      if (eventClean !== 'messagesupsert') {
+        wlog('WEBHOOK_DROP', `evento ignorado: "${eventClean}"`);
+        return;
+      }
 
       // Ignorar notificações de status sem conteúdo de mensagem
       const dataStatus = payload.data?.status;
-      if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') return;
+      if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
+        wlog('WEBHOOK_DROP', `status-only (${dataStatus}) mid=${_mid}`);
+        return;
+      }
 
       const remoteJid = payload.data?.key?.remoteJid || '';
-
-      // Log para diagnóstico — nunca perder mensagens silenciosamente
-      console.log(`[WEBHOOK] remoteJid recebido: "${remoteJid}" | event: ${eventClean} | instance: ${payload.instance}`);
-      if (!remoteJid) return;
-      if (!remoteJid.includes('@')) return;
-      // Aceitar grupos (@g.us) e contatos individuais (@s.whatsapp.net / @lid)
+      if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio mid=${_mid}`); return; }
+      if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}"`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
 
       const messageId = payload.data?.key?.id || '';
-      if (!messageId) return;
+      if (!messageId) { wlog('WEBHOOK_DROP', `messageId vazio jid=${remoteJid}`); return; }
+
 
       const instancia  = payload.instance;
       const telefone   = remoteJid.split('@')[0]; // phone ou groupId
