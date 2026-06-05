@@ -175,14 +175,23 @@ export default function webhookRouter(pool: Pool): Router {
 
       // Ignorar notificações de status sem conteúdo de mensagem
       const dataStatus = payload.data?.status;
-      if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') return;
+      if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
+        wlog('WEBHOOK_DROP', `status-only event ignorado: ${dataStatus} | instance=${payload.instance}`);
+        return;
+      }
 
       const remoteJid = payload.data?.key?.remoteJid || '';
 
       // Log para diagnóstico — nunca perder mensagens silenciosamente
       console.log(`[WEBHOOK] remoteJid recebido: "${remoteJid}" | event: ${eventClean} | instance: ${payload.instance}`);
-      if (!remoteJid) return;
-      if (!remoteJid.includes('@')) return;
+      if (!remoteJid) {
+        wlog('WEBHOOK_DROP', `remoteJid vazio | instance=${payload.instance}`);
+        return;
+      }
+      if (!remoteJid.includes('@')) {
+        wlog('WEBHOOK_DROP', `remoteJid sem @ inválido: "${remoteJid}" | instance=${payload.instance}`);
+        return;
+      }
       // Aceitar grupos (@g.us) e contatos individuais (@s.whatsapp.net / @lid)
       const isGroup = remoteJid.endsWith('@g.us');
 
@@ -338,16 +347,23 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // ── Deduplicação em memória ───────────────────────────────────────────────
-      if (processados.has(messageId)) return;
-      processados.add(messageId);
-      setTimeout(() => processados.delete(messageId), 60000);
+      const dedupKey = `${instancia}:${messageId}`;
+      if (processados.has(dedupKey)) {
+        wlog('WEBHOOK_DROP', `dedup memória: ${messageId} | ${instancia}`);
+        return;
+      }
+      processados.add(dedupKey);
+      setTimeout(() => processados.delete(dedupKey), 60000);
 
-      // ── Deduplicação no banco ─────────────────────────────────────────────────
+      // ── Deduplicação no banco — usa (message_id, instancia) para evitar colisão cross-instância ──
       const jaExiste = await pool.query(
-        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
-        [messageId]
+        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
+        [messageId, instancia]
       );
-      if (jaExiste.rows.length) return;
+      if (jaExiste.rows.length) {
+        wlog('WEBHOOK_DROP', `dedup banco: ${messageId} | ${instancia}`);
+        return;
+      }
 
       await pool.query(
         'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
@@ -526,7 +542,10 @@ export default function webhookRouter(pool: Pool): Router {
         console.log(`[WEBHOOK] Grupo ${telefone} — mensagem salva, IA não processada`);
         return;
       }
-      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) return;
+      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) {
+        wlog('WEBHOOK_DROP', `sem texto e tipo não-mídia: tipo=${tipo} | ${remoteJid} | ${messageId}`);
+        return;
+      }
 
       processarComDebounce(pool, {
         instancia,
