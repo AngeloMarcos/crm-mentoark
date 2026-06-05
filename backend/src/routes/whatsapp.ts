@@ -265,6 +265,8 @@ export default function whatsappRouter(pool: Pool): Router {
              m.remote_jid LIKE '%@g.us' AS is_group,
              m.push_name AS last_sender,
              COUNT(*) OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS total,
+             COUNT(*) FILTER (WHERE NOT m.from_me AND NOT m.is_read) 
+               OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS unread_count,
              ROW_NUMBER() OVER (
                PARTITION BY split_part(m.remote_jid,'@',1)
                ORDER BY m.created_at DESC
@@ -284,16 +286,17 @@ export default function whatsappRouter(pool: Pool): Router {
          )
          SELECT
            r.phone AS session_id,
-           r.instance_name AS instancia,
-           r.created_at AS ultima_atividade,
-           r.total::int AS total,
-           r.content AS ultima_mensagem,
-           r.is_group,
-           r.last_sender,
-           CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
-           cu.push_name,
-           cu.nome_contato,
-           cu.profile_pic_url
+            r.instance_name AS instancia,
+            r.created_at AS ultima_atividade,
+            r.total::int AS total,
+            r.unread_count::int AS unread,
+            r.content AS ultima_mensagem,
+            r.is_group,
+            r.last_sender,
+            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
+            cu.push_name,
+            cu.nome_contato,
+            cu.profile_pic_url
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          WHERE r.rn = 1
@@ -319,6 +322,7 @@ export default function whatsappRouter(pool: Pool): Router {
           ultima_mensagem: row.ultima_mensagem || '',
           ultimo_role: row.ultimo_role,
           total: Number(row.total),
+          unread: Number(row.unread || 0),
           mensagens: [],
         };
       });
@@ -408,7 +412,31 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // PATCH /api/whatsapp/conversas/:phone/read — marca mensagens como lidas
+  router.patch('/conversas/:phone/read', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      if (!phone) return res.status(400).json({ message: 'phone inválido' });
+
+      await pool.query(
+        `UPDATE whatsapp_messages 
+         SET is_read = true 
+         WHERE (split_part(remote_jid,'@',1) = $1 OR split_part(remote_jid,'@',1) = '55' || $1)
+           AND user_id = $2 
+           AND from_me = false 
+           AND is_read = false`,
+        [phone, userId]
+      );
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/ia-status/:phone — lê se IA está pausada para esse contato
+
   router.get('/ia-status/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;

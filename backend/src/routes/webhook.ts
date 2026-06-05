@@ -141,12 +141,14 @@ export default function webhookRouter(pool: Pool): Router {
       ).catch(() => {});
 
       if (status === 'READ' || status === 'PLAYED') {
+        // Quando status é READ/PLAYED, marca a mensagem como lida no banco
         await pool.query(
           `UPDATE whatsapp_messages SET is_read = true
            WHERE message_id = $1 AND instance_name = $2`,
           [messageId, payload.instance]
         ).catch(() => {});
       }
+
     }
   }
 
