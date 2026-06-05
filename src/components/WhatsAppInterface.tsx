@@ -257,6 +257,13 @@ export function WhatsAppInterface() {
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
+  // Estados para busca global de mensagens
+  const [globalSearchTerm, setGlobalSearchTerm] = useState("");
+  const [globalSearchResults, setGlobalSearchResults] = useState<any[]>([]);
+  const [isGlobalSearching, setIsGlobalSearching] = useState(false);
+  const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
+
+
   // Estados para seleção múltipla
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
