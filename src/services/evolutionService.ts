@@ -46,8 +46,14 @@ export async function fetchConnectionStatus(instancia?: string): Promise<StatusR
     
     if (instancia && Array.isArray(data)) {
       // Procura a configuração da evolução para esta instância específica
-      const config = data.find(i => i.tipo === 'evolution' && i.instancia === instancia);
-      console.log(`[EvolutionService] Configuração encontrada para ${instancia}:`, config?.status);
+      // Normalização: Comparamos ignorando case e espaços para maior resiliência
+      const config = data.find(i => 
+        i.tipo === 'evolution' && 
+        i.instancia?.toLowerCase().trim() === instancia.toLowerCase().trim()
+      );
+      
+      console.log(`[EvolutionService] Resultado para ${instancia}:`, config ? config.status : 'não encontrada');
+      
       return { 
         state: config?.status === 'conectado' ? 'open' : 'close' 
       };
