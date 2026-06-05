@@ -1988,6 +1988,15 @@ export function WhatsAppInterface() {
                 >
                   <Search className="h-4.5 w-4.5" />
                 </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
+                  onClick={runUITests}
+                  title="Executar Testes de UI"
+                >
+                  <Activity className="h-4.5 w-4.5" />
+                </Button>
                 <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
                   <Info className="h-4.5 w-4.5" />
                 </Button>
