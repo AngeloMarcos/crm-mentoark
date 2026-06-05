@@ -397,8 +397,12 @@ export function WhatsAppInterface() {
   const fetchConversas = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
-      if (!res.ok) return;
+      if (!res.ok) {
+        console.warn('[WA] fetchConversas falhou', res.status, await res.text().catch(() => ''));
+        return;
+      }
       const rows: any[] = await res.json();
+      console.debug('[WA] fetchConversas OK — linhas:', rows.length, 'phones:', rows.map(r => r.session_id).slice(0, 5));
       
       const newArrivals: string[] = [];
       for (const row of rows) {
