@@ -413,14 +413,31 @@ export function WhatsAppInterface() {
   };
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
-
-  const filteredChats = useMemo(() =>
-    chats.filter(c =>
+  
+  const filteredChats = useMemo(() => {
+    let list = chats.filter(c =>
       c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       c.phone.includes(searchTerm)
-    ),
-    [chats, searchTerm]
-  );
+    );
+
+    // Filtra pela aba (Arquivadas ou Principal)
+    if (activeTab === "todos") {
+      list = list.filter(c => !c.is_archived);
+    } else if (activeTab === "fila") {
+      // Exemplo: na fila apenas não arquivados e com unread ou sem agente? 
+      // Por ora mantemos lógica WhatsApp: arquivado sai da vista principal.
+      list = list.filter(c => !c.is_archived);
+    }
+    // Se quiser adicionar aba "Arquivadas" no futuro, filtraria list.filter(c => c.is_archived)
+
+    // Ordenação: Fixados primeiro, depois por timestamp
+    return list.sort((a, b) => {
+      if (a.is_pinned && !b.is_pinned) return -1;
+      if (!a.is_pinned && b.is_pinned) return 1;
+      return (b.rawTimestamp || "").localeCompare(a.rawTimestamp || "");
+    });
+  }, [chats, searchTerm, activeTab]);
+
 
   const fetchConversas = async () => {
     try {
