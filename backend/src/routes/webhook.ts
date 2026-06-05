@@ -44,17 +44,17 @@ interface EvolutionPayload {
     };
     message?: {
       conversation?: string;
-      extendedTextMessage?: { text: string };
-      imageMessage?: { caption?: string; url?: string; mimetype?: string };
-      audioMessage?: { url?: string; mimetype?: string; seconds?: number };
-      videoMessage?: { caption?: string; url?: string; mimetype?: string; seconds?: number };
-      documentMessage?: { caption?: string; fileName?: string; url?: string; mimetype?: string };
-      stickerMessage?: { url?: string; mimetype?: string };
-      buttonsResponseMessage?: { selectedDisplayText: string };
-      listResponseMessage?: { title: string };
-      templateButtonReplyMessage?: { selectedDisplayText: string };
+      extendedTextMessage?: { text: string; contextInfo?: any };
+      imageMessage?: { caption?: string; url?: string; mimetype?: string; contextInfo?: any };
+      audioMessage?: { url?: string; mimetype?: string; seconds?: number; contextInfo?: any };
+      videoMessage?: { caption?: string; url?: string; mimetype?: string; seconds?: number; contextInfo?: any };
+      documentMessage?: { caption?: string; fileName?: string; url?: string; mimetype?: string; contextInfo?: any };
+      stickerMessage?: { url?: string; mimetype?: string; contextInfo?: any };
+      buttonsResponseMessage?: { selectedDisplayText: string; contextInfo?: any };
+      listResponseMessage?: { title: string; contextInfo?: any };
+      templateButtonReplyMessage?: { selectedDisplayText: string; contextInfo?: any };
     };
-    update?: { status: string }[];
+    update?: { status: string; id?: string }[];
     messageTimestamp?: number;
     pushName?: string;
     status?: string;
