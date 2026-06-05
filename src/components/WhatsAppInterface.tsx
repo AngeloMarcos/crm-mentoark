@@ -963,38 +963,69 @@ export function WhatsAppInterface() {
     setSelectedMessageIds(new Set());
   };
 
-  const handleDeleteSelected = () => {
-    const count = selectedMessageIds.size;
-    const currentChat = activeChat;
-    if (!currentChat) return;
+  const handleToggleStar = () => {
+    setStarredMessageIds(prev => {
+      const next = new Set(prev);
+      selectedMessageIds.forEach(id => {
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+      });
+      return next;
+    });
+    toast.success(`${selectedMessageIds.size} mensagens marcadas/desmarcadas`);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+  };
 
-    const idsToDelete = Array.from(selectedMessageIds);
-    
-    // Otimista
+  const handleDeleteForMe = () => {
+    const count = selectedMessageIds.size;
     setChats(prev => prev.map(c => 
       c.id === activeChatId 
         ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
         : c
     ));
-
-    Promise.all(idsToDelete.map(id => 
-      fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        headers: apiHeaders(),
-        body: JSON.stringify({ 
-          forEveryone: true, 
-          instancia: currentChat.source, 
-          remoteJid: `${currentChat.phone}@s.whatsapp.net` 
-        })
-      })
-    )).catch(() => {
-      toast.error("Erro ao apagar algumas mensagens no servidor");
-    });
-
-    toast.success(`${count} mensagens apagadas`);
+    toast.success(`${count} mensagens removidas para você`);
     setIsSelectMode(false);
     setSelectedMessageIds(new Set());
   };
+
+  const handleDeleteForEveryone = async () => {
+    const count = selectedMessageIds.size;
+    const currentChat = activeChat;
+    if (!currentChat) return;
+
+    setIsActionLoading(true);
+    const idsToDelete = Array.from(selectedMessageIds);
+    
+    try {
+      // Otimista
+      setChats(prev => prev.map(c => 
+        c.id === activeChatId 
+          ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
+          : c
+      ));
+
+      await Promise.all(idsToDelete.map(id => 
+        fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: apiHeaders(),
+          body: JSON.stringify({ 
+            forEveryone: true, 
+            instancia: currentChat.source, 
+            remoteJid: `${currentChat.phone}@s.whatsapp.net` 
+          })
+        })
+      ));
+      toast.success(`${count} mensagens apagadas para todos`);
+    } catch (err) {
+      toast.error("Erro ao apagar mensagens no servidor");
+    } finally {
+      setIsActionLoading(false);
+      setIsSelectMode(false);
+      setSelectedMessageIds(new Set());
+    }
+  };
+
 
 
 
