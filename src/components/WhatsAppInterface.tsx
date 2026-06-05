@@ -799,6 +799,8 @@ export function WhatsAppInterface() {
                   className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
                     isActive
                       ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary"
+                      : chat.unread
+                      ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
                       : "hover:bg-muted/30"
                   }`}
                 >
