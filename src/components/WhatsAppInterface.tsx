@@ -10,6 +10,7 @@ import {
   UserPlus, Check, Smartphone,
   ShieldAlert, Tag, Sparkles, Zap,
   BotOff, Bot, ImageIcon, Reply,
+  ChevronUp,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
@@ -237,6 +238,13 @@ export function WhatsAppInterface() {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [replyTo, setReplyTo] = useState<{ message_id: string; content: string; senderName: string; role: "user" | "assistant" } | null>(null);
+  
+  // Estados para busca na conversa
+  const [isSearchingInChat, setIsSearchingInChat] = useState(false);
+  const [chatSearchTerm, setChatSearchTerm] = useState("");
+  const [chatSearchResults, setChatSearchResults] = useState<number[]>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
@@ -652,8 +660,13 @@ export function WhatsAppInterface() {
   }, [activeChatId]);
 
   useEffect(() => {
-    if (!activeChatId) return;
+    if (!activeChatId) {
+      setIsSearchingInChat(false);
+      setChatSearchTerm("");
+      return;
+    }
     const chat = chats.find(c => c.id === activeChatId);
+
     const chatName = chat?.name || activeChatId;
     activeChatNameRef.current = chatName;
     if (chat) fetchMensagens(activeChatId, chatName, true);
@@ -673,6 +686,10 @@ export function WhatsAppInterface() {
   }, [activeChatId, chats]);
 
   const handleSendMessage = async () => {
+    // Fecha busca ao enviar mensagem
+    setIsSearchingInChat(false);
+    setChatSearchTerm("");
+
     if (inputMode === "nota") {
       // Nota privada — salva internamente, não envia ao WhatsApp
       if (!noteInput.trim() || !activeChatId) return;
@@ -802,6 +819,74 @@ export function WhatsAppInterface() {
     setContatoSearch("");
     setContatoResults([]);
   };
+
+  // Lógica de busca na conversa
+  const handleChatSearch = (term: string) => {
+    setChatSearchTerm(term);
+    if (!term.trim() || !activeChat) {
+      setChatSearchResults([]);
+      setCurrentSearchIndex(-1);
+      return;
+    }
+
+    const results: number[] = [];
+    const lowerTerm = term.toLowerCase();
+    activeChat.messages.forEach((m, idx) => {
+      if (m.content.toLowerCase().includes(lowerTerm)) {
+        results.push(idx);
+      }
+    });
+
+    setChatSearchResults(results);
+    if (results.length > 0) {
+      setCurrentSearchIndex(results.length - 1); // Começa do mais recente
+      scrollToMessage(results[results.length - 1]);
+    } else {
+      setCurrentSearchIndex(-1);
+    }
+  };
+
+  const navigateSearch = (direction: 'next' | 'prev') => {
+    if (chatSearchResults.length === 0) return;
+    
+    let newIndex = currentSearchIndex;
+    if (direction === 'next') {
+      newIndex = currentSearchIndex > 0 ? currentSearchIndex - 1 : chatSearchResults.length - 1;
+    } else {
+      newIndex = currentSearchIndex < chatSearchResults.length - 1 ? currentSearchIndex + 1 : 0;
+    }
+    
+    setCurrentSearchIndex(newIndex);
+    scrollToMessage(chatSearchResults[newIndex]);
+  };
+
+  const scrollToMessage = (msgIndex: number) => {
+    if (!activeChat) return;
+    const msg = activeChat.messages[msgIndex];
+    if (msg) {
+      const el = messageRefs.current.get(msg.id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
+
+  const highlightText = (text: string, term: string) => {
+    if (!term.trim()) return text;
+    const parts = text.split(new RegExp(`(${term})`, 'gi'));
+    return (
+      <>
+        {parts.map((part, i) => 
+          part.toLowerCase() === term.toLowerCase() ? (
+            <mark key={i} className="bg-yellow-300 text-black px-0.5 rounded-sm animate-pulse font-bold">
+              {part}
+            </mark>
+          ) : part
+        )}
+      </>
+    );
+  };
+
 
   const isConnected = connectionStatus?.state === "open";
 
@@ -1364,11 +1449,94 @@ export function WhatsAppInterface() {
                   <Sparkles className="h-4 w-4" />
                   <span className="hidden sm:inline">Criar Tarefa</span>
                 </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className={`h-9 w-9 rounded-xl transition-colors ${isSearchingInChat ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
+                  onClick={() => {
+                    setIsSearchingInChat(!isSearchingInChat);
+                    if (!isSearchingInChat) {
+                      setTimeout(() => document.getElementById('chat-search-input')?.focus(), 100);
+                    } else {
+                      setChatSearchTerm("");
+                      setChatSearchResults([]);
+                      setCurrentSearchIndex(-1);
+                    }
+                  }}
+                >
+                  <Search className="h-4.5 w-4.5" />
+                </Button>
                 <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
                   <Info className="h-4.5 w-4.5" />
                 </Button>
               </div>
             </div>
+
+            {/* Painel de Busca */}
+            {isSearchingInChat && (
+              <div className="absolute top-0 left-0 right-0 z-30 bg-background/95 backdrop-blur-md border-b shadow-sm animate-in slide-in-from-top duration-300">
+                <div className="px-6 py-3 flex items-center gap-4">
+                  <div className="flex-1 relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="chat-search-input"
+                      placeholder="Buscar na conversa..."
+                      className="pl-10 h-10 rounded-xl bg-muted/50 border-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                      value={chatSearchTerm}
+                      onChange={(e) => handleChatSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setIsSearchingInChat(false);
+                          setChatSearchTerm("");
+                        } else if (e.key === 'Enter') {
+                          navigateSearch(e.shiftKey ? 'prev' : 'next');
+                        }
+                      }}
+                    />
+                  </div>
+                  
+                  {chatSearchTerm && (
+                    <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground whitespace-nowrap bg-muted/30 px-3 py-2 rounded-lg">
+                      {chatSearchResults.length > 0 ? (
+                        <>
+                          <span>{chatSearchResults.length - currentSearchIndex} de {chatSearchResults.length}</span>
+                          <div className="flex items-center border-l ml-2 pl-2 gap-1">
+                            <button 
+                              onClick={() => navigateSearch('prev')}
+                              className="p-1 hover:bg-background rounded-md transition-colors"
+                            >
+                              <ChevronUp className="h-4 w-4" />
+                            </button>
+                            <button 
+                              onClick={() => navigateSearch('next')}
+                              className="p-1 hover:bg-background rounded-md transition-colors"
+                            >
+                              <ChevronDown className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <span>Nenhum resultado</span>
+                      )}
+                    </div>
+                  )}
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 rounded-xl hover:bg-muted"
+                    onClick={() => {
+                      setIsSearchingInChat(false);
+                      setChatSearchTerm("");
+                      setChatSearchResults([]);
+                      setCurrentSearchIndex(-1);
+                    }}
+                  >
+                    <X className="h-4.5 w-4.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* Messages */}
             <ScrollArea 
@@ -1427,7 +1595,10 @@ export function WhatsAppInterface() {
                   const showNameOut = isOut && !isNote && (prevRole !== "assistant" || prevMsg?.senderName !== m.senderName);
 
                   return (
-                    <div key={m.id}>
+                    <div 
+                      key={m.id}
+                      ref={el => { if (el) messageRefs.current.set(m.id, el); }}
+                    >
                       {dateLabel && (
                         <div className="flex justify-center my-6 sticky top-2 z-10">
                           <div className="bg-background/80 backdrop-blur-sm border border-border/50 px-4 py-1.5 rounded-full shadow-sm">
@@ -1513,7 +1684,7 @@ export function WhatsAppInterface() {
                           ) : m.tipo === 'sticker' && m.midia_url ? (
                             <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
                           ) : null}
-                          {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
+                          {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}</p>}
                           <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
                             <span className="text-[10px] font-bold">{formatTime(m.timestamp)}</span>
                             {isOut && (
