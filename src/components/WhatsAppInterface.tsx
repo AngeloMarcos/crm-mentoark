@@ -1155,6 +1155,7 @@ export function WhatsAppInterface() {
               const hasUnreadInTab = (key === "todos" || key === "arquivadas") && chats.some(c => (key === "arquivadas" ? c.is_archived : !c.is_archived) && (c.unread || 0) > 0);
 
 
+
               return (
                 <button
                   key={t}
