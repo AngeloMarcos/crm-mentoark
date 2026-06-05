@@ -1311,68 +1311,114 @@ export function WhatsAppInterface() {
                   const isNote = m.role === "note";
                   const prevMsg = i > 0 ? activeChat.messages[i - 1] : null;
                   const prevRole = prevMsg?.role ?? null;
+                  
+                  // Lógica de separador de data
+                  const currentDate = new Date(m.timestamp);
+                  const prevDate = prevMsg ? new Date(prevMsg.timestamp) : null;
+                  
+                  const isDifferentDay = !prevDate || 
+                    currentDate.getDate() !== prevDate.getDate() || 
+                    currentDate.getMonth() !== prevDate.getMonth() || 
+                    currentDate.getFullYear() !== prevDate.getFullYear();
+
+                  // Determinar label da data
+                  let dateLabel = "";
+                  if (isDifferentDay) {
+                    const today = new Date();
+                    const yesterday = new Date();
+                    yesterday.setDate(today.getDate() - 1);
+
+                    const isToday = currentDate.getDate() === today.getDate() && 
+                                    currentDate.getMonth() === today.getMonth() && 
+                                    currentDate.getFullYear() === today.getFullYear();
+                    
+                    const isYesterday = currentDate.getDate() === yesterday.getDate() && 
+                                        currentDate.getMonth() === yesterday.getMonth() && 
+                                        currentDate.getFullYear() === yesterday.getFullYear();
+
+                    if (isToday) {
+                      // Não exibir separador antes da primeira mensagem se for hoje
+                      if (i > 0) dateLabel = "Hoje";
+                    } else if (isYesterday) {
+                      dateLabel = "Ontem";
+                    } else {
+                      dateLabel = currentDate.toLocaleDateString('pt-BR');
+                    }
+                  }
+
                   // Mostra nome quando muda de remetente
                   const showNameIn  = !isOut && !isNote && prevRole !== "user";
                   const showNameOut = isOut && !isNote && (prevRole !== "assistant" || prevMsg?.senderName !== m.senderName);
 
                   return (
-                    <div key={m.id} className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
-                      <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
-                        isOut
-                          ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
-                          : isNote
-                            ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
-                            : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
-                      }`}>
-                        {showNameIn && (
-                          <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
-                        )}
-                        {showNameOut && m.senderName && (
-                          <p className="text-[10px] font-bold text-primary-foreground/70 mb-1 text-right">{m.senderName}</p>
-                        )}
-                        {isNote && (
-                          <div className="flex items-center justify-center gap-1.5 mb-1 text-[10px] font-black uppercase tracking-widest text-amber-600/80">
-                            <Info className="h-3 w-3" /> Nota Privada
-                          </div>
-                        )}
-                        {m.tipo === 'image' && m.midia_url ? (
-                          <img src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" />
-                        ) : m.tipo === 'audio' ? (
-                          m.midia_url
-                            ? <AudioPlayer src={m.midia_url} />
-                            : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Mic className="h-4 w-4" /> Áudio</div>
-                        ) : m.tipo === 'video' && m.midia_url ? (
-                          <video controls className="rounded max-w-[260px] mb-1" preload="metadata">
-                            <source src={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`} type={m.midia_mime || 'video/mp4'} />
-                          </video>
-                        ) : m.tipo === 'document' && m.midia_url ? (
-                          <a
-                            href={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`}
-                            target="_blank" rel="noreferrer"
-                            className="flex items-center gap-2 text-xs text-primary underline py-1"
-                            download={m.midia_nome || true}
-                          >
-                            <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
-                          </a>
-                        ) : m.tipo === 'sticker' && m.midia_url ? (
-                          <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
-                        ) : null}
-                        {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
-                        <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
-                          <span className="text-[10px] font-bold">{m.timestamp}</span>
-                          {isOut && (
-                            <span title={m.status || 'sent'}>
-                              {m.status === 'READ' || m.status === 'PLAYED' ? (
-                                <span className="text-sky-300 text-[10px] font-bold">✓✓</span>
-                              ) : m.status === 'DELIVERY_ACK' ? (
-                                <span className="text-primary-foreground/60 text-[10px] font-bold">✓✓</span>
-                              ) : m.status === 'SERVER_ACK' ? (
-                                <span className="text-primary-foreground/50 text-[10px] font-bold">✓</span>
-                              ) : (
-                                <Check className="h-3 w-3 opacity-50" />
-                              )}
+                    <div key={m.id}>
+                      {dateLabel && (
+                        <div className="flex justify-center my-6 sticky top-2 z-10">
+                          <div className="bg-background/80 backdrop-blur-sm border border-border/50 px-4 py-1.5 rounded-full shadow-sm">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/80">
+                              {dateLabel}
                             </span>
+                          </div>
+                        </div>
+                      )}
+                      <div className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
+                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
+                          isOut
+                            ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
+                            : isNote
+                              ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
+                              : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
+                        }`}>
+                          {showNameIn && (
+                            <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
                           )}
+                          {showNameOut && m.senderName && (
+                            <p className="text-[10px] font-bold text-primary-foreground/70 mb-1 text-right">{m.senderName}</p>
+                          )}
+                          {isNote && (
+                            <div className="flex items-center justify-center gap-1.5 mb-1 text-[10px] font-black uppercase tracking-widest text-amber-600/80">
+                              <Info className="h-3 w-3" /> Nota Privada
+                            </div>
+                          )}
+                          {m.tipo === 'image' && m.midia_url ? (
+                            <img src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" />
+                          ) : m.tipo === 'audio' ? (
+                            m.midia_url
+                              ? <AudioPlayer src={m.midia_url} />
+                              : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Mic className="h-4 w-4" /> Áudio</div>
+                          ) : m.tipo === 'video' && m.midia_url ? (
+                            <video controls className="rounded max-w-[260px] mb-1" preload="metadata">
+                              <source src={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`} type={m.midia_mime || 'video/mp4'} />
+                            </video>
+                          ) : m.tipo === 'document' && m.midia_url ? (
+                            <a
+                              href={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`}
+                              target="_blank" rel="noreferrer"
+                              className="flex items-center gap-2 text-xs text-primary underline py-1"
+                              download={m.midia_nome || true}
+                            >
+                              <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
+                            </a>
+                          ) : m.tipo === 'sticker' && m.midia_url ? (
+                            <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
+                          ) : null}
+                          {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
+                          <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
+                            <span className="text-[10px] font-bold">{formatTime(m.timestamp)}</span>
+                            {isOut && (
+                              <span title={m.status || 'sent'}>
+                                {m.status === 'READ' || m.status === 'PLAYED' ? (
+                                  <span className="text-sky-300 text-[10px] font-bold">✓✓</span>
+                                ) : m.status === 'DELIVERY_ACK' ? (
+                                  <span className="text-primary-foreground/60 text-[10px] font-bold">✓✓</span>
+                                ) : m.status === 'SERVER_ACK' ? (
+                                  <span className="text-primary-foreground/50 text-[10px] font-bold">✓</span>
+                                ) : (
+                                  <Check className="h-3 w-3 opacity-50" />
+                                )}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
