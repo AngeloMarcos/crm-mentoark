@@ -1438,13 +1438,48 @@ export function WhatsAppInterface() {
                         </div>
                       )}
                       <div className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
-                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
+                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
                           isOut
                             ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
                             : isNote
                               ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
                               : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
                         }`}>
+                          {/* Menu de Resposta (Reply) */}
+                          {!isNote && (
+                            <button
+                              onClick={() => {
+                                setReplyTo({
+                                  message_id: m.message_id || m.id,
+                                  content: m.content,
+                                  senderName: m.senderName || (isOut ? 'Você' : activeChat.name),
+                                  role: isOut ? "assistant" : "user"
+                                });
+                                textareaRef.current?.focus();
+                              }}
+                              className={`absolute top-2 ${isOut ? '-left-8' : '-right-8'} p-1.5 rounded-full bg-background border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-muted text-muted-foreground hover:text-primary z-20`}
+                              title="Responder"
+                            >
+                              <Reply className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+
+                          {/* Quote (Citação) */}
+                          {m.reply_to && (
+                            <div className={`mb-2 p-2 rounded-lg border-l-4 bg-black/5 text-left text-[11px] flex flex-col gap-0.5 ${
+                              m.reply_to.role === "assistant" ? "border-primary" : "border-green-500"
+                            }`}>
+                              <p className={`font-black uppercase tracking-widest text-[9px] ${
+                                m.reply_to.role === "assistant" ? (isOut ? "text-primary-foreground/80" : "text-primary") : "text-green-600"
+                              }`}>
+                                {m.reply_to.senderName}
+                              </p>
+                              <p className={`line-clamp-2 italic ${isOut ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                                {m.reply_to.content}
+                              </p>
+                            </div>
+                          )}
+
                           {showNameIn && (
                             <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
                           )}
