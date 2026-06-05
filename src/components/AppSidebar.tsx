@@ -5,7 +5,7 @@ import {
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
-  Activity, Webhook, Database, Sparkles,
+  Activity, Webhook, Database, Sparkles, Terminal,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -159,6 +159,7 @@ const navGroups: NavGroup[] = [
           { title: "Configuração da IA", url: "/cerebro", icon: Brain, modulo: "cerebro", color: "text-purple-400" },
           { title: "Workflows", url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500" },
           { title: "Uso de IA", url: "/uso-ia", icon: Activity, modulo: "agentes", color: "text-pink-500" },
+          { title: "OpenClaw Admin", url: "/openclaw", icon: Terminal, modulo: "agentes", color: "text-blue-500" },
         ],
       },
     ],
