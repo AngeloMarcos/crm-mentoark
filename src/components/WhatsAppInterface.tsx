@@ -508,7 +508,17 @@ export function WhatsAppInterface() {
           setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
         }
 
-        return prev.map(c => c.id === phone ? { ...c, messages: msgs } : c);
+        const now = new Date().toISOString();
+        return prev.map(c => c.id === phone 
+          ? { 
+              ...c, 
+              messages: msgs, 
+              rawTimestamp: now, 
+              timestamp: formatTime(now),
+              lastMessage: msgs.at(-1)?.content ?? c.lastMessage 
+            } 
+          : c
+        ).sort((a, b) => b.rawTimestamp.localeCompare(a.rawTimestamp));
       });
     } catch {}
     finally { if (showLoading) setLoadingMessages(false); }
