@@ -397,8 +397,12 @@ export function WhatsAppInterface() {
   const fetchConversas = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
-      if (!res.ok) return;
+      if (!res.ok) {
+        console.warn('[WA] fetchConversas falhou', res.status, await res.text().catch(() => ''));
+        return;
+      }
       const rows: any[] = await res.json();
+      console.debug('[WA] fetchConversas OK — linhas:', rows.length, 'phones:', rows.map(r => r.session_id).slice(0, 5));
       
       const newArrivals: string[] = [];
       for (const row of rows) {
@@ -475,8 +479,12 @@ export function WhatsAppInterface() {
     if (showLoading) setLoadingMessages(true);
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}?limit=100`, { headers: apiHeaders() });
-      if (!res.ok) return;
+      if (!res.ok) {
+        console.warn('[WA] fetchMensagens falhou', phone, res.status, await res.text().catch(() => ''));
+        return;
+      }
       const rows: any[] = await res.json();
+      console.debug('[WA] fetchMensagens', phone, '— msgs:', rows.length);
       const msgs: Message[] = rows.map((m, i) => ({
         id: String(m.id || `msg-${i}`),
         message_id: m.message_id,
