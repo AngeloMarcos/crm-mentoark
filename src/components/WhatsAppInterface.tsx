@@ -227,6 +227,9 @@ export function WhatsAppInterface() {
   const activeChatIdRef = useRef<string | null>(null);
   const activeChatNameRef = useRef<string>('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
