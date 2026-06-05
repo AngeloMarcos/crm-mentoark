@@ -371,6 +371,7 @@ export function ConfigAgenteIA() {
           Salvar Fluxo IA
         </Button>
       </div>
+      </div>
     </div>
   );
 }
