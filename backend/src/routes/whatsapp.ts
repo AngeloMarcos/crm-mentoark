@@ -21,17 +21,29 @@ function webhookPayload() {
 }
 
 // Registra (ou atualiza) o webhook da instância no Evolution.
-// Idempotente — pode ser chamado várias vezes sem efeito colateral.
+// Tenta payload flat (v2) primeiro; se o servidor exigir wrapper {webhook:...} (v1), usa esse.
 async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
   const cleanBase = sanitizeEvolutionUrl(base);
+  const url = `${cleanBase}/webhook/set/${instancia}`;
+  const headers = { 'Content-Type': 'application/json', apikey: apiKey };
   try {
-    const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+    // Tenta Evolution v2 — payload flat
+    const res = await evolutionFetch(url, {
+      method: 'POST', headers,
       body: JSON.stringify(webhookPayload()),
     });
-    const body = await res.json().catch(() => ({}));
-    console.log(`[whatsapp] webhook registrado para ${instancia}:`, JSON.stringify(body).slice(0, 120));
+    const body = await res.json().catch(() => ({})) as any;
+    if (!res.ok && JSON.stringify(body).includes('webhook')) {
+      // Evolution v1 — payload aninhado em {webhook:{...}}
+      const res2 = await evolutionFetch(url, {
+        method: 'POST', headers,
+        body: JSON.stringify({ webhook: webhookPayload() }),
+      });
+      const body2 = await res2.json().catch(() => ({}));
+      console.log(`[whatsapp] webhook (v1) registrado para ${instancia}:`, JSON.stringify(body2).slice(0, 120));
+      return;
+    }
+    console.log(`[whatsapp] webhook (v2) registrado para ${instancia}:`, JSON.stringify(body).slice(0, 120));
   } catch (err) {
     console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
   }
