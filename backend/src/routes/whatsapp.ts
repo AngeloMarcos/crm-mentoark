@@ -322,6 +322,7 @@ export default function whatsappRouter(pool: Pool): Router {
           ultima_mensagem: row.ultima_mensagem || '',
           ultimo_role: row.ultimo_role,
           total: Number(row.total),
+          unread: Number(row.unread || 0),
           mensagens: [],
         };
       });
