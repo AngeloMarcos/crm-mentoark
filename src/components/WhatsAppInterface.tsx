@@ -481,6 +481,11 @@ export function WhatsAppInterface() {
         const currentIds = atual?.messages.map(m => m.id + (m.status || '')) ?? [];
         const newIds     = msgs.map(m => m.id + (m.status || ''));
         if (JSON.stringify(currentIds) === JSON.stringify(newIds)) return prev;
+        
+        if (msgs.length > (atual?.messages.length ?? 0)) {
+          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+        }
+
         return prev.map(c => c.id === phone ? { ...c, messages: msgs } : c);
       });
     } catch {}
