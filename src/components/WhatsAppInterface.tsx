@@ -2068,7 +2068,16 @@ export function WhatsAppInterface() {
                           ) : m.tipo === 'sticker' && m.midia_url ? (
                             <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
                           ) : null}
-                          {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}</p>}
+                          {m.tipo === 'deleted' ? (
+                            <p className="text-sm italic text-muted-foreground/60 flex items-center gap-1.5 py-1">
+                              <ShieldAlert className="h-3.5 w-3.5 opacity-50" /> Mensagem apagada
+                            </p>
+                          ) : m.content && (
+                            <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                              {highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}
+                            </p>
+                          )}
+
                           <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
                             <span className="text-[10px] font-bold">{formatTime(m.timestamp)}</span>
                             {isOut && (
