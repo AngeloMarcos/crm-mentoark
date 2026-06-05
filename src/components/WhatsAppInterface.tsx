@@ -2000,7 +2000,6 @@ export function WhatsAppInterface() {
           <ScrollArea className="flex-1">
             {/* Avatar + name + phone */}
             <div className="flex flex-col items-center pt-8 pb-6 px-5 bg-gradient-to-b from-primary/[0.03] to-transparent">
-              {/* Avatar clicável para ampliar */}
               <button
                 onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
                 className={`mb-4 transition-transform hover:scale-105 duration-500 border-4 border-background rounded-[2rem] shadow-xl shadow-primary/10 ${activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}`}
@@ -2014,7 +2013,6 @@ export function WhatsAppInterface() {
                 />
               </button>
 
-              {/* Nome editável */}
               <div className="flex items-center gap-2 mb-1.5 w-full justify-center">
                 {editingName ? (
                   <div className="flex items-center gap-1 w-full px-2">
@@ -2034,7 +2032,7 @@ export function WhatsAppInterface() {
                   </div>
                 ) : (
                   <>
-                    <p className="font-black text-base tracking-tight">{activeChat.name}</p>
+                    <p className="font-black text-base tracking-tight truncate max-w-[200px]">{activeChat.name}</p>
                     <button
                       onClick={() => { setNameInput(activeChat.name); setEditingName(true); }}
                       className="p-1 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all"
@@ -2045,44 +2043,176 @@ export function WhatsAppInterface() {
                   </>
                 )}
               </div>
-              <div className="bg-muted/50 rounded-full px-4 py-1 flex flex-col items-center">
-                <p className="text-[9px] text-muted-foreground/60 uppercase font-black tracking-[0.15em] mb-0.5">
-                  WhatsApp Principal
-                </p>
-                <p className="text-xs font-bold text-foreground/80 leading-none pb-0.5">{activeChat.phone}</p>
+              
+              <div className="flex flex-col items-center gap-1 w-full">
+                <div className="flex items-center gap-2 bg-muted/50 rounded-full pl-4 pr-2 py-1">
+                  <span className="text-xs font-bold text-foreground/80">{activeChat.phone}</span>
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(activeChat.phone);
+                      toast.success("Telefone copiado!");
+                    }}
+                    className="p-1 hover:bg-background rounded-full transition-colors"
+                    title="Copiar telefone"
+                  >
+                    <Copy className="h-3 w-3 text-muted-foreground" />
+                  </button>
+                </div>
+                {activeChat.online && (
+                  <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest animate-pulse">Online Agora</span>
+                )}
               </div>
             </div>
 
-            {/* CRM Button */}
-            <div className="px-5 pb-6">
+            {/* Ações Rápidas */}
+            <div className="px-5 pb-6 flex flex-col gap-2">
               <Button className="w-full h-11 text-xs font-black gap-2.5 bg-primary hover:bg-primary/90 text-white rounded-2xl shadow-lg shadow-primary/20 transition-all active:scale-95">
                 <LayoutGrid className="h-4 w-4" />
                 ABRIR NO CRM
               </Button>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={toggleIA}
+                  disabled={togglingIA}
+                  className={`flex items-center justify-center gap-2 h-11 rounded-2xl border text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 ${
+                    iaPausada
+                      ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
+                      : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                  }`}
+                >
+                  {togglingIA ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : iaPausada ? (
+                    <BotOff className="h-3.5 w-3.5" />
+                  ) : (
+                    <Bot className="h-3.5 w-3.5" />
+                  )}
+                  {iaPausada ? "IA Pausada" : "IA Ativa"}
+                </button>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="flex items-center justify-center gap-2 h-11 rounded-2xl border bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted text-[10px] font-black uppercase tracking-tight transition-all active:scale-95">
+                      <BellOff className="h-3.5 w-3.5" />
+                      Silenciar
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-xl">
+                    <DropdownMenuItem onClick={() => toast.success("Silenciado por 8 horas")} className="cursor-pointer">8 horas</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => toast.success("Silenciado por 1 semana")} className="cursor-pointer">1 semana</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => toast.success("Silenciado para sempre")} className="cursor-pointer">Sempre</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
 
-            {/* Mídia, Links e Docs */}
+            {/* Sobre */}
             <div className="border-t border-border/40 px-5 py-5">
-            <div className="flex items-center justify-between mb-4">
-                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Mídia Recente</p>
-                <ChevronRight className="h-4 w-4 text-muted-foreground/40" />
+              <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 mb-2">Sobre / Recado</p>
+              <p className="text-sm font-medium text-foreground/80 leading-relaxed italic">
+                {activeChat.is_group ? "Grupo de conversa" : "Disponível"}
+              </p>
+            </div>
+
+            {/* Etiquetas / Tags */}
+            <div className="border-t border-border/40 px-5 py-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Etiquetas</p>
+                <button className="p-1 rounded-md text-primary hover:bg-primary/10 transition-all">
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
               </div>
-              <div className="grid grid-cols-3 gap-2.5">
-                {[0, 1, 2, 3, 4, 5].map(i => (
-                  <div
-                    key={i}
-                    className="aspect-square rounded-xl bg-primary/5 flex items-center justify-center cursor-pointer hover:bg-primary/10 border border-primary/5 transition-all hover:scale-105"
-                  >
-                    <Mic className="h-5 w-5 text-primary/40" />
-                  </div>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {activeChat.tag ? (
+                  <span className={`text-[10px] font-bold px-3 py-1 rounded-full shadow-sm border border-transparent ${TAG_COLORS[activeChat.tag] ?? "bg-gray-100 text-gray-600"}`}>
+                    {activeChat.tag}
+                  </span>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground/40 font-medium">Nenhuma etiqueta atribuída</p>
+                )}
               </div>
             </div>
 
-            {/* Observações do CRM */}
+            {/* Mídia Recente */}
+            <div className="border-t border-border/40 px-5 py-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Mídia Compartilhada</p>
+                <button className="text-[10px] font-bold text-primary hover:underline">Ver tudo</button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {activeChat.messages
+                  .filter(m => ['image', 'video', 'audio'].includes(m.tipo || ''))
+                  .slice(-6)
+                  .reverse()
+                  .map((m, i) => (
+                    <div
+                      key={m.id}
+                      className="aspect-square rounded-xl bg-muted/30 border border-border/30 overflow-hidden flex items-center justify-center cursor-pointer hover:bg-muted/50 transition-all hover:scale-105 group"
+                      onClick={() => m.midia_url && m.tipo === 'image' && setPhotoModal(m.midia_url)}
+                    >
+                      {m.tipo === 'image' && m.midia_url ? (
+                        <img src={m.midia_url} alt="mídia" className="w-full h-full object-cover" />
+                      ) : m.tipo === 'video' ? (
+                        <div className="relative w-full h-full flex items-center justify-center bg-black/5">
+                          <Video className="h-6 w-6 text-muted-foreground/40" />
+                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
+                      ) : (
+                        <Mic className="h-5 w-5 text-muted-foreground/30" />
+                      )}
+                    </div>
+                  ))}
+                {activeChat.messages.filter(m => ['image', 'video', 'audio'].includes(m.tipo || '')).length === 0 && (
+                  <div className="col-span-3 py-8 flex flex-col items-center justify-center bg-muted/10 rounded-2xl border border-dashed border-border/50">
+                    <ImageIcon className="h-6 w-6 text-muted-foreground/20 mb-2" />
+                    <p className="text-[10px] font-bold text-muted-foreground/30 uppercase">Sem mídias</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Documentos */}
+            <div className="border-t border-border/40 px-5 py-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Documentos</p>
+                <button className="text-[10px] font-bold text-primary hover:underline">Ver todos</button>
+              </div>
+              <div className="flex flex-col gap-2">
+                {activeChat.messages
+                  .filter(m => m.tipo === 'document')
+                  .slice(-3)
+                  .reverse()
+                  .map(m => (
+                    <a
+                      key={m.id}
+                      href={m.midia_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-3 p-3 bg-muted/20 hover:bg-muted/30 border border-border/30 rounded-xl transition-colors group"
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
+                        <FileText className="h-5 w-5 text-blue-500" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold truncate text-foreground/80">{m.midia_nome || "Documento"}</p>
+                        <p className="text-[10px] text-muted-foreground/60 uppercase font-black">{m.timestamp}</p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/20 group-hover:text-primary transition-colors" />
+                    </a>
+                  ))}
+                {activeChat.messages.filter(m => m.tipo === 'document').length === 0 && (
+                  <div className="py-4 flex flex-col items-center justify-center bg-muted/10 rounded-xl border border-dashed border-border/50">
+                    <p className="text-[10px] font-bold text-muted-foreground/30 uppercase">Nenhum documento</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Anotações do CRM */}
             <div className="border-t border-border/40 px-5 py-5 bg-amber-500/[0.02]">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-black uppercase tracking-widest text-amber-600/70">Anotações do CRM</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-amber-600/70">Anotações do CRM</p>
                 <button className="p-1 rounded-md text-amber-600/40 hover:text-amber-600 hover:bg-amber-500/10 transition-all">
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
@@ -2095,20 +2225,6 @@ export function WhatsAppInterface() {
                   <p className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-tighter">Sem anotações</p>
                 </div>
               )}
-            </div>
-
-            {/* Cofre de Documentos */}
-            <div className="border-t border-border/40 px-5 py-5">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Documentos</p>
-                <button className="p-1 rounded-md text-muted-foreground/40 hover:text-primary hover:bg-primary/10 transition-all">
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <div className="bg-muted/10 border border-dashed border-border p-4 rounded-xl flex flex-col items-center">
-                <Plus className="h-4 w-4 text-muted-foreground/20 mb-1" />
-                <p className="text-[10px] font-black text-muted-foreground/30 uppercase tracking-tighter">Adicionar Arquivo</p>
-              </div>
             </div>
           </ScrollArea>
         </div>
