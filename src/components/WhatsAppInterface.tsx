@@ -57,6 +57,12 @@ interface Message {
   midia_nome?: string;
   status?: DeliveryStatus;
   is_read?: boolean;
+  reply_to?: {
+    message_id: string;
+    content: string;
+    senderName: string;
+    role: "user" | "assistant";
+  };
 }
 
 interface Chat {
