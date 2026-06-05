@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import { spawn } from 'child_process';
 import { Pool } from 'pg';
 
 export function makeOpenClawRouter(pool: Pool): Router {
@@ -15,23 +14,8 @@ export function makeOpenClawRouter(pool: Pool): Router {
       return res.status(400).json({ error: 'message é obrigatório' });
     }
 
-    const openaiKey = process.env.OPENAI_API_KEY || '';
-    if (!openaiKey) {
-      return res.status(503).json({ error: 'OPENAI_API_KEY não configurada' });
-    }
-
-    const args = [
-      '--agent', 'main',
-      '--message', message.trim(),
-      '--json',
-    ];
-
-    if (sessionKey?.trim()) {
-      args.push('--session-key', sessionKey.trim());
-    }
-
     try {
-      const result = await runOpenClaw(args, openaiKey);
+      const result = await callProxy(message.trim(), sessionKey?.trim() || 'default');
       return res.json(result);
     } catch (err: any) {
       console.error('[OPENCLAW] Erro:', err.message);
@@ -42,67 +26,46 @@ export function makeOpenClawRouter(pool: Pool): Router {
   return router;
 }
 
+// URL do proxy HTTP que roda no host da VPS (fora do container Docker)
+const OPENCLAW_PROXY = process.env.OPENCLAW_PROXY_URL || 'http://172.19.0.1:18790';
+
 export async function chamarOpenClawAgent(
   mensagem: string,
   sessionKey: string,
-  apiKey: string,
+  _apiKey: string,
   timeoutMs = 45_000,
 ): Promise<string> {
-  const args = [
-    '--agent', 'main',
-    '--session-key', sessionKey,
-    '--message', mensagem,
-    '--json',
-  ];
-
-  const { reply } = await runOpenClaw(args, apiKey, timeoutMs);
+  const { reply } = await callProxy(mensagem, sessionKey, timeoutMs);
   return reply;
 }
 
-function runOpenClaw(
-  args: string[],
-  openaiKey: string,
+async function callProxy(
+  message: string,
+  sessionKey: string,
   timeoutMs = 45_000,
 ): Promise<{ reply: string; toolCalls: number }> {
-  return new Promise((resolve, reject) => {
-    let stdout = '';
-    let stderr = '';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    const proc = spawn('openclaw', ['agent', ...args], {
-      env: { ...process.env, OPENAI_API_KEY: openaiKey },
-      timeout: timeoutMs,
+  try {
+    const res = await fetch(`${OPENCLAW_PROXY}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, sessionKey }),
+      signal: controller.signal,
     });
 
-    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    if (!res.ok) {
+      const err = await res.text().catch(() => String(res.status));
+      throw new Error(`proxy ${res.status}: ${err.slice(0, 200)}`);
+    }
 
-    proc.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`openclaw saiu com código ${code}: ${stderr.slice(0, 300)}`));
-        return;
-      }
+    const data = await res.json() as { reply?: string; toolCalls?: number; error?: string };
+    if (data.error) throw new Error(data.error);
+    if (!data.reply) throw new Error('OpenClaw não retornou texto');
 
-      try {
-        const parsed = JSON.parse(stdout);
-        const result = parsed?.result ?? parsed;
-        const reply: string = result?.finalAssistantVisibleText
-          || result?.finalAssistantRawText
-          || '';
-        const toolCalls: number = result?.toolSummary?.calls ?? 0;
-
-        if (!reply) {
-          reject(new Error('OpenClaw não retornou texto'));
-          return;
-        }
-
-        resolve({ reply, toolCalls });
-      } catch {
-        reject(new Error(`Falha ao parsear resposta OpenClaw: ${stdout.slice(0, 300)}`));
-      }
-    });
-
-    proc.on('error', (err) => {
-      reject(new Error(`Falha ao iniciar openclaw: ${err.message}`));
-    });
-  });
+    return { reply: data.reply, toolCalls: data.toolCalls ?? 0 };
+  } finally {
+    clearTimeout(timer);
+  }
 }
