@@ -90,6 +90,7 @@ interface Chat {
   is_muted?: boolean;
   is_archived?: boolean;
   source?: string;
+  push_name?: string;
   messages: Message[];
   notes?: string;
   profile_pic?: string;
@@ -200,7 +201,7 @@ export function WhatsAppInterface() {
   const currentUserName = user?.display_name || user?.email?.split('@')[0] || 'Agente';
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
-  const [searchTerm, setSearchTerm] = useState("");
+  
   const [messageInput, setMessageInput] = useState("");
   const [inputMode, setInputMode] = useState<"responder" | "nota">("responder");
   const [connectionStatus, setConnectionStatus] = useState<StatusResult | null>(null);
@@ -256,6 +257,13 @@ export function WhatsAppInterface() {
   const [chatSearchResults, setChatSearchResults] = useState<number[]>([]);
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Estados para busca global de mensagens
+  const [globalSearchTerm, setGlobalSearchTerm] = useState("");
+  const [globalSearchResults, setGlobalSearchResults] = useState<any[]>([]);
+  const [isGlobalSearching, setIsGlobalSearching] = useState(false);
+  const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
+
 
   // Estados para seleção múltipla
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -421,9 +429,10 @@ export function WhatsAppInterface() {
   
   const filteredChats = useMemo(() => {
     let list = chats.filter(c =>
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.phone.includes(searchTerm)
+      c.name.toLowerCase().includes(globalSearchTerm.toLowerCase()) ||
+      c.phone.includes(globalSearchTerm)
     );
+
 
     // Filtra pela aba (Arquivadas ou Principal)
     if (activeTab === "todos") {
@@ -441,7 +450,7 @@ export function WhatsAppInterface() {
       if (!a.is_pinned && b.is_pinned) return 1;
       return (b.rawTimestamp || "").localeCompare(a.rawTimestamp || "");
     });
-  }, [chats, searchTerm, activeTab]);
+  }, [chats, globalSearchTerm, activeTab]);
 
 
   const fetchConversas = async (isArchived = false) => {
@@ -490,7 +499,10 @@ export function WhatsAppInterface() {
             messages: prevMap.get(row.session_id)?.messages || [],
             notes: prevMap.get(row.session_id)?.notes || '',
             profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
-            unread: hasUnread ? 1 : 0,
+            unread: Number(row.unread || (hasUnread ? 1 : 0)),
+            pinned: row.pinned === true,
+            archived: row.archived === true,
+            push_name: row.push_name || undefined,
           };
         });
 
@@ -982,6 +994,29 @@ export function WhatsAppInterface() {
     );
   };
 
+  const handleGlobalSearch = async (term: string) => {
+    setGlobalSearchTerm(term);
+    if (!term.trim() || term.length < 2) {
+      setGlobalSearchResults([]);
+      setShowGlobalSearchResults(false);
+      return;
+    }
+
+    setIsGlobalSearching(true);
+    setShowGlobalSearchResults(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/search?q=${encodeURIComponent(term)}`, { headers: apiHeaders() });
+      if (res.ok) {
+        setGlobalSearchResults(await res.json());
+      }
+    } catch {
+      toast.error("Erro na busca global");
+    } finally {
+      setIsGlobalSearching(false);
+    }
+  };
+
+
 
   const isConnected = connectionStatus?.state === "open";
 
@@ -1113,10 +1148,16 @@ export function WhatsAppInterface() {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-1 p-1 bg-muted/40 rounded-lg">
+          <div className="flex gap-1 p-1 bg-muted/40 rounded-lg overflow-x-auto no-scrollbar scroll-smooth">
             {(["Meus", "Fila", "Todos", "Arquivadas"] as const).map(t => {
               const key = t.toLowerCase() as ChatTab;
               const isActive = activeTab === key;
+              const hasUnreadInTab = (key === "todos" || key === "arquivadas") && chats.some(c => (key === "arquivadas" ? c.is_archived : !c.is_archived) && (c.unread || 0) > 0);
+
+
+
+
+
               return (
                 <button
                   key={t}
@@ -1124,13 +1165,15 @@ export function WhatsAppInterface() {
                     setActiveTab(key);
                     fetchConversas(key === "arquivadas");
                   }}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap relative ${
                     isActive
                       ? "bg-white shadow-sm text-primary ring-1 ring-black/5"
                       : "text-muted-foreground hover:text-foreground hover:bg-white/50"
                   }`}
                 >
                   {t}
+                  {hasUnreadInTab && <span className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full border border-background shadow-sm" />}
+
                 </button>
               );
             })}
@@ -1138,17 +1181,70 @@ export function WhatsAppInterface() {
         </div>
 
         {/* Search */}
-        <div className="px-4 py-3 border-b bg-card/20">
+        <div className="px-4 py-3 border-b bg-card/20 relative">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
             <Input
-              placeholder="Buscar por nome ou telefone..."
+              placeholder="Buscar em todas as mensagens..."
               className="pl-9 h-10 bg-background/50 border-muted focus:bg-background focus:ring-primary/20 transition-all text-sm rounded-xl"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
+              value={globalSearchTerm}
+              onChange={e => handleGlobalSearch(e.target.value)}
+              onFocus={() => globalSearchTerm.length >= 2 && setShowGlobalSearchResults(true)}
             />
+            {globalSearchTerm && (
+              <button 
+                onClick={() => { setGlobalSearchTerm(""); setGlobalSearchResults([]); setShowGlobalSearchResults(false); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-muted rounded-full"
+              >
+                <X className="h-3 w-3 text-muted-foreground" />
+              </button>
+            )}
           </div>
+
+          {/* Resultados da Busca Global */}
+          {showGlobalSearchResults && globalSearchTerm.length >= 2 && (
+            <div className="absolute top-full left-0 right-0 z-50 bg-background border-x border-b shadow-2xl rounded-b-2xl max-h-[400px] overflow-y-auto animate-in slide-in-from-top-2 duration-200">
+
+              <div className="p-3 border-b bg-muted/20 flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Mensagens Encontradas</span>
+                {isGlobalSearching && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+              </div>
+              {globalSearchResults.length === 0 && !isGlobalSearching ? (
+                <div className="p-8 text-center text-muted-foreground text-xs font-medium">
+                  Nenhuma mensagem encontrada para "{globalSearchTerm}"
+                </div>
+              ) : (
+                globalSearchResults.map((res: any) => (
+                  <div
+                    key={res.id}
+                    onClick={() => {
+                      setActiveChatId(res.phone);
+                      setShowGlobalSearchResults(false);
+                      setGlobalSearchTerm("");
+                      // O scroll automático para a mensagem exata na conversa 
+                      // requer que a mensagem já esteja carregada, o que fetchMensagens fará
+                    }}
+                    className="p-4 hover:bg-primary/[0.04] cursor-pointer border-b border-border/30 last:border-0 group transition-colors"
+                  >
+                    <div className="flex items-center gap-3 mb-1.5">
+                      <ChatAvatar name={res.contact_name} url={res.profile_pic} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold truncate group-hover:text-primary transition-colors">{res.contact_name}</p>
+                        <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-tighter">
+                          {new Date(res.timestamp_wa || res.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-foreground/80 line-clamp-2 pl-11 italic border-l-2 border-primary/10">
+                      {highlightText(res.content, globalSearchTerm)}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
+
 
         {/* Chat list */}
         <ScrollArea className="flex-1">
@@ -1160,11 +1256,12 @@ export function WhatsAppInterface() {
           {!loadingChats && filteredChats.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 px-6 text-center text-muted-foreground text-sm">
               <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
-              {searchTerm 
-                ? "Nenhuma conversa encontrada para esta busca."
-                : "Nenhuma mensagem recebida ainda. Quando clientes enviarem mensagens para seu WhatsApp, elas aparecerão aqui automaticamente."}
+              {globalSearchTerm 
+                ? "Nenhum chat correspondente."
+                : "Nenhuma mensagem recebida ainda."}
             </div>
           )}
+
           <div className="divide-y divide-border/50">
             {filteredChats.map(chat => {
               const isActive = activeChatId === chat.id;
@@ -1178,7 +1275,7 @@ export function WhatsAppInterface() {
                       }}
                       className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
                         isActive
-                          ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary"
+                          ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary z-10"
                           : chat.unread
                           ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
                           : "hover:bg-muted/30"
@@ -2293,7 +2390,7 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5">
               <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 mb-2">Sobre / Recado</p>
               <p className="text-sm font-medium text-foreground/80 leading-relaxed italic">
-                {activeChat.is_group ? "Grupo de conversa" : "Disponível"}
+                {activeChat.is_group ? "Grupo de conversa" : (activeChat.push_name ? `~${activeChat.push_name}` : "Disponível")}
               </p>
             </div>
 
