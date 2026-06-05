@@ -444,10 +444,10 @@ export function WhatsAppInterface() {
   }, [chats, searchTerm, activeTab]);
 
 
-  const fetchConversas = async () => {
+  const fetchConversas = async (isArchived = false) => {
     try {
-      console.log('[WA] fetchConversas iniciando...');
-      const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
+      console.log(`[WA] fetchConversas iniciando (archived=${isArchived})...`);
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas?archived=${isArchived}`, { headers: apiHeaders() });
       if (!res.ok) {
         console.error('[WA] fetchConversas falhou', res.status);
         return;
