@@ -1161,7 +1161,7 @@ export function WhatsAppInterface() {
                     setActiveTab(key);
                     fetchConversas(key === "arquivadas");
                   }}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap relative ${
                     isActive
                       ? "bg-white shadow-sm text-primary ring-1 ring-black/5"
                       : "text-muted-foreground hover:text-foreground hover:bg-white/50"
