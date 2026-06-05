@@ -388,6 +388,13 @@ export default function webhookRouter(pool: Pool): Router {
       const ts       = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
       const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
+      // Extrair informações de resposta (reply/quote)
+      const contextInfo = (payload.data as any)?.message?.extendedTextMessage?.contextInfo || (payload.data as any)?.message?.imageMessage?.contextInfo || (payload.data as any)?.message?.videoMessage?.contextInfo || (payload.data as any)?.message?.documentMessage?.contextInfo;
+      const replyToId = contextInfo?.stanzaId || contextInfo?.participant ? contextInfo?.stanzaId : null;
+      const replyToContent = contextInfo?.quotedMessage?.conversation || contextInfo?.quotedMessage?.extendedTextMessage?.text || null;
+      const replyToSender = contextInfo?.participant ? (contextInfo.participant.includes('@s.whatsapp.net') ? 'user' : 'assistant') : null;
+
+
       // ── Persistir mensagem recebida ───────────────────────────────────────────
       if (userId) {
         // Em grupos guarda o remetente real (participant) no push_name
@@ -398,12 +405,13 @@ export default function webhookRouter(pool: Pool): Router {
         await pool.query(
           `INSERT INTO whatsapp_messages
              (user_id, instance_name, remote_jid, message_id, from_me, message_type,
-              content, media_url, media_mimetype, push_name, status, timestamp_wa)
-           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $9, 'received', to_timestamp($10))
+              content, media_url, media_mimetype, push_name, status, timestamp_wa,
+              reply_to_message_id, reply_to_content, reply_to_sender)
+           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $9, 'received', to_timestamp($10), $11, $12, $13)
            ON CONFLICT (message_id, instance_name) DO NOTHING`,
           [userId, instancia, remoteJid, messageId, tipo,
            texto || null, midia.url || null, midia.mime || null,
-           pushNameFinal, tsVal]
+           pushNameFinal, tsVal, replyToId, replyToContent, replyToSender]
         ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao salvar mensagem recebida: ${err.message}`));
 
         // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────

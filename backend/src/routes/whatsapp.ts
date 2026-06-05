@@ -347,8 +347,10 @@ export default function whatsappRouter(pool: Pool): Router {
            m.id, m.message_id, m.from_me, m.message_type, m.content,
            m.media_url, m.media_mimetype, m.status, m.push_name,
            m.timestamp_wa, m.created_at,
+           m.reply_to_message_id, m.reply_to_content, m.reply_to_sender,
            COALESCE(s.status, m.status) AS delivery_status,
            u.display_name AS sender_name
+
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
@@ -375,6 +377,9 @@ export default function whatsappRouter(pool: Pool): Router {
         sender_name: row.sender_name || null,
         created_at: row.created_at,
         timestamp_wa: row.timestamp_wa,
+        reply_to_message_id: row.reply_to_message_id,
+        reply_to_content: row.reply_to_content,
+        reply_to_sender: row.reply_to_sender,
       }));
 
       return res.json(mensagens);
@@ -944,10 +949,12 @@ export default function whatsappRouter(pool: Pool): Router {
       const {
         phone, text, instancia: instanciaParam,
         mediaUrl, mediaType, mediaCaption, mediaFilename,
+        replyToMessageId,
       } = req.body as {
         phone: string; text?: string; instancia?: string;
         mediaUrl?: string; mediaType?: 'image' | 'audio' | 'video' | 'document';
         mediaCaption?: string; mediaFilename?: string;
+        replyToMessageId?: string;
       };
 
       // Normaliza o telefone — remove tudo exceto dígitos
@@ -1022,7 +1029,12 @@ export default function whatsappRouter(pool: Pool): Router {
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-            body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+            body: JSON.stringify({ 
+              number: phoneClean, 
+              text, 
+              delay: 1200,
+              quoted: replyToMessageId ? { key: { id: replyToMessageId } } : undefined
+            }),
           });
         } catch (err: any) {
           console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message);
@@ -1043,11 +1055,11 @@ export default function whatsappRouter(pool: Pool): Router {
       await pool.query(
         `INSERT INTO whatsapp_messages
            (user_id, sent_by_user_id, instance_name, remote_jid, message_id, from_me, message_type,
-            content, media_url, status, timestamp_wa)
-         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW())
+            content, media_url, status, timestamp_wa, reply_to_message_id)
+         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW(), $9)
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
         [userId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
-         messageId, msgType, content, mediaUrl || null]
+         messageId, msgType, content, mediaUrl || null, replyToMessageId || null]
       ).catch(err => console.warn('[SEND] Falha ao salvar:', err.message));
 
       return res.json({ ok: true, messageId });

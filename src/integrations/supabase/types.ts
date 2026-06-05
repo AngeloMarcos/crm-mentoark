@@ -2309,6 +2309,9 @@ export type Database = {
           midia_url: string | null
           push_name: string | null
           remote_jid: string
+          reply_to_content: string | null
+          reply_to_message_id: string | null
+          reply_to_sender: string | null
           session_id: string
           status: string | null
           timestamp_unix: number | null
@@ -2326,6 +2329,9 @@ export type Database = {
           midia_url?: string | null
           push_name?: string | null
           remote_jid: string
+          reply_to_content?: string | null
+          reply_to_message_id?: string | null
+          reply_to_sender?: string | null
           session_id: string
           status?: string | null
           timestamp_unix?: number | null
@@ -2343,6 +2349,9 @@ export type Database = {
           midia_url?: string | null
           push_name?: string | null
           remote_jid?: string
+          reply_to_content?: string | null
+          reply_to_message_id?: string | null
+          reply_to_sender?: string | null
           session_id?: string
           status?: string | null
           timestamp_unix?: number | null
