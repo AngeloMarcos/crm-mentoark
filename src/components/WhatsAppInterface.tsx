@@ -19,7 +19,7 @@ import {
   BotOff, Bot, ImageIcon, Reply,
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
   Copy, Video, FileText, Trash2, Forward, Star,
-  AlertCircle,
+  AlertCircle, Activity,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -1153,10 +1153,33 @@ export function WhatsAppInterface() {
   };
 
 
+  const runUITests = () => {
+
+    toast.info("Iniciando testes de UI...");
+    const first3Msgs = activeChat?.messages.slice(0, 3) || [];
+    if (first3Msgs.length < 3) {
+      toast.error("Não há mensagens suficientes para o teste");
+      return;
+    }
+    setIsSelectMode(true);
+    setSelectedMessageIds(new Set(first3Msgs.map(m => m.id)));
+    setTimeout(() => {
+      if (document.querySelector('.sticky.top-0')?.textContent?.includes('selecionada')) {
+        toast.success("Cenário A validado: Toolbar ativa");
+      }
+      setTimeout(() => {
+        setSelectedMessageIds(new Set());
+        setIsSelectMode(false);
+        toast.success("Cenário B validado: Toolbar escondida");
+      }, 1500);
+    }, 1500);
+  };
+
   const handleDeleteForEveryone = async () => {
     const count = selectedMessageIds.size;
     const currentChat = activeChat;
     if (!currentChat) return;
+
 
     setIsActionLoading(true);
     const idsToDelete = Array.from(selectedMessageIds);
@@ -1987,6 +2010,15 @@ export function WhatsAppInterface() {
                   }}
                 >
                   <Search className="h-4.5 w-4.5" />
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
+                  onClick={runUITests}
+                  title="Executar Testes de UI"
+                >
+                  <Activity className="h-4.5 w-4.5" />
                 </Button>
                 <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
                   <Info className="h-4.5 w-4.5" />
