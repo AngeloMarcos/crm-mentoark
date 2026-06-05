@@ -1772,7 +1772,23 @@ export function WhatsAppInterface() {
                     <div 
                       key={m.id}
                       ref={el => { if (el) messageRefs.current.set(m.id, el); }}
+                      className="flex items-center gap-4 group/row"
                     >
+                      {isSelectMode && !isNote && (
+                        <div 
+                          className="shrink-0 cursor-pointer"
+                          onClick={() => toggleMessageSelection(m.id)}
+                        >
+                          <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+                            selectedMessageIds.has(m.id) 
+                              ? "bg-primary border-primary" 
+                              : "border-muted-foreground/30 bg-background"
+                          }`}>
+                            {selectedMessageIds.has(m.id) && <Check className="h-3.5 w-3.5 text-white stroke-[4px]" />}
+                          </div>
+                        </div>
+                      )}
+
                       {dateLabel && (
                         <div className="flex justify-center my-6 sticky top-2 z-10">
                           <div className="bg-background/80 backdrop-blur-sm border border-border/50 px-4 py-1.5 rounded-full shadow-sm">
