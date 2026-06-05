@@ -49,7 +49,7 @@ function formatTime(iso: string): string {
   } catch { return ''; }
 }
 
-type ChatTab = "todos" | "fila" | "meus";
+type ChatTab = "todos" | "fila" | "meus" | "arquivadas";
 
 type DeliveryStatus = "sent" | "SERVER_ACK" | "DELIVERY_ACK" | "READ" | "PLAYED" | "received" | string;
 
@@ -444,10 +444,10 @@ export function WhatsAppInterface() {
   }, [chats, searchTerm, activeTab]);
 
 
-  const fetchConversas = async () => {
+  const fetchConversas = async (isArchived = false) => {
     try {
-      console.log('[WA] fetchConversas iniciando...');
-      const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
+      console.log(`[WA] fetchConversas iniciando (archived=${isArchived})...`);
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas?archived=${isArchived}`, { headers: apiHeaders() });
       if (!res.ok) {
         console.error('[WA] fetchConversas falhou', res.status);
         return;
@@ -673,7 +673,7 @@ export function WhatsAppInterface() {
 
   useEffect(() => {
     const ms = activeChatId ? 2000 : 5000;
-    const t = setInterval(fetchConversas, ms);
+    const t = setInterval(() => fetchConversas(false), ms);
     return () => clearInterval(t);
   }, [activeChatId]);
 
@@ -986,19 +986,62 @@ export function WhatsAppInterface() {
   const isConnected = connectionStatus?.state === "open";
 
   // Funções para Context Menu
-  const togglePin = (chatId: string) => {
-    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_pinned: !c.is_pinned } : c));
-    toast.success("Conversa atualizada");
+  const togglePin = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_pinned;
+    
+    // Otimista
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_pinned: nextVal } : c));
+    toast.success(nextVal ? "Conversa fixada" : "Conversa desafixada");
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ pinned: nextVal })
+      });
+    } catch {
+      // Reverter em caso de erro real se necessário
+    }
   };
 
-  const toggleMute = (chatId: string) => {
-    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_muted: !c.is_muted } : c));
-    toast.success("Status de notificação alterado");
+  const toggleMute = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_muted;
+
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_muted: nextVal } : c));
+    toast.success(nextVal ? "Notificações silenciadas" : "Notificações ativadas");
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ muted_until: nextVal ? new Date(Date.now() + 365*24*60*60*1000).toISOString() : null })
+      });
+    } catch {}
   };
 
-  const toggleArchive = (chatId: string) => {
-    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_archived: !c.is_archived } : c));
-    toast.success("Conversa arquivada");
+  const toggleArchive = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_archived;
+
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_archived: nextVal } : c));
+    toast.success(nextVal ? "Conversa arquivada" : "Conversa desarquivada");
+    
+    if (nextVal && activeChatId === chatId) {
+      setActiveChatId(null);
+    }
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ archived: nextVal })
+      });
+    } catch {}
   };
 
   const markAsUnread = (chatId: string) => {
@@ -1071,13 +1114,16 @@ export function WhatsAppInterface() {
 
           {/* Tabs */}
           <div className="flex gap-1 p-1 bg-muted/40 rounded-lg">
-            {(["Meus", "Fila", "Todos"] as const).map(t => {
+            {(["Meus", "Fila", "Todos", "Arquivadas"] as const).map(t => {
               const key = t.toLowerCase() as ChatTab;
               const isActive = activeTab === key;
               return (
                 <button
                   key={t}
-                  onClick={() => setActiveTab(key)}
+                  onClick={() => {
+                    setActiveTab(key);
+                    fetchConversas(key === "arquivadas");
+                  }}
                   className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
                     isActive
                       ? "bg-white shadow-sm text-primary ring-1 ring-black/5"

@@ -44,17 +44,17 @@ interface EvolutionPayload {
     };
     message?: {
       conversation?: string;
-      extendedTextMessage?: { text: string };
-      imageMessage?: { caption?: string; url?: string; mimetype?: string };
-      audioMessage?: { url?: string; mimetype?: string; seconds?: number };
-      videoMessage?: { caption?: string; url?: string; mimetype?: string; seconds?: number };
-      documentMessage?: { caption?: string; fileName?: string; url?: string; mimetype?: string };
-      stickerMessage?: { url?: string; mimetype?: string };
-      buttonsResponseMessage?: { selectedDisplayText: string };
-      listResponseMessage?: { title: string };
-      templateButtonReplyMessage?: { selectedDisplayText: string };
+      extendedTextMessage?: { text: string; contextInfo?: any };
+      imageMessage?: { caption?: string; url?: string; mimetype?: string; contextInfo?: any };
+      audioMessage?: { url?: string; mimetype?: string; seconds?: number; contextInfo?: any };
+      videoMessage?: { caption?: string; url?: string; mimetype?: string; seconds?: number; contextInfo?: any };
+      documentMessage?: { caption?: string; fileName?: string; url?: string; mimetype?: string; contextInfo?: any };
+      stickerMessage?: { url?: string; mimetype?: string; contextInfo?: any };
+      buttonsResponseMessage?: { selectedDisplayText: string; contextInfo?: any };
+      listResponseMessage?: { title: string; contextInfo?: any };
+      templateButtonReplyMessage?: { selectedDisplayText: string; contextInfo?: any };
     };
-    update?: { status: string }[];
+    update?: { status: string; id?: string }[];
     messageTimestamp?: number;
     pushName?: string;
     status?: string;
@@ -391,10 +391,15 @@ export default function webhookRouter(pool: Pool): Router {
       const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
       // Extrair informações de resposta (reply/quote)
-      const contextInfo = (payload.data as any)?.message?.extendedTextMessage?.contextInfo || (payload.data as any)?.message?.imageMessage?.contextInfo || (payload.data as any)?.message?.videoMessage?.contextInfo || (payload.data as any)?.message?.documentMessage?.contextInfo;
-      const replyToId = contextInfo?.stanzaId || contextInfo?.participant ? contextInfo?.stanzaId : null;
+      const contextInfo = payload.data?.message?.extendedTextMessage?.contextInfo || 
+                         payload.data?.message?.imageMessage?.contextInfo || 
+                         payload.data?.message?.videoMessage?.contextInfo || 
+                         payload.data?.message?.documentMessage?.contextInfo ||
+                         payload.data?.message?.stickerMessage?.contextInfo;
+      const replyToId = contextInfo?.stanzaId || null;
       const replyToContent = contextInfo?.quotedMessage?.conversation || contextInfo?.quotedMessage?.extendedTextMessage?.text || null;
       const replyToSender = contextInfo?.participant ? (contextInfo.participant.includes('@s.whatsapp.net') ? 'user' : 'assistant') : null;
+
 
 
       // ── Persistir mensagem recebida ───────────────────────────────────────────

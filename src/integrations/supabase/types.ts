@@ -2297,6 +2297,47 @@ export type Database = {
         }
         Relationships: []
       }
+      whatsapp_chat_prefs: {
+        Row: {
+          archived: boolean | null
+          created_at: string | null
+          id: string
+          muted_until: string | null
+          pinned: boolean | null
+          remote_jid: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          archived?: boolean | null
+          created_at?: string | null
+          id?: string
+          muted_until?: string | null
+          pinned?: boolean | null
+          remote_jid: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          archived?: boolean | null
+          created_at?: string | null
+          id?: string
+          muted_until?: string | null
+          pinned?: boolean | null
+          remote_jid?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_chat_prefs_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       whatsapp_messages: {
         Row: {
           conteudo: string | null

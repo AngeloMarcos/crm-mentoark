@@ -253,10 +253,13 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // PARTITION BY phone (não por instância) — evita duplicatas quando o mesmo
       // número existiu em duas instâncias diferentes
+      const showArchived = req.query.archived === 'true';
+
       const r = await pool.query(
         `WITH ranked AS (
            SELECT
              split_part(m.remote_jid,'@',1) AS phone,
+             m.remote_jid,
              m.instance_name,
              m.content,
              m.from_me,
@@ -286,23 +289,27 @@ export default function whatsappRouter(pool: Pool): Router {
          )
          SELECT
            r.phone AS session_id,
-            r.instance_name AS instancia,
-            r.created_at AS ultima_atividade,
-            r.total::int AS total,
-            r.unread_count::int AS unread,
-            r.content AS ultima_mensagem,
-            r.is_group,
-            r.last_sender,
-            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
-            cu.push_name,
-            cu.nome_contato,
-            cu.profile_pic_url
+           r.instance_name AS instancia,
+           r.created_at AS ultima_atividade,
+           r.total::int AS total,
+           r.unread_count::int AS unread,
+           r.content AS ultima_mensagem,
+           r.is_group,
+           r.last_sender,
+           CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
+           cu.push_name,
+           cu.nome_contato,
+           cu.profile_pic_url,
+           COALESCE(wcp.pinned, false) as pinned,
+           COALESCE(wcp.archived, false) as archived,
+           wcp.muted_until
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
-         WHERE r.rn = 1
-         ORDER BY r.created_at DESC
+         LEFT JOIN whatsapp_chat_prefs wcp ON wcp.user_id = $1 AND wcp.remote_jid = r.remote_jid
+         WHERE r.rn = 1 AND (COALESCE(wcp.archived, false) = $2)
+         ORDER BY COALESCE(wcp.pinned, false) DESC, r.created_at DESC
          LIMIT 300`,
-        [userId]
+        [userId, showArchived]
       );
 
       const conversas = r.rows.map(row => {
@@ -323,6 +330,9 @@ export default function whatsappRouter(pool: Pool): Router {
           ultimo_role: row.ultimo_role,
           total: Number(row.total),
           unread: Number(row.unread || 0),
+          pinned: row.pinned === true,
+          archived: row.archived === true,
+          muted_until: row.muted_until,
           mensagens: [],
         };
       });
@@ -435,7 +445,33 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // POST /api/whatsapp/chat-prefs/:phone — atualiza preferências de conversa (pin, archive, mute)
+  router.post('/chat-prefs/:phone', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const { pinned, archived, muted_until } = req.body;
+      const remoteJid = `${phone}@s.whatsapp.net`; // TODO: suporte a grupos se phone contiver '-'
+
+      await pool.query(
+        `INSERT INTO whatsapp_chat_prefs (user_id, remote_jid, pinned, archived, muted_until, updated_at)
+         VALUES ($1, $2, COALESCE($3, false), COALESCE($4, false), $5, NOW())
+         ON CONFLICT (user_id, remote_jid) DO UPDATE SET
+           pinned = COALESCE($3, whatsapp_chat_prefs.pinned),
+           archived = COALESCE($4, whatsapp_chat_prefs.archived),
+           muted_until = COALESCE($5, whatsapp_chat_prefs.muted_until),
+           updated_at = NOW()`,
+        [userId, remoteJid, pinned, archived, muted_until]
+      );
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/ia-status/:phone — lê se IA está pausada para esse contato
+
 
   router.get('/ia-status/:phone', async (req: AuthRequest, res: Response) => {
     try {
