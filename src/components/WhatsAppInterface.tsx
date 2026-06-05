@@ -917,6 +917,28 @@ export function WhatsAppInterface() {
 
   const isConnected = connectionStatus?.state === "open";
 
+  // Funções para Context Menu
+  const togglePin = (chatId: string) => {
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_pinned: !c.is_pinned } : c));
+    toast.success("Conversa atualizada");
+  };
+
+  const toggleMute = (chatId: string) => {
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_muted: !c.is_muted } : c));
+    toast.success("Status de notificação alterado");
+  };
+
+  const toggleArchive = (chatId: string) => {
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_archived: !c.is_archived } : c));
+    toast.success("Conversa arquivada");
+  };
+
+  const markAsUnread = (chatId: string) => {
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, unread: (c.unread || 0) + 1 } : c));
+    toast.success("Marcada como não lida");
+  };
+
+
   return (
     <div className="flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border shadow-xl bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
 
