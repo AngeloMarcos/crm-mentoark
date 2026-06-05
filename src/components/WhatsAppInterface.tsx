@@ -1016,6 +1016,39 @@ export function WhatsAppInterface() {
     }
   };
 
+  const handleForwardMessages = async (targetPhone: string, targetSource?: string) => {
+    if (!activeChat || selectedMessageIds.size === 0) return;
+    
+    setIsActionLoading(true);
+    const messagesToForward = activeChat.messages.filter(m => selectedMessageIds.has(m.id));
+    
+    try {
+      for (const msg of messagesToForward) {
+        // Encaminha enviando o conteúdo novamente para o novo destinatário
+        await fetch(`${API_BASE}/api/whatsapp/send`, {
+          method: 'POST',
+          headers: apiHeaders(),
+          body: JSON.stringify({ 
+            phone: targetPhone, 
+            text: msg.content, 
+            instancia: targetSource,
+            mediaUrl: msg.midia_url,
+            mediaType: msg.tipo === 'image' || msg.tipo === 'video' || msg.tipo === 'audio' || msg.tipo === 'document' ? msg.tipo : undefined
+          }),
+        });
+      }
+      toast.success(`${messagesToForward.length} mensagens encaminhadas`);
+    } catch {
+      toast.error("Erro ao encaminhar algumas mensagens");
+    } finally {
+      setIsActionLoading(false);
+      setIsSelectMode(false);
+      setSelectedMessageIds(new Set());
+      setShowForwardModal(false);
+    }
+  };
+
+
   const handleDeleteForEveryone = async () => {
     const count = selectedMessageIds.size;
     const currentChat = activeChat;
