@@ -23,17 +23,15 @@ export interface StatusResult {
 }
 
 export async function fetchConnectionStatus(instancia?: string): Promise<StatusResult> {
-  // Ajuste cirúrgico: Se for uma instância específica, vamos buscar nas configurações de integrações
-  // Caso contrário, usamos a rota padrão de status global
-  const API_URL = instancia 
-    ? `${API_BASE}/api/integracoes_config`
-    : `${API_BASE}/api/whatsapp/status`;
+  // Ajuste cirúrgico: O endpoint para verificar o status de uma instância deve ser via configs
+  // A rota /api/whatsapp/evo/status/:instancia não existe no backend.
+  const API_URL = `${API_BASE}/api/integracoes_config`;
 
-  console.log(`[EvolutionService] Buscando status: ${API_URL} (Instância: ${instancia || 'Global'})`);
+  console.log(`[EvolutionService] Buscando status global de integrações: ${API_URL}`);
 
   try {
     const res = await fetch(API_URL, {
-      method: instancia ? 'GET' : 'POST',
+      method: 'GET',
       headers: authHeaders(),
     });
 
@@ -44,24 +42,27 @@ export async function fetchConnectionStatus(instancia?: string): Promise<StatusR
     
     const data = await res.json();
     
-    if (instancia && Array.isArray(data)) {
-      // Procura a configuração da evolução para esta instância específica
-      // Normalização: Comparamos ignorando case e espaços para maior resiliência
-      const config = data.find(i => 
-        i.tipo === 'evolution' && 
-        i.instancia?.toLowerCase().trim() === instancia.toLowerCase().trim()
-      );
+    if (Array.isArray(data)) {
+      // Se pedimos uma instância específica (ex: 'teste')
+      if (instancia) {
+        const config = data.find(i => 
+          i.tipo === 'evolution' && 
+          i.instancia?.toLowerCase().trim() === instancia.toLowerCase().trim()
+        );
+        console.log(`[EvolutionService] Status para ${instancia}:`, config ? config.status : 'não encontrada');
+        return { 
+          state: config?.status === 'conectado' ? 'open' : 'close' 
+        };
+      }
       
-      console.log(`[EvolutionService] Resultado para ${instancia}:`, config ? config.status : 'não encontrada');
-      
-      return { 
-        state: config?.status === 'conectado' ? 'open' : 'close' 
-      };
+      // Se não passou instância, mas tem alguma conectada, retornamos 'open'
+      const anyOpen = data.some(i => i.tipo === 'evolution' && i.status === 'conectado');
+      return { state: anyOpen ? 'open' : 'close' };
     }
     
-    return data;
+    return { state: 'close' };
   } catch (error) {
-    console.error(`[EvolutionService] Erro crítico ao buscar status para ${instancia || 'default'}:`, error);
+    console.error(`[EvolutionService] Erro crítico ao buscar status:`, error);
     return { state: 'close' };
   }
 }
