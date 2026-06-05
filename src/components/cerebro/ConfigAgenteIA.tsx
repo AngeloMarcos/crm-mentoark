@@ -53,6 +53,17 @@ export function ConfigAgenteIA() {
   const [config, setConfig] = useState<AgentConfig>(defaultConfig);
   const [loading, setLoading] = useState(true);
   const [salvando, setSalvando] = useState(false);
+  const [hasProviders, setHasProviders] = useState(true);
+
+  useEffect(() => {
+    const checkProviders = async () => {
+      try {
+        const { data } = await api.from("ai_providers").select("id").eq("user_id", user?.id).eq("ativo", true).limit(1);
+        setHasProviders(!!data && data.length > 0);
+      } catch {}
+    };
+    if (user) checkProviders();
+  }, [user]);
 
   useEffect(() => {
     if (user) carregarConfig();
