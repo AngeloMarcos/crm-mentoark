@@ -163,7 +163,9 @@ export default function webhookRouter(pool: Pool): Router {
       const payload = req.body as EvolutionPayload;
       // Correção 1 — normalizar evento removendo qualquer separador (_, ., /) e caixa
       const eventClean = (payload.event || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      console.log(`[WEBHOOK EVENTO] event="${payload.event}" → clean="${eventClean}" | instance="${payload.instance}"`);
+      const _rj = payload.data?.key?.remoteJid || '';
+      const _mid = payload.data?.key?.id || '';
+      wlog('WEBHOOK_IN', `event="${payload.event}" clean="${eventClean}" instance="${payload.instance}" jid="${_rj}" mid="${_mid}" fromMe=${payload.data?.key?.fromMe}`);
 
       if (eventClean === 'messagesupdate') {
         await handleStatusUpdate(payload);
@@ -171,23 +173,26 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // Aceita 'messagesupsert' (cobre MESSAGES_UPSERT, messages.upsert, messages_upsert etc.)
-      if (eventClean !== 'messagesupsert') return;
+      if (eventClean !== 'messagesupsert') {
+        wlog('WEBHOOK_DROP', `evento ignorado: "${eventClean}"`);
+        return;
+      }
 
       // Ignorar notificações de status sem conteúdo de mensagem
       const dataStatus = payload.data?.status;
-      if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') return;
+      if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
+        wlog('WEBHOOK_DROP', `status-only (${dataStatus}) mid=${_mid}`);
+        return;
+      }
 
       const remoteJid = payload.data?.key?.remoteJid || '';
-
-      // Log para diagnóstico — nunca perder mensagens silenciosamente
-      console.log(`[WEBHOOK] remoteJid recebido: "${remoteJid}" | event: ${eventClean} | instance: ${payload.instance}`);
-      if (!remoteJid) return;
-      if (!remoteJid.includes('@')) return;
-      // Aceitar grupos (@g.us) e contatos individuais (@s.whatsapp.net / @lid)
+      if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio mid=${_mid}`); return; }
+      if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}"`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
 
       const messageId = payload.data?.key?.id || '';
-      if (!messageId) return;
+      if (!messageId) { wlog('WEBHOOK_DROP', `messageId vazio jid=${remoteJid}`); return; }
+
 
       const instancia  = payload.instance;
       const telefone   = remoteJid.split('@')[0]; // phone ou groupId
@@ -337,22 +342,24 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
-      // ── Deduplicação em memória ───────────────────────────────────────────────
-      if (processados.has(messageId)) return;
-      processados.add(messageId);
-      setTimeout(() => processados.delete(messageId), 60000);
+      // ── Deduplicação em memória (escopo por instância) ───────────────────────
+      const memKey = `${instancia}:${messageId}`;
+      if (processados.has(memKey)) { wlog('WEBHOOK_DROP', `dedup memória ${memKey}`); return; }
+      processados.add(memKey);
+      setTimeout(() => processados.delete(memKey), 60000);
 
-      // ── Deduplicação no banco ─────────────────────────────────────────────────
+      // ── Deduplicação no banco (escopo por instância) ─────────────────────────
       const jaExiste = await pool.query(
-        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
-        [messageId]
+        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
+        [messageId, instancia]
       );
-      if (jaExiste.rows.length) return;
+      if (jaExiste.rows.length) { wlog('WEBHOOK_DROP', `dedup banco mid=${messageId} inst=${instancia}`); return; }
 
       await pool.query(
         'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [messageId, instancia]
       ).catch(err => console.error('[WEBHOOK INSERT webhook_mensagens_processadas]:', err.message));
+
 
       // ── Extrair dados ─────────────────────────────────────────────────────────
       const texto    = extrairTexto(payload.data);
@@ -526,7 +533,13 @@ export default function webhookRouter(pool: Pool): Router {
         console.log(`[WEBHOOK] Grupo ${telefone} — mensagem salva, IA não processada`);
         return;
       }
-      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) return;
+      if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) {
+        wlog('WEBHOOK_DROP', `sem texto e sem mídia tipo=${tipo} mid=${messageId}`);
+        return;
+      }
+
+      wlog('WEBHOOK_OK', `enfileirando IA tel=${telefone} tipo=${tipo} mid=${messageId} texto="${(texto||'').slice(0,80)}"`);
+
 
       processarComDebounce(pool, {
         instancia,
