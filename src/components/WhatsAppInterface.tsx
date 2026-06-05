@@ -682,7 +682,12 @@ export function WhatsAppInterface() {
           filter: `user_id=eq.${user.id}`
         },
         (payload) => {
-          console.log('[REALTIME] Mudança em whatsapp_messages:', payload.eventType, payload);
+          console.log('⚡ [RASTREIO REALTIME - EVENTO DETECTADO]', {
+            evento: payload.eventType,
+            tabela: payload.table,
+            novoRegistro: payload.new,
+            registroDeletado: payload.old
+          });
           
           // Sempre atualizamos a lista de conversas para refletir unread_count ou última msg
           fetchConversas(activeTab === "arquivadas");
@@ -708,7 +713,11 @@ export function WhatsAppInterface() {
           filter: `user_id=eq.${user.id}`
         },
         (payload) => {
-          console.log('[REALTIME] Mudança em n8n_chat_histories:', payload.eventType);
+          console.log('⚡ [RASTREIO REALTIME - EVENTO DETECTADO (n8n)]', {
+            evento: payload.eventType,
+            tabela: payload.table,
+            novoRegistro: payload.new
+          });
           fetchConversas(activeTab === "arquivadas");
           if (activeChatIdRef.current) {
             fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
@@ -718,7 +727,10 @@ export function WhatsAppInterface() {
       .subscribe((status) => {
         console.log(`[REALTIME] Status: ${status}`);
         if (status === 'CHANNEL_ERROR') {
-          console.error('[REALTIME] Erro crítico no canal (401/403/Timeout). Polling ativo.');
+          console.error('❌ [RASTREIO REALTIME - ERRO CRÍTICO]', {
+            status,
+            detalhe: "Erro na sincronização em tempo real. Polling ativo."
+          });
           toast.error("Erro na sincronização em tempo real. Polling ativo.");
         }
       });
@@ -1046,12 +1058,21 @@ export function WhatsAppInterface() {
     if (!isSelectMode) setIsSelectMode(true);
     setSelectedMessageIds(prev => {
       const next = new Set(prev);
-      if (next.has(messageId)) {
+      const isAdded = !next.has(messageId);
+      
+      if (isAdded) {
+        next.add(messageId);
+      } else {
         next.delete(messageId);
         if (next.size === 0) setIsSelectMode(false);
-      } else {
-        next.add(messageId);
       }
+
+      console.log('--- [RASTREIO SELEÇÃO] ---', { 
+        mensagemId: messageId, 
+        acao: isAdded ? 'adicionado' : 'removido', 
+        listaAtual: Array.from(next)
+      });
+
       return next;
     });
   };
@@ -1088,6 +1109,14 @@ export function WhatsAppInterface() {
     const currentChat = activeChat;
     if (!currentChat) return;
 
+    console.log('🚀 [RASTREIO EXCLUSÃO - INÍCIO]', {
+      tipoExclusao: 'mim',
+      quantidadeMensagens: count,
+      idsParaDeletar: Array.from(selectedMessageIds),
+      userIdAtivo: user?.id,
+      instanciaEvolution: currentChat.source
+    });
+
     setIsActionLoading(true);
     const idsToDelete = Array.from(selectedMessageIds);
 
@@ -1099,7 +1128,7 @@ export function WhatsAppInterface() {
           : c
       ));
 
-      await Promise.all(idsToDelete.map(id => 
+      const responses = await Promise.all(idsToDelete.map(id => 
         fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
           method: 'DELETE',
           headers: apiHeaders(),
@@ -1110,8 +1139,19 @@ export function WhatsAppInterface() {
           })
         })
       ));
+
+      responses.forEach(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        console.log('✅ [RASTREIO API - SUCESSO]', { status: response.status, data });
+      });
+
       toast.success(`${count} mensagens removidas para você`);
-    } catch {
+    } catch (err: any) {
+      console.error('❌ [RASTREIO API - ERRO CRÍTICO]', { 
+        mensagem: err.message, 
+        response404_500: err.response?.status, 
+        payloadEnviado: err.config?.data 
+      });
       toast.error("Erro ao ocultar mensagens");
     } finally {
       setIsActionLoading(false);
@@ -1180,6 +1220,13 @@ export function WhatsAppInterface() {
     const currentChat = activeChat;
     if (!currentChat) return;
 
+    console.log('🚀 [RASTREIO EXCLUSÃO - INÍCIO]', {
+      tipoExclusao: 'todos',
+      quantidadeMensagens: count,
+      idsParaDeletar: Array.from(selectedMessageIds),
+      userIdAtivo: user?.id,
+      instanciaEvolution: currentChat.source
+    });
 
     setIsActionLoading(true);
     const idsToDelete = Array.from(selectedMessageIds);
@@ -1192,7 +1239,7 @@ export function WhatsAppInterface() {
           : c
       ));
 
-      await Promise.all(idsToDelete.map(id => {
+      const responses = await Promise.all(idsToDelete.map(id => {
         const msg = currentChat.messages.find(m => m.id === id);
         const mId = msg?.message_id || id; // Fallback para UUID se não tiver message_id
         
@@ -1206,8 +1253,19 @@ export function WhatsAppInterface() {
           })
         });
       }));
+
+      responses.forEach(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        console.log('✅ [RASTREIO API - SUCESSO]', { status: response.status, data });
+      });
+
       toast.success(`${count} mensagens apagadas para todos`);
-    } catch (err) {
+    } catch (err: any) {
+      console.error('❌ [RASTREIO API - ERRO CRÍTICO]', { 
+        mensagem: err.message, 
+        response404_500: err.response?.status, 
+        payloadEnviado: err.config?.data 
+      });
       toast.error("Erro ao apagar mensagens no servidor");
     } finally {
       setIsActionLoading(false);
