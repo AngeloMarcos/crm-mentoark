@@ -405,12 +405,13 @@ export default function webhookRouter(pool: Pool): Router {
         await pool.query(
           `INSERT INTO whatsapp_messages
              (user_id, instance_name, remote_jid, message_id, from_me, message_type,
-              content, media_url, media_mimetype, push_name, status, timestamp_wa)
-           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $9, 'received', to_timestamp($10))
+              content, media_url, media_mimetype, push_name, status, timestamp_wa,
+              reply_to_message_id, reply_to_content, reply_to_sender)
+           VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $9, 'received', to_timestamp($10), $11, $12, $13)
            ON CONFLICT (message_id, instance_name) DO NOTHING`,
           [userId, instancia, remoteJid, messageId, tipo,
            texto || null, midia.url || null, midia.mime || null,
-           pushNameFinal, tsVal]
+           pushNameFinal, tsVal, replyToId, replyToContent, replyToSender]
         ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao salvar mensagem recebida: ${err.message}`));
 
         // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────
