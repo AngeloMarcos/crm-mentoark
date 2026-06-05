@@ -1995,6 +1995,15 @@ export function WhatsAppInterface() {
                       <Star className="h-4 w-4" />
                       Favoritar
                     </Button>
+                    <Button 
+                      variant="ghost" 
+                      onClick={() => setShowForwardModal(true)}
+                      disabled={isActionLoading}
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-blue-50 hover:text-blue-600 transition-all text-xs font-bold uppercase tracking-tight"
+                    >
+                      <Forward className="h-4 w-4" />
+                      Encaminhar
+                    </Button>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button 
