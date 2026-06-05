@@ -244,7 +244,23 @@ export default function webhookRouter(pool: Pool): Router {
         if (uRes.rows.length) userId = uRes.rows[0].id;
       }
 
-      wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);
+      // 4. Fallback Integracoes: busca na tabela integracoes_config
+      if (!userId) {
+        const intRes = await pool.query(
+          `SELECT user_id FROM integracoes_config
+           WHERE LOWER(instancia) = LOWER($1) AND tipo = 'whatsapp'
+           LIMIT 1`,
+          [instancia]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (intRes.rows.length) userId = intRes.rows[0].user_id;
+      }
+
+      if (!userId) {
+        wlog('WEBHOOK_DROP', `userId não encontrado para instancia="${instancia}". Verifique Configurações da IA ou Integrações. mid=${messageId}`);
+      } else {
+        wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);
+      }
+
 
       // ── Mensagens do atendente (fromMe=true) → pausar IA ou reativar ─────────
       if (fromMe) {
