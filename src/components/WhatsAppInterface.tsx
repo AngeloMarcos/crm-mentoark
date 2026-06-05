@@ -29,7 +29,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { supabase } from "@/integrations/supabase/client";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -674,81 +673,16 @@ export function WhatsAppInterface() {
     }
   };
  
-  // ── Supabase Realtime ────────────────────────────────────────────────────────
+  // ── Polling de mensagens (substitui Supabase Realtime) ──────────────────────
   useEffect(() => {
     if (!user?.id) return;
-
-    console.log('[REALTIME] Iniciando subscrição de mensagens para:', user.id);
-    
-    // Escuta mudanças em whatsapp_messages (INSERT, UPDATE, DELETE)
-    const channel = supabase
-      .channel('realtime_whatsapp_v2')
-      .on(
-        'postgres_changes',
-        {
-          event: '*', // Escuta TUDO (Insert, Update, Delete)
-          schema: 'public',
-          table: 'whatsapp_messages',
-          filter: `user_id=eq.${user.id}`
-        },
-        (payload) => {
-          console.log('⚡ [RASTREIO REALTIME - EVENTO DETECTADO]', {
-            evento: payload.eventType,
-            tabela: payload.table,
-            novoRegistro: payload.new,
-            registroDeletado: payload.old
-          });
-          
-          // Sempre atualizamos a lista de conversas para refletir unread_count ou última msg
-          fetchConversas(activeTab === "arquivadas");
-          
-          if (activeChatIdRef.current) {
-            const msg = (payload.new as any) || (payload.old as any);
-            const phone = msg?.remote_jid?.split('@')[0];
-            
-            // Verifica se a mensagem pertence ao chat aberto (incluindo variações de DDI)
-            if (phone && (phone === activeChatIdRef.current || activeChatIdRef.current?.includes(phone))) {
-              console.log('[REALTIME] Atualizando chat ativo:', activeChatIdRef.current);
-              fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
-            }
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*', 
-          schema: 'public',
-          table: 'n8n_chat_histories',
-          filter: `user_id=eq.${user.id}`
-        },
-        (payload) => {
-          console.log('⚡ [RASTREIO REALTIME - EVENTO DETECTADO (n8n)]', {
-            evento: payload.eventType,
-            tabela: payload.table,
-            novoRegistro: payload.new
-          });
-          fetchConversas(activeTab === "arquivadas");
-          if (activeChatIdRef.current) {
-            fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
-          }
-        }
-      )
-      .subscribe((status) => {
-        console.log(`[REALTIME] Status: ${status}`);
-        if (status === 'CHANNEL_ERROR') {
-          console.error('❌ [RASTREIO REALTIME - ERRO CRÍTICO]', {
-            status,
-            detalhe: "Erro na sincronização em tempo real. Polling ativo."
-          });
-          toast.error("Erro na sincronização em tempo real. Polling ativo.");
-        }
-      });
-
-    return () => {
-      console.log('[REALTIME] Desconectando canal');
-      supabase.removeChannel(channel);
-    };
+    const interval = setInterval(() => {
+      fetchConversas(activeTab === "arquivadas");
+      if (activeChatIdRef.current) {
+        fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
   }, [user?.id, activeTab]);
 
   useEffect(() => {
@@ -787,22 +721,9 @@ export function WhatsAppInterface() {
           headers: apiHeaders()
         });
         
-        // Se 404, tenta via Supabase direto como fallback
         if (res.status === 404) {
-          console.warn('[WA] Rota /read não encontrada no backend. Usando fallback Supabase.');
-          
-          const { error } = await supabase
-            .from('whatsapp_messages')
-            .update({ is_read: true })
-            .eq('user_id', user?.id)
-            .eq('remote_jid', `${activeChatId}@s.whatsapp.net`)
-            .eq('from_me', false)
-            .eq('is_read', false);
-
-          if (error) throw error;
-          
-          // Zera o contador visual local
-          setChats(prev => prev.map(c => 
+          // Zera contador visual local se backend não tiver a rota
+          setChats(prev => prev.map(c =>
             c.id === activeChatId ? { ...c, unread: 0 } : c
           ));
         }
