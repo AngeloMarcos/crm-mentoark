@@ -956,15 +956,37 @@ export function WhatsAppInterface() {
 
   const handleDeleteSelected = () => {
     const count = selectedMessageIds.size;
+    const currentChat = activeChat;
+    if (!currentChat) return;
+
+    const idsToDelete = Array.from(selectedMessageIds);
+    
+    // Otimista
     setChats(prev => prev.map(c => 
       c.id === activeChatId 
         ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
         : c
     ));
-    toast.success(`${count} mensagens removidas localmente`);
+
+    Promise.all(idsToDelete.map(id => 
+      fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: apiHeaders(),
+        body: JSON.stringify({ 
+          forEveryone: true, 
+          instancia: currentChat.source, 
+          remoteJid: `${currentChat.phone}@s.whatsapp.net` 
+        })
+      })
+    )).catch(() => {
+      toast.error("Erro ao apagar algumas mensagens no servidor");
+    });
+
+    toast.success(`${count} mensagens apagadas`);
     setIsSelectMode(false);
     setSelectedMessageIds(new Set());
   };
+
 
 
   const scrollToMessage = (msgIndex: number) => {
