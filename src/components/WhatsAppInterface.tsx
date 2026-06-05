@@ -1242,11 +1242,12 @@ export function WhatsAppInterface() {
           {!loadingChats && filteredChats.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 px-6 text-center text-muted-foreground text-sm">
               <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
-              {searchTerm 
-                ? "Nenhuma conversa encontrada para esta busca."
-                : "Nenhuma mensagem recebida ainda. Quando clientes enviarem mensagens para seu WhatsApp, elas aparecerão aqui automaticamente."}
+              {globalSearchTerm 
+                ? "Nenhum chat correspondente."
+                : "Nenhuma mensagem recebida ainda."}
             </div>
           )}
+
           <div className="divide-y divide-border/50">
             {filteredChats.map(chat => {
               const isActive = activeChatId === chat.id;
