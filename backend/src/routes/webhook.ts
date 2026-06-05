@@ -342,22 +342,24 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
-      // ── Deduplicação em memória ───────────────────────────────────────────────
-      if (processados.has(messageId)) return;
-      processados.add(messageId);
-      setTimeout(() => processados.delete(messageId), 60000);
+      // ── Deduplicação em memória (escopo por instância) ───────────────────────
+      const memKey = `${instancia}:${messageId}`;
+      if (processados.has(memKey)) { wlog('WEBHOOK_DROP', `dedup memória ${memKey}`); return; }
+      processados.add(memKey);
+      setTimeout(() => processados.delete(memKey), 60000);
 
-      // ── Deduplicação no banco ─────────────────────────────────────────────────
+      // ── Deduplicação no banco (escopo por instância) ─────────────────────────
       const jaExiste = await pool.query(
-        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
-        [messageId]
+        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
+        [messageId, instancia]
       );
-      if (jaExiste.rows.length) return;
+      if (jaExiste.rows.length) { wlog('WEBHOOK_DROP', `dedup banco mid=${messageId} inst=${instancia}`); return; }
 
       await pool.query(
         'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [messageId, instancia]
       ).catch(err => console.error('[WEBHOOK INSERT webhook_mensagens_processadas]:', err.message));
+
 
       // ── Extrair dados ─────────────────────────────────────────────────────────
       const texto    = extrairTexto(payload.data);
