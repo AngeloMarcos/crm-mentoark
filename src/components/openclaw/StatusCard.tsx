@@ -1,6 +1,6 @@
-import { Card } from "@/components/ui/badge";
 import { Badge } from "@/components/ui/badge";
 import { Server, Zap } from 'lucide-react';
+
 
 interface StatusCardProps {
   title: string;
