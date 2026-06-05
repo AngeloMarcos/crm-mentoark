@@ -18,7 +18,7 @@ import {
   ShieldAlert, Tag, Sparkles, Zap,
   BotOff, Bot, ImageIcon, Reply,
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
-  Copy, Video, FileText, Trash2, Forward,
+  Copy, Video, FileText, Trash2, Forward, Star,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
