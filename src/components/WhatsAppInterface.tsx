@@ -1333,7 +1333,11 @@ export function WhatsAppInterface() {
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 bg-muted/10 relative">
+            <ScrollArea 
+              className="flex-1 bg-muted/10 relative" 
+              ref={scrollAreaRef}
+              onScroll={handleScroll}
+            >
               <div className="px-8 py-6 space-y-1 relative z-1">
                 {loadingMessages && (
                   <div className="flex items-center justify-center py-12 text-muted-foreground">
