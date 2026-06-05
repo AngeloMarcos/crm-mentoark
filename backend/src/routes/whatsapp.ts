@@ -330,6 +330,9 @@ export default function whatsappRouter(pool: Pool): Router {
           ultimo_role: row.ultimo_role,
           total: Number(row.total),
           unread: Number(row.unread || 0),
+          pinned: row.pinned === true,
+          archived: row.archived === true,
+          muted_until: row.muted_until,
           mensagens: [],
         };
       });
