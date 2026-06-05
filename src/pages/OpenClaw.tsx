@@ -38,8 +38,12 @@ export default function OpenClawPage() {
 
   const getOpenClawHeader = () => ({
     ...getAuthHeader(),
-    'X-Openclaw-Key': 'openclaw-admin-2025',
     'Content-Type': 'application/json',
+  });
+
+  const openClawBody = (extra: object) => ({
+    ...extra,
+    _adminKey: 'openclaw-admin-2025',
   });
 
   const scrollToBottom = () => {
@@ -64,7 +68,7 @@ export default function OpenClawPage() {
       const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
         method: 'POST',
         headers: getOpenClawHeader(),
-        body: JSON.stringify({ message: 'ping', sessionKey: 'admin' })
+        body: JSON.stringify(openClawBody({ message: 'ping', sessionKey: 'admin' }))
       });
       setStatus(prev => ({ ...prev, gateway: res.ok ? 'online' : 'offline' }));
     } catch {
@@ -108,7 +112,7 @@ export default function OpenClawPage() {
       const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
         method: 'POST',
         headers: getOpenClawHeader(),
-        body: JSON.stringify({ message: messageText, sessionKey: 'admin' })
+        body: JSON.stringify(openClawBody({ message: messageText, sessionKey: 'admin' }))
       });
 
       if (res.status === 503) {

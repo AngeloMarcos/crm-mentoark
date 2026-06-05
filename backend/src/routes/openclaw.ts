@@ -6,11 +6,15 @@ const ADMIN_KEY = process.env.OPENCLAW_ADMIN_KEY || 'openclaw-admin-2025';
 const OPENCLAW_PROXY = process.env.OPENCLAW_PROXY_URL || 'http://172.19.0.1:18790';
 
 function checkAuth(req: Request, res: Response): boolean {
-  // 1. X-Openclaw-Key (painel externo)
-  const key = req.headers['x-openclaw-key'] as string | undefined;
-  if (key && key === ADMIN_KEY) return true;
+  // 1. Admin key no header (curl/ferramentas externas)
+  const headerKey = req.headers['x-openclaw-key'] as string | undefined;
+  if (headerKey && headerKey === ADMIN_KEY) return true;
 
-  // 2. JWT Bearer (CRM frontend — rota está antes do authMiddleware, então validamos aqui)
+  // 2. Admin key no body (CRM frontend — evita CORS preflight em header customizado)
+  const bodyKey = (req.body as any)?._adminKey;
+  if (bodyKey && bodyKey === ADMIN_KEY) return true;
+
+  // 3. JWT Bearer válido
   const auth = req.headers.authorization;
   if (auth?.startsWith('Bearer ')) {
     try {
@@ -22,7 +26,7 @@ function checkAuth(req: Request, res: Response): boolean {
     }
   }
 
-  res.status(401).json({ error: 'Autenticação necessária: envie Authorization Bearer ou X-Openclaw-Key' });
+  res.status(401).json({ error: 'Autenticação necessária' });
   return false;
 }
 
