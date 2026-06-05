@@ -19,7 +19,7 @@ import {
   BotOff, Bot, ImageIcon, Reply,
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
   Copy, Video, FileText, Trash2, Forward, Star,
-  AlertCircle,
+  AlertCircle, Activity,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -1153,19 +1153,8 @@ export function WhatsAppInterface() {
   };
 
 
-  const handleToggleStar = () => {
-    const newStarred = new Set(starredMessageIds);
-    selectedMessageIds.forEach(id => {
-      if (newStarred.has(id)) newStarred.delete(id);
-      else newStarred.add(id);
-    });
-    setStarredMessageIds(newStarred);
-    toast.success(`${selectedMessageIds.size} mensagens favoritadas`);
-    setIsSelectMode(false);
-    setSelectedMessageIds(new Set());
-  };
-
   const runUITests = () => {
+
     toast.info("Iniciando testes de UI...");
     const first3Msgs = activeChat?.messages.slice(0, 3) || [];
     if (first3Msgs.length < 3) {
