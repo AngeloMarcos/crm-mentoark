@@ -396,6 +396,7 @@ export function WhatsAppInterface() {
 
   const fetchConversas = async () => {
     try {
+      console.debug('[WA] fetchConversas iniciando...');
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
       if (!res.ok) {
         console.warn('[WA] fetchConversas falhou', res.status, await res.text().catch(() => ''));
@@ -410,6 +411,9 @@ export function WhatsAppInterface() {
         const isNew = !prev || new Date(row.ultima_atividade) > new Date(prev);
         const fromClient = row.ultimo_role === 'user';
         const notActive = activeChatIdRef.current !== row.session_id;
+        
+        console.debug(`[WA] Chat ${row.session_id}: isNew=${isNew}, fromClient=${fromClient}, notActive=${notActive}`);
+        
         if (isNew && fromClient && notActive && prev) {
           newArrivals.push(row.session_id);
         }
@@ -476,6 +480,7 @@ export function WhatsAppInterface() {
   };
 
   const fetchMensagens = async (phone: string, chatName: string, showLoading = false) => {
+    console.debug(`[WA] fetchMensagens para ${phone} iniciando...`);
     if (showLoading) setLoadingMessages(true);
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}?limit=100`, { headers: apiHeaders() });
@@ -484,7 +489,7 @@ export function WhatsAppInterface() {
         return;
       }
       const rows: any[] = await res.json();
-      console.debug('[WA] fetchMensagens', phone, '— msgs:', rows.length);
+      console.debug('[WA] fetchMensagens', phone, '— msgs recebidas:', rows.length);
       const msgs: Message[] = rows.map((m, i) => ({
         id: String(m.id || `msg-${i}`),
         message_id: m.message_id,
