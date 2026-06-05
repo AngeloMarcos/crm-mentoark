@@ -53,6 +53,17 @@ export function ConfigAgenteIA() {
   const [config, setConfig] = useState<AgentConfig>(defaultConfig);
   const [loading, setLoading] = useState(true);
   const [salvando, setSalvando] = useState(false);
+  const [hasProviders, setHasProviders] = useState(true);
+
+  useEffect(() => {
+    const checkProviders = async () => {
+      try {
+        const { data } = await api.from("ai_providers").select("id").eq("user_id", user?.id).eq("ativo", true).limit(1);
+        setHasProviders(!!data && data.length > 0);
+      } catch {}
+    };
+    if (user) checkProviders();
+  }, [user]);
 
   useEffect(() => {
     if (user) carregarConfig();
@@ -120,6 +131,16 @@ export function ConfigAgenteIA() {
 
   return (
     <div className="space-y-6">
+      {!hasProviders && (
+        <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 animate-in fade-in slide-in-from-top-2">
+          <Shield className="h-5 w-5 shrink-0 mt-0.5" />
+          <div className="text-sm space-y-1">
+            <p className="font-bold">⚠️ Nenhum provider de IA configurado</p>
+            <p className="opacity-90">A IA está usando a chave padrão do servidor. Configure seu próprio provider em Integrações para isolamento e controle de custos.</p>
+          </div>
+        </div>
+      )}
+      <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-medium">Configurações do Fluxo IA</h3>
@@ -349,6 +370,7 @@ export function ConfigAgenteIA() {
           {salvando ? <Loader2 className="h-5 w-5 mr-2 animate-spin" /> : <Save className="h-5 w-5 mr-2" />} 
           Salvar Fluxo IA
         </Button>
+      </div>
       </div>
     </div>
   );

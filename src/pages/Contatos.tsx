@@ -20,11 +20,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 
 interface DadoCliente {
-  id: string; // Changed to string to match table definitions
+  id: string;
   nomewpp: string | null;
+  push_name: string | null;
   telefone: string | null;
   Setor: string | null;
   atendimento_ia: string | null;
+  status: 'novo' | 'ativo' | 'inativo' | null;
+  origem: string | null;
   created_at: string;
 }
 
@@ -84,7 +87,7 @@ export default function ContatosPage() {
       setLoading(true);
       const { data, error } = await api
         .from("dados_cliente")
-        .select('id, user_id, nomewpp, telefone, "Setor", atendimento_ia, created_at')
+        .select('id, user_id, nomewpp, push_name, telefone, "Setor", atendimento_ia, status, origem, created_at')
         .order("created_at", { ascending: false });
       if (error) {
         toast({ title: "Erro ao carregar", description: error.message, variant: "destructive" });
@@ -261,8 +264,19 @@ export default function ContatosPage() {
                           <User className="h-5 w-5 text-primary" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-semibold truncate">{c.nomewpp || "Sem nome"}</h3>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="font-semibold truncate">
+                              {(c.push_name && c.nomewpp === c.telefone) ? c.push_name : (c.nomewpp || "Sem nome")}
+                            </h3>
+                            {c.status === 'novo' && (
+                              <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-[10px] px-1.5 h-4">Novo</Badge>
+                            )}
+                            {c.status === 'ativo' && (
+                              <Badge className="bg-green-100 text-green-700 border-green-200 text-[10px] px-1.5 h-4">Ativo</Badge>
+                            )}
+                            {c.status === 'inativo' && (
+                              <Badge className="bg-gray-100 text-gray-500 border-gray-200 text-[10px] px-1.5 h-4">Inativo</Badge>
+                            )}
                             {c.atendimento_ia === 'pause' && (
                               <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs px-1.5">
                                 ⏸️ Pausada
