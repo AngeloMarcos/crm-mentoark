@@ -1026,6 +1026,19 @@ export default function whatsappRouter(pool: Pool): Router {
                 instancia,
               });
             }
+          } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
+            // Socket Baileys ainda inicializando — retry após 3s
+            console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
+            await new Promise(r => setTimeout(r, 3000));
+            const retry = await evolutionFetch(targetUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+              body: JSON.stringify(mediaPayload),
+            }).catch(() => null);
+            if (!retry?.ok) {
+              return res.status(503).json({ message: 'WhatsApp ainda inicializando. Tente novamente em alguns segundos.' });
+            }
+            evolutionResp = await retry.json().catch(() => ({}));
           } else {
             console.error(`[DEBUG SEND] Evolution mídia falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
             return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
@@ -1079,6 +1092,19 @@ export default function whatsappRouter(pool: Pool): Router {
                 instancia,
               });
             }
+          } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
+            // Socket Baileys ainda inicializando — retry após 3s
+            console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
+            await new Promise(r => setTimeout(r, 3000));
+            const retry = await evolutionFetch(targetUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+              body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+            }).catch(() => null);
+            if (!retry?.ok) {
+              return res.status(503).json({ message: 'WhatsApp ainda inicializando. Tente novamente em alguns segundos.' });
+            }
+            evolutionResp = await retry.json().catch(() => ({}));
           } else {
             console.error(`[DEBUG SEND] Evolution texto falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
             return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
