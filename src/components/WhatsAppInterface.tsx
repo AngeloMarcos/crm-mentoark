@@ -68,6 +68,7 @@ interface Chat {
   tag?: string;
   lastMessage: string;
   timestamp: string;
+  rawTimestamp: string;
   unread?: number;
   online?: boolean;
   source?: string;
