@@ -1,80 +1,85 @@
-# Plano — Painel Super Admin (Firewall, Copiloto, WhatsApp, Mentoark AI)
+# Diagnóstico: mensagem do WhatsApp não chega no CRM
 
-Backend já tem tudo pronto (`/api/admin/firewall/*` e `/api/suporte/diagnostico`). Trabalho é 100% frontend.
+## Contexto observado
 
-## 1. Infra compartilhada
+- O frontend (`WhatsAppInterface`) está recebendo mensagens de outros contatos ("Teste", "Cliente Teste", "T") — os toasts apareceram no replay, então o pipeline **Evolution → webhook → DB → /api/whatsapp/conversas → UI** funciona.
+- O número `119991909106` (provavelmente JID `5511999190910X@s.whatsapp.net`) nunca aparece, mesmo com a mensagem entregue na Evolution.
 
-- **`src/lib/adminApi.ts`** — helper `adminFetch(path, options)` que:
-  - Lê `crm_access_token` do localStorage e adiciona header `Authorization: Bearer …`.
-  - Faz `response.text()` + `JSON.parse` defensivo (evita o bug de "<" do HTML de erro).
-  - Mapeia 401 → logout + redirect `/login`; 403 → toast "Acesso restrito a administradores"; 503 → toast específico do copiloto; 5xx → toast com `message`; network error → "Servidor indisponível".
-- **`ProtectedRoute`** já suporta `requireAdmin`; usar em todas as rotas novas.
+Isso indica um filtro **específico daquele número** (não uma quebra global do webhook).
 
-## 2. Módulo 1 — `/admin/firewall`
+## Pontos do código onde a mensagem pode ser descartada silenciosamente
 
-Arquivos novos:
-- `src/pages/admin/Firewall.tsx` (página principal)
-- `src/components/admin/firewall/FirewallStatusHeader.tsx` (título + badges)
-- `src/components/admin/firewall/FirewallConfigCard.tsx` (toggles + avisos)
-- `src/components/admin/firewall/FirewallStatsCards.tsx` (5 cards)
-- `src/components/admin/firewall/FirewallIpsTable.tsx` (tabela + filtro + busca + paginação + ações inline)
-- `src/components/admin/firewall/RegisterIpDialog.tsx` (modal POST)
+Em `backend/src/routes/webhook.ts` — todos retornam `200 ok` sem registrar no front:
 
-Detalhes:
-- React Query (`@tanstack/react-query` já presente) com `queryKey` `["fw-config"]`, `["fw-stats"]`, `["fw-ips", {tipo, search, offset}]`.
-- Validação IP no dialog: regex IPv4 / IPv6 / CIDR antes de habilitar Salvar.
-- Toggles `ativo` inline com `PATCH`; delete com confirm. Toda mutação invalida `fw-stats` + `fw-ips`.
-- Aviso amarelo quando `firewall_ligado && !modo_simulacao`; aviso azul quando `modo_simulacao`.
+| # | Linha | Causa do descarte | Quem dispara |
+|---|------:|-------------------|--------------|
+| 1 | 178 | `data.status` = READ/PLAYED/DELIVERY_ACK | Evolution manda só ACK |
+| 2 | 184–187 | `remoteJid` vazio ou sem `@` | JID malformado |
+| 3 | 248 | `messageId` com prefixo `resp_`/`manual_` | falso positivo anti-loop |
+| 4 | 252 | `botMessageIds.has(messageId)` | id confundido com bot |
+| 5 | 260 | `botSentTexts.has(texto)` | texto idêntico a uma resposta recente da IA → **falso positivo cruzado**: se outro contato escrever "Olá" e a IA tiver respondido "Olá" há pouco, **bloqueia** |
+| 6 | 271 | já existe `from_me=true` com mesmo `message_id` | reentrega Evolution |
+| 7 | 341–350 | deduplicação por `webhook_mensagens_processadas` | `message_id` colidiu |
+| 8 | 457 | texto bate em `OPT_OUT_KEYWORDS` (sair/stop/parar/cancelar/remover/não quero) | usuário escreveu palavra-gatilho |
+| 9 | 520 | `userId` null (lookup falhou) | instância sem agent_config |
 
-## 3. Módulo 2 — `/admin/copiloto`
+O culpado mais provável para "um número específico nunca chega" é **#5** (anti-loop por texto compartilhado em `botSentTexts`) ou **#7** (collision de `message_id`). A entrada `contatos.opt_out` também filtra na listagem se for usado em algum WHERE downstream.
 
-Arquivos novos:
-- `src/pages/admin/Copiloto.tsx` (chat estilo ChatGPT, `max-w-3xl mx-auto`)
-- `src/components/admin/copiloto/MessageBubble.tsx` (user direita azul, IA esquerda cinza)
-- `src/components/admin/copiloto/ToolCallsAccordion.tsx` (shadcn Accordion com JSON formatado)
-- `src/components/admin/copiloto/QuickSuggestions.tsx` (chips fixos)
-- `src/components/admin/copiloto/ChatComposer.tsx` (textarea Enter envia, Shift+Enter quebra)
+## Plano
 
-Detalhes:
-- Estado local `messages: {role, content, tools?, iterations?}[]`. Sem persistência.
-- POST `/api/suporte/diagnostico` via `adminFetch`; loading spinner no balão pendente; auto-scroll ao fim.
-- Chips: "Verificar status do sistema", "Corrigir URL do Evolution", "Quantos contatos com IA pausada?", "Diagnóstico completo".
-- 503 → toast "Configure uma OPENAI_API_KEY válida no servidor".
+### 1. Coleta de evidências (sem alterar código)
+Como não posso `ssh` da sandbox, listo os comandos exatos que o usuário roda na VPS para confirmar a causa:
 
-## 4. Módulo 3 — Correção WhatsApp/Evolution
+```bash
+# a) ver se o webhook está sendo chamado para esse número
+ssh root@147.93.9.172 'docker logs crm-api --tail=400 2>&1 | grep -E "119991909|999190910"'
 
-Editar `src/pages/Integracoes.tsx` (form do Evolution):
-- Garantir que o campo "Servidor Evolution" mostra o valor atual (já vem via GET) e está editável.
-- Adicionar validação onChange/onBlur: se a URL contém `fierceparrot` → erro inline + bloquear submit com mensagem "Este servidor foi desativado. Use disparo.mentoark.com.br".
-- Defaults sugeridos no placeholder: `https://disparo.mentoark.com.br`, instância `crm_435ee4720fc3`.
-- Save continua usando o endpoint atual (`/api/integracoes_config`/`/api/agent-config` conforme já refatorado); **não** chamar `/api/admin/firewall/config`.
+# b) ver descartes recentes
+ssh root@147.93.9.172 'docker logs crm-api --tail=400 2>&1 | grep -E "WEBHOOK_ANTILOOP|WEBHOOK_REJECT|Opt-out"'
 
-## 5. Módulo 4 — Item "Mentoark AI" no sidebar
-
-Editar `src/components/AppSidebar.tsx`:
-- Novo grupo "🛡️ SUPER ADMIN" (`adminOnly: true`) com subgrupo "Infraestrutura" contendo:
-  - Firewall → `/admin/firewall` (ícone `ShieldCheck`)
-  - Copiloto → `/admin/copiloto` (ícone `Sparkles`)
-  - Mentoark AI → link externo `https://ai.mentoark.com.br` (ícone `Bot`)
-- Para o link externo, criar pequeno wrapper `ExternalNavItem` que renderiza `<a target="_blank" rel="noopener">` em vez de `NavLink`, com badge de status.
-- Hook `useExternalHealth(url)` faz `fetch(url + "/health", { mode: "no-cors" })` ao montar; verde "Online" se resolver, amarelo "DNS pendente" caso falhe. Cache 60s.
-
-## 6. Roteamento
-
-Editar `src/App.tsx`:
-```
-<Route path="/admin/firewall" element={<ProtectedRoute requireAdmin><Firewall/></ProtectedRoute>} />
-<Route path="/admin/copiloto" element={<ProtectedRoute requireAdmin><Copiloto/></ProtectedRoute>} />
+# c) checar deduplicação e opt-out no banco
+ssh root@147.93.9.172 'docker exec crm-api psql $DATABASE_URL -c "
+  SELECT message_id, instancia, criado_em FROM webhook_mensagens_processadas
+  WHERE message_id LIKE '\''%119991909%'\'' OR instancia=$$crm_435ee4720fc3$$
+  ORDER BY criado_em DESC LIMIT 20;
+  SELECT telefone, opt_out, atendente_pausou_ia FROM contatos
+  WHERE telefone LIKE $$%99919091%$$;
+  SELECT telefone, motivo, created_at FROM disparo_optouts
+  WHERE telefone LIKE $$%99919091%$$;"'
 ```
 
-## 7. Design tokens
+### 2. Blindagem do webhook (mudanças de código)
 
-Tudo via classes semânticas (`bg-primary`, `bg-destructive`, `bg-muted`, `text-warning`, etc.). Badges: shadcn `<Badge variant="…">`. Nada de cores hardcoded.
+Mesmo antes do diagnóstico, há 4 correções no `webhook.ts` que evitam o tipo exato de bug relatado:
+
+1. **Log estruturado em TODO ponto de descarte** (linhas 178, 184, 187, 248, 252, 260, 271, 341, 350, 457, 520). Hoje só alguns logam via `wlog`; vou adicionar `wlog('WEBHOOK_DROP', motivo + remoteJid + messageId)` em cada `return` para que o `log_geral.txt` mostre exatamente qual filtro pegou cada mensagem.
+2. **Escopar `botSentTexts` por telefone** (linha 260). Hoje a chave é `${telefone}:${texto}`, mas o `Set` é global no processo; se a IA falar "Olá" para o cliente A e o cliente B escrever "Olá", o `botSentTexts.has` para B retorna `false` (chave inclui telefone) — então esse caso já está OK. Vou validar a regra e adicionar TTL explícito (já existe). Sem mudança se passou na verificação.
+3. **Deduplicação por `(message_id, instancia)`** (linha 347). Hoje o SELECT é só por `message_id` — se a Evolution gerar IDs curtos colidentes entre instâncias, mata mensagens válidas. Mudar para `WHERE message_id=$1 AND instancia=$2` e adicionar índice único `(message_id, instancia)`.
+4. **Tratar `contatos.opt_out`/`atendente_pausou_ia` como filtros apenas da IA, nunca do salvamento**. Já é o caso, mas vou confirmar que o INSERT em `whatsapp_messages` (linha 371) acontece ANTES de qualquer filtro de opt-out (já é).
+5. **Endpoint de diagnóstico** `GET /api/admin/webhook-trace?phone=119991909106` (admin only) que devolve as últimas 50 linhas do `log_geral.txt` filtradas por número, mais o status no banco (`whatsapp_messages`, `webhook_mensagens_processadas`, `contatos.opt_out`, `disparo_optouts`).
+
+### 3. UI: card de diagnóstico no Painel Admin
+Adicionar em `/admin/firewall` (ou nova aba `/admin/diagnostico-whatsapp`) um campo "Buscar número" que chama o endpoint acima e mostra:
+- ✅/❌ webhook recebeu  → tabela `whatsapp_messages`
+- ✅/❌ foi para `webhook_mensagens_processadas`
+- ✅/❌ contato está em opt-out
+- Linhas de log com motivo do descarte (se houver)
+
+### 4. Deploy
+Atualizar `backend/src/routes/webhook.ts` e dois arquivos auxiliares; usuário publica com:
+```
+scp backend/src/routes/webhook.ts root@147.93.9.172:/opt/crm/backend/src/routes/
+ssh root@147.93.9.172 'cd /opt/crm/backend && docker compose build --no-cache && docker compose up -d'
+```
 
 ## Detalhes técnicos
 
-- React Query já configurado em `App.tsx` (`QueryClientProvider`).
-- Toasts via `sonner` (`import { toast } from "sonner"`).
-- shadcn components a usar: Card, Switch, Badge, Button, Input, Textarea, Select, Table, Dialog, Accordion, Tooltip, ScrollArea.
-- Sem mudanças no backend, sem migrations, sem alterar `src/integrations/supabase/client.ts`.
-- `adminFetch` lida com resposta vazia (204) e com HTML de erro retornando objeto `{ error }` em vez de explodir.
+- Migração SQL nova: `CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_dedup_msgid_inst ON webhook_mensagens_processadas(message_id, instancia);` + `DELETE` das duplicatas antes de criar o índice.
+- `wlog('WEBHOOK_DROP', ...)` reusa o helper já existente — escreve no console e em `log_geral.txt`.
+- Endpoint `/api/admin/webhook-trace` em `backend/src/routes/admin_infra.ts`, protegido pelo middleware `requireAdmin` já existente.
+- Componente novo `src/pages/admin/DiagnosticoWhatsApp.tsx` com input + tabela; rota adicionada em `AppSidebar`.
+
+## O que NÃO faço neste plano
+- Não mudo o `agentEngine` nem a lógica de IA (escopo é "mensagem não aparece").
+- Não toco em `dados_cliente` / `contatos` schema.
+- Não altero a integração com a Evolution em si.
