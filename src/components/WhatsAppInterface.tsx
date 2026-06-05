@@ -866,18 +866,23 @@ export function WhatsAppInterface() {
 
     try {
       const chat = chats.find(c => c.id === activeChatId);
+      const payload = { 
+        phone: activeChatId, 
+        text, 
+        instancia: chat?.source,
+        replyToMessageId: currentReplyTo?.message_id
+      };
+      
+      console.log('[WHATSAPP] Enviando payload:', JSON.stringify(payload, null, 2));
+
       const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
         method: 'POST',
         headers: apiHeaders(),
-        body: JSON.stringify({ 
-          phone: activeChatId, 
-          text, 
-          instancia: chat?.source,
-          replyToMessageId: currentReplyTo?.message_id
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: 'Erro ao enviar' }));
+        console.error('[WHATSAPP] Erro no envio — Resposta do servidor:', err);
         toast.error(err.message || 'Erro ao enviar mensagem');
         setChats(prev => prev.map(c =>
           c.id === activeChatId
@@ -885,7 +890,8 @@ export function WhatsAppInterface() {
             : c
         ));
       }
-    } catch {
+    } catch (err) {
+      console.error('[WHATSAPP] Falha crítica no fetch:', err);
       toast.error('Sem conexão com o servidor');
       setChats(prev => prev.map(c =>
         c.id === activeChatId
