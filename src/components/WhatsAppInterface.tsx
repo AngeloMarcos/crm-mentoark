@@ -1168,17 +1168,69 @@ export function WhatsAppInterface() {
         </div>
 
         {/* Search */}
-        <div className="px-4 py-3 border-b bg-card/20">
+        <div className="px-4 py-3 border-b bg-card/20 relative">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
             <Input
-              placeholder="Buscar por nome ou telefone..."
+              placeholder="Buscar em todas as mensagens..."
               className="pl-9 h-10 bg-background/50 border-muted focus:bg-background focus:ring-primary/20 transition-all text-sm rounded-xl"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
+              value={globalSearchTerm}
+              onChange={e => handleGlobalSearch(e.target.value)}
+              onFocus={() => globalSearchTerm.length >= 2 && setShowGlobalSearchResults(true)}
             />
+            {globalSearchTerm && (
+              <button 
+                onClick={() => { setGlobalSearchTerm(""); setGlobalSearchResults([]); setShowGlobalSearchResults(false); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-muted rounded-full"
+              >
+                <X className="h-3 w-3 text-muted-foreground" />
+              </button>
+            )}
           </div>
+
+          {/* Resultados da Busca Global */}
+          {showGlobalSearchResults && (
+            <div className="absolute top-full left-0 right-0 z-50 bg-background border-x border-b shadow-2xl rounded-b-2xl max-h-[400px] overflow-y-auto animate-in slide-in-from-top-2 duration-200">
+              <div className="p-3 border-b bg-muted/20 flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Mensagens Encontradas</span>
+                {isGlobalSearching && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+              </div>
+              {globalSearchResults.length === 0 && !isGlobalSearching ? (
+                <div className="p-8 text-center text-muted-foreground text-xs font-medium">
+                  Nenhuma mensagem encontrada para "{globalSearchTerm}"
+                </div>
+              ) : (
+                globalSearchResults.map((res: any) => (
+                  <div
+                    key={res.id}
+                    onClick={() => {
+                      setActiveChatId(res.phone);
+                      setShowGlobalSearchResults(false);
+                      setGlobalSearchTerm("");
+                      // O scroll automático para a mensagem exata na conversa 
+                      // requer que a mensagem já esteja carregada, o que fetchMensagens fará
+                    }}
+                    className="p-4 hover:bg-primary/[0.04] cursor-pointer border-b border-border/30 last:border-0 group transition-colors"
+                  >
+                    <div className="flex items-center gap-3 mb-1.5">
+                      <ChatAvatar name={res.contact_name} url={res.profile_pic} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold truncate group-hover:text-primary transition-colors">{res.contact_name}</p>
+                        <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-tighter">
+                          {new Date(res.timestamp_wa || res.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-foreground/80 line-clamp-2 pl-11 italic border-l-2 border-primary/10">
+                      {highlightText(res.content, globalSearchTerm)}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
+
 
         {/* Chat list */}
         <ScrollArea className="flex-1">
