@@ -4,6 +4,7 @@ import { AlertTriangle } from "lucide-react";
 
 interface Props {
   children: ReactNode;
+  name?: string;
 }
 interface State {
   hasError: boolean;
