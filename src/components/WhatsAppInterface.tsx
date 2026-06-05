@@ -238,6 +238,13 @@ export function WhatsAppInterface() {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [replyTo, setReplyTo] = useState<{ message_id: string; content: string; senderName: string; role: "user" | "assistant" } | null>(null);
+  
+  // Estados para busca na conversa
+  const [isSearchingInChat, setIsSearchingInChat] = useState(false);
+  const [chatSearchTerm, setChatSearchTerm] = useState("");
+  const [chatSearchResults, setChatSearchResults] = useState<number[]>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
