@@ -68,6 +68,7 @@ interface Chat {
   tag?: string;
   lastMessage: string;
   timestamp: string;
+  rawTimestamp: string;
   unread?: number;
   online?: boolean;
   source?: string;
@@ -399,21 +400,31 @@ export function WhatsAppInterface() {
       const rows: any[] = await res.json();
       
       const newArrivals: string[] = [];
-      rows.forEach(row => {
-        const prev = prevConversasRef.current.get(row.session_id);
-        if (row.ultima_atividade !== prev?.ts && row.ultimo_role === 'user' && row.session_id !== activeChatIdRef.current) {
-          newArrivals.push(row.session_id);
-        }
-        prevConversasRef.current.set(row.session_id, { ts: row.ultima_atividade, role: row.ultimo_role });
-      });
+      const newContacts: string[] = [];
 
       setChats(prev => {
         const prevMap = new Map(prev.map(c => [c.id, c]));
+        
+        rows.forEach(row => {
+          const prevInfo = prevMap.get(row.session_id);
+          const prevMeta = prevConversasRef.current.get(row.session_id);
+          
+          if (row.ultima_atividade !== prevMeta?.ts && row.ultimo_role === 'user' && row.session_id !== activeChatIdRef.current) {
+            newArrivals.push(row.session_id);
+          }
+          
+          if (!prevMeta && row.ultimo_role === 'user') {
+            newContacts.push(row.session_id);
+          }
+          
+          prevConversasRef.current.set(row.session_id, { ts: row.ultima_atividade, role: row.ultimo_role });
+        });
+
         const dbChats = rows.map(row => {
-          const prevInfo = prevConversasRef.current.get(row.session_id);
+          const prevMeta = prevConversasRef.current.get(row.session_id);
           const lastOpened = lastOpenedRef.current.get(row.session_id);
           const unread = (newArrivals.includes(row.session_id) || 
-            (prevInfo?.role === 'user' && (!lastOpened || lastOpened < row.ultima_atividade))) ? 1 : 0;
+            (prevMeta?.role === 'user' && (!lastOpened || lastOpened < row.ultima_atividade))) ? 1 : 0;
 
           return {
             id: row.session_id,
@@ -423,6 +434,7 @@ export function WhatsAppInterface() {
             source: row.instancia || undefined,
             lastMessage: row.ultima_mensagem || '',
             timestamp: formatTime(row.ultima_atividade),
+            rawTimestamp: row.ultima_atividade,
             messages: prevMap.get(row.session_id)?.messages || [],
             notes: prevMap.get(row.session_id)?.notes || '',
             profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
@@ -436,6 +448,16 @@ export function WhatsAppInterface() {
             const row = rows.find(r => r.session_id === id);
             const nome = row?.nome || id;
             toast.info(`💬 Nova mensagem de ${nome}`, { duration: 4000 });
+          }
+        });
+
+        // Lógica para novos contatos
+        newContacts.forEach(id => {
+          if (!activeChatIdRef.current) {
+            setActiveChatId(id);
+          } else {
+            const row = rows.find(r => r.session_id === id);
+            toast.success(`📱 Novo contato: ${row?.nome || id}`);
           }
         });
 
@@ -486,7 +508,17 @@ export function WhatsAppInterface() {
           setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
         }
 
-        return prev.map(c => c.id === phone ? { ...c, messages: msgs } : c);
+        const now = new Date().toISOString();
+        return prev.map(c => c.id === phone 
+          ? { 
+              ...c, 
+              messages: msgs, 
+              rawTimestamp: now, 
+              timestamp: formatTime(now),
+              lastMessage: msgs.at(-1)?.content ?? c.lastMessage 
+            } 
+          : c
+        ).sort((a, b) => b.rawTimestamp.localeCompare(a.rawTimestamp));
       });
     } catch {}
     finally { if (showLoading) setLoadingMessages(false); }
@@ -669,6 +701,7 @@ export function WhatsAppInterface() {
         phone: cleanPhone,
         lastMessage: '',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        rawTimestamp: new Date().toISOString(),
         messages: [],
         notes: '',
       };
@@ -789,9 +822,11 @@ export function WhatsAppInterface() {
             </div>
           )}
           {!loadingChats && filteredChats.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground text-sm">
+            <div className="flex flex-col items-center justify-center py-12 px-6 text-center text-muted-foreground text-sm">
               <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
-              Nenhuma conversa
+              {searchTerm 
+                ? "Nenhuma conversa encontrada para esta busca."
+                : "Nenhuma mensagem recebida ainda. Quando clientes enviarem mensagens para seu WhatsApp, elas aparecerão aqui automaticamente."}
             </div>
           )}
           <div className="divide-y divide-border/50">
