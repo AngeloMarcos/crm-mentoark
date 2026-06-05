@@ -682,7 +682,12 @@ export function WhatsAppInterface() {
           filter: `user_id=eq.${user.id}`
         },
         (payload) => {
-          console.log('[REALTIME] Mudança em whatsapp_messages:', payload.eventType, payload);
+          console.log('⚡ [RASTREIO REALTIME - EVENTO DETECTADO]', {
+            evento: payload.eventType,
+            tabela: payload.table,
+            novoRegistro: payload.new,
+            registroDeletado: payload.old
+          });
           
           // Sempre atualizamos a lista de conversas para refletir unread_count ou última msg
           fetchConversas(activeTab === "arquivadas");
@@ -708,7 +713,11 @@ export function WhatsAppInterface() {
           filter: `user_id=eq.${user.id}`
         },
         (payload) => {
-          console.log('[REALTIME] Mudança em n8n_chat_histories:', payload.eventType);
+          console.log('⚡ [RASTREIO REALTIME - EVENTO DETECTADO (n8n)]', {
+            evento: payload.eventType,
+            tabela: payload.table,
+            novoRegistro: payload.new
+          });
           fetchConversas(activeTab === "arquivadas");
           if (activeChatIdRef.current) {
             fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
@@ -718,7 +727,10 @@ export function WhatsAppInterface() {
       .subscribe((status) => {
         console.log(`[REALTIME] Status: ${status}`);
         if (status === 'CHANNEL_ERROR') {
-          console.error('[REALTIME] Erro crítico no canal (401/403/Timeout). Polling ativo.');
+          console.error('❌ [RASTREIO REALTIME - ERRO CRÍTICO]', {
+            status,
+            detalhe: "Erro na sincronização em tempo real. Polling ativo."
+          });
           toast.error("Erro na sincronização em tempo real. Polling ativo.");
         }
       });
