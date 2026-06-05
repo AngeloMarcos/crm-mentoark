@@ -19,6 +19,7 @@ import {
   BotOff, Bot, ImageIcon, Reply,
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
   Copy, Video, FileText, Trash2, Forward, Star,
+  AlertCircle,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -28,6 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { supabase } from "@/integrations/supabase/client";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -661,12 +663,81 @@ export function WhatsAppInterface() {
       setConnecting(false);
     }
   };
+ 
+  // ── Supabase Realtime ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!user?.id) return;
+
+    console.log('[REALTIME] Iniciando subscrição para usuário:', user.id);
+    
+    const channel = supabase
+      .channel('public:whatsapp_messages')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'whatsapp_messages',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('[REALTIME] Nova mensagem recebida:', payload);
+          // Recarrega conversas e mensagens se for o chat ativo
+          fetchConversas(activeTab === "arquivadas");
+          if (activeChatIdRef.current) {
+            const phone = payload.new.remote_jid?.split('@')[0];
+            if (phone === activeChatIdRef.current) {
+              fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
+            }
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'n8n_chat_histories',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('[REALTIME] Novo log de IA recebido:', payload);
+          // IA também gerou mensagem, atualizamos a conversa
+          fetchConversas(activeTab === "arquivadas");
+          if (activeChatIdRef.current) {
+            fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log(`[REALTIME] Status da conexão: ${status}`);
+        if (err) {
+          console.error('[REALTIME] Erro na conexão:', err);
+          if (err.message?.includes('401') || err.message?.includes('403')) {
+            toast.error("Erro de autenticação no Realtime (401/403). Verifique sua sessão.");
+          }
+        }
+        
+        if (status === 'CHANNEL_ERROR') {
+          toast.error("Falha na conexão em tempo real. O sistema usará o modo de contingência (polling).", {
+            icon: <AlertCircle className="h-4 w-4 text-destructive" />,
+            duration: 5000
+          });
+        }
+      });
+
+    return () => {
+      console.log('[REALTIME] Removendo subscrição');
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, activeTab]);
 
   useEffect(() => {
     checkStatus();
     fetchConversas();
     fetchRespostasRapidas();
   }, [fetchRespostasRapidas]);
+
 
   useEffect(() => {
     const tStatus = setInterval(checkStatus, 30000);
@@ -812,18 +883,23 @@ export function WhatsAppInterface() {
 
     try {
       const chat = chats.find(c => c.id === activeChatId);
+      const payload = { 
+        phone: activeChatId, 
+        text, 
+        instancia: chat?.source,
+        replyToMessageId: currentReplyTo?.message_id
+      };
+      
+      console.log('[WHATSAPP] Enviando payload:', JSON.stringify(payload, null, 2));
+
       const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
         method: 'POST',
         headers: apiHeaders(),
-        body: JSON.stringify({ 
-          phone: activeChatId, 
-          text, 
-          instancia: chat?.source,
-          replyToMessageId: currentReplyTo?.message_id
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: 'Erro ao enviar' }));
+        console.error('[WHATSAPP] Erro no envio — Resposta do servidor:', err);
         toast.error(err.message || 'Erro ao enviar mensagem');
         setChats(prev => prev.map(c =>
           c.id === activeChatId
@@ -831,7 +907,8 @@ export function WhatsAppInterface() {
             : c
         ));
       }
-    } catch {
+    } catch (err) {
+      console.error('[WHATSAPP] Falha crítica no fetch:', err);
       toast.error('Sem conexão com o servidor');
       setChats(prev => prev.map(c =>
         c.id === activeChatId
