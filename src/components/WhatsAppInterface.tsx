@@ -397,20 +397,38 @@ export function WhatsAppInterface() {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
       if (!res.ok) return;
       const rows: any[] = await res.json();
+      
+      const newArrivals: string[] = [];
+      rows.forEach(row => {
+        const prev = prevConversasRef.current.get(row.session_id);
+        if (row.ultima_atividade !== prev?.ts && row.ultimo_role === 'user' && row.session_id !== activeChatIdRef.current) {
+          newArrivals.push(row.session_id);
+        }
+        prevConversasRef.current.set(row.session_id, { ts: row.ultima_atividade, role: row.ultimo_role });
+      });
+
       setChats(prev => {
         const prevMap = new Map(prev.map(c => [c.id, c]));
-        const dbChats = rows.map(row => ({
-          id: row.session_id,
-          name: row.nome || row.session_id,
-          phone: row.session_id,
-          is_group: row.is_group || false,
-          source: row.instancia || undefined,
-          lastMessage: row.ultima_mensagem || '',
-          timestamp: formatTime(row.ultima_atividade),
-          messages: prevMap.get(row.session_id)?.messages || [],
-          notes: prevMap.get(row.session_id)?.notes || '',
-          profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
-        }));
+        const dbChats = rows.map(row => {
+          const prevInfo = prevConversasRef.current.get(row.session_id);
+          const lastOpened = lastOpenedRef.current.get(row.session_id);
+          const unread = (newArrivals.includes(row.session_id) || 
+            (prevInfo?.role === 'user' && (!lastOpened || lastOpened < row.ultima_atividade))) ? 1 : 0;
+
+          return {
+            id: row.session_id,
+            name: row.nome || row.session_id,
+            phone: row.session_id,
+            is_group: row.is_group || false,
+            source: row.instancia || undefined,
+            lastMessage: row.ultima_mensagem || '',
+            timestamp: formatTime(row.ultima_atividade),
+            messages: prevMap.get(row.session_id)?.messages || [],
+            notes: prevMap.get(row.session_id)?.notes || '',
+            profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
+            unread: unread,
+          };
+        });
 
         // Preserva chat local ativo que ainda não chegou ao banco (ex: nova conversa antes do 1º envio)
         const activeId = activeChatIdRef.current;
