@@ -275,17 +275,10 @@ export function InstanceManagementPanel() {
         .filter(a => !!a.evolution_instancia)
         .map(async (a) => {
           try {
-            const res = await fetch(
-              `${API_BASE}/api/whatsapp/evo/status/${encodeURIComponent(a.evolution_instancia!)}`,
-              { headers: t ? { Authorization: `Bearer ${t}` } : {} }
-            );
-            if (res.ok) {
-              const json = await res.json();
-              map[a.id] = (json.state ?? "close") as ConnState;
-            } else {
-              map[a.id] = "close";
-            }
-          } catch {
+            const st = await fetchConnectionStatus(a.evolution_instancia!);
+            map[a.id] = (st.state ?? "close") as ConnState;
+          } catch (error) {
+            console.error(`[WhatsApp] Erro ao buscar status para ${a.evolution_instancia}:`, error);
             map[a.id] = "close";
           }
         })
