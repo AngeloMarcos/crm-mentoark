@@ -1449,6 +1449,23 @@ export function WhatsAppInterface() {
                   <Sparkles className="h-4 w-4" />
                   <span className="hidden sm:inline">Criar Tarefa</span>
                 </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className={`h-9 w-9 rounded-xl transition-colors ${isSearchingInChat ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
+                  onClick={() => {
+                    setIsSearchingInChat(!isSearchingInChat);
+                    if (!isSearchingInChat) {
+                      setTimeout(() => document.getElementById('chat-search-input')?.focus(), 100);
+                    } else {
+                      setChatSearchTerm("");
+                      setChatSearchResults([]);
+                      setCurrentSearchIndex(-1);
+                    }
+                  }}
+                >
+                  <Search className="h-4.5 w-4.5" />
+                </Button>
                 <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
                   <Info className="h-4.5 w-4.5" />
                 </Button>
