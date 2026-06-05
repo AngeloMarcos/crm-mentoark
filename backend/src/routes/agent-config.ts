@@ -37,6 +37,7 @@ export default function agentConfigRouter(pool: Pool): Router {
       mensagem_encerramento,
       evolution_server_url,
       evolution_api_key,
+      evolution_instancia,
       operation_mode,
       distribution_mode,
       ativo,
@@ -47,9 +48,9 @@ export default function agentConfigRouter(pool: Pool): Router {
          (user_id, prompt_sistema, nome_agente, sinal_pausa, palavra_reativar,
           modelo_llm, saudacao_inicial, bloco_qualificacao,
           mensagem_encaminhamento, mensagem_encerramento,
-          evolution_server_url, evolution_api_key,
+          evolution_server_url, evolution_api_key, evolution_instancia,
           operation_mode, distribution_mode, ativo, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
        ON CONFLICT (user_id) DO UPDATE SET
          prompt_sistema          = COALESCE(EXCLUDED.prompt_sistema,          agent_configs.prompt_sistema),
          nome_agente             = COALESCE(EXCLUDED.nome_agente,             agent_configs.nome_agente),
@@ -62,6 +63,7 @@ export default function agentConfigRouter(pool: Pool): Router {
          mensagem_encerramento   = COALESCE(EXCLUDED.mensagem_encerramento,   agent_configs.mensagem_encerramento),
          evolution_server_url    = COALESCE(EXCLUDED.evolution_server_url,    agent_configs.evolution_server_url),
          evolution_api_key       = COALESCE(EXCLUDED.evolution_api_key,       agent_configs.evolution_api_key),
+         evolution_instancia     = COALESCE(EXCLUDED.evolution_instancia,     agent_configs.evolution_instancia),
          operation_mode          = COALESCE(EXCLUDED.operation_mode,          agent_configs.operation_mode),
          distribution_mode       = COALESCE(EXCLUDED.distribution_mode,       agent_configs.distribution_mode),
          ativo                   = COALESCE(EXCLUDED.ativo,                   agent_configs.ativo),
@@ -80,6 +82,7 @@ export default function agentConfigRouter(pool: Pool): Router {
         mensagem_encerramento ?? null,
         evolution_server_url ?? null,
         evolution_api_key ?? null,
+        evolution_instancia ?? null,
         operation_mode ?? null,
         distribution_mode ?? null,
         ativo ?? true,

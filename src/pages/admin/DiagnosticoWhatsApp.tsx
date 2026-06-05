@@ -72,9 +72,24 @@ export default function DiagnosticoWhatsApp() {
               onKeyDown={(e) => e.key === "Enter" && buscar()}
             />
             <Button onClick={buscar} disabled={loading}>
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-              <span className="ml-2">Diagnosticar</span>
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Verificando...
+                </>
+              ) : (
+                <>
+                  <Search className="h-4 w-4 mr-2" />
+                  Diagnosticar
+                </>
+              )}
             </Button>
+            {data && (
+              <Button variant="outline" onClick={buscar} disabled={loading}>
+                Recarregar
+              </Button>
+            )}
+
           </CardContent>
         </Card>
 
