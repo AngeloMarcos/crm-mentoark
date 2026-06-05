@@ -664,10 +664,19 @@ export function WhatsAppInterface() {
   }, [isSelectMode]);
 
   useEffect(() => {
+    if (!activeChatId) return;
+    fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(activeChatId)}/read`, {
+      method: 'PATCH',
+      headers: apiHeaders()
+    }).catch(() => {});
+  }, [activeChatId]);
+
+  useEffect(() => {
     const ms = activeChatId ? 2000 : 5000;
     const t = setInterval(fetchConversas, ms);
     return () => clearInterval(t);
   }, [activeChatId]);
+
 
 
   useEffect(() => {
