@@ -36,6 +36,12 @@ export default function OpenClawPage() {
     return token ? { 'Authorization': `Bearer ${token}` } : {};
   };
 
+  const getOpenClawHeader = () => ({
+    ...getAuthHeader(),
+    'X-Openclaw-Key': 'openclaw-admin-2025',
+    'Content-Type': 'application/json',
+  });
+
   const scrollToBottom = () => {
     if (scrollRef.current) {
       scrollRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -57,7 +63,7 @@ export default function OpenClawPage() {
     try {
       const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
         method: 'POST',
-        headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+        headers: getOpenClawHeader(),
         body: JSON.stringify({ message: 'ping', sessionKey: 'admin' })
       });
       setStatus(prev => ({ ...prev, gateway: res.ok ? 'online' : 'offline' }));
@@ -101,7 +107,7 @@ export default function OpenClawPage() {
     try {
       const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
         method: 'POST',
-        headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+        headers: getOpenClawHeader(),
         body: JSON.stringify({ message: messageText, sessionKey: 'admin' })
       });
 
