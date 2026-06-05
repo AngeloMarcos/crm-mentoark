@@ -23,9 +23,13 @@ export interface StatusResult {
 }
 
 export async function fetchConnectionStatus(instancia?: string): Promise<StatusResult> {
+  // Ajuste cirúrgico: Se for uma instância específica, vamos buscar nas configurações de integrações
+  // Caso contrário, usamos a rota padrão de status global
   const API_URL = instancia 
     ? `${API_BASE}/api/integracoes_config`
     : `${API_BASE}/api/whatsapp/status`;
+
+  console.log(`[EvolutionService] Buscando status: ${API_URL} (Instância: ${instancia || 'Global'})`);
 
   try {
     const res = await fetch(API_URL, {
@@ -33,12 +37,17 @@ export async function fetchConnectionStatus(instancia?: string): Promise<StatusR
       headers: authHeaders(),
     });
 
-    if (!res.ok) return { state: 'close' };
+    if (!res.ok) {
+      console.error(`[EvolutionService] Erro na resposta (${res.status}):`, await res.text().catch(() => 'no body'));
+      return { state: 'close' };
+    }
     
     const data = await res.json();
     
     if (instancia && Array.isArray(data)) {
+      // Procura a configuração da evolução para esta instância específica
       const config = data.find(i => i.tipo === 'evolution' && i.instancia === instancia);
+      console.log(`[EvolutionService] Configuração encontrada para ${instancia}:`, config?.status);
       return { 
         state: config?.status === 'conectado' ? 'open' : 'close' 
       };
@@ -46,7 +55,7 @@ export async function fetchConnectionStatus(instancia?: string): Promise<StatusR
     
     return data;
   } catch (error) {
-    console.error(`[EvolutionService] Error fetching status for ${instancia || 'default'}:`, error);
+    console.error(`[EvolutionService] Erro crítico ao buscar status para ${instancia || 'default'}:`, error);
     return { state: 'close' };
   }
 }
