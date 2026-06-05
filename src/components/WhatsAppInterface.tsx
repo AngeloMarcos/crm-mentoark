@@ -218,6 +218,8 @@ export function WhatsAppInterface() {
   // Sincronização de fotos
   const [syncingProfiles, setSyncingProfiles] = useState(false);
   // Cache de sessão: phone → foto_perfil buscada (evita repetir chamadas)
+  const prevConversasRef = useRef<Map<string, { ts: string; role: string }>>(new Map());
+  const lastOpenedRef = useRef<Map<string, string>>(new Map());
   const picCacheRef = useRef<Map<string, string | null>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeChatIdRef = useRef<string | null>(null);
