@@ -2685,6 +2685,50 @@ export function WhatsAppInterface() {
           </ScrollArea>
         </div>
       )}
+      {/* Modal de Encaminhar */}
+      <Dialog open={showForwardModal} onOpenChange={setShowForwardModal}>
+        <DialogContent className="sm:max-w-[420px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl">
+          <div className="px-6 pt-5 pb-3 border-b bg-background">
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Forward className="h-4 w-4 text-primary" />
+              Encaminhar Mensagem
+            </DialogTitle>
+            <DialogDescription className="text-xs mt-1">
+              Selecione um contato recente para encaminhar as {selectedMessageIds.size} mensagens selecionadas.
+            </DialogDescription>
+          </div>
+          
+          <ScrollArea className="max-h-[60vh] bg-background">
+            <div className="p-2 space-y-1">
+              {chats.map(chat => (
+                <button
+                  key={chat.id}
+                  onClick={() => handleForwardMessages(chat.phone, chat.source)}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-primary/5 transition-colors group text-left"
+                >
+                  <ChatAvatar name={chat.name} url={chat.profile_pic} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold truncate group-hover:text-primary transition-colors">{chat.name}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{chat.phone}</p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground/20 group-hover:text-primary transition-colors" />
+                </button>
+              ))}
+              {chats.length === 0 && (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  Nenhum contato recente encontrado.
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+          
+          <div className="p-4 bg-muted/20 border-t flex justify-end">
+            <Button variant="ghost" onClick={() => setShowForwardModal(false)} className="font-bold text-xs uppercase tracking-widest">
+              Cancelar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
