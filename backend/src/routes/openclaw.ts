@@ -1,29 +1,38 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
+import jwt from 'jsonwebtoken';
 
 const ADMIN_KEY = process.env.OPENCLAW_ADMIN_KEY || 'openclaw-admin-2025';
+const OPENCLAW_PROXY = process.env.OPENCLAW_PROXY_URL || 'http://172.19.0.1:18790';
 
 function checkAuth(req: Request, res: Response): boolean {
-  // Aceita JWT (via authMiddleware upstream) ou X-Openclaw-Key
+  // 1. X-Openclaw-Key (painel externo)
   const key = req.headers['x-openclaw-key'] as string | undefined;
   if (key && key === ADMIN_KEY) return true;
-  // Se passou pelo authMiddleware o req.user já está definido
-  if ((req as any).user) return true;
-  res.status(401).json({ error: 'Autenticação necessária: envie X-Openclaw-Key ou JWT' });
+
+  // 2. JWT Bearer (CRM frontend — rota está antes do authMiddleware, então validamos aqui)
+  const auth = req.headers.authorization;
+  if (auth?.startsWith('Bearer ')) {
+    try {
+      const payload = jwt.verify(auth.slice(7), process.env.JWT_SECRET!) as any;
+      (req as any).user = payload;
+      return true;
+    } catch {
+      // token inválido ou expirado
+    }
+  }
+
+  res.status(401).json({ error: 'Autenticação necessária: envie Authorization Bearer ou X-Openclaw-Key' });
   return false;
 }
 
 export function makeOpenClawRouter(_pool: Pool): Router {
   const router = Router();
 
-  // POST /api/openclaw/chat
-  // Body: { message: string, sessionKey?: string }
-  // Returns: { reply: string, toolCalls: number }
   router.post('/chat', async (req: Request, res: Response) => {
     if (!checkAuth(req, res)) return;
 
     const { message, sessionKey } = req.body as { message?: string; sessionKey?: string };
-
     if (!message?.trim()) {
       return res.status(400).json({ error: 'message é obrigatório' });
     }
@@ -39,9 +48,6 @@ export function makeOpenClawRouter(_pool: Pool): Router {
 
   return router;
 }
-
-// URL do proxy HTTP que roda no host da VPS (fora do container Docker)
-const OPENCLAW_PROXY = process.env.OPENCLAW_PROXY_URL || 'http://172.19.0.1:18790';
 
 export async function chamarOpenClawAgent(
   mensagem: string,
