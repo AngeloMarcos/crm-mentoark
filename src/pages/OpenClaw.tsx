@@ -138,32 +138,32 @@ export default function OpenClawPage() {
   };
 
   return (
-    <div className="p-6 space-y-6 bg-[#0a0a0a] min-h-screen text-gray-100">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Terminal className="w-8 h-8 text-blue-500" />
-          <h1 className="text-2xl font-bold tracking-tight">OpenClaw Admin</h1>
+    <div className="p-3 sm:p-6 space-y-4 sm:space-y-6 bg-[#0a0a0a] min-h-screen text-gray-100">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <Terminal className="w-6 h-6 sm:w-8 sm:h-8 text-blue-500 shrink-0" />
+          <h1 className="text-lg sm:text-2xl font-bold tracking-tight truncate">OpenClaw Admin</h1>
         </div>
-        <Badge variant="outline" className="border-blue-500/30 text-blue-400 gap-1 bg-blue-500/5">
+        <Badge variant="outline" className="border-blue-500/30 text-blue-400 gap-1 bg-blue-500/5 text-[10px] sm:text-xs">
           <Zap className="w-3 h-3 fill-current" /> v2.4 Stable
         </Badge>
       </div>
 
       <Tabs defaultValue="chat" className="space-y-4">
-        <TabsList className="bg-[#111] border border-[#222] p-1 h-12">
-          <TabsTrigger value="chat" className="data-[state=active]:bg-[#222] px-6">
-            <Bot className="w-4 h-4 mr-2" /> Chat Admin
+        <TabsList className="bg-[#111] border border-[#222] p-1 h-auto sm:h-12 w-full sm:w-auto grid grid-cols-3 sm:inline-flex">
+          <TabsTrigger value="chat" className="data-[state=active]:bg-[#222] px-2 sm:px-6 text-xs sm:text-sm">
+            <Bot className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Chat Admin</span><span className="sm:hidden ml-1">Chat</span>
           </TabsTrigger>
-          <TabsTrigger value="status" className="data-[state=active]:bg-[#222] px-6">
-            <Activity className="w-4 h-4 mr-2" /> Status & Diagnóstico
+          <TabsTrigger value="status" className="data-[state=active]:bg-[#222] px-2 sm:px-6 text-xs sm:text-sm">
+            <Activity className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Status & Diagnóstico</span><span className="sm:hidden ml-1">Status</span>
           </TabsTrigger>
-          <TabsTrigger value="config" className="data-[state=active]:bg-[#222] px-6">
-            <SettingsIcon className="w-4 h-4 mr-2" /> Configuração
+          <TabsTrigger value="config" className="data-[state=active]:bg-[#222] px-2 sm:px-6 text-xs sm:text-sm">
+            <SettingsIcon className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Configuração</span><span className="sm:hidden ml-1">Config</span>
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="chat" className="h-[calc(100vh-220px)] border border-[#222] rounded-xl bg-[#111] flex overflow-hidden shadow-2xl">
-          <div className="w-[240px] border-r border-[#222] p-4 flex flex-col gap-4 bg-[#0d0d0d]">
+        <TabsContent value="chat" className="h-[calc(100vh-200px)] sm:h-[calc(100vh-220px)] border border-[#222] rounded-xl bg-[#111] flex overflow-hidden shadow-2xl">
+          <div className="hidden md:flex w-[240px] border-r border-[#222] p-4 flex-col gap-4 bg-[#0d0d0d]">
             <Button 
               variant="outline" 
               className="w-full justify-start gap-2 border-[#222] hover:bg-[#222] hover:text-white"
@@ -189,17 +189,29 @@ export default function OpenClawPage() {
             </Card>
           </div>
 
-          <div className="flex-1 flex flex-col relative bg-[#0a0a0a]">
-            <ScrollArea className="flex-1 p-6">
+          <div className="flex-1 flex flex-col relative bg-[#0a0a0a] min-w-0">
+            <div className="md:hidden flex items-center justify-between gap-2 px-3 py-2 border-b border-[#222] bg-[#0d0d0d]">
+              <Button 
+                variant="outline" 
+                size="sm"
+                className="gap-2 border-[#222] hover:bg-[#222] hover:text-white text-xs"
+                onClick={() => setMessages([])}
+              >
+                <span>+</span> Nova conversa
+              </Button>
+              <span className="text-[10px] text-gray-500">Sessão local</span>
+            </div>
+
+            <ScrollArea className="flex-1 p-3 sm:p-6">
               <div className="max-w-4xl mx-auto space-y-6">
                 {messages.length === 0 && (
-                  <div className="h-[400px] flex flex-col items-center justify-center text-center space-y-4">
+                  <div className="h-[300px] sm:h-[400px] flex flex-col items-center justify-center text-center space-y-4 px-2">
                     <div className="p-4 bg-blue-500/10 rounded-full animate-pulse">
-                      <Bot className="w-12 h-12 text-blue-500" />
+                      <Bot className="w-10 h-10 sm:w-12 sm:h-12 text-blue-500" />
                     </div>
                     <div>
-                      <h2 className="text-xl font-bold text-gray-200">Como posso ajudar na VPS hoje?</h2>
-                      <p className="text-gray-500 max-w-sm mx-auto mt-2">
+                      <h2 className="text-base sm:text-xl font-bold text-gray-200">Como posso ajudar na VPS hoje?</h2>
+                      <p className="text-xs sm:text-sm text-gray-500 max-w-sm mx-auto mt-2">
                         Posso executar comandos, analisar logs, gerenciar containers e editar arquivos de configuração.
                       </p>
                     </div>
@@ -226,14 +238,14 @@ export default function OpenClawPage() {
               </div>
             </ScrollArea>
 
-            <div className="p-4 bg-[#111]/50 backdrop-blur-md border-t border-[#222]">
-              <div className="max-w-4xl mx-auto space-y-4">
-                <div className="flex flex-wrap gap-2">
+            <div className="p-3 sm:p-4 bg-[#111]/50 backdrop-blur-md border-t border-[#222]">
+              <div className="max-w-4xl mx-auto space-y-3 sm:space-y-4">
+                <div className="flex gap-2 overflow-x-auto sm:flex-wrap pb-1 -mx-1 px-1">
                   {['docker ps', 'df -h', 'docker logs crm-api --tail 50', 'git log --oneline -10'].map(cmd => (
                     <Badge 
                       key={cmd} 
                       variant="outline" 
-                      className="cursor-pointer hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all font-mono text-[10px] py-1 px-2 border-[#333] text-gray-400"
+                      className="cursor-pointer hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all font-mono text-[10px] py-1 px-2 border-[#333] text-gray-400 whitespace-nowrap shrink-0"
                       onClick={() => handleQuickAction(cmd)}
                     >
                       {cmd}
@@ -241,11 +253,11 @@ export default function OpenClawPage() {
                   ))}
                 </div>
                 
-                <div className="flex gap-3 items-end">
-                  <div className="flex-1 bg-[#0a0a0a] rounded-xl border border-[#222] focus-within:border-blue-500/50 transition-colors p-1">
+                <div className="flex gap-2 sm:gap-3 items-end">
+                  <div className="flex-1 min-w-0 bg-[#0a0a0a] rounded-xl border border-[#222] focus-within:border-blue-500/50 transition-colors p-1">
                     <Textarea 
-                      placeholder="Peça ao agente para executar comandos, analisar código, verificar containers..." 
-                      className="bg-transparent border-none focus-visible:ring-0 min-h-[44px] resize-none py-3"
+                      placeholder="Peça ao agente para executar comandos..." 
+                      className="bg-transparent border-none focus-visible:ring-0 min-h-[44px] resize-none py-3 text-sm"
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -257,7 +269,7 @@ export default function OpenClawPage() {
                     />
                   </div>
                   <Button 
-                    className="h-[52px] w-[52px] bg-blue-600 hover:bg-blue-700 rounded-xl shadow-lg shadow-blue-900/20 transition-all active:scale-95"
+                    className="h-11 w-11 sm:h-[52px] sm:w-[52px] shrink-0 bg-blue-600 hover:bg-blue-700 rounded-xl shadow-lg shadow-blue-900/20 transition-all active:scale-95"
                     onClick={() => sendMessage()}
                     disabled={isLoading || !input.trim()}
                   >
