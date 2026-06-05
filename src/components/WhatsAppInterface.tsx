@@ -1115,7 +1115,7 @@ export function WhatsAppInterface() {
           {/* Tabs */}
           <div className="flex gap-1 p-1 bg-muted/40 rounded-lg">
             {(["Meus", "Fila", "Todos", "Arquivadas"] as const).map(t => {
-              const key = t.toLowerCase() as ChatTab | "arquivadas";
+              const key = t.toLowerCase() as ChatTab;
               const isActive = activeTab === key;
               return (
                 <button
