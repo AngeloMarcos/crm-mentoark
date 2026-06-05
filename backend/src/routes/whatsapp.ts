@@ -445,7 +445,33 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // POST /api/whatsapp/chat-prefs/:phone — atualiza preferências de conversa (pin, archive, mute)
+  router.post('/chat-prefs/:phone', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const { pinned, archived, muted_until } = req.body;
+      const remoteJid = `${phone}@s.whatsapp.net`; // TODO: suporte a grupos se phone contiver '-'
+
+      await pool.query(
+        `INSERT INTO whatsapp_chat_prefs (user_id, remote_jid, pinned, archived, muted_until, updated_at)
+         VALUES ($1, $2, COALESCE($3, false), COALESCE($4, false), $5, NOW())
+         ON CONFLICT (user_id, remote_jid) DO UPDATE SET
+           pinned = COALESCE($3, whatsapp_chat_prefs.pinned),
+           archived = COALESCE($4, whatsapp_chat_prefs.archived),
+           muted_until = COALESCE($5, whatsapp_chat_prefs.muted_until),
+           updated_at = NOW()`,
+        [userId, remoteJid, pinned, archived, muted_until]
+      );
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/ia-status/:phone — lê se IA está pausada para esse contato
+
 
   router.get('/ia-status/:phone', async (req: AuthRequest, res: Response) => {
     try {
