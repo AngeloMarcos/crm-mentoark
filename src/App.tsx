@@ -50,6 +50,7 @@ import AceitarConvitePage from "./pages/AceitarConvite";
 import CargosPage from "./pages/Cargos";
 import FirewallPage from "./pages/admin/Firewall";
 import CopilotoPage from "./pages/admin/Copiloto";
+import DiagnosticoWhatsApp from "./pages/admin/DiagnosticoWhatsApp";
 
 
 const queryClient = new QueryClient();
