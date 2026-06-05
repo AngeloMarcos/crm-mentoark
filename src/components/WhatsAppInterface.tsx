@@ -989,6 +989,29 @@ export function WhatsAppInterface() {
     );
   };
 
+  const handleGlobalSearch = async (term: string) => {
+    setGlobalSearchTerm(term);
+    if (!term.trim() || term.length < 2) {
+      setGlobalSearchResults([]);
+      setShowGlobalSearchResults(false);
+      return;
+    }
+
+    setIsGlobalSearching(true);
+    setShowGlobalSearchResults(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/search?q=${encodeURIComponent(term)}`, { headers: apiHeaders() });
+      if (res.ok) {
+        setGlobalSearchResults(await res.json());
+      }
+    } catch {
+      toast.error("Erro na busca global");
+    } finally {
+      setIsGlobalSearching(false);
+    }
+  };
+
+
 
   const isConnected = connectionStatus?.state === "open";
 
