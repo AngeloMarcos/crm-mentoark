@@ -1029,7 +1029,12 @@ export default function whatsappRouter(pool: Pool): Router {
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-            body: JSON.stringify({ number: phoneClean, text, delay: 1200 }),
+            body: JSON.stringify({ 
+              number: phoneClean, 
+              text, 
+              delay: 1200,
+              quoted: replyToMessageId ? { key: { id: replyToMessageId } } : undefined
+            }),
           });
         } catch (err: any) {
           console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message);
