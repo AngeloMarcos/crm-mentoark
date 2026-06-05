@@ -1194,8 +1194,9 @@ export function WhatsAppInterface() {
           </div>
 
           {/* Resultados da Busca Global */}
-          {showGlobalSearchResults && (
+          {showGlobalSearchResults && globalSearchTerm.length >= 2 && (
             <div className="absolute top-full left-0 right-0 z-50 bg-background border-x border-b shadow-2xl rounded-b-2xl max-h-[400px] overflow-y-auto animate-in slide-in-from-top-2 duration-200">
+
               <div className="p-3 border-b bg-muted/20 flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Mensagens Encontradas</span>
                 {isGlobalSearching && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
