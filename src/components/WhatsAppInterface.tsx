@@ -1618,7 +1618,7 @@ export function WhatsAppInterface() {
                           ) : m.tipo === 'sticker' && m.midia_url ? (
                             <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
                           ) : null}
-                          {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
+                          {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}</p>}
                           <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
                             <span className="text-[10px] font-bold">{formatTime(m.timestamp)}</span>
                             {isOut && (
