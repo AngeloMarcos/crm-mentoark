@@ -19,6 +19,7 @@ import {
   BotOff, Bot, ImageIcon, Reply,
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
   Copy, Video, FileText, Trash2, Forward, Star,
+  AlertCircle,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -28,6 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { supabase } from "@/integrations/supabase/client";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
