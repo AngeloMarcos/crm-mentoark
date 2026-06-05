@@ -604,6 +604,37 @@ export function WhatsAppInterface() {
   }, [activeChatId]);
 
   useEffect(() => {
+    if (!messagesEndRef.current) return;
+    
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsAtBottom(entry.isIntersecting);
+        if (entry.isIntersecting) {
+          setShowScrollButton(false);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    
+    observer.observe(messagesEndRef.current);
+    return () => observer.disconnect();
+  }, [activeChatId]);
+
+  const handleScroll = (e: any) => {
+    // Para ScrollArea do Radix, o evento pode ser diferente, 
+    // mas aqui estamos pegando o viewport interno se possível
+    const target = e.target as HTMLDivElement;
+    const isBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 150;
+    setIsAtBottom(isBottom);
+    setShowScrollButton(!isBottom);
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+
+  useEffect(() => {
     activeChatIdRef.current = activeChatId;
   }, [activeChatId]);
 
