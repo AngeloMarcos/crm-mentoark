@@ -63,12 +63,12 @@ export default function OpenClawPage() {
   }, []);
 
   const checkStatus = async () => {
-    // Check Gateway
+    // Check Gateway — usa sessionKey isolada para não contaminar o chat real
     try {
       const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
         method: 'POST',
         headers: getOpenClawHeader(),
-        body: JSON.stringify(openClawBody({ message: 'ping', sessionKey: 'admin' }))
+        body: JSON.stringify(openClawBody({ message: 'ping', sessionKey: 'healthcheck' }))
       });
       setStatus(prev => ({ ...prev, gateway: res.ok ? 'online' : 'offline' }));
     } catch {
@@ -108,27 +108,39 @@ export default function OpenClawPage() {
     setInput('');
     setIsLoading(true);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
     try {
       const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
         method: 'POST',
         headers: getOpenClawHeader(),
-        body: JSON.stringify(openClawBody({ message: messageText, sessionKey: 'admin' }))
+        body: JSON.stringify(openClawBody({ message: messageText, sessionKey: 'admin' })),
+        signal: controller.signal,
       });
 
-      if (res.status === 503) {
-        toast.error('OpenClaw gateway offline. Verifique a VPS.');
+      const data = await res.json();
+
+      if (!res.ok) {
+        const errMsg = data?.error || `Erro ${res.status}`;
+        toast.error(errMsg);
+        setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${errMsg}` }]);
         return;
       }
 
-      const data = await res.json();
       if (data.reply) {
         setMessages(prev => [...prev, { role: 'assistant', content: data.reply, toolCalls: data.toolCalls }]);
       } else {
-        toast.error('Erro na resposta do agente');
+        toast.error('Agente não retornou resposta');
       }
-    } catch (err) {
-      toast.error('O agente demorou muito para responder ou ocorreu um erro.');
+    } catch (err: any) {
+      const msg = err?.name === 'AbortError'
+        ? 'Agente demorou mais de 60s. Tente um comando mais simples.'
+        : 'Erro de conexão com o agente.';
+      toast.error(msg);
+      setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${msg}` }]);
     } finally {
+      clearTimeout(timeout);
       setIsLoading(false);
     }
   };
