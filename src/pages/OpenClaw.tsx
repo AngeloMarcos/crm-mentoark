@@ -32,7 +32,7 @@ export default function OpenClawPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const getAuthHeader = () => {
-    const token = localStorage.getItem('crm_access_token');
+    const token = localStorage.getItem('access_token');
     return token ? { 'Authorization': `Bearer ${token}` } : {};
   };
 
