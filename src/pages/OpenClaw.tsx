@@ -85,12 +85,13 @@ export default function OpenClawPage() {
 
     // Check Evolution
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/instances`, {
+      const res = await fetch(`${API_BASE}/api/whatsapp/evo/status`, {
         headers: getAuthHeader()
       });
       if (res.ok) {
         const data = await res.json();
-        setStatus(prev => ({ ...prev, evolution: 'online', evolutionCount: data.length }));
+        const isConnected = data?.state === 'open';
+        setStatus(prev => ({ ...prev, evolution: isConnected ? 'online' : 'offline', evolutionInstance: data?.instancia }));
       } else {
         setStatus(prev => ({ ...prev, evolution: 'offline' }));
       }
@@ -122,7 +123,11 @@ export default function OpenClawPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        const errMsg = data?.error || `Erro ${res.status}`;
+        const rawErr = data?.error || `Erro ${res.status}`;
+        const isRateLimit = rawErr.toLowerCase().includes('rate limit') || rawErr.toLowerCase().includes('tpm');
+        const errMsg = isRateLimit
+          ? '⏳ Limite de requisições atingido. Aguarde alguns segundos e tente novamente.'
+          : rawErr;
         toast.error(errMsg);
         setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${errMsg}` }]);
         return;
