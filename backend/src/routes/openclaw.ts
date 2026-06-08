@@ -50,8 +50,12 @@ export function makeOpenClawRouter(_pool: Pool): Router {
       const result = await callProxy(message.trim(), sessionKey?.trim() || 'default');
       return res.json(result);
     } catch (err: any) {
-      console.error('[OPENCLAW] Erro:', err.message);
-      return res.status(500).json({ error: err.message || 'Erro ao chamar OpenClaw' });
+      console.error('[OPENCLAW] Erro completo:', err);
+      const statusCode = err.message?.includes('proxy') ? parseInt(err.message.split(' ')[1]) || 500 : 500;
+      return res.status(statusCode).json({ 
+        error: err.message || 'Erro ao chamar OpenClaw',
+        details: err.stack
+      });
     }
   });
 
