@@ -25,46 +25,15 @@ export interface StatusResult {
 }
 
 export async function fetchConnectionStatus(instancia?: string): Promise<StatusResult> {
-  // Ajuste cirúrgico: O endpoint para verificar o status de uma instância deve ser via configs
-  // A rota /api/whatsapp/evo/status/:instancia não existe no backend.
-  const API_URL = `${API_BASE}/api/integracoes_config`;
-
-  console.log(`[EvolutionService] Buscando status global de integrações: ${API_URL}`);
-
   try {
-    const res = await fetch(API_URL, {
-      method: 'GET',
+    const res = await fetch(`${API_BASE}/api/whatsapp/evo/status`, {
       headers: authHeaders(),
     });
-
-    if (!res.ok) {
-      console.error(`[EvolutionService] Erro na resposta (${res.status}):`, await res.text().catch(() => 'no body'));
-      return { state: 'close' };
-    }
-    
+    if (!res.ok) return { state: 'close' };
     const data = await res.json();
-    
-    if (Array.isArray(data)) {
-      // Se pedimos uma instância específica (ex: 'teste')
-      if (instancia) {
-        const config = data.find(i => 
-          i.tipo === 'evolution' && 
-          i.instancia?.toLowerCase().trim() === instancia.toLowerCase().trim()
-        );
-        console.log(`[EvolutionService] Status para ${instancia}:`, config ? config.status : 'não encontrada');
-        return { 
-          state: config?.status === 'conectado' ? 'open' : 'close' 
-        };
-      }
-      
-      // Se não passou instância, mas tem alguma conectada, retornamos 'open'
-      const anyOpen = data.some(i => i.tipo === 'evolution' && i.status === 'conectado');
-      return { state: anyOpen ? 'open' : 'close' };
-    }
-    
-    return { state: 'close' };
-  } catch (error) {
-    console.error(`[EvolutionService] Erro crítico ao buscar status:`, error);
+    const state = data?.state === 'open' ? 'open' : data?.state === 'connecting' ? 'connecting' : 'close';
+    return { state: state as StatusResult['state'], phoneNumber: data?.phoneNumber };
+  } catch {
     return { state: 'close' };
   }
 }
