@@ -2,17 +2,22 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import jwt from 'jsonwebtoken';
 
-const ADMIN_KEY = process.env.OPENCLAW_ADMIN_KEY || 'openclaw-admin-2025';
+const ADMIN_KEY = process.env.OPENCLAW_ADMIN_KEY;
+if (!ADMIN_KEY) {
+  console.warn('[OPENCLAW] OPENCLAW_ADMIN_KEY não configurado — acesso via admin key desabilitado (apenas JWT funcionará)');
+}
 const OPENCLAW_PROXY = process.env.OPENCLAW_PROXY_URL || 'http://172.19.0.1:18790';
 
 function checkAuth(req: Request, res: Response): boolean {
-  // 1. Admin key no header (curl/ferramentas externas)
-  const headerKey = req.headers['x-openclaw-key'] as string | undefined;
-  if (headerKey && headerKey === ADMIN_KEY) return true;
+  // 1. Admin key no header (curl/ferramentas externas) — apenas se configurada
+  if (ADMIN_KEY) {
+    const headerKey = req.headers['x-openclaw-key'] as string | undefined;
+    if (headerKey && headerKey === ADMIN_KEY) return true;
 
-  // 2. Admin key no body (CRM frontend — evita CORS preflight em header customizado)
-  const bodyKey = (req.body as any)?._adminKey;
-  if (bodyKey && bodyKey === ADMIN_KEY) return true;
+    // 2. Admin key no body (CRM frontend — evita CORS preflight em header customizado)
+    const bodyKey = (req.body as any)?._adminKey;
+    if (bodyKey && bodyKey === ADMIN_KEY) return true;
+  }
 
   // 3. JWT Bearer válido
   const auth = req.headers.authorization;

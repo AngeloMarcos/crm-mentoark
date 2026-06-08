@@ -158,15 +158,15 @@ export default function webhookRouter(pool: Pool): Router {
     console.log(`[WH:${traceId}] headers.content-type="${req.headers['content-type']}" | body_keys="${Object.keys(req.body || {}).join(',')}"`);
 
     const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
-    if (webhookSecret) {
-      const ok = verificarAssinaturaEvolution(req, webhookSecret);
-      console.log(`[WH:${traceId}] ASSINATURA secret=SET | válida=${ok}`);
-      if (!ok) {
-        console.warn(`[WH:${traceId}] Assinatura inválida — rejeitando`);
-        return res.status(401).json({ error: 'Assinatura inválida' });
-      }
-    } else {
-      console.log(`[WH:${traceId}] ASSINATURA secret=NOT_SET (aceitar tudo)`);
+    if (!webhookSecret) {
+      console.error(`[WH:${traceId}] EVOLUTION_WEBHOOK_SECRET não configurado — rejeitando requisição`);
+      return res.status(401).json({ error: 'Webhook secret não configurado no servidor' });
+    }
+    const ok = verificarAssinaturaEvolution(req, webhookSecret);
+    console.log(`[WH:${traceId}] ASSINATURA válida=${ok}`);
+    if (!ok) {
+      console.warn(`[WH:${traceId}] Assinatura inválida — rejeitando`);
+      return res.status(401).json({ error: 'Assinatura inválida' });
     }
 
     res.status(200).json({ ok: true });
