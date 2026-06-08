@@ -260,14 +260,6 @@ class QueryBuilder {
         return { data: null, error: { message: 'Sessão expirada. Faça login novamente.' } };
       }
     }
-      if (!ok) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        _currentUser = null;
-        _notify('SIGNED_OUT', null);
-        return { data: null, error: { message: 'Sessão expirada. Faça login novamente.' } };
-      }
-    }
     const headers = _authHeaders();
     const baseUrl = `${API_BASE}/api/${this._table}`;
 
