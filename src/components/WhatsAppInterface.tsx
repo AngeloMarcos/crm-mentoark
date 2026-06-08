@@ -452,6 +452,8 @@ export function WhatsAppInterface() {
     // Filtra pela aba (Arquivadas ou Principal)
     if (activeTab === "todos") {
       list = list.filter(c => !c.is_archived);
+    } else if (activeTab === "arquivadas") {
+      list = list.filter(c => c.is_archived);
     } else if (activeTab === "fila") {
       // Exemplo: na fila apenas não arquivados e com unread ou sem agente? 
       // Por ora mantemos lógica WhatsApp: arquivado sai da vista principal.
