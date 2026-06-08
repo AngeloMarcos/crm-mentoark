@@ -67,6 +67,7 @@ interface Message {
   role: "user" | "assistant" | "note";
   content: string;
   timestamp: string;
+  rawTimestamp?: string;
   senderName?: string;
   tipo?: string;
   midia_url?: string;
@@ -570,6 +571,7 @@ export function WhatsAppInterface() {
         role: (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant',
         content: m.content || m.conteudo || '',
         timestamp: formatTime(m.timestamp_wa || m.created_at),
+        rawTimestamp: m.timestamp_wa || m.created_at || new Date().toISOString(),
         // sender_name: nome de quem enviou (humano ou IA); push_name: nome do contato recebido
         senderName: m.from_me
           ? (m.sender_name || 'IA')
@@ -2187,8 +2189,8 @@ export function WhatsAppInterface() {
                   const prevRole = prevMsg?.role ?? null;
                   
                   // Lógica de separador de data
-                  const currentDate = new Date(m.timestamp);
-                  const prevDate = prevMsg ? new Date(prevMsg.timestamp) : null;
+                  const currentDate = new Date(m.rawTimestamp || m.timestamp);
+                  const prevDate = prevMsg ? new Date(prevMsg.rawTimestamp || prevMsg.timestamp) : null;
                   
                   const isDifferentDay = !prevDate || 
                     currentDate.getDate() !== prevDate.getDate() || 
