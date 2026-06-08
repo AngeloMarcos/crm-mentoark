@@ -75,7 +75,10 @@ export async function createInstance(instanceName?: string, phoneNumber?: string
     headers: authHeaders(),
     body: JSON.stringify({ instanceName, phoneNumber }),
   });
-  if (!res.ok) throw new Error('Erro ao conectar instância');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || 'Erro ao conectar instância');
+  }
   return res.json();
 }
 
