@@ -1271,6 +1271,79 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // GET /api/whatsapp/search?q=texto — busca em mensagens
+  router.get('/search', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const q = ((req.query.q as string) || '').trim();
+    if (!q || q.length < 2) return res.json([]);
+    const r = await pool.query(
+      `SELECT m.id, m.content, m.timestamp_wa, m.created_at, m.from_me,
+               split_part(m.remote_jid,'@',1) AS phone,
+               COALESCE(c.nome, c.push_name, split_part(m.remote_jid,'@',1)) AS contact_name,
+               COALESCE(c.foto_perfil, c.profile_pic_url) AS profile_pic
+        FROM whatsapp_messages m
+        LEFT JOIN contatos c ON c.user_id = m.user_id
+          AND c.telefone ILIKE '%' || RIGHT(split_part(m.remote_jid,'@',1), 11)
+        WHERE m.user_id = $1 AND m.content ILIKE $2
+          AND m.remote_jid NOT LIKE '%@g.us'
+        ORDER BY m.created_at DESC LIMIT 50`,
+      [userId, `%${q}%`]
+    );
+    return res.json(r.rows);
+  });
+
+  // DELETE /api/whatsapp/messages/:id — apaga mensagem local e opcionalmente no Evolution
+  router.delete('/messages/:id', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const id = req.params.id;
+    const { forEveryone, instancia, remoteJid } = req.body as any;
+    await pool.query(
+      `DELETE FROM whatsapp_messages WHERE (id::text = $1 OR message_id = $1) AND user_id = $2`,
+      [id, userId]
+    ).catch(() => {});
+    if (forEveryone && instancia && remoteJid) {
+      const cfg = await getEvolutionConfig(userId);
+      const base = cfg.url.replace(/\/$/, '');
+      await fetch(`${base}/chat/deleteMessage/${instancia}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+        body: JSON.stringify({ remoteJid, messageId: id }),
+      }).catch(() => {});
+    }
+    return res.json({ ok: true });
+  });
+
+  // PATCH /api/whatsapp/conversas/:phone/read — marca mensagens como lidas
+  router.patch('/conversas/:phone/read', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+    await pool.query(
+      `UPDATE whatsapp_messages SET is_read = true
+       WHERE user_id = $1 AND split_part(remote_jid,'@',1) = $2 AND from_me = false`,
+      [userId, phone]
+    ).catch(() => {});
+    return res.json({ ok: true });
+  });
+
+  // POST /api/whatsapp/chat-prefs/:phone — pin, archive, mute de conversa
+  router.post('/chat-prefs/:phone', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+    const { pinned, archived, muted_until } = req.body as any;
+    const setParts: string[] = [];
+    const vals: any[] = [userId, `%${phone.slice(-11)}`];
+    if (pinned !== undefined)      { setParts.push(`is_pinned = $${vals.length + 1}`);    vals.push(pinned); }
+    if (archived !== undefined)    { setParts.push(`is_archived = $${vals.length + 1}`);  vals.push(archived); }
+    if (muted_until !== undefined) { setParts.push(`muted_until = $${vals.length + 1}`);  vals.push(muted_until); }
+    if (!setParts.length) return res.json({ ok: true });
+    await pool.query(
+      `UPDATE contatos SET ${setParts.join(', ')}, updated_at = NOW()
+       WHERE user_id = $1 AND telefone ILIKE $2`,
+      vals
+    ).catch(() => {});
+    return res.json({ ok: true });
+  });
+
   return router;
 }
 
