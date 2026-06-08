@@ -144,7 +144,7 @@ export function InstanceManagementPanel() {
         carregar();
       } else if (res.qrCode || res.pairingCode) {
         toast.info("Escaneie o QR Code ou use o código de pareamento");
-        pollUntilConnected();
+        pollUntilConnected(res.instanceName || res.instancia);
       } else if (res.qrPending) {
         // Evolution v2: Baileys ainda inicializando — faz polling do QR
         toast.info("Gerando QR Code, aguarde...");
@@ -183,7 +183,7 @@ export function InstanceManagementPanel() {
           setQrData(prev => ({ ...prev, ...data }));
           setWaitingQr(false);
           toast.success("QR Code gerado! Escaneie agora.");
-          pollUntilConnected();
+          pollUntilConnected(data.instanceName || data.instancia);
           return;
         }
       } catch {}
@@ -192,14 +192,15 @@ export function InstanceManagementPanel() {
     toast.error("Tempo esgotado para gerar QR. Clique em 'Atualizar QR' para tentar novamente.");
   };
 
-  const pollUntilConnected = async () => {
+  const pollUntilConnected = async (instanciaNome?: string) => {
     setPollingConnect(true);
     const start = Date.now();
     const TIMEOUT = 2 * 60 * 1000; // 2 min
+    const targetInstancia = instanciaNome || newInstanceName;
     while (Date.now() - start < TIMEOUT) {
       await new Promise(r => setTimeout(r, 3000));
       try {
-        const st = await fetchConnectionStatus();
+        const st = await fetchConnectionStatus(targetInstancia);
         if (st.state === "open") {
           setPollingConnect(false);
           setShowQrModal(false);
