@@ -10,7 +10,8 @@ const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
 const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
-function webhookPayload() {
+// Objeto interno do webhook (usado em instance/create e /webhook/set)
+function webhookInner() {
   return {
     enabled: true,
     url: WEBHOOK_URL,
@@ -21,6 +22,7 @@ function webhookPayload() {
 }
 
 // Registra (ou atualiza) o webhook da instância no Evolution.
+// Evolution v2 exige formato { webhook: {...} } no endpoint /webhook/set.
 // Idempotente — pode ser chamado várias vezes sem efeito colateral.
 async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
   const cleanBase = sanitizeEvolutionUrl(base);
@@ -28,10 +30,11 @@ async function registrarWebhook(base: string, apiKey: string, instancia: string)
     const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
-      body: JSON.stringify(webhookPayload()),
+      body: JSON.stringify({ webhook: webhookInner() }),
     });
     const body = await res.json().catch(() => ({}));
-    console.log(`[whatsapp] webhook registrado ${instancia} → enabled=${(body as any)?.webhook?.enabled ?? (body as any)?.enabled}`);
+    const enabled = (body as any)?.webhook?.enabled ?? (body as any)?.enabled;
+    console.log(`[whatsapp] webhook registrado ${instancia} → enabled=${enabled}`);
   } catch (err) {
     console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
   }
@@ -707,7 +710,7 @@ export default function whatsappRouter(pool: Pool): Router {
         readMessages: true,
         readStatus: false,
         ...(phoneNumber ? { number: phoneNumber } : {}),
-        webhook: webhookPayload(),
+        webhook: webhookInner(),
       };
 
       console.log(`[WHATSAPP] Criando instância em ${base}: ${cfg.instancia}`);
@@ -1234,7 +1237,7 @@ export default function whatsappRouter(pool: Pool): Router {
         body: JSON.stringify({
           instanceName: cfg.instancia, qrcode: true, integration: 'WHATSAPP-BAILEYS',
           groupsIgnore: true, alwaysOnline: true, readMessages: true,
-          webhook: webhookPayload(),
+          webhook: webhookInner(),
         }),
       });
       const created: any = await createR.json().catch(() => ({}));
