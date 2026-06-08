@@ -236,11 +236,11 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // GET /api/whatsapp/conversas
   router.get('/conversas', async (req: AuthRequest, res: Response) => {
-    console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId });
+    console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId, query: req.query });
     try {
       const userId = req.userId!;
+      const showArchived = req.query.archived === 'true';
 
       // PARTITION BY phone (não por instância) — evita duplicatas quando o mesmo
       // número existiu em duas instâncias diferentes
@@ -294,9 +294,10 @@ export default function whatsappRouter(pool: Pool): Router {
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          WHERE r.rn = 1
+           AND COALESCE(cu.is_archived, false) = $2
          ORDER BY cu.is_pinned DESC NULLS LAST, r.created_at DESC
          LIMIT 300`,
-        [userId]
+        [userId, showArchived]
       );
 
       const conversas = r.rows.map(row => {
@@ -325,6 +326,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       return res.json(conversas);
     } catch (err: any) {
+      console.error('[WHATSAPP conversas]:', err.message);
       return res.status(500).json({ message: err.message });
     }
   });
