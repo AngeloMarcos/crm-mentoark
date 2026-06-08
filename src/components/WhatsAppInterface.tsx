@@ -452,6 +452,8 @@ export function WhatsAppInterface() {
     // Filtra pela aba (Arquivadas ou Principal)
     if (activeTab === "todos") {
       list = list.filter(c => !c.is_archived);
+    } else if (activeTab === "arquivadas") {
+      list = list.filter(c => c.is_archived);
     } else if (activeTab === "fila") {
       // Exemplo: na fila apenas não arquivados e com unread ou sem agente? 
       // Por ora mantemos lógica WhatsApp: arquivado sai da vista principal.
@@ -2217,8 +2219,17 @@ export function WhatsAppInterface() {
                   const currentDateStr = m.rawTimestamp || m.timestamp;
                   const prevDateStr = prevMsg ? (prevMsg.rawTimestamp || prevMsg.timestamp) : null;
                   
-                  const currentDate = currentDateStr ? new Date(currentDateStr) : new Date();
-                  const prevDate = prevDateStr ? new Date(prevDateStr) : null;
+                  // Helper para validar se é uma string de data válida ou apenas hora "14:30"
+                  const parseSafeDate = (str: string | undefined | null) => {
+                    if (!str) return new Date();
+                    // Se for apenas hora (HH:mm ou HH:mm:ss), não é uma data completa
+                    if (/^\d{2}:\d{2}(:\d{2})?$/.test(str)) return null;
+                    const d = new Date(str);
+                    return isNaN(d.getTime()) ? null : d;
+                  };
+
+                  const currentDate = parseSafeDate(currentDateStr) || new Date();
+                  const prevDate = parseSafeDate(prevDateStr);
                   
                   const isDifferentDay = !prevDate || 
                     currentDate.getDate() !== prevDate.getDate() || 
