@@ -13,8 +13,10 @@ export interface CreateInstanceResult {
   qrCode?: string;
   pairingCode?: string;
   instanceName?: string;
+  instancia?: string;
   state?: string;
   phoneNumber?: string;
+  qrPending?: boolean; // true quando Evolution ainda não gerou o QR (Baileys inicializando)
 }
 
 export interface StatusResult {
@@ -79,6 +81,14 @@ export async function createInstance(instanceName?: string, phoneNumber?: string
 
 export async function reconnectInstance(): Promise<CreateInstanceResult> {
   return createInstance();
+}
+
+export async function pollQr(): Promise<CreateInstanceResult> {
+  const res = await fetch(`${API_BASE}/api/whatsapp/poll-qr`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Erro ao buscar QR');
+  return res.json();
 }
 
 export async function disconnectInstance(): Promise<void> {

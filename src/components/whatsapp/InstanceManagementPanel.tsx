@@ -56,6 +56,7 @@ import {
   createInstance,
   fetchConnectionStatus,
   disconnectInstance,
+  pollQr,
   type CreateInstanceResult,
 } from "@/services/evolutionService";
 
@@ -123,6 +124,7 @@ export function InstanceManagementPanel() {
   const [connecting, setConnecting] = useState(false);
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [pollingConnect, setPollingConnect] = useState(false);
+  const [waitingQr, setWaitingQr] = useState(false); // Baileys ainda gerando QR
 
   const startConnect = async () => {
     if (!newInstanceName.trim()) {
@@ -143,6 +145,10 @@ export function InstanceManagementPanel() {
       } else if (res.qrCode || res.pairingCode) {
         toast.info("Escaneie o QR Code ou use o código de pareamento");
         pollUntilConnected();
+      } else if (res.qrPending) {
+        // Evolution v2: Baileys ainda inicializando — faz polling do QR
+        toast.info("Gerando QR Code, aguarde...");
+        pollQrLoop();
       } else {
         toast.error("Evolution não retornou QR Code");
       }
@@ -151,6 +157,39 @@ export function InstanceManagementPanel() {
     } finally {
       setConnecting(false);
     }
+  };
+
+  // Polling do QR enquanto Baileys inicializa (Evolution v2.2.3)
+  const pollQrLoop = async () => {
+    setWaitingQr(true);
+    const start = Date.now();
+    const TIMEOUT = 90 * 1000; // 90 segundos
+    while (Date.now() - start < TIMEOUT) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const data = await pollQr();
+        if (data.state === "open") {
+          setWaitingQr(false);
+          setPollingConnect(false);
+          setShowQrModal(false);
+          setQrData(null);
+          setNewInstanceName("");
+          setNewInstancePhone("");
+          toast.success("✅ WhatsApp conectado com sucesso!");
+          carregar();
+          return;
+        }
+        if (data.qrCode) {
+          setQrData(prev => ({ ...prev, ...data }));
+          setWaitingQr(false);
+          toast.success("QR Code gerado! Escaneie agora.");
+          pollUntilConnected();
+          return;
+        }
+      } catch {}
+    }
+    setWaitingQr(false);
+    toast.error("Tempo esgotado para gerar QR. Clique em 'Atualizar QR' para tentar novamente.");
   };
 
   const pollUntilConnected = async () => {
@@ -179,10 +218,18 @@ export function InstanceManagementPanel() {
   const refreshQr = async () => {
     try {
       setConnecting(true);
-      const phoneDigits = newInstancePhone.replace(/\D/g, "");
-      const res = await createInstance(newInstanceName.trim(), phoneDigits || undefined);
-      setQrData(res);
-      toast.success("Códigos atualizados!");
+      const data = await pollQr();
+      if (data.qrCode) {
+        setQrData(prev => ({ ...prev, ...data }));
+        toast.success("QR Code atualizado!");
+      } else if (data.state === "open") {
+        setShowQrModal(false);
+        toast.success("✅ WhatsApp já conectado!");
+        carregar();
+      } else {
+        toast.info("QR ainda não disponível, aguarde...");
+        pollQrLoop();
+      }
     } catch (e: any) {
       toast.error(`Erro: ${e.message}`);
     } finally {
@@ -750,6 +797,7 @@ export function InstanceManagementPanel() {
             if (!o) {
               setQrData(null);
               setPollingConnect(false);
+              setWaitingQr(false);
               carregar();
             }
           }}
@@ -796,17 +844,27 @@ export function InstanceManagementPanel() {
                   {qrData?.qrCode?.startsWith("data:image") ? (
                     <img src={qrData.qrCode} alt="QR Code" className="w-56 h-56" />
                   ) : (
-                    <div className="w-56 h-56 flex items-center justify-center bg-muted/20 rounded-lg">
-                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    <div className="w-56 h-56 flex flex-col items-center justify-center gap-3 bg-muted/20 rounded-lg">
+                      <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+                      <span className="text-xs text-muted-foreground text-center px-4">
+                        {waitingQr ? "Inicializando WhatsApp...\nAguarde alguns segundos" : "Carregando QR Code..."}
+                      </span>
                     </div>
                   )}
                 </div>
               </div>
 
-              {pollingConnect && (
+              {pollingConnect && !waitingQr && (
                 <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground bg-muted/30 rounded-lg p-3">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Aguardando você escanear o código...
+                </div>
+              )}
+
+              {waitingQr && (
+                <div className="flex items-center justify-center gap-2 text-sm text-orange-600 bg-orange-500/10 rounded-lg p-3">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Aguardando WhatsApp inicializar... (pode levar até 30s)
                 </div>
               )}
             </div>

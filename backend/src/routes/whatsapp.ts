@@ -753,16 +753,20 @@ export default function whatsappRouter(pool: Pool): Router {
       let pairingCode =
         created?.qrcode?.pairingCode || created?.pairingCode || created?.hash?.pairingCode || null;
 
-      // Se o create não retornou QR (comum no Evolution v2), busca via /connect
+      // Evolution v2.2.3: QR não vem no create; Baileys precisa de alguns segundos.
+      // Tenta até 6 vezes com 2s de intervalo (máx ~12s de espera).
       if (!qrCode) {
-        await new Promise(r => setTimeout(r, 1500)); // aguarda instância inicializar
-        const qrRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
-          headers: { apikey: cfg.api_key },
-        }).catch(() => null);
-        if (qrRes?.ok) {
-          const qrData: any = await qrRes.json();
-          qrCode = qrData?.base64 || qrData?.qrcode?.base64 || null;
-          pairingCode = pairingCode || qrData?.pairingCode || null;
+        for (let attempt = 0; attempt < 6 && !qrCode; attempt++) {
+          await new Promise(r => setTimeout(r, 2000));
+          const qrRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
+            headers: { apikey: cfg.api_key },
+          }).catch(() => null);
+          if (qrRes?.ok) {
+            const qrData: any = await qrRes.json();
+            qrCode = qrData?.base64 || qrData?.qrcode?.base64 || null;
+            pairingCode = pairingCode || qrData?.pairingCode || null;
+            if (qrCode) console.log(`[WHATSAPP] QR obtido na tentativa ${attempt + 1}`);
+          }
         }
       }
 
@@ -773,10 +777,50 @@ export default function whatsappRouter(pool: Pool): Router {
       return res.json({
         state: created?.instance?.state || 'connecting',
         qrCode: normalizeQr(qrCode),
+        qrPending: !qrCode, // sinaliza que frontend pode precisar de polling
         pairingCode,
         instanceName: cfg.instancia,
         instancia: cfg.instancia,
       });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/poll-qr — polling leve para aguardar QR gerado pelo Baileys
+  router.get('/poll-qr', async (req: AuthRequest, res: Response) => {
+    try {
+      const cfg = await getEvolutionConfig(req.userId!);
+      const base = cfg.url.replace(/\/$/, '');
+
+      const stateRes = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, {
+        headers: { apikey: cfg.api_key },
+      }).catch(() => null);
+      const stateData: any = stateRes?.ok ? await stateRes.json() : {};
+      const state = stateData?.instance?.state || stateData?.state || 'close';
+
+      if (state === 'open') {
+        return res.json({ state: 'open', qrCode: null, qrPending: false });
+      }
+
+      const qrRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
+        headers: { apikey: cfg.api_key },
+      }).catch(() => null);
+
+      if (qrRes?.ok) {
+        const qrData: any = await qrRes.json();
+        const qrCode = qrData?.base64 || qrData?.qrcode?.base64 || null;
+        const pairingCode = qrData?.pairingCode || null;
+        return res.json({
+          state,
+          qrCode: normalizeQr(qrCode),
+          qrPending: !qrCode,
+          pairingCode,
+          instancia: cfg.instancia,
+        });
+      }
+
+      return res.json({ state, qrCode: null, qrPending: true });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
