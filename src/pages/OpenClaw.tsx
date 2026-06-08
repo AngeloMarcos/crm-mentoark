@@ -11,6 +11,8 @@ import { ChatMessage } from '@/components/openclaw/ChatMessage';
 import { StatusCard } from '@/components/openclaw/StatusCard';
 import { FileConfigCard } from '@/components/openclaw/FileConfigCard';
 import { toast } from 'sonner';
+import { getAuthToken } from "@/lib/api-token";
+import { fetchConnectionStatus } from "@/services/evolutionService";
 
 interface Message {
   role: 'user' | 'assistant';
@@ -51,7 +53,7 @@ export default function OpenClawPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const getAuthHeader = useCallback(() => {
-    const token = localStorage.getItem('access_token');
+    const token = getAuthToken();
     return token ? { 'Authorization': `Bearer ${token}` } : {};
   }, []);
 
@@ -104,15 +106,12 @@ export default function OpenClawPage() {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/evo/status`, {
-        headers: getAuthHeader()
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setStatus((prev: any) => ({ ...prev, evolution: data?.state === 'open' ? 'online' : 'offline', evolutionInstance: data?.instancia }));
-      } else {
-        setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
-      }
+      const res = await fetchConnectionStatus();
+      setStatus((prev: any) => ({ 
+        ...prev, 
+        evolution: res.state === 'open' ? 'online' : 'offline', 
+        evolutionInstance: res.phoneNumber || 'Instância'
+      }));
     } catch {
       setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
     }
