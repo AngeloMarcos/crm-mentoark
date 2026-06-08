@@ -2,7 +2,7 @@ import {
   LayoutDashboard, LayoutGrid, BarChart3, UserPlus, Tags, BookUser,
   PhoneCall, Filter, MessageCircle, Timer, Zap,
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
-  Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
+  Brain, Package, Images, BookOpen, ShieldCheck, LogOut, ShieldOff,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
   Activity, Webhook, Database, Sparkles, Terminal,
@@ -429,6 +429,19 @@ export function AppSidebar() {
           <LogOut className="h-5 w-5 shrink-0" />
           {!collapsed && <span>Sair</span>}
         </SidebarMenuButton>
+        {import.meta.env.DEV && (
+          <SidebarMenuButton
+            onClick={() => {
+              localStorage.removeItem('access_token');
+              localStorage.removeItem('crm_access_token');
+              window.location.reload();
+            }}
+            className="flex items-center gap-3 px-3 py-2 text-red-400 hover:text-red-500 w-full rounded-lg hover:bg-red-500/10 transition-all duration-200 mt-1"
+          >
+            <ShieldOff className="h-5 w-5 shrink-0" />
+            {!collapsed && <span>Simular Expiração</span>}
+          </SidebarMenuButton>
+        )}
       </SidebarFooter>
     </Sidebar>
   );

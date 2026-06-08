@@ -27,7 +27,8 @@ function checkAuth(req: Request, res: Response): boolean {
       (req as any).user = payload;
       return true;
     } catch {
-      // token inválido ou expirado
+      res.status(401).json({ error: 'Sessão inválida ou expirada. Faça login novamente.', code: 'TOKEN_EXPIRED' });
+      return false;
     }
   }
 

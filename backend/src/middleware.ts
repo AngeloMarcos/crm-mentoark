@@ -46,7 +46,7 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
     req.userEmail = payload.email;
     next();
   } catch {
-    return res.status(401).json({ message: 'Token inválido ou expirado' });
+    return res.status(401).json({ message: 'Token inválido ou expirado', code: 'TOKEN_EXPIRED' });
   }
 }
 

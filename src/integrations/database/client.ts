@@ -98,9 +98,20 @@ const auth = {
 
   async _refreshSilent(): Promise<boolean> {
     const r = localStorage.getItem('refresh_token');
-    if (!r) return false;
+    if (!r) {
+      if (_notify) _notify('SIGNED_OUT', null);
+      return false;
+    }
     try {
       const res = await fetch(`${API_BASE}/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: r }) });
+
+      if (res.status === 401) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        _currentUser = null;
+        _notify('SIGNED_OUT', null);
+        return false;
+      }
       if (!res.ok) return false;
       const data = await res.json();
       localStorage.setItem('access_token', data.access_token);
@@ -242,10 +253,10 @@ class QueryBuilder {
     if (token && _isExpired(token)) {
       const ok = await auth._refreshSilent();
       if (!ok) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        _currentUser = null;
-        _notify('SIGNED_OUT', null);
+        // Redirecionamento forçado para login em caso de falha no refresh durante query
+        if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+          window.location.href = '/login?expired=1';
+        }
         return { data: null, error: { message: 'Sessão expirada. Faça login novamente.' } };
       }
     }
