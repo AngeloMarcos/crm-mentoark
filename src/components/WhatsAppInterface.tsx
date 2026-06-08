@@ -825,7 +825,12 @@ export function WhatsAppInterface() {
         if (!res.ok) {
            const err = await res.json().catch(() => ({}));
            console.error('[OPENCLAW] Erro na resposta IA:', err);
-           toast.error(err.error || 'Erro na resposta da IA');
+           if (res.status === 401) {
+             toast.error('Sessão expirada. Faça login novamente.');
+             navigate('/login');
+           } else {
+             toast.error(err.error || 'Erro na resposta da IA');
+           }
         }
       } catch (err) {
         console.error('[OPENCLAW] Falha ao chamar IA:', err);
