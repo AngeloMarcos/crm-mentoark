@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { CRMLayout } from "@/components/CRMLayout";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Terminal, Server, Bot, Database, Zap, RefreshCw, Copy, Send, LayoutGrid, Loader2, Activity } from 'lucide-react';
+import { Terminal, Server, Bot, Database, Zap, RefreshCw, Send, LayoutGrid, Loader2, Activity, Settings, Trash2 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -15,12 +16,30 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: number;
+  timestamp?: number;
 }
 
 const API_BASE = "https://api.mentoark.com.br";
+const HISTORY_KEY = 'openclaw_chat_history';
+const MAX_HISTORY = 60;
+
+function loadHistory(): Message[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(msgs: Message[]) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(msgs.slice(-MAX_HISTORY)));
+  } catch {}
+}
 
 export default function OpenClawPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(loadHistory);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<any>({
@@ -31,15 +50,15 @@ export default function OpenClawPage() {
   });
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const getAuthHeader = () => {
+  const getAuthHeader = useCallback(() => {
     const token = localStorage.getItem('access_token');
     return token ? { 'Authorization': `Bearer ${token}` } : {};
-  };
+  }, []);
 
-  const getOpenClawHeader = () => ({
+  const getOpenClawHeader = useCallback(() => ({
     ...getAuthHeader(),
     'Content-Type': 'application/json',
-  });
+  }), [getAuthHeader]);
 
   const openClawBody = (extra: object) => ({
     ...extra,
@@ -47,14 +66,17 @@ export default function OpenClawPage() {
   });
 
   const scrollToBottom = () => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading]);
+
+  // Persiste histórico sempre que mensagens mudam
+  useEffect(() => {
+    if (messages.length > 0) saveHistory(messages);
+  }, [messages]);
 
   useEffect(() => {
     checkStatus();
@@ -63,40 +85,36 @@ export default function OpenClawPage() {
   }, []);
 
   const checkStatus = async () => {
-    // Check Gateway — usa sessionKey isolada para não contaminar o chat real
     try {
       const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
         method: 'POST',
         headers: getOpenClawHeader(),
         body: JSON.stringify(openClawBody({ message: 'ping', sessionKey: 'healthcheck' }))
       });
-      setStatus(prev => ({ ...prev, gateway: res.ok ? 'online' : 'offline' }));
+      setStatus((prev: any) => ({ ...prev, gateway: res.ok ? 'online' : 'offline' }));
     } catch {
-      setStatus(prev => ({ ...prev, gateway: 'offline' }));
+      setStatus((prev: any) => ({ ...prev, gateway: 'offline' }));
     }
 
-    // Check Backend
     try {
       const res = await fetch(`${API_BASE}/health`);
-      setStatus(prev => ({ ...prev, backend: res.ok ? 'online' : 'offline' }));
+      setStatus((prev: any) => ({ ...prev, backend: res.ok ? 'online' : 'offline' }));
     } catch {
-      setStatus(prev => ({ ...prev, backend: 'offline' }));
+      setStatus((prev: any) => ({ ...prev, backend: 'offline' }));
     }
 
-    // Check Evolution
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/evo/status`, {
         headers: getAuthHeader()
       });
       if (res.ok) {
         const data = await res.json();
-        const isConnected = data?.state === 'open';
-        setStatus(prev => ({ ...prev, evolution: isConnected ? 'online' : 'offline', evolutionInstance: data?.instancia }));
+        setStatus((prev: any) => ({ ...prev, evolution: data?.state === 'open' ? 'online' : 'offline', evolutionInstance: data?.instancia }));
       } else {
-        setStatus(prev => ({ ...prev, evolution: 'offline' }));
+        setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
       }
     } catch {
-      setStatus(prev => ({ ...prev, evolution: 'offline' }));
+      setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
     }
   };
 
@@ -104,8 +122,9 @@ export default function OpenClawPage() {
     const messageText = text || input;
     if (!messageText.trim() || isLoading) return;
 
-    const userMsg: Message = { role: 'user', content: messageText };
-    setMessages(prev => [...prev, userMsg]);
+    const userMsg: Message = { role: 'user', content: messageText, timestamp: Date.now() };
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
     setInput('');
     setIsLoading(true);
 
@@ -129,12 +148,14 @@ export default function OpenClawPage() {
           ? '⏳ Limite de requisições atingido. Aguarde alguns segundos e tente novamente.'
           : rawErr;
         toast.error(errMsg);
-        setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${errMsg}` }]);
+        const errMsgs = [...newMessages, { role: 'assistant' as const, content: `❌ ${errMsg}`, timestamp: Date.now() }];
+        setMessages(errMsgs);
         return;
       }
 
       if (data.reply) {
-        setMessages(prev => [...prev, { role: 'assistant', content: data.reply, toolCalls: data.toolCalls }]);
+        const updatedMsgs = [...newMessages, { role: 'assistant' as const, content: data.reply, toolCalls: data.toolCalls, timestamp: Date.now() }];
+        setMessages(updatedMsgs);
       } else {
         toast.error('Agente não retornou resposta');
       }
@@ -143,309 +164,307 @@ export default function OpenClawPage() {
         ? 'Agente demorou mais de 60s. Tente um comando mais simples.'
         : 'Erro de conexão com o agente.';
       toast.error(msg);
-      setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${msg}` }]);
+      const errMsgs = [...newMessages, { role: 'assistant' as const, content: `❌ ${msg}`, timestamp: Date.now() }];
+      setMessages(errMsgs);
     } finally {
       clearTimeout(timeout);
       setIsLoading(false);
     }
   };
 
-  const handleQuickAction = (cmd: string) => {
-    sendMessage(cmd);
+  const clearHistory = () => {
+    setMessages([]);
+    localStorage.removeItem(HISTORY_KEY);
+    toast.success('Histórico apagado');
   };
 
+  const handleQuickAction = (cmd: string) => sendMessage(cmd);
+
   return (
-    <div className="p-3 sm:p-6 space-y-4 sm:space-y-6 bg-[#0a0a0a] min-h-screen text-gray-100">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <Terminal className="w-6 h-6 sm:w-8 sm:h-8 text-blue-500 shrink-0" />
-          <h1 className="text-lg sm:text-2xl font-bold tracking-tight truncate">OpenClaw Admin</h1>
-        </div>
-        <Badge variant="outline" className="border-blue-500/30 text-blue-400 gap-1 bg-blue-500/5 text-[10px] sm:text-xs">
-          <Zap className="w-3 h-3 fill-current" /> v2.4 Stable
-        </Badge>
-      </div>
-
-      <Tabs defaultValue="chat" className="space-y-4">
-        <TabsList className="bg-[#111] border border-[#222] p-1 h-auto sm:h-12 w-full sm:w-auto grid grid-cols-3 sm:inline-flex">
-          <TabsTrigger value="chat" className="data-[state=active]:bg-[#222] px-2 sm:px-6 text-xs sm:text-sm">
-            <Bot className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Chat Admin</span><span className="sm:hidden ml-1">Chat</span>
-          </TabsTrigger>
-          <TabsTrigger value="status" className="data-[state=active]:bg-[#222] px-2 sm:px-6 text-xs sm:text-sm">
-            <Activity className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Status & Diagnóstico</span><span className="sm:hidden ml-1">Status</span>
-          </TabsTrigger>
-          <TabsTrigger value="config" className="data-[state=active]:bg-[#222] px-2 sm:px-6 text-xs sm:text-sm">
-            <SettingsIcon className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Configuração</span><span className="sm:hidden ml-1">Config</span>
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="chat" className="h-[calc(100vh-200px)] sm:h-[calc(100vh-220px)] border border-[#222] rounded-xl bg-[#111] flex overflow-hidden shadow-2xl">
-          <div className="hidden md:flex w-[240px] border-r border-[#222] p-4 flex-col gap-4 bg-[#0d0d0d]">
-            <Button 
-              variant="outline" 
-              className="w-full justify-start gap-2 border-[#222] hover:bg-[#222] hover:text-white"
-              onClick={() => setMessages([])}
-            >
-              <span className="text-xl">+</span> Nova conversa
-            </Button>
-            
-            <div className="flex-1 space-y-1">
-              <p className="text-[10px] font-bold text-gray-600 uppercase tracking-widest px-2 mb-2">Recentes</p>
-              {["🔧 VPS Admin", "📊 Diagnóstico", "🐳 Docker", "📝 Código"].map(item => (
-                <div key={item} className="text-sm p-2.5 rounded-lg hover:bg-[#1a1a1a] cursor-pointer text-gray-400 flex items-center gap-2 group transition-colors">
-                  <div className="w-1.5 h-1.5 rounded-full bg-gray-700 group-hover:bg-blue-500" />
-                  {item}
-                </div>
-              ))}
+    <CRMLayout>
+      <div className="space-y-4 max-w-full">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
+              <Terminal className="w-5 h-5 text-blue-500" />
             </div>
-            
-            <Card className="p-3 bg-blue-500/5 border-blue-500/20 rounded-xl">
-              <p className="text-[10px] text-blue-400 font-medium leading-relaxed">
-                O histórico é mantido apenas nesta sessão. Comandos complexos podem levar até 10s.
-              </p>
-            </Card>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight">OpenClaw Admin</h1>
+              <p className="text-xs text-muted-foreground">Agente de administração da VPS via IA</p>
+            </div>
           </div>
+          <Badge variant="outline" className="border-blue-500/30 text-blue-500 gap-1 bg-blue-500/5">
+            <Zap className="w-3 h-3 fill-current" /> v2.4 Stable
+          </Badge>
+        </div>
 
-          <div className="flex-1 flex flex-col relative bg-[#0a0a0a] min-w-0">
-            <div className="md:hidden flex items-center justify-between gap-2 px-3 py-2 border-b border-[#222] bg-[#0d0d0d]">
-              <Button 
-                variant="outline" 
-                size="sm"
-                className="gap-2 border-[#222] hover:bg-[#222] hover:text-white text-xs"
-                onClick={() => setMessages([])}
-              >
-                <span>+</span> Nova conversa
-              </Button>
-              <span className="text-[10px] text-gray-500">Sessão local</span>
-            </div>
+        <Tabs defaultValue="chat" className="space-y-4">
+          <TabsList className="w-full sm:w-auto">
+            <TabsTrigger value="chat" className="flex-1 sm:flex-none gap-2">
+              <Bot className="w-4 h-4" /> Chat Admin
+            </TabsTrigger>
+            <TabsTrigger value="status" className="flex-1 sm:flex-none gap-2">
+              <Activity className="w-4 h-4" /> Status
+            </TabsTrigger>
+            <TabsTrigger value="config" className="flex-1 sm:flex-none gap-2">
+              <Settings className="w-4 h-4" /> Config
+            </TabsTrigger>
+          </TabsList>
 
-            <ScrollArea className="flex-1 p-3 sm:p-6">
-              <div className="max-w-4xl mx-auto space-y-6">
-                {messages.length === 0 && (
-                  <div className="h-[300px] sm:h-[400px] flex flex-col items-center justify-center text-center space-y-4 px-2">
-                    <div className="p-4 bg-blue-500/10 rounded-full animate-pulse">
-                      <Bot className="w-10 h-10 sm:w-12 sm:h-12 text-blue-500" />
-                    </div>
-                    <div>
-                      <h2 className="text-base sm:text-xl font-bold text-gray-200">Como posso ajudar na VPS hoje?</h2>
-                      <p className="text-xs sm:text-sm text-gray-500 max-w-sm mx-auto mt-2">
-                        Posso executar comandos, analisar logs, gerenciar containers e editar arquivos de configuração.
-                      </p>
-                    </div>
-                  </div>
-                )}
-                
-                {messages.map((msg, i) => (
-                  <ChatMessage key={i} message={msg} />
-                ))}
-                
-                {isLoading && (
-                  <div className="flex justify-start mb-4">
-                    <div className="bg-[#222] p-4 rounded-lg rounded-tl-none border border-[#333] flex items-center gap-3">
-                      <div className="flex gap-1">
-                        <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                        <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                        <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" />
-                      </div>
-                      <span className="text-xs text-gray-400 font-mono">OpenClaw processando...</span>
-                    </div>
-                  </div>
-                )}
-                <div ref={scrollRef} />
-              </div>
-            </ScrollArea>
-
-            <div className="p-3 sm:p-4 bg-[#111]/50 backdrop-blur-md border-t border-[#222]">
-              <div className="max-w-4xl mx-auto space-y-3 sm:space-y-4">
-                <div className="flex gap-2 overflow-x-auto sm:flex-wrap pb-1 -mx-1 px-1">
-                  {['docker ps', 'df -h', 'docker logs crm-api --tail 50', 'git log --oneline -10'].map(cmd => (
-                    <Badge 
-                      key={cmd} 
-                      variant="outline" 
-                      className="cursor-pointer hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all font-mono text-[10px] py-1 px-2 border-[#333] text-gray-400 whitespace-nowrap shrink-0"
+          {/* ─── CHAT ─── */}
+          <TabsContent value="chat">
+            <Card className="flex overflow-hidden" style={{ height: 'calc(100vh - 240px)', minHeight: 480 }}>
+              {/* Sidebar do chat (desktop) */}
+              <div className="hidden md:flex w-[220px] border-r flex-col gap-3 p-3 bg-muted/30 shrink-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-start gap-2"
+                  onClick={clearHistory}
+                >
+                  <Trash2 className="w-4 h-4" /> Limpar histórico
+                </Button>
+                <div className="flex-1">
+                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-1 mb-2">Ações rápidas</p>
+                  {['docker ps', 'df -h', 'free -h', 'uptime'].map(cmd => (
+                    <button
+                      key={cmd}
                       onClick={() => handleQuickAction(cmd)}
+                      className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-accent font-mono text-muted-foreground hover:text-foreground transition-colors"
                     >
                       {cmd}
-                    </Badge>
+                    </button>
                   ))}
                 </div>
-                
-                <div className="flex gap-2 sm:gap-3 items-end">
-                  <div className="flex-1 min-w-0 bg-[#0a0a0a] rounded-xl border border-[#222] focus-within:border-blue-500/50 transition-colors p-1">
-                    <Textarea 
-                      placeholder="Peça ao agente para executar comandos..." 
-                      className="bg-transparent border-none focus-visible:ring-0 min-h-[44px] resize-none py-3 text-sm"
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          sendMessage();
-                        }
-                      }}
-                    />
-                  </div>
-                  <Button 
-                    className="h-11 w-11 sm:h-[52px] sm:w-[52px] shrink-0 bg-blue-600 hover:bg-blue-700 rounded-xl shadow-lg shadow-blue-900/20 transition-all active:scale-95"
-                    onClick={() => sendMessage()}
-                    disabled={isLoading || !input.trim()}
-                  >
-                    {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                <div className="text-[10px] text-muted-foreground bg-muted rounded-lg p-2 leading-relaxed">
+                  Histórico salvo localmente ({messages.length} msgs)
+                </div>
+              </div>
+
+              {/* Área principal do chat */}
+              <div className="flex-1 flex flex-col min-w-0">
+                {/* Toolbar mobile */}
+                <div className="flex md:hidden items-center justify-between gap-2 px-3 py-2 border-b">
+                  <span className="text-xs text-muted-foreground">{messages.length} mensagens salvas</span>
+                  <Button variant="ghost" size="sm" onClick={clearHistory} className="gap-1 text-xs">
+                    <Trash2 className="w-3 h-3" /> Limpar
                   </Button>
                 </div>
-              </div>
-            </div>
-          </div>
-        </TabsContent>
 
-        <TabsContent value="status" className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatusCard 
-              title="OpenClaw Gateway" 
-              status={status.gateway === 'online' ? 'online' : 'offline'} 
-              info="gpt-5.4-mini" 
-            />
-            <StatusCard 
-              title="Backend API" 
-              status={status.backend === 'online' ? 'online' : 'offline'} 
-              info={status.backend === 'online' ? 'Ativo' : 'Offline'} 
-            />
-            <StatusCard 
-              title="Evolution API" 
-              status={status.evolution === 'online' ? 'online' : 'offline'} 
-              info={status.evolutionCount ? `${status.evolutionCount} instâncias` : 'Verificando...'} 
-            />
-            <StatusCard 
-              title="Banco de Dados" 
-              status="online" 
-              info="PostgreSQL 16 + pgvector" 
-            />
-          </div>
+                <ScrollArea className="flex-1 p-4">
+                  <div className="max-w-3xl mx-auto space-y-4">
+                    {messages.length === 0 && (
+                      <div className="h-64 flex flex-col items-center justify-center text-center gap-4">
+                        <div className="p-4 bg-blue-500/10 rounded-full">
+                          <Bot className="w-10 h-10 text-blue-500" />
+                        </div>
+                        <div>
+                          <h2 className="text-lg font-bold">Como posso ajudar na VPS hoje?</h2>
+                          <p className="text-sm text-muted-foreground max-w-sm mx-auto mt-1">
+                            Execute comandos, analise logs, gerencie containers e edite configurações.
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
-          <div className="grid grid-cols-1 gap-6">
-            <Card className="p-6 bg-[#111] border-[#222]">
-              <div className="flex justify-between items-center mb-6">
-                <div>
-                  <h2 className="text-lg font-bold flex items-center gap-2">
-                    <LayoutGrid className="w-5 h-5 text-blue-500" /> Containers Ativos
-                  </h2>
-                  <p className="text-sm text-gray-500">Listagem de containers via docker ps</p>
+                    {messages.map((msg, i) => (
+                      <ChatMessage key={i} message={msg} />
+                    ))}
+
+                    {isLoading && (
+                      <div className="flex justify-start">
+                        <div className="bg-muted px-4 py-3 rounded-2xl rounded-tl-none border flex items-center gap-2">
+                          <div className="flex gap-1">
+                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" />
+                          </div>
+                          <span className="text-xs text-muted-foreground font-mono">OpenClaw processando...</span>
+                        </div>
+                      </div>
+                    )}
+                    <div ref={scrollRef} />
+                  </div>
+                </ScrollArea>
+
+                {/* Input */}
+                <div className="p-3 border-t bg-background">
+                  <div className="max-w-3xl mx-auto space-y-2">
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {['docker ps', 'df -h', 'docker logs crm-api --tail 50', 'git log --oneline -10'].map(cmd => (
+                        <Badge
+                          key={cmd}
+                          variant="outline"
+                          className="cursor-pointer hover:bg-primary hover:text-primary-foreground hover:border-primary transition-all font-mono text-[10px] py-1 px-2 whitespace-nowrap shrink-0"
+                          onClick={() => handleQuickAction(cmd)}
+                        >
+                          {cmd}
+                        </Badge>
+                      ))}
+                    </div>
+
+                    <div className="flex gap-2 items-end">
+                      <div className="flex-1 min-w-0 rounded-xl border bg-muted/30 focus-within:border-blue-500/50 transition-colors p-1">
+                        <Textarea
+                          placeholder="Peça ao agente para executar comandos..."
+                          className="bg-transparent border-none focus-visible:ring-0 min-h-[44px] resize-none py-2 text-sm"
+                          value={input}
+                          onChange={(e) => setInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              sendMessage();
+                            }
+                          }}
+                        />
+                      </div>
+                      <Button
+                        className="h-11 w-11 shrink-0 bg-blue-600 hover:bg-blue-700 rounded-xl shadow-lg shadow-blue-900/20 transition-all active:scale-95"
+                        onClick={() => sendMessage()}
+                        disabled={isLoading || !input.trim()}
+                      >
+                        {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
-                <Button variant="outline" size="sm" className="gap-2 border-[#333]" onClick={() => handleQuickAction("Use exec para rodar: docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' e retorne os dados")}>
-                  <RefreshCw className="w-4 h-4" /> Verificar containers
-                </Button>
-              </div>
-              
-              <div className="rounded-lg border border-[#222] overflow-hidden">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-[#1a1a1a] text-gray-400">
-                    <tr>
-                      <th className="p-3 font-medium">Nome</th>
-                      <th className="p-3 font-medium">Status</th>
-                      <th className="p-3 font-medium">Portas</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#222] text-gray-300">
-                    <tr>
-                      <td className="p-3 font-mono">crm-api</td>
-                      <td className="p-3"><Badge className="bg-green-500/20 text-green-500 border-green-500/30">Up 4 days</Badge></td>
-                      <td className="p-3 text-xs text-gray-500">0.0.0.0:3000-&gt;3000/tcp</td>
-                    </tr>
-                    <tr>
-                      <td className="p-3 font-mono">evolution-api</td>
-                      <td className="p-3"><Badge className="bg-green-500/20 text-green-500 border-green-500/30">Up 12 days</Badge></td>
-                      <td className="p-3 text-xs text-gray-500">0.0.0.0:8080-&gt;8080/tcp</td>
-                    </tr>
-                    <tr>
-                      <td className="p-3 font-mono">openclaw-gateway</td>
-                      <td className="p-3"><Badge className="bg-green-500/20 text-green-500 border-green-500/30">Up 48 hours</Badge></td>
-                      <td className="p-3 text-xs text-gray-500">0.0.0.0:18789-&gt;18789/tcp</td>
-
-                    </tr>
-                  </tbody>
-                </table>
               </div>
             </Card>
+          </TabsContent>
 
-            <Card className="p-6 bg-[#111] border-[#222]">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold flex items-center gap-2">
-                  <Terminal className="w-5 h-5 text-yellow-500" /> Logs em tempo real
-                </h2>
-                <Button variant="outline" size="sm" className="gap-2 border-[#333]" onClick={() => handleQuickAction("Use exec para rodar: docker logs crm-api --tail 30 2>&1")}>
-                  <RefreshCw className="w-4 h-4" /> Atualizar logs
-                </Button>
-              </div>
-              <div className="bg-[#0a0a0a] p-4 rounded-lg border border-[#222] font-mono text-xs text-green-500/80 h-64 overflow-y-auto leading-relaxed">
-                <div>[2024-05-20 10:15:22] INFO: Server started on port 3000</div>
-                <div>[2024-05-20 10:15:25] INFO: Database connected</div>
-                <div>[2024-05-20 10:20:44] DEBUG: Incoming request to /api/openclaw/chat</div>
-                <div>[2024-05-20 10:20:50] INFO: Agent tool call: exec_command</div>
-                <div className="animate-pulse">_</div>
-              </div>
-            </Card>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="config" className="space-y-8">
-          <div>
-            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <Database className="w-5 h-5 text-blue-500" /> Workspace Files
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-               <FileConfigCard 
-                 filename="SOUL.md" 
-                 description="Identidade e comportamento do agente" 
-                 contentPreview="Você é o agente MentoArk, um assistente especializado em infraestrutura e código..." 
-                 onSave={async (c) => handleQuickAction(`Use a ferramenta write para salvar este conteúdo em /opt/crm/SOUL.md: ${c}`)} 
-               />
-               <FileConfigCard 
-                 filename="USER.md" 
-                 description="Preferências e perfil do operador" 
-                 contentPreview="Nome: Admin. Nível de acesso: Root. Preferência: Respostas concisas e técnicas." 
-                 onSave={async (c) => handleQuickAction(`Use a ferramenta write para salvar este conteúdo em /opt/crm/USER.md: ${c}`)} 
-               />
-               <FileConfigCard 
-                 filename="TOOLS.md" 
-                 description="Definição de permissões de ferramentas" 
-                 contentPreview="Ferramentas permitidas: exec, write, read, fetch. Restrições: rm -rf /" 
-                 onSave={async (c) => handleQuickAction(`Use a ferramenta write para salvar este conteúdo em /opt/crm/TOOLS.md: ${c}`)} 
-               />
+          {/* ─── STATUS ─── */}
+          <TabsContent value="status" className="space-y-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <StatusCard title="OpenClaw Gateway" status={status.gateway === 'online' ? 'online' : 'offline'} info="gpt-4o-mini" />
+              <StatusCard title="Backend API" status={status.backend === 'online' ? 'online' : 'offline'} info={status.backend === 'online' ? 'Ativo' : 'Offline'} />
+              <StatusCard title="Evolution API" status={status.evolution === 'online' ? 'online' : 'offline'} info={status.evolutionInstance || 'Verificando...'} />
+              <StatusCard title="Banco de Dados" status="online" info="PostgreSQL 16 + pgvector" />
             </div>
-          </div>
 
-          <div>
-            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <Zap className="w-5 h-5 text-orange-500" /> Ações Rápidas VPS
-            </h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              {[
-                { label: 'Reiniciar Backend', cmd: 'docker compose -f /opt/crm/backend/docker-compose.yml restart', icon: RefreshCw },
-                { label: 'Reiniciar Evolution', cmd: 'docker compose -f /opt/evolution/docker-compose.yml restart', icon: RefreshCw },
-                { label: 'Uso de disco', cmd: 'df -h /', icon: Database },
-                { label: 'Limpar imagens', cmd: 'docker image prune -f', icon: LayoutGrid },
-                { label: 'Ver logs erro', cmd: 'docker logs crm-api --tail 50 2>&1 | grep -i error', icon: Terminal },
-                { label: 'Status geral', cmd: 'docker ps && df -h / && free -h', icon: Activity },
-              ].map(action => (
-                <Button 
-                  key={action.label}
-                  variant="outline" 
-                  className="flex flex-col h-24 gap-2 border-[#222] hover:bg-[#222] hover:border-blue-500/50 group transition-all"
-                  onClick={() => handleQuickAction(action.cmd)}
-                >
-                  <action.icon className="w-5 h-5 text-gray-500 group-hover:text-blue-500" />
-                  <span className="text-[10px] text-center font-bold">{action.label}</span>
-                </Button>
-              ))}
+            <div className="grid grid-cols-1 gap-4">
+              <Card className="p-5">
+                <div className="flex justify-between items-center mb-4">
+                  <div>
+                    <h2 className="text-base font-bold flex items-center gap-2">
+                      <LayoutGrid className="w-4 h-4 text-blue-500" /> Containers Ativos
+                    </h2>
+                    <p className="text-xs text-muted-foreground">Clique em "Verificar" para dados em tempo real</p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => handleQuickAction("Use exec para rodar: docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}' e retorne os dados")}
+                  >
+                    <RefreshCw className="w-4 h-4" /> Verificar
+                  </Button>
+                </div>
+                <div className="rounded-lg border overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-muted/50 text-muted-foreground">
+                      <tr>
+                        <th className="p-3 font-medium">Container</th>
+                        <th className="p-3 font-medium">Status</th>
+                        <th className="p-3 font-medium hidden sm:table-cell">Portas</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y text-sm">
+                      {[
+                        { name: 'crm-api', port: '3000→3000' },
+                        { name: 'crm', port: '80→80' },
+                        { name: 'evolution', port: '8080→8080' },
+                        { name: 'traefik', port: '80,443' },
+                      ].map(c => (
+                        <tr key={c.name}>
+                          <td className="p-3 font-mono text-xs">{c.name}</td>
+                          <td className="p-3"><Badge className="bg-green-500/15 text-green-600 border-green-500/30 text-xs">Running</Badge></td>
+                          <td className="p-3 text-xs text-muted-foreground hidden sm:table-cell">{c.port}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+
+              <Card className="p-5">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-base font-bold flex items-center gap-2">
+                    <Terminal className="w-4 h-4 text-yellow-500" /> Logs em tempo real
+                  </h2>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => handleQuickAction("Use exec para rodar: docker logs crm-api --tail 30 2>&1")}
+                  >
+                    <RefreshCw className="w-4 h-4" /> Buscar logs
+                  </Button>
+                </div>
+                <div className="bg-muted/30 rounded-lg border p-3 font-mono text-xs text-muted-foreground h-40 overflow-y-auto leading-relaxed">
+                  <p>Clique em "Buscar logs" para carregar os logs em tempo real via agente.</p>
+                  <p className="animate-pulse mt-2">_</p>
+                </div>
+              </Card>
             </div>
-          </div>
-        </TabsContent>
-      </Tabs>
-    </div>
+          </TabsContent>
+
+          {/* ─── CONFIG ─── */}
+          <TabsContent value="config" className="space-y-6">
+            <div>
+              <h2 className="text-base font-bold mb-3 flex items-center gap-2">
+                <Database className="w-4 h-4 text-blue-500" /> Workspace Files
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FileConfigCard
+                  filename="SOUL.md"
+                  description="Identidade e comportamento do agente"
+                  contentPreview="Você é o agente MentoArk, um assistente especializado em infraestrutura e código..."
+                  onSave={async (c) => handleQuickAction(`Use a ferramenta write para salvar este conteúdo em /opt/crm/SOUL.md: ${c}`)}
+                />
+                <FileConfigCard
+                  filename="USER.md"
+                  description="Preferências e perfil do operador"
+                  contentPreview="Nome: Admin. Nível de acesso: Root. Preferência: Respostas concisas e técnicas."
+                  onSave={async (c) => handleQuickAction(`Use a ferramenta write para salvar este conteúdo em /opt/crm/USER.md: ${c}`)}
+                />
+                <FileConfigCard
+                  filename="TOOLS.md"
+                  description="Definição de permissões de ferramentas"
+                  contentPreview="Ferramentas permitidas: exec, write, read, fetch. Restrições: rm -rf /"
+                  onSave={async (c) => handleQuickAction(`Use a ferramenta write para salvar este conteúdo em /opt/crm/TOOLS.md: ${c}`)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <h2 className="text-base font-bold mb-3 flex items-center gap-2">
+                <Zap className="w-4 h-4 text-orange-500" /> Ações Rápidas VPS
+              </h2>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                {[
+                  { label: 'Reiniciar Backend', cmd: 'docker compose -f /opt/crm/backend/docker-compose.yml restart', icon: RefreshCw },
+                  { label: 'Reiniciar Evolution', cmd: 'docker compose -f /opt/evolution/docker-compose.yml restart', icon: RefreshCw },
+                  { label: 'Uso de disco', cmd: 'df -h /', icon: Database },
+                  { label: 'Limpar imagens', cmd: 'docker image prune -f', icon: LayoutGrid },
+                  { label: 'Ver logs erro', cmd: 'docker logs crm-api --tail 50 2>&1 | grep -i error', icon: Terminal },
+                  { label: 'Status geral', cmd: 'docker ps && df -h / && free -h', icon: Activity },
+                ].map(action => (
+                  <Button
+                    key={action.label}
+                    variant="outline"
+                    className="flex flex-col h-20 gap-1.5 group transition-all"
+                    onClick={() => handleQuickAction(action.cmd)}
+                  >
+                    <action.icon className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                    <span className="text-[10px] text-center font-medium leading-tight">{action.label}</span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+    </CRMLayout>
   );
 }
-
-// Missing icons from standard imports
-const SettingsIcon = (props: any) => (
-  <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-);

@@ -19,16 +19,16 @@ export const ChatMessage = ({ message }: ChatMessageProps) => {
   return (
     <div className={`flex w-full mb-4 ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-[80%] p-3 rounded-lg shadow-md ${
+        className={`max-w-[80%] p-3 rounded-lg shadow-sm ${
           isUser
             ? 'bg-blue-600 text-white rounded-tr-none'
-            : 'bg-[#222] text-gray-100 rounded-tl-none border border-[#333]'
+            : 'bg-muted text-foreground rounded-tl-none border'
         }`}
       >
-        <div className="text-xs mb-1 opacity-70 font-semibold flex items-center gap-1">
+        <div className={`text-xs mb-1 font-semibold flex items-center gap-1 ${isUser ? 'opacity-70' : 'text-muted-foreground'}`}>
           {isUser ? 'Você' : 'OpenClaw Agent'}
         </div>
-        <div className="prose prose-invert prose-sm max-w-none">
+        <div className="prose prose-sm max-w-none dark:prose-invert">
           <ReactMarkdown
             components={{
               code({ node, inline, className, children, ...props }: any) {

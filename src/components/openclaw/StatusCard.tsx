@@ -11,9 +11,9 @@ interface StatusCardProps {
 
 export const StatusCard = ({ title, status, info, indicatorText }: StatusCardProps) => {
   return (
-    <div className="p-4 bg-[#111] border border-[#222] rounded-xl flex flex-col justify-between h-32 hover:border-[#333] transition-colors">
+    <div className="p-4 bg-card border rounded-xl flex flex-col justify-between h-32 hover:border-primary/30 transition-colors">
       <div className="flex justify-between items-start">
-        <h3 className="text-sm font-medium text-gray-400">{title}</h3>
+        <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>
         <Badge 
           className={
             status === 'online' ? 'bg-green-500/20 text-green-500 border-green-500/30' : 
@@ -27,7 +27,7 @@ export const StatusCard = ({ title, status, info, indicatorText }: StatusCardPro
       </div>
       <div className="flex items-center gap-2">
         <div className={`w-2 h-2 rounded-full ${status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : status === 'offline' ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} />
-        <span className="text-lg font-mono font-bold text-gray-200 truncate">{info || '---'}</span>
+        <span className="text-lg font-mono font-bold text-foreground truncate">{info || '---'}</span>
       </div>
     </div>
   );
