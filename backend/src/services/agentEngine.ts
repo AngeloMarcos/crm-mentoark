@@ -531,14 +531,15 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     await pool.query(
       `INSERT INTO whatsapp_messages
          (user_id, instance_name, remote_jid, message_id, from_me,
-          message_type, content, status, timestamp_wa)
-       VALUES ($1,$2,$3,$4,true,'text',$5,'sent',to_timestamp($6))
+          message_type, content, status, timestamp_wa, push_name)
+       VALUES ($1,$2,$3,$4,true,'text',$5,'sent',to_timestamp($6), $7)
        ON CONFLICT (message_id, instance_name) DO NOTHING`,
       [userIdFinal, agente.evolution_instancia || entrada.instancia,
        `${entrada.telefone}@s.whatsapp.net`,
        `resp_${entrada.messageId}`,
        respostaFinal,
-       Math.floor(Date.now() / 1000)]
+       Math.floor(Date.now() / 1000),
+       nomeAgente]
     ).catch(err => console.error('[ENGINE INSERT whatsapp_messages]:', err.message));
   }
 
