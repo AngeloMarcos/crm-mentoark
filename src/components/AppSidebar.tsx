@@ -2,7 +2,7 @@ import {
   LayoutDashboard, LayoutGrid, BarChart3, UserPlus, Tags, BookUser,
   PhoneCall, Filter, MessageCircle, Timer, Zap,
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
-  Brain, Package, Images, BookOpen, ShieldCheck, LogOut,
+  Brain, Package, Images, BookOpen, ShieldCheck, LogOut, ShieldOff,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
   Activity, Webhook, Database, Sparkles, Terminal,
