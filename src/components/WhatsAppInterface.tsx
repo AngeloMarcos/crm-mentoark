@@ -2895,6 +2895,55 @@ export function WhatsAppInterface() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Modal de Nova Conversa */}
+      <Dialog open={showNewMessageModal} onOpenChange={setShowNewMessageModal}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Nova Conversa</DialogTitle>
+            <DialogDescription>
+              Digite o número com DDD ou busque por um contato no CRM.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Telefone</Label>
+              <Input 
+                placeholder="Ex: 11999999999" 
+                value={newMessagePhone}
+                onChange={e => {
+                  setNewMessagePhone(e.target.value);
+                  buscarContatos(e.target.value);
+                }}
+              />
+            </div>
+
+            {contatoResults.length > 0 && (
+              <div className="rounded-xl border bg-muted/20 p-2 space-y-1">
+                {contatoResults.map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => handleStartNewChat(c.telefone, c.nome)}
+                    className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-background transition-colors text-left"
+                  >
+                    <ChatAvatar name={c.nome} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold truncate">{c.nome}</p>
+                      <p className="text-[10px] text-muted-foreground">{c.telefone}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNewMessageModal(false)}>Cancelar</Button>
+            <Button onClick={() => handleStartNewChat()} disabled={!newMessagePhone.trim()}>
+              Iniciar Chat
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
