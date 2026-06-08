@@ -64,7 +64,7 @@ export default function OpenClawPage() {
 
   const openClawBody = (extra: object) => ({
     ...extra,
-    _adminKey: 'openclaw-admin-2025',
+    // _adminKey: 'openclaw-admin-2025', // Removido fallback inseguro
   });
 
   const scrollToBottom = () => {

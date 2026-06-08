@@ -2,11 +2,14 @@
 // Cliente HTTP customizado — espelha a interface @api/api-js
 // Todas as chamadas vão para VITE_API_URL (backend Express próprio)
 // NÃO usa Database real — zero dependência externa
+import { getAuthToken } from "@/lib/api-token";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 
 // ── Token helpers ─────────────────────────────────────────────
-function _getToken(): string | null { return localStorage.getItem('access_token'); }
+function _getToken(): string | null { 
+  return getAuthToken() || null; 
+}
 
 function _authHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
