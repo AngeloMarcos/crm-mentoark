@@ -268,7 +268,10 @@ export default function whatsappRouter(pool: Pool): Router {
              RIGHT(telefone, 11) AS sufixo,
              COALESCE(push_name, nome) AS push_name,
              COALESCE(nome, push_name) AS nome_contato,
-             COALESCE(foto_perfil, profile_pic_url) AS profile_pic_url
+             COALESCE(profile_pic_url) AS profile_pic_url,
+             is_pinned,
+             is_archived,
+             muted_until
            FROM contatos
            WHERE user_id = $1 AND telefone IS NOT NULL
            ORDER BY RIGHT(telefone, 11), updated_at DESC NULLS LAST
@@ -284,11 +287,14 @@ export default function whatsappRouter(pool: Pool): Router {
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
            cu.push_name,
            cu.nome_contato,
-           cu.profile_pic_url
+           cu.profile_pic_url,
+           COALESCE(cu.is_pinned, false) AS is_pinned,
+           COALESCE(cu.is_archived, false) AS is_archived,
+           cu.muted_until
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          WHERE r.rn = 1
-         ORDER BY r.created_at DESC
+         ORDER BY cu.is_pinned DESC NULLS LAST, r.created_at DESC
          LIMIT 300`,
         [userId]
       );
@@ -310,6 +316,9 @@ export default function whatsappRouter(pool: Pool): Router {
           ultima_mensagem: row.ultima_mensagem || '',
           ultimo_role: row.ultimo_role,
           total: Number(row.total),
+          is_pinned: row.is_pinned || false,
+          is_archived: row.is_archived || false,
+          muted_until: row.muted_until || null,
           mensagens: [],
         };
       });
@@ -337,7 +346,7 @@ export default function whatsappRouter(pool: Pool): Router {
         `SELECT
            m.id, m.message_id, m.from_me, m.message_type, m.content,
            m.media_url, m.media_mimetype, m.status, m.push_name,
-           m.timestamp_wa, m.created_at,
+           m.timestamp_wa, m.created_at, m.is_read,
            COALESCE(s.status, m.status) AS delivery_status,
            u.display_name AS sender_name
          FROM whatsapp_messages m
@@ -362,6 +371,7 @@ export default function whatsappRouter(pool: Pool): Router {
         midia_mime: row.media_mimetype,
         midia_nome: null,
         status: row.delivery_status || row.status,
+        is_read: row.is_read ?? false,
         sender_name: row.sender_name || null,
         created_at: row.created_at,
         timestamp_wa: row.timestamp_wa,

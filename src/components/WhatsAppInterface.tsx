@@ -513,8 +513,8 @@ export function WhatsAppInterface() {
             notes: prevMap.get(row.session_id)?.notes || '',
             profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
             unread: Number(row.unread || (hasUnread ? 1 : 0)),
-            pinned: row.pinned === true,
-            archived: row.archived === true,
+            is_pinned: row.is_pinned === true,
+            is_archived: row.is_archived === true,
             push_name: row.push_name || undefined,
           };
         });
