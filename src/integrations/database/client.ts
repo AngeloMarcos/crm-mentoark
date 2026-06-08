@@ -101,6 +101,13 @@ const auth = {
     if (!r) return false;
     try {
       const res = await fetch(`${API_BASE}/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: r }) });
+      if (res.status === 401) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        _currentUser = null;
+        _notify('SIGNED_OUT', null);
+        return false;
+      }
       if (!res.ok) return false;
       const data = await res.json();
       localStorage.setItem('access_token', data.access_token);
