@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { pool } from './db';
 import { authMiddleware, AuthRequest } from './middleware';
 
-const DEBUG_AUTH = process.env.NODE_ENV !== 'production' || true;
+const DEBUG_AUTH = process.env.NODE_ENV !== 'production';
 
 const router = Router();
 

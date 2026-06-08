@@ -177,8 +177,13 @@ app.get('/api/agent_prompts/ativo', n8nSecretMiddleware, async (req, res) => {
 
 // Endpoint do catálogo para n8n — protegido por segredo compartilhado
 app.get('/api/catalogo/n8n/:userId', async (req, res) => {
-  const secret = (req.headers['x-n8n-secret'] as string) || (req.query.secret as string);
-  if (process.env.N8N_CATALOG_SECRET && secret !== process.env.N8N_CATALOG_SECRET) {
+  const expected = process.env.N8N_CATALOG_SECRET;
+  if (!expected) {
+    console.error('[CATALOGO_N8N] N8N_CATALOG_SECRET não configurado — endpoint desabilitado');
+    return res.status(503).json({ error: 'Endpoint não configurado' });
+  }
+  const secret = req.headers['x-n8n-secret'] as string;
+  if (!secret || secret !== expected) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
