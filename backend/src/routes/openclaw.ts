@@ -77,11 +77,18 @@ async function callProxy(
   sessionKey: string,
   timeoutMs = 45_000,
 ): Promise<{ reply: string; toolCalls: number }> {
+  const proxyUrl = process.env.OPENCLAW_PROXY_URL;
+  
+  // Se não tiver proxy configurado, chama OpenAI diretamente
+  if (!proxyUrl || proxyUrl === 'http://172.19.0.1:18790') {
+    return callOpenAIDirect(message, sessionKey, timeoutMs);
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(`${OPENCLAW_PROXY}/chat`, {
+    const res = await fetch(`${proxyUrl}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, sessionKey }),
@@ -90,7 +97,9 @@ async function callProxy(
 
     if (!res.ok) {
       const err = await res.text().catch(() => String(res.status));
-      throw new Error(`proxy ${res.status}: ${err.slice(0, 200)}`);
+      // Fallback para OpenAI direto se proxy falhar
+      console.warn(`[OPENCLAW] Proxy falhou (${res.status}), usando OpenAI direto`);
+      return callOpenAIDirect(message, sessionKey, timeoutMs);
     }
 
     const data = await res.json() as { reply?: string; toolCalls?: number; error?: string };
@@ -98,7 +107,56 @@ async function callProxy(
     if (!data.reply) throw new Error('OpenClaw não retornou texto');
 
     return { reply: data.reply, toolCalls: data.toolCalls ?? 0 };
+  } catch (err: any) {
+    if (err.message.includes('fetch failed') || err.message.includes('ECONNREFUSED') || err.message.includes('ECONNRESET')) {
+      console.warn('[OPENCLAW] Proxy inacessível, usando OpenAI direto');
+      return callOpenAIDirect(message, sessionKey, timeoutMs);
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Fallback: OpenAI direto sem proxy
+async function callOpenAIDirect(
+  message: string,
+  _sessionKey: string,
+  _timeoutMs: number,
+): Promise<{ reply: string; toolCalls: number }> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OpenAI API Key não configurada. Configure em Integrações > IA no CRM.');
+  }
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4.1-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'Você é um assistente de CRM especializado em vendas via WhatsApp. Ajude o usuário a analisar conversas, criar estratégias de vendas e otimizar o atendimento.',
+        },
+        { role: 'user', content: message },
+      ],
+      max_tokens: 2000,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => String(res.status));
+    throw new Error(`OpenAI ${res.status}: ${err.slice(0, 200)}`);
+  }
+
+  const data = await res.json() as any;
+  const reply = data.choices?.[0]?.message?.content || '';
+  if (!reply) throw new Error('OpenAI não retornou resposta');
+
+  return { reply, toolCalls: 0 };
 }
