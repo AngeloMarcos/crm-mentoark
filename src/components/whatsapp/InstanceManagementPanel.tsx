@@ -119,6 +119,7 @@ export function InstanceManagementPanel() {
   // ─── Conectar nova instância ───
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [newInstanceName, setNewInstanceName] = useState("");
   const [newInstancePhone, setNewInstancePhone] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -880,6 +881,41 @@ export function InstanceManagementPanel() {
               </Button>
             </DialogFooter>
           </DialogContent>
+        </Dialog>
+
+        {/* Modal para evitar erro de DialogTitle em outros diálogos se houver */}
+        <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
+           <DialogContent>
+             <DialogHeader>
+               <DialogTitle>Conectar Novo WhatsApp</DialogTitle>
+               <DialogDescription>Preencha os dados da nova instância.</DialogDescription>
+             </DialogHeader>
+             <div className="space-y-4 py-4">
+               <div className="space-y-2">
+                 <Label>Nome da Instância</Label>
+                 <Input 
+                   placeholder="Ex: Vendas" 
+                   value={newInstanceName}
+                   onChange={e => setNewInstanceName(e.target.value)}
+                 />
+               </div>
+               <div className="space-y-2">
+                 <Label>Telefone (opcional)</Label>
+                 <Input 
+                   placeholder="55..." 
+                   value={newInstancePhone}
+                   onChange={e => setNewInstancePhone(e.target.value)}
+                 />
+               </div>
+             </div>
+             <DialogFooter>
+               <Button variant="outline" onClick={() => setShowConnectModal(false)}>Cancelar</Button>
+               <Button onClick={startConnect} disabled={connecting}>
+                 {connecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Smartphone className="h-4 w-4 mr-2" />}
+                 Gerar Conexão
+               </Button>
+             </DialogFooter>
+           </DialogContent>
         </Dialog>
       </div>
     </TooltipProvider>

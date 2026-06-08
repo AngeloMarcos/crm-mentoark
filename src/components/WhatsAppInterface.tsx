@@ -210,6 +210,7 @@ export function WhatsAppInterface() {
   const currentUserName = user?.display_name || user?.email?.split('@')[0] || 'Agente';
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
+  const [isAiProcessing, setIsAiProcessing] = useState(false);
   
   const [messageInput, setMessageInput] = useState("");
   const [inputMode, setInputMode] = useState<"responder" | "nota">("responder");
@@ -808,6 +809,27 @@ export function WhatsAppInterface() {
   }, [activeChatId, chats]);
 
   const handleSendMessage = async () => {
+    // IA responde via API unificada se o modo IA estiver ativo e não houver pausa manual
+    const chat = chats.find(c => c.id === activeChatId);
+    if (!iaPausada && inputMode === "responder") {
+      try {
+        setIsAiProcessing(true);
+        const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
+          method: 'POST',
+          headers: apiHeaders(),
+          body: JSON.stringify({ message: messageInput, sessionKey: activeChatId })
+        });
+        if (!res.ok) {
+           const err = await res.json().catch(() => ({}));
+           console.error('[OPENCLAW] Erro na resposta IA:', err);
+        }
+      } catch (err) {
+        console.error('[OPENCLAW] Falha ao chamar IA:', err);
+      } finally {
+        setIsAiProcessing(false);
+      }
+    }
+
     // Fecha busca ao enviar mensagem
     setIsSearchingInChat(false);
     setChatSearchTerm("");
@@ -2428,7 +2450,7 @@ export function WhatsAppInterface() {
               <div className="bg-background rounded-2xl border border-border/50 shadow-sm overflow-hidden focus-within:ring-2 focus-within:ring-primary/20 transition-all">
                 <div className="px-4 py-3 bg-muted/20 border-b border-border/30 flex items-center justify-between">
                   <p className="text-[11px] font-bold text-muted-foreground/70 uppercase tracking-widest">
-                    {inputMode === "nota" ? "Anotando privadamente..." : "Enviando como Agente..."}
+                    {isAiProcessing ? "IA Processando resposta..." : (inputMode === "nota" ? "Anotando privadamente..." : "Enviando como Agente...")}
                   </p>
                   <p className="text-[10px] font-medium text-muted-foreground/50 italic">
                     Shift + Enter para nova linha
@@ -2533,7 +2555,7 @@ export function WhatsAppInterface() {
                           ? (inputMode === "nota" ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-primary hover:bg-primary/90 shadow-primary/20")
                           : "bg-muted text-muted-foreground opacity-50"
                       }`}
-                      disabled={!(inputMode === "nota" ? noteInput.trim() : messageInput.trim())}
+                      disabled={isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim())}
                       onClick={handleSendMessage}
                     >
                       <Send className="h-4.5 w-4.5" />
