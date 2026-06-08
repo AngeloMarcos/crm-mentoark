@@ -621,10 +621,11 @@ export function WhatsAppInterface() {
     try {
       // Se houver uma instância ativa no chat atual, priorizamos verificar o status dela
       // Caso contrário, tentamos pegar a instância 'teste' ou a primeira disponível no cache local
-      const activeInstance = activeChat?.source || chats.find(c => c.source)?.source || 'teste';
+      const activeInstance = activeChatId ? chats.find(c => c.id === activeChatId)?.source : null;
+      const targetInstance = activeInstance || chats.find(c => c.source)?.source || 'teste';
       
-      console.log(`[WA] Verificando status para instância: ${activeInstance}`);
-      const res = await fetchConnectionStatus(activeInstance);
+      console.log(`[WA] Verificando status para instância: ${targetInstance}`);
+      const res = await fetchConnectionStatus(targetInstance);
       
       setConnectionStatus(res);
       if (res.state === "open") setQrData(null);
@@ -1554,7 +1555,7 @@ export function WhatsAppInterface() {
                             {chat.is_pinned && <Pin className="h-3 w-3 text-muted-foreground rotate-45 shrink-0" />}
                             {chat.is_muted && <BellOff className="h-3 w-3 text-muted-foreground shrink-0" />}
                           </div>
-                          <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
+                          <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp || '...'}</span>
                         </div>
                         <div className="flex items-center gap-1.5 mb-1.5">
                           {chat.is_group && (
@@ -1958,7 +1959,7 @@ export function WhatsAppInterface() {
                 <div>
                   <div className="flex items-center gap-2">
                     <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
-                    <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+                    <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
                   </div>
                   <p className="text-[11px] font-medium text-muted-foreground">
                     <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span> · {activeChat.phone}
@@ -2189,8 +2190,11 @@ export function WhatsAppInterface() {
                   const prevRole = prevMsg?.role ?? null;
                   
                   // Lógica de separador de data
-                  const currentDate = new Date(m.rawTimestamp || m.timestamp);
-                  const prevDate = prevMsg ? new Date(prevMsg.rawTimestamp || prevMsg.timestamp) : null;
+                  const currentDateStr = m.rawTimestamp || m.timestamp;
+                  const prevDateStr = prevMsg ? (prevMsg.rawTimestamp || prevMsg.timestamp) : null;
+                  
+                  const currentDate = currentDateStr ? new Date(currentDateStr) : new Date();
+                  const prevDate = prevDateStr ? new Date(prevDateStr) : null;
                   
                   const isDifferentDay = !prevDate || 
                     currentDate.getDate() !== prevDate.getDate() || 
