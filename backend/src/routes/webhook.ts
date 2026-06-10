@@ -414,14 +414,14 @@ export default function webhookRouter(pool: Pool): Router {
                ON CONFLICT (user_id, telefone) DO UPDATE
                  SET atendimento_ia = 'pause', pausa_timestamp = NOW()`,
               [userId, telefone]
-            ).catch(() =>
+            ).catch(async () => {
               // fallback sem UPSERT caso não exista constraint única
-              pool.query(
+              await pool.query(
                 `UPDATE dados_cliente SET atendimento_ia = 'pause', pausa_timestamp = NOW()
                  WHERE user_id = $1 AND telefone ILIKE $2`,
                 [userId, `%${telefone.slice(-11)}`]
-              ).catch(() => {})
-            );
+              ).catch(() => {});
+            });
 
             console.log(`[WEBHOOK HUMAN INTERVENTION] ${telefone} → IA pausada | msg: "${(textoFromMe || '').slice(0, 60)}"`);
           }
