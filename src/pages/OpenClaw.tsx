@@ -175,7 +175,7 @@ export default function OpenClawPage() {
         if (!res.ok) {
           const errMsg = friendlyError(res.status, data?.error || data?.message);
           toast.error(errMsg, { id: 'openclaw-error' });
-          appendErrorOnce(errMsg);
+          if (res.status !== 401) appendErrorOnce(errMsg);
           throw new Error(errMsg);
         }
 
