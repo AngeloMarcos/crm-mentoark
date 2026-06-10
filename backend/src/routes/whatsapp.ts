@@ -744,13 +744,25 @@ export default function whatsappRouter(pool: Pool): Router {
         const stateData: any = await stateRes.json();
         const state = stateData?.instance?.state || stateData?.state || 'close';
         if (state === 'open') {
-          await registrarWebhook(base, cfg.api_key, cfg.instancia);
-          await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
-          return res.json({
-            state: 'open',
-            phoneNumber: stateData?.instance?.profileName || stateData?.instance?.number || '',
-            instancia: cfg.instancia,
-          });
+          // Só consideramos 'open' se tiver número/perfil vinculado
+          const hasPhone = !!(stateData?.instance?.profileName || stateData?.instance?.number);
+          
+          if (hasPhone) {
+            await registrarWebhook(base, cfg.api_key, cfg.instancia);
+            await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+            return res.json({
+              state: 'open',
+              phoneNumber: stateData?.instance?.profileName || stateData?.instance?.number || '',
+              instancia: cfg.instancia,
+            });
+          } else {
+            console.log(`[WHATSAPP] Instância ${cfg.instancia} está em 'open' mas sem conta vinculada. Tratando como unauthorized.`);
+            return res.json({ 
+              state: 'unauthorized', 
+              message: 'Instância sem conta do WhatsApp vinculada. Reconecte.',
+              instancia: cfg.instancia 
+            });
+          }
         }
       }
 
