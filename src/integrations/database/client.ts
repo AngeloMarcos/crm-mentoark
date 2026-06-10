@@ -142,6 +142,7 @@ const auth = {
         if (!res.ok) throw new Error(`refresh_${res.status}`);
         const data = await res.json();
         localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('crm_access_token', data.access_token);
         localStorage.setItem('refresh_token', data.refresh_token);
         _currentUser = data.user;
         sessionStorage.removeItem('_redirected_login');
