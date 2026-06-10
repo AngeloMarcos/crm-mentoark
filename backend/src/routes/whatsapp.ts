@@ -1111,7 +1111,7 @@ export default function whatsappRouter(pool: Pool): Router {
         if (mediaCaption) mediaPayload.caption = mediaCaption;
         if (mediaFilename) mediaPayload.fileName = mediaFilename;
 
-        const targetUrl = `${base}/message/${endpoint}/${instancia}`;
+        const targetUrl = `${base}/message/${endpoint}/${cfg.instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
         let evoRes: globalThis.Response;
         try {
