@@ -207,7 +207,7 @@ export function InstanceManagementPanel() {
     const start = Date.now();
     const TIMEOUT = 2 * 60 * 1000; // 2 min
     const targetInstancia = instanciaNome || newInstanceName;
-    while (Date.now() - start < TIMEOUT) {
+    while (Date.now() - start < TIMEOUT && pollingConnect) {
       await new Promise(r => setTimeout(r, 3000));
       try {
         const st = await fetchConnectionStatus(targetInstancia);
@@ -219,6 +219,12 @@ export function InstanceManagementPanel() {
           setNewInstancePhone("");
           toast.success("✅ WhatsApp conectado com sucesso!");
           carregar();
+          return;
+        }
+        if (st.state === "unauthorized") {
+          setPollingConnect(false);
+          setShowQrModal(false);
+          toast.error("Erro na conexão: API Key ou Sessão inválida.");
           return;
         }
       } catch {}
