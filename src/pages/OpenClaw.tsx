@@ -88,14 +88,18 @@ export default function OpenClawPage() {
 
   useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, 60000);
+    // Aumentamos o intervalo para 90s para evitar fadiga de logs
+    const interval = setInterval(checkStatus, 90000);
     return () => clearInterval(interval);
   }, []);
 
   const checkStatus = async () => {
     // Health check leve — não bate em /openclaw/chat (que é pago e pode estar em cooldown).
     try {
-      const res = await fetch(`${API_BASE}/health`);
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 10000); // Timeout rápido para health check
+      const res = await fetch(`${API_BASE}/health`, { signal: controller.signal });
+      clearTimeout(t);
       const ok = res.ok;
       setStatus((prev: any) => ({
         ...prev,
