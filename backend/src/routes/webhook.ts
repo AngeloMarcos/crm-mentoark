@@ -211,7 +211,7 @@ export default function webhookRouter(pool: Pool): Router {
 
       const remoteJid = payload.data?.key?.remoteJid || '';
       console.log(`[WH:${traceId}] remoteJid="${remoteJid}"`);
-      if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio mid=${_mid} instance=${payload.instance}`); return; }
+      if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio instance=${payload.instance}`); return; }
       if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}" instance=${payload.instance}`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
 
