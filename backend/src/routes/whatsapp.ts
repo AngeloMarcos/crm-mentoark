@@ -50,8 +50,6 @@ export default function whatsappRouter(pool: Pool): Router {
   // Cache em memória para evitar race conditions simultâneas no mesmo processo
   const connectingUsers = new Set<string>();
   const router = Router();
-  // Idempotency guard: evita criação paralela de instâncias para o mesmo usuário
-  const connectingUsers = new Set<string>();
 
   // Retorna config do agente, ou config global com nome de instância gerado
   async function getEvolutionConfig(userId: string): Promise<{
