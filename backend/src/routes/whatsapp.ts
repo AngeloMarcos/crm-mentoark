@@ -742,8 +742,8 @@ export default function whatsappRouter(pool: Pool): Router {
 
       if (stateRes?.ok) {
         const stateData: any = await stateRes.json();
-        const state = stateData?.instance?.state || stateData?.state || 'close';
-        if (state === 'open') {
+        const state = stateData?.instance?.state || stateData?.state || stateData?.status || 'close';
+        if (state === 'open' || state === 'CONNECTED') {
           // Só consideramos 'open' se tiver número/perfil vinculado
           const hasPhone = !!(stateData?.instance?.profileName || stateData?.instance?.number);
           
