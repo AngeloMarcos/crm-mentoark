@@ -220,6 +220,7 @@ export function WhatsAppInterface() {
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [connecting, setConnecting] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [showNewMessageModal, setShowNewMessageModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
