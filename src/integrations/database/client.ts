@@ -3,7 +3,7 @@
 // Todas as chamadas vão para VITE_API_URL (backend Express próprio)
 // NÃO usa Database real — zero dependência externa
 import { getAuthToken } from "@/lib/api-token";
-import { withCooldown, CooldownError, hasExceededRetries, resetCooldown } from "@/lib/requestGuard";
+import { withCooldown, CooldownError, hasExceededRetries, singleflight } from "@/lib/requestGuard";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 
@@ -127,32 +127,38 @@ const auth = {
       _hardSignOut();
       return false;
     }
-    try {
-      return await withCooldown(REFRESH_KEY, async () => {
-        const res = await fetch(`${API_BASE}/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: r }),
-        });
-        if (res.status === 401) {
-          // Refresh inválido — não adianta repetir. Força signOut e estoura para contar como falha.
-          _hardSignOut();
-          throw new Error('refresh_invalid');
-        }
-        if (!res.ok) throw new Error(`refresh_${res.status}`);
-        const data = await res.json();
-        localStorage.setItem('access_token', data.access_token);
-        localStorage.setItem('crm_access_token', data.access_token);
-        localStorage.setItem('refresh_token', data.refresh_token);
-        _currentUser = data.user;
-        sessionStorage.removeItem('_redirected_login');
-        return true;
-      }, { baseMs: 2000, maxMs: 60_000 });
-    } catch (err) {
-      if (err instanceof CooldownError) return false;
-      if (hasExceededRetries(REFRESH_KEY, REFRESH_MAX_RETRIES)) _hardSignOut();
-      return false;
-    }
+    
+    // singleflight evita múltiplas chamadas simultâneas ao refresh
+    return singleflight(REFRESH_KEY, async () => {
+      try {
+        return await withCooldown(REFRESH_KEY, async () => {
+          const res = await fetch(`${API_BASE}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: r }),
+          });
+          
+          if (res.status === 401) {
+            _hardSignOut();
+            throw new Error('refresh_invalid');
+          }
+          
+          if (!res.ok) throw new Error(`refresh_${res.status}`);
+          
+          const data = await res.json();
+          localStorage.setItem('access_token', data.access_token);
+          localStorage.setItem('crm_access_token', data.access_token);
+          localStorage.setItem('refresh_token', data.refresh_token);
+          _currentUser = data.user;
+          sessionStorage.removeItem('_redirected_login');
+          return true;
+        }, { baseMs: 2000, maxMs: 60_000 });
+      } catch (err) {
+        if (err instanceof CooldownError) return false;
+        if (hasExceededRetries(REFRESH_KEY, REFRESH_MAX_RETRIES)) _hardSignOut();
+        return false;
+      }
+    });
   },
 
   onAuthStateChange(cb: (event: string, session: any) => void) {

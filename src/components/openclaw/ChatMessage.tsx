@@ -4,7 +4,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'error';
   content: string;
   toolCalls?: number;
 }
@@ -15,6 +15,7 @@ interface ChatMessageProps {
 
 export const ChatMessage = ({ message }: ChatMessageProps) => {
   const isUser = message.role === 'user';
+  const isError = message.role === 'error';
 
   return (
     <div className={`flex w-full mb-4 ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -22,11 +23,13 @@ export const ChatMessage = ({ message }: ChatMessageProps) => {
         className={`max-w-[80%] p-3 rounded-lg shadow-sm ${
           isUser
             ? 'bg-blue-600 text-white rounded-tr-none'
-            : 'bg-muted text-foreground rounded-tl-none border'
+            : isError 
+              ? 'bg-destructive/10 text-destructive border-destructive/20 rounded-tl-none border'
+              : 'bg-muted text-foreground rounded-tl-none border'
         }`}
       >
-        <div className={`text-xs mb-1 font-semibold flex items-center gap-1 ${isUser ? 'opacity-70' : 'text-muted-foreground'}`}>
-          {isUser ? 'Você' : 'OpenClaw Agent'}
+        <div className={`text-xs mb-1 font-semibold flex items-center gap-1 ${isUser ? 'opacity-70' : isError ? 'text-destructive/70' : 'text-muted-foreground'}`}>
+          {isUser ? 'Você' : isError ? 'Erro do Sistema' : 'OpenClaw Agent'}
         </div>
         <div className="prose prose-sm max-w-none dark:prose-invert">
           <ReactMarkdown
