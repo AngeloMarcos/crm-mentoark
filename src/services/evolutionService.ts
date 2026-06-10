@@ -31,7 +31,7 @@ export async function fetchConnectionStatus(instancia?: string): Promise<StatusR
     });
     if (!res.ok) return { state: 'close' };
     const data = await res.json();
-    const state = data?.state === 'open' ? 'open' : data?.state === 'connecting' ? 'connecting' : 'close';
+    const state = data?.state === 'open' ? 'open' : data?.state === 'connecting' ? 'connecting' : data?.state === 'unauthorized' ? 'unauthorized' : 'close';
     return { state: state as StatusResult['state'], phoneNumber: data?.phoneNumber };
   } catch {
     return { state: 'close' };
