@@ -116,26 +116,38 @@ const auth = {
   async _refreshSilent(): Promise<boolean> {
     const r = localStorage.getItem('refresh_token');
     if (!r) {
-      if (_notify) _notify('SIGNED_OUT', null);
+      _notify('SIGNED_OUT', null);
+      return false;
+    }
+    if (hasExceededRetries(REFRESH_KEY, REFRESH_MAX_RETRIES)) {
+      _hardSignOut();
       return false;
     }
     try {
-      const res = await fetch(`${API_BASE}/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: r }) });
-
-      if (res.status === 401) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        _currentUser = null;
-        _notify('SIGNED_OUT', null);
-        return false;
-      }
-      if (!res.ok) return false;
-      const data = await res.json();
-      localStorage.setItem('access_token', data.access_token);
-      localStorage.setItem('refresh_token', data.refresh_token);
-      _currentUser = data.user;
-      return true;
-    } catch { return false; }
+      return await withCooldown(REFRESH_KEY, async () => {
+        const res = await fetch(`${API_BASE}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: r }),
+        });
+        if (res.status === 401) {
+          // Refresh inválido — não adianta repetir. Força signOut e estoura para contar como falha.
+          _hardSignOut();
+          throw new Error('refresh_invalid');
+        }
+        if (!res.ok) throw new Error(`refresh_${res.status}`);
+        const data = await res.json();
+        localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('refresh_token', data.refresh_token);
+        _currentUser = data.user;
+        sessionStorage.removeItem('_redirected_login');
+        return true;
+      }, { baseMs: 2000, maxMs: 60_000 });
+    } catch (err) {
+      if (err instanceof CooldownError) return false;
+      if (hasExceededRetries(REFRESH_KEY, REFRESH_MAX_RETRIES)) _hardSignOut();
+      return false;
+    }
   },
 
   onAuthStateChange(cb: (event: string, session: any) => void) {
