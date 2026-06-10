@@ -887,7 +887,10 @@ export default function whatsappRouter(pool: Pool): Router {
 
       console.log(`[WHATSAPP] Desconexão total iniciada para usuário ${userId} (instância: ${instancia})`);
 
-      // 1. Tentar logout e delete na Evolution API
+      // 1. Tentar remover webhook, logout e delete na Evolution API
+      // Remove webhook primeiro para evitar eventos residuais
+      await registrarWebhook(base, cfg.api_key, instancia, false).catch(() => {});
+
       // Logout desconecta a conta do WhatsApp
       await fetch(`${base}/instance/logout/${instancia}`, {
         method: 'DELETE',
