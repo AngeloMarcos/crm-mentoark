@@ -47,6 +47,8 @@ function normalizeQr(raw: string | null | undefined): string | null {
 }
 
 export default function whatsappRouter(pool: Pool): Router {
+  // Cache em memória para evitar race conditions simultâneas no mesmo processo
+  const connectingUsers = new Set<string>();
   const router = Router();
   // Idempotency guard: evita criação paralela de instâncias para o mesmo usuário
   const connectingUsers = new Set<string>();
