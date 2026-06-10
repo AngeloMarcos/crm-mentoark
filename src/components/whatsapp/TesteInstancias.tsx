@@ -15,7 +15,7 @@ type Agente = {
 };
 
 type TesteResultado = {
-  state: "open" | "close" | "error";
+  state: "open" | "close" | "error" | "unauthorized";
   phoneNumber?: string;
   error?: string;
   testadoEm?: string;
