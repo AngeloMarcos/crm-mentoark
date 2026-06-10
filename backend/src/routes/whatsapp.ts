@@ -1088,7 +1088,7 @@ export default function whatsappRouter(pool: Pool): Router {
         tokenPresente: !!cfg.api_key,
       });
 
-      const instancia = instanciaParam || cfg.instancia;
+      const instancia = cfg.instancia;
       const base = cfg.url.replace(/\/$/, '');
 
       let evolutionResp: any;
