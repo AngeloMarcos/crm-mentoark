@@ -627,7 +627,7 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // POST /api/whatsapp/status
+  // POST /api/whatsapp/status — Verifica status da conexão na Evolution
   router.post('/status', async (req: AuthRequest, res: Response) => {
     try {
       const cfg = await getEvolutionConfig(req.userId!);
@@ -640,16 +640,24 @@ export default function whatsappRouter(pool: Pool): Router {
       if (!r) {
         return res.json({ state: 'close', instancia: cfg.instancia });
       }
+
+      // Tratamento explícito de 401 (API Key inválida ou instância deslogada forçadamente)
       if (r.status === 401) {
-        return res.json({ state: 'unauthorized', instancia: cfg.instancia });
+        console.warn(`[WHATSAPP] Evolution retornou 401 para instância ${cfg.instancia}.`);
+        return res.json({ 
+          state: 'unauthorized', 
+          message: 'Sessão expirada ou API Key inválida. Por favor, reconecte.',
+          instancia: cfg.instancia 
+        });
       }
+
       if (!r.ok) {
         return res.json({ state: 'close', instancia: cfg.instancia });
       }
 
       const data: any = await r.json();
       const state = data?.instance?.state || data?.state || 'close';
-      const phoneNumber = data?.instance?.profileName || data?.instance?.name || '';
+      const phoneNumber = data?.instance?.profileName || data?.instance?.number || '';
 
       // Re-registra webhook toda vez que a instância está conectada
       if (state === 'open') {
@@ -658,7 +666,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       return res.json({ state, phoneNumber, instancia: cfg.instancia });
     } catch (err: any) {
-      return res.json({ state: 'close', instancia: null });
+      return res.json({ state: 'close', instancia: null, error: err.message });
     }
   });
 
