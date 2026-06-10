@@ -20,7 +20,7 @@ export interface CreateInstanceResult {
 }
 
 export interface StatusResult {
-  state: 'open' | 'close' | 'connecting';
+  state: 'open' | 'close' | 'connecting' | 'unauthorized';
   phoneNumber?: string;
 }
 
