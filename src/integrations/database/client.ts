@@ -103,7 +103,7 @@ const auth = {
   async getUser() {
     const token = _getToken();
     if (!token) return { data: { user: null }, error: null };
-    if (_isExpired(token)) { const ok = await auth._refreshSilent(); if (!ok) { localStorage.removeItem('access_token'); localStorage.removeItem('refresh_token'); _currentUser = null; return { data: { user: null }, error: null }; } }
+    if (_isExpired(token)) { const ok = await auth._refreshSilent(); if (!ok) { localStorage.removeItem('access_token'); localStorage.removeItem('crm_access_token'); localStorage.removeItem('refresh_token'); _currentUser = null; return { data: { user: null }, error: null }; } }
     if (!_currentUser) _currentUser = _decodeUser(localStorage.getItem('access_token')!);
     return { data: { user: _currentUser }, error: null };
   },
