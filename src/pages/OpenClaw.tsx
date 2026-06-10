@@ -140,11 +140,10 @@ export default function OpenClawPage() {
     const appendErrorOnce = (msg: string) => {
       setMessages(prev => {
         const last = prev[prev.length - 1];
-        const tagged = `❌ ${msg}`;
-        if (last?.role === 'assistant' && last.content === tagged) {
+        if (last?.role === 'error' && last.content === msg) {
           return prev.map((m, i) => i === prev.length - 1 ? { ...m, timestamp: Date.now() } : m);
         }
-        return [...prev, { role: 'assistant' as const, content: tagged, timestamp: Date.now() }];
+        return [...prev, { role: 'error' as const, content: msg, timestamp: Date.now() }];
       });
     };
 
