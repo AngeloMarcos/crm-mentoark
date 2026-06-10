@@ -90,12 +90,13 @@ interface Profile {
   display_name: string | null;
 }
 
-type ConnState = "open" | "close" | "connecting";
+type ConnState = "open" | "close" | "connecting" | "unauthorized";
 
 function StatusChip({ state }: { state: ConnState }) {
   const cfg = {
     open: { label: "Conectado", className: "bg-emerald-500/15 text-emerald-600 border-emerald-500/30", Icon: Wifi },
     connecting: { label: "Reconectando", className: "bg-yellow-500/15 text-yellow-600 border-yellow-500/30", Icon: RefreshCw },
+    unauthorized: { label: "Reconecte seu WhatsApp", className: "bg-orange-500/15 text-orange-600 border-orange-500/30 font-bold animate-pulse", Icon: AlertOctagon },
     close: { label: "Desconectado", className: "bg-red-500/15 text-red-600 border-red-500/30", Icon: WifiOff },
   }[state];
   const I = cfg.Icon;
