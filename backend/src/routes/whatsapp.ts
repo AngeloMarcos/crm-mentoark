@@ -57,6 +57,8 @@ function normalizeQr(raw: string | null | undefined): string | null {
 
 export default function whatsappRouter(pool: Pool): Router {
   const router = Router();
+  // Idempotency guard: evita criação paralela de instâncias para o mesmo usuário
+  const connectingUsers = new Set<string>();
 
   // Retorna config do agente, ou config global com nome de instância gerado
   async function getEvolutionConfig(userId: string): Promise<{
@@ -107,9 +109,14 @@ export default function whatsappRouter(pool: Pool): Router {
     userId: string, agenteId: string | null,
     url: string, api_key: string, instancia: string
   ) {
-    // 1. Atualiza registro existente; se não existir, insere novo
+    // Remove configs com instância diferente — garante 1 instância ativa por usuário
+    await pool.query(
+      `DELETE FROM integracoes_config WHERE user_id=$1 AND tipo='evolution' AND instancia!=$2`,
+      [userId, instancia]
+    );
+    // Atualiza registro existente; se não existir, insere novo
     const upd = await pool.query(
-      `UPDATE integracoes_config SET url=$2, api_key=$3, instancia=$4, status='conectado', updated_at=NOW()
+      `UPDATE integracoes_config SET url=$2, api_key=$3, status='conectado', updated_at=NOW()
        WHERE user_id=$1 AND tipo='evolution' AND instancia=$4`,
       [userId, url, api_key, instancia]
     );
@@ -628,7 +635,13 @@ export default function whatsappRouter(pool: Pool): Router {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
-      if (!r || !r.ok) {
+      if (!r) {
+        return res.json({ state: 'close', instancia: cfg.instancia });
+      }
+      if (r.status === 401) {
+        return res.json({ state: 'unauthorized', instancia: cfg.instancia });
+      }
+      if (!r.ok) {
         return res.json({ state: 'close', instancia: cfg.instancia });
       }
 
@@ -665,11 +678,22 @@ export default function whatsappRouter(pool: Pool): Router {
       const cfg = await getEvolutionConfig(req.userId!);
       const base = cfg.url.replace(/\/$/, '');
 
+      // Idempotency: segunda chamada paralela retorna 'connecting' em vez de criar nova instância
+      const lockKey = `connect:${req.userId!}`;
+      if (connectingUsers.has(lockKey)) {
+        return res.json({ state: 'connecting', instancia: cfg.instancia });
+      }
+      connectingUsers.add(lockKey);
+      setTimeout(() => connectingUsers.delete(lockKey), 30_000);
+
       // 1. Verifica estado atual
       const stateRes = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
+      if (stateRes?.status === 401) {
+        return res.json({ state: 'unauthorized', instancia: cfg.instancia });
+      }
       if (stateRes?.ok) {
         const stateData: any = await stateRes.json();
         const state = stateData?.instance?.state || stateData?.state || 'close';
@@ -822,24 +846,22 @@ export default function whatsappRouter(pool: Pool): Router {
         console.warn(`[WHATSAPP] Evolution retornou erro ao deletar ${instancia}: ${deleteRes.status} - ${errorText}`);
       }
 
-      // 3. Limpar a referência da instância no banco de dados do sistema
-      if (cfg.agenteId) {
-        await pool.query(
-          `UPDATE agentes 
-           SET evolution_instancia = NULL, 
-               evolution_server_url = NULL, 
-               evolution_api_key = NULL,
-               updated_at = NOW() 
-           WHERE id = $1 AND user_id = $2`,
-          [cfg.agenteId, userId]
-        );
-      }
-
-      // 4. Também limpar em integracoes_config para garantir (G1/B3)
+      // 3. Limpar referências em TODOS os agentes do usuário (independente de agenteId)
       await pool.query(
-        `DELETE FROM integracoes_config 
-         WHERE user_id = $1 AND instancia = $2 AND tipo = 'evolution'`,
-        [userId, instancia]
+        `UPDATE agentes
+         SET evolution_instancia = NULL,
+             evolution_server_url = NULL,
+             evolution_api_key = NULL,
+             updated_at = NOW()
+         WHERE user_id = $1`,
+        [userId]
+      );
+
+      // 4. Limpar TODAS as configs Evolution do usuário — evita registros órfãos
+      await pool.query(
+        `DELETE FROM integracoes_config
+         WHERE user_id = $1 AND tipo = 'evolution'`,
+        [userId]
       );
 
       return res.json({ ok: true, message: 'Instância desconectada e removida com sucesso' });
@@ -1181,7 +1203,9 @@ export default function whatsappRouter(pool: Pool): Router {
       if (!cfg.url || !cfg.api_key) return res.json({ state: 'nao_configurado' });
       const base = cfg.url.replace(/\/$/, '');
       const r    = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, { headers: { apikey: cfg.api_key } }).catch(() => null);
-      if (!r?.ok) return res.json({ state: 'close', instancia: cfg.instancia });
+      if (!r) return res.json({ state: 'close', instancia: cfg.instancia });
+      if (r.status === 401) return res.json({ state: 'unauthorized', instancia: cfg.instancia });
+      if (!r.ok) return res.json({ state: 'close', instancia: cfg.instancia });
       const d: any = await r.json();
       return res.json({ state: d?.instance?.state || d?.state || 'close', instancia: cfg.instancia });
     } catch (err: any) {

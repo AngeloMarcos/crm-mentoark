@@ -249,7 +249,7 @@ export default function webhookRouter(pool: Pool): Router {
       if (!userId) {
         const intRes = await pool.query(
           `SELECT user_id FROM integracoes_config
-           WHERE LOWER(instancia) = LOWER($1) AND tipo = 'whatsapp'
+           WHERE LOWER(instancia) = LOWER($1) AND tipo = 'evolution'
            LIMIT 1`,
           [instancia]
         ).catch(() => ({ rows: [] as any[] }));
