@@ -3,7 +3,7 @@
 // Todas as chamadas vão para VITE_API_URL (backend Express próprio)
 // NÃO usa Database real — zero dependência externa
 import { getAuthToken } from "@/lib/api-token";
-import { withCooldown, CooldownError, hasExceededRetries, singleflight } from "@/lib/requestGuard";
+import { withCooldown, CooldownError, hasExceededRetries, friendlyError } from "@/lib/requestGuard";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 
@@ -128,37 +128,36 @@ const auth = {
       return false;
     }
     
-    // singleflight evita múltiplas chamadas simultâneas ao refresh
-    return singleflight(REFRESH_KEY, async () => {
-      try {
-        return await withCooldown(REFRESH_KEY, async () => {
-          const res = await fetch(`${API_BASE}/auth/refresh`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: r }),
-          });
-          
-          if (res.status === 401) {
-            _hardSignOut();
-            throw new Error('refresh_invalid');
-          }
-          
-          if (!res.ok) throw new Error(`refresh_${res.status}`);
-          
-          const data = await res.json();
-          localStorage.setItem('access_token', data.access_token);
-          localStorage.setItem('crm_access_token', data.access_token);
-          localStorage.setItem('refresh_token', data.refresh_token);
-          _currentUser = data.user;
-          sessionStorage.removeItem('_redirected_login');
-          return true;
-        }, { baseMs: 2000, maxMs: 60_000 });
-      } catch (err) {
-        if (err instanceof CooldownError) return false;
-        if (hasExceededRetries(REFRESH_KEY, REFRESH_MAX_RETRIES)) _hardSignOut();
-        return false;
-      }
-    });
+    // withCooldown já faz singleflight internamente — NÃO envolver em outro singleflight
+    // com a mesma chave, pois causaria deadlock (promise aguardando a si mesma).
+    try {
+      return await withCooldown(REFRESH_KEY, async () => {
+        const res = await fetch(`${API_BASE}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: r }),
+        });
+
+        if (res.status === 401) {
+          _hardSignOut();
+          throw new Error('refresh_invalid');
+        }
+
+        if (!res.ok) throw new Error(`refresh_${res.status}`);
+
+        const data = await res.json();
+        localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('crm_access_token', data.access_token);
+        localStorage.setItem('refresh_token', data.refresh_token);
+        _currentUser = data.user;
+        sessionStorage.removeItem('_redirected_login');
+        return true;
+      }, { baseMs: 2000, maxMs: 60_000 });
+    } catch (err) {
+      if (err instanceof CooldownError) return false;
+      if (hasExceededRetries(REFRESH_KEY, REFRESH_MAX_RETRIES)) _hardSignOut();
+      return false;
+    }
   },
 
   onAuthStateChange(cb: (event: string, session: any) => void) {
@@ -267,7 +266,14 @@ class QueryBuilder {
   single()           { this._single = true; return this; }
   maybeSingle()      { this._maybeSingle = true; return this; }
 
-  then(resolve: (v: any) => any, reject: (r: any) => any) { return this._exec().then(resolve, reject); }
+  then(resolve: (v: any) => any, reject: (r: any) => any) {
+    return this._exec()
+      .catch((err: any) => ({
+        data: null,
+        error: { message: friendlyError(undefined, err?.message ?? String(err)) }
+      }))
+      .then(resolve, reject);
+  }
 
   private _buildParams(): URLSearchParams {
     const p = new URLSearchParams();
@@ -398,24 +404,32 @@ export const api = {
   removeChannel: (_ch: any) => {},
   removeAllChannels: () => {},
   get: async (path: string) => {
-    const res = await fetch(`${API_BASE}${path}`, { headers: _authHeaders() });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw e; }
-    return { data: await res.json() };
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { headers: _authHeaders() });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
+      return { data: await res.json() };
+    } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
   },
   post: async (path: string, body: any) => {
-    const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: _authHeaders(), body: JSON.stringify(body) });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw e; }
-    return { data: await res.json() };
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: _authHeaders(), body: JSON.stringify(body) });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
+      return { data: await res.json() };
+    } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
   },
   patch: async (path: string, body: any) => {
-    const res = await fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: _authHeaders(), body: JSON.stringify(body) });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw e; }
-    return { data: await res.json() };
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: _authHeaders(), body: JSON.stringify(body) });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
+      return { data: await res.json() };
+    } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
   },
   delete: async (path: string) => {
-    const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: _authHeaders() });
-    if (!res.ok && res.status !== 204) { const e = await res.json().catch(() => ({})); throw e; }
-    return { data: null };
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: _authHeaders() });
+      if (!res.ok && res.status !== 204) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
+      return { data: null };
+    } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
   },
 };
 
