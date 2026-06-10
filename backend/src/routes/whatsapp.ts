@@ -68,9 +68,10 @@ export default function whatsappRouter(pool: Pool): Router {
       return {
         url: row.url || DEFAULT_EVO_URL,
         api_key: row.api_key || DEFAULT_EVO_KEY,
-        instancia: row.instancia || `crm_${userId.replace(/-/g, '').slice(0, 12)}`,
+        instancia: row.instancia || stableInstancia,
         agenteId: null,
-        isGlobal: !row.url
+        isGlobal: !row.url,
+        stableInstancia
       };
     }
 
@@ -87,13 +88,12 @@ export default function whatsappRouter(pool: Pool): Router {
       const row = r.rows[0];
       const url = row.url || DEFAULT_EVO_URL;
       const api_key = row.api_key || DEFAULT_EVO_KEY;
-      const instancia = row.instancia || `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
-      return { url, api_key, instancia, agenteId: row.id, isGlobal: !row.url };
+      const instancia = row.instancia || stableInstancia;
+      return { url, api_key, instancia, agenteId: row.id, isGlobal: !row.url, stableInstancia };
     }
 
     // 3. Fallback final global
-    const instancia = `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
-    return { url: DEFAULT_EVO_URL, api_key: DEFAULT_EVO_KEY, instancia, agenteId: null, isGlobal: true };
+    return { url: DEFAULT_EVO_URL, api_key: DEFAULT_EVO_KEY, instancia: stableInstancia, agenteId: null, isGlobal: true, stableInstancia };
   }
 
   // Salva/atualiza a config Evolution no agente do usuário
