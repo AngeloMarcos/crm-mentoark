@@ -634,7 +634,10 @@ export function WhatsAppInterface() {
       const res = await fetchConnectionStatus(targetInstance);
       
       setConnectionStatus(res);
-      if (res.state === "open") setQrData(null);
+      if (res.state === "open") {
+        setQrData(null);
+        setRetryCount(0); // Reset retry on success
+      }
       
       if (!silent && res.state === "unauthorized") {
         toast.error("Sessão expirada. Por favor, reconecte seu WhatsApp.", { id: 'wa-unauthorized' });
