@@ -80,21 +80,25 @@ export async function withCooldown<T>(
 
 export function friendlyError(status: number | undefined, raw?: string): string {
   const text = (raw || "").toLowerCase();
+  
   if (text.includes("rate limit") || text.includes("tpm") || status === 429) {
     return "⏳ Muitas requisições. Aguarde alguns segundos e tente novamente.";
   }
-  if (status === 401) return "Sessão expirada. Faça login novamente ou verifique se o backend está configurado.";
+  if (status === 401) return "Sessão expirada. Faça login novamente.";
   if (status === 402) return "Plano sem créditos suficientes para essa ação.";
   if (status === 403) return "Você não tem permissão para essa ação.";
   if (status === 404) return "Recurso não encontrado.";
-  if (status === 408 || text.includes("abort")) {
-    return "A resposta demorou demais. Tente um comando mais simples.";
+  if (status === 408 || text.includes("abort") || text.includes("timeout")) {
+    return "A resposta demorou demais. A VPS pode estar lenta ou o comando é muito pesado.";
   }
   if (status && status >= 500) {
-    return "Serviço temporariamente indisponível. Tentaremos novamente em instantes.";
+    return `Ocorreu um erro no servidor (${status}). A VPS pode estar em manutenção.`;
   }
-  if (text.includes("failed to fetch") || text.includes("networkerror")) {
-    return "Sem conexão com o servidor. Verifique sua internet.";
+  if (text.includes("failed to fetch") || text.includes("networkerror") || text.includes("load failed")) {
+    return "Sem conexão com a API. Verifique se o servidor backend está online.";
   }
-  return raw || "Algo deu errado. Tente novamente em instantes.";
+  if (text.includes("html") || text.includes("<!doctype")) {
+    return "Resposta inválida do servidor (Proxy Error). Tente novamente em 1 minuto.";
+  }
+  return raw || "Ocorreu um erro inesperado. Tente novamente em instantes.";
 }
