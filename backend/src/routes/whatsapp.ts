@@ -1257,9 +1257,11 @@ export default function whatsappRouter(pool: Pool): Router {
       await Promise.allSettled([
         pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1`, [userId]),
         pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [name]),
+        pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [name]),
         pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1`, [userId]),
         pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`, [userId]),
         pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
+        pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
         pool.query(
           `UPDATE agentes 
            SET evolution_instancia = NULL, 
