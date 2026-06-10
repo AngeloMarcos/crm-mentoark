@@ -1159,34 +1159,12 @@ export default function whatsappRouter(pool: Pool): Router {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
           if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
-            console.log(`[SEND] Instância ${instancia} não existe na Evolution — recriando automaticamente...`);
-            try {
-              await evolutionFetch(`${base}/instance/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ instanceName: instancia, qrcode: false, integration: 'WHATSAPP-BAILEYS' }),
-              });
-              await new Promise(r => setTimeout(r, 2000));
-              const retry = await evolutionFetch(targetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ number: phoneClean, text }),
-              });
-              if (!retry.ok) {
-                return res.status(503).json({
-                  message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                  reconnect_required: true,
-                  instancia,
-                });
-              }
-              evolutionResp = await retry.json().catch(() => ({}));
-            } catch {
-              return res.status(503).json({
-                message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                reconnect_required: true,
-                instancia,
-              });
-            }
+            console.log(`[SEND] Instância ${instancia} não existe ou está deslogada na Evolution — solicitando reconexão manual...`);
+            return res.status(401).json({
+              message: 'Sessão do WhatsApp expirada ou não encontrada. Por favor, reconecte.',
+              reconnect_required: true,
+              instancia,
+            });
           } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
             // Socket Baileys ainda inicializando — retry após 3s
             console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
