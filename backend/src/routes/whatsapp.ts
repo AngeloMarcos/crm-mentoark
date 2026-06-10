@@ -1018,7 +1018,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
         const targetUrl = `${base}/message/${endpoint}/${instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
-        let evoRes: Response;
+        let evoRes: globalThis.Response;
         try {
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
@@ -1039,7 +1039,7 @@ export default function whatsappRouter(pool: Pool): Router {
         // Envio de texto
         const targetUrl = `${base}/message/sendText/${instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
-        let evoRes: Response;
+        let evoRes: globalThis.Response;
         try {
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
@@ -1133,7 +1133,7 @@ export default function whatsappRouter(pool: Pool): Router {
         const txt = await r.text().catch(() => '');
         return res.status(r.status).json({ message: `Evolution retornou HTTP ${r.status}`, detail: txt.slice(0, 300) });
       }
-      const instances: any[] = await r.json().catch(() => []);
+      const instances = (await r.json().catch(() => [])) as any[];
       return res.json({ ok: true, instances: Array.isArray(instances) ? instances : [] });
     } catch (err: any) {
       return res.status(502).json({ message: `Sem resposta do servidor Evolution: ${err.message}` });
@@ -1150,8 +1150,19 @@ export default function whatsappRouter(pool: Pool): Router {
 
       if (!base || !key) return res.status(400).json({ message: 'Configure URL e API Key em Conectores antes de conectar.' });
 
+      // Idempotency: segunda chamada paralela retorna 'connecting' em vez de criar nova instância
+      const lockKey = `connect:${req.userId!}`;
+      if (connectingUsers.has(lockKey)) {
+        return res.json({ state: 'connecting', instancia: cfg.instancia });
+      }
+      connectingUsers.add(lockKey);
+      setTimeout(() => connectingUsers.delete(lockKey), 30_000);
+
       // 1. Verificar se já está conectado
       const stateR = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
+      if (stateR?.status === 401) {
+        return res.json({ state: 'unauthorized', instancia: cfg.instancia });
+      }
       if (stateR?.ok) {
         const sd: any = await stateR.json();
         const state = sd?.instance?.state || sd?.state || 'close';
@@ -1223,7 +1234,9 @@ export default function whatsappRouter(pool: Pool): Router {
       const r = await fetch(`${base}/instance/connectionState/${instancia}`, {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
-      if (!r?.ok) return res.json({ state: 'close', instancia });
+      if (!r) return res.json({ state: 'close', instancia });
+      if (r.status === 401) return res.json({ state: 'unauthorized', instancia });
+      if (!r.ok) return res.json({ state: 'close', instancia });
       const d: any = await r.json();
       const state: string = d?.instance?.state || d?.state || 'close';
       if (state === 'open') registrarWebhook(base, cfg.api_key, instancia).catch(() => {});
