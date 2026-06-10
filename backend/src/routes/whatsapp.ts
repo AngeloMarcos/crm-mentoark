@@ -651,7 +651,7 @@ export default function whatsappRouter(pool: Pool): Router {
         return res.json({ 
           state: 'unauthorized', 
           message: 'Sessão expirada ou API Key inválida. Por favor, reconecte.',
-          instancia: cfg.instancia 
+          instancia: instancia 
         });
       }
 
