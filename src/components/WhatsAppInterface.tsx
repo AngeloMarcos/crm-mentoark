@@ -646,36 +646,45 @@ export function WhatsAppInterface() {
   };
 
   const handleConnect = async () => {
-    if (!instanceName.trim()) {
-      toast.error("Informe um nome para a instância");
-      return;
-    }
+    // Para "1 conta = 1 instância", usamos o nome estável gerado no backend.
+    // O nome informado aqui serve apenas para identificação inicial se for a primeira vez.
+    const name = instanceName.trim() || `WhatsApp ${currentUserName}`;
     
     try {
       setConnecting(true);
-      try { await disconnectInstance(); } catch {}
       const phoneDigits = instancePhone.replace(/\D/g, '');
-      const res = await createInstance(instanceName, phoneDigits || undefined);
+      
+      // Chamada unificada ao backend. O backend agora gerencia a idempotência,
+      // limpeza de instâncias antigas e reuso da instância atual.
+      const res = await createInstance(name, phoneDigits || undefined);
+      
       setQrData(res);
       setShowConnectModal(false);
       setShowQrModal(true);
-      setShowConnectModal(false);
       
       if (res.state === "open") {
         setConnectionStatus({ state: "open", phoneNumber: res.phoneNumber });
-        toast.success("WhatsApp conectado!");
-      } else if (res.qrCode) {
-        toast.info("Escaneie o QR Code");
-        // Copiar mensagem ao conectar (simulado aqui pois a conexão real é via QR)
-        const messageToCopy = "Olá, acabei de conectar minha instância!";
-        navigator.clipboard.writeText(messageToCopy).then(() => {
-          toast.success("Mensagem de boas-vindas copiada!");
-        });
-      } else {
-        toast.error("Evolution não retornou QR Code");
+        toast.success("WhatsApp já está conectado!");
+        setShowQrModal(false);
+        fetchConversas();
+      } else if (res.qrCode || res.pairingCode) {
+        toast.info(res.pairingCode ? "Use o código de pareamento no seu celular" : "Escaneie o QR Code no seu WhatsApp");
+        
+        // Se o Evolution enviou QR, o processo de conexão iniciou
+        if (res.qrCode) {
+          const messageToCopy = "Olá, estou conectando meu WhatsApp ao CRM!";
+          navigator.clipboard.writeText(messageToCopy).catch(() => {});
+        }
+      } else if (res.qrPending) {
+        toast.info("Aguardando geração do QR Code pela Evolution...");
       }
     } catch (err: any) {
-      toast.error("Erro: " + err.message);
+      const msg = err.message || "";
+      if (msg.includes("401") || msg.includes("unauthorized")) {
+        toast.error("Erro de autenticação: Verifique a API Key da Evolution no servidor.");
+      } else {
+        toast.error("Erro ao conectar: " + msg);
+      }
     } finally {
       setConnecting(false);
     }
