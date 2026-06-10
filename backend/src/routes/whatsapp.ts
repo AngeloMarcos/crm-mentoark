@@ -844,8 +844,8 @@ export default function whatsappRouter(pool: Pool): Router {
         qrCode: normalizeQr(qrCode),
         qrPending: !qrCode,
         pairingCode,
-        instanceName: cfg.instancia,
-        instancia: cfg.instancia,
+        instanceName: cfg.stableInstancia,
+        instancia: cfg.stableInstancia,
       });
     } catch (err: any) {
       console.error('[WHATSAPP connect] Erro:', err.message);
