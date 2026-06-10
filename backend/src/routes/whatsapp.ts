@@ -836,7 +836,7 @@ export default function whatsappRouter(pool: Pool): Router {
       await registrarWebhook(base, cfg.api_key, cfg.instancia);
 
       return res.json({
-        state: qrCode ? 'connecting' : (created?.instance?.state || 'connecting'),
+        state: (qrCode || created?.qrcode?.base64) ? 'connecting' : (created?.instance?.state || created?.state || 'connecting'),
         qrCode: normalizeQr(qrCode),
         qrPending: !qrCode,
         pairingCode,
