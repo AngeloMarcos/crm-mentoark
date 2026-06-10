@@ -112,24 +112,6 @@ export default function OpenClawPage() {
     } catch {
       setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
     }
-
-    try {
-      const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
-        method: 'POST',
-        headers: getOpenClawHeader(),
-        body: JSON.stringify(openClawBody({ message: 'health', sessionKey: 'health' })),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.reply) {
-          // Extrai info do banco se disponível no reply
-          if (data.reply.includes('PostgreSQL')) {
-             const match = data.reply.match(/PostgreSQL [0-9.]+/);
-             if (match) setDbInfo(match[0]);
-          }
-        }
-      }
-    } catch {}
   };
 
   const sendMessage = async (text?: string) => {
