@@ -282,10 +282,7 @@ class QueryBuilder {
     if (token && _isExpired(token)) {
       const ok = await auth._refreshSilent();
       if (!ok) {
-        // Redirecionamento forçado para login em caso de falha no refresh durante query
-        if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-          window.location.href = '/login?expired=1';
-        }
+        // _hardSignOut() já trata redirect uma única vez via sessionStorage flag.
         return { data: null, error: { message: 'Sessão expirada. Faça login novamente.' } };
       }
     }
