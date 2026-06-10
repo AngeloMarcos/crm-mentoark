@@ -864,7 +864,7 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // POST /api/whatsapp/disconnect
+  // POST /api/whatsapp/disconnect — Desconexão total e limpeza de estado
   router.post('/disconnect', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -872,20 +872,21 @@ export default function whatsappRouter(pool: Pool): Router {
       const base = cfg.url.replace(/\/$/, '');
       const instancia = cfg.instancia;
 
-      console.log(`[WHATSAPP] Desconectando instância: ${instancia} para o usuário ${userId}`);
+      console.log(`[WHATSAPP] Desconexão total iniciada para usuário ${userId} (instância: ${instancia})`);
 
-      // 1. Tentar fazer logout (desconecta o WhatsApp da instância)
+      // 1. Tentar logout e delete na Evolution API
+      // Logout desconecta a conta do WhatsApp
       await fetch(`${base}/instance/logout/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(err => console.warn(`[WHATSAPP] Erro no logout de ${instancia}:`, err.message));
 
-      // 2. Tentar deletar a instância permanentemente da Evolution API
+      // Delete remove a instância completamente do servidor Evolution
       const deleteRes = await fetch(`${base}/instance/delete/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(err => {
-        console.error(`[WHATSAPP] Erro crítico ao deletar ${instancia}:`, err.message);
+        console.error(`[WHATSAPP] Erro ao deletar instância ${instancia} na Evolution:`, err.message);
         return null;
       });
 
@@ -894,40 +895,44 @@ export default function whatsappRouter(pool: Pool): Router {
         console.warn(`[WHATSAPP] Evolution retornou erro ao deletar ${instancia}: ${deleteRes.status} - ${errorText}`);
       }
 
-      // 3. Limpar histórico de mensagens para evitar "estado sujo" na próxima conexão
-      // O usuário solicitou "Sem estado sujo reaparecendo"
-      console.log(`[WHATSAPP] Limpando histórico de mensagens para o usuário ${userId}`);
-      await pool.query(
-        `DELETE FROM whatsapp_messages WHERE user_id = $1`,
-        [userId]
-      ).catch(err => console.error('[WHATSAPP] Erro ao limpar whatsapp_messages:', err.message));
+      // 2. Limpeza profunda no Banco de Dados (Postgres)
+      // Removemos todo o histórico de mensagens e estados para evitar "estado sujo" ao reconectar
+      console.log(`[WHATSAPP] Limpando registros do BD para o usuário ${userId}`);
       
-      await pool.query(
-        `DELETE FROM whatsapp_message_status WHERE instance_name = $1`,
-        [instancia]
-      ).catch(() => {});
+      const queries = [
+        // Remove mensagens do chat
+        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1`, [userId]),
+        // Remove status de entrega
+        pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [instancia]),
+        // Remove deduplicação de webhook para esta instância
+        pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [instancia]),
+        // Remove histórico de logs da IA (n8n_chat_histories)
+        pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1`, [userId]),
+        // Limpa configurações de integração (integracoes_config)
+        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`, [userId]),
+        // Reseta o status da IA nos contatos e dados_cliente para o padrão (Ativa)
+        pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
+        pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
+        // Limpa referências em TODOS os agentes do usuário (independente de agenteId)
+        pool.query(
+          `UPDATE agentes 
+           SET evolution_instancia = NULL, 
+               evolution_server_url = NULL, 
+               evolution_api_key = NULL, 
+               updated_at = NOW() 
+           WHERE user_id = $1`,
+          [userId]
+        )
+      ];
 
-      // 4. Limpar referências em TODOS os agentes do usuário (independente de agenteId)
-      await pool.query(
-        `UPDATE agentes
-         SET evolution_instancia = NULL,
-             evolution_server_url = NULL,
-             evolution_api_key = NULL,
-             updated_at = NOW()
-         WHERE user_id = $1`,
-        [userId]
-      );
+      await Promise.allSettled(queries);
 
-      // 5. Limpar TODAS as configs Evolution do usuário — evita registros órfãos
-      await pool.query(
-        `DELETE FROM integracoes_config
-         WHERE user_id = $1 AND tipo = 'evolution'`,
-        [userId]
-      );
-
-      return res.json({ ok: true, message: 'Instância desconectada e removida com sucesso' });
+      return res.json({ 
+        ok: true, 
+        message: 'WhatsApp desconectado, instância removida e estado limpo com sucesso.' 
+      });
     } catch (err: any) {
-      console.error('[WHATSAPP] Erro ao processar disconnect:', err);
+      console.error('[WHATSAPP] Erro fatal no disconnect:', err);
       return res.status(500).json({ message: err.message });
     }
   });
@@ -1229,7 +1234,7 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // DELETE /api/whatsapp/instances/:name — remove instância na Evolution e desvincula do agente
+  // DELETE /api/whatsapp/instances/:name — remove instância na Evolution e limpa estado do agente
   router.delete('/instances/:name', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -1237,6 +1242,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
 
+      // 1. Evolution Cleanup
       await fetch(`${base}/instance/logout/${name}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
@@ -1247,13 +1253,29 @@ export default function whatsappRouter(pool: Pool): Router {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
-      await pool.query(
-        `UPDATE agentes SET evolution_instancia=NULL WHERE user_id=$1 AND evolution_instancia=$2`,
-        [userId, name]
-      );
+      // 2. DB Cleanup (Sincronizado com o fluxo de /disconnect)
+      await Promise.allSettled([
+        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1`, [userId]),
+        pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [name]),
+        pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [name]),
+        pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1`, [userId]),
+        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`, [userId]),
+        pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
+        pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
+        pool.query(
+          `UPDATE agentes 
+           SET evolution_instancia = NULL, 
+               evolution_server_url = NULL, 
+               evolution_api_key = NULL, 
+               updated_at = NOW() 
+           WHERE user_id = $1`,
+          [userId]
+        )
+      ]);
 
-      return res.json({ ok: true });
+      return res.json({ ok: true, message: 'Instância removida e estado limpo.' });
     } catch (err: any) {
+      console.error('[WHATSAPP] Erro ao deletar instância via DELETE:', err);
       return res.status(500).json({ message: err.message });
     }
   });
