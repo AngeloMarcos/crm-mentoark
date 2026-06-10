@@ -625,13 +625,10 @@ export function WhatsAppInterface() {
 
   const checkStatus = async (silent = true) => {
     try {
-      // Se houver uma instância ativa no chat atual, priorizamos verificar o status dela
-      // Caso contrário, tentamos pegar a instância 'teste' ou a primeira disponível no cache local
-      const activeInstance = activeChatId ? chats.find(c => c.id === activeChatId)?.source : null;
-      const targetInstance = activeInstance || chats.find(c => c.source)?.source || 'teste';
-      
-      console.log(`[WA] Verificando status para instância: ${targetInstance}`);
-      const res = await fetchConnectionStatus(targetInstance);
+      // O backend agora gerencia qual a instância oficial do usuário.
+      // Removemos a dependência de passar o nome da instância no frontend
+      // para evitar loops com instâncias órfãs.
+      const res = await fetchConnectionStatus();
       
       setConnectionStatus(res);
       if (res.state === "open") {
