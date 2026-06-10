@@ -635,7 +635,9 @@ export function WhatsAppInterface() {
       setConnectionStatus(res);
       if (res.state === "open") setQrData(null);
       
-      if (!silent && res.state !== "open") {
+      if (!silent && res.state === "unauthorized") {
+        toast.error("Sessão expirada. Por favor, reconecte seu WhatsApp.", { id: 'wa-unauthorized' });
+      } else if (!silent && res.state !== "open") {
         toast.warning("WhatsApp desconectado ou em sincronização");
       }
     } catch (e) {
