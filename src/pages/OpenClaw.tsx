@@ -13,6 +13,7 @@ import { FileConfigCard } from '@/components/openclaw/FileConfigCard';
 import { toast } from 'sonner';
 import { getAuthToken } from "@/lib/api-token";
 import { fetchConnectionStatus } from "@/services/evolutionService";
+import { withCooldown, CooldownError, friendlyError, getCooldownRemaining } from "@/lib/requestGuard";
 
 interface Message {
   role: 'user' | 'assistant';
