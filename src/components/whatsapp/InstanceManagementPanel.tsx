@@ -216,7 +216,7 @@ export function InstanceManagementPanel() {
     while (Date.now() - start < TIMEOUT && pollingConnect && showQrModal) {
       await new Promise(r => setTimeout(r, 3000));
       try {
-        const st = await fetchConnectionStatus(targetInstancia);
+        const st = await fetchConnectionStatus();
         if (st.state === "open") {
           setPollingConnect(false);
           setShowQrModal(false);
