@@ -186,6 +186,12 @@ export function TesteInstancias() {
                         <span>Conectado{r.phoneNumber ? ` — ${r.phoneNumber}` : ""}</span>
                       </div>
                     )}
+                    {r?.state === "unauthorized" && (
+                      <div className="text-sm text-orange-700 flex items-center gap-1 font-bold animate-pulse">
+                        <AlertTriangle className="h-4 w-4" />
+                        <span>Sessão expirada — Reconecte</span>
+                      </div>
+                    )}
                     {r?.state === "close" && (
                       <div className="text-sm text-amber-700 flex items-center gap-1">
                         <AlertTriangle className="h-4 w-4" />
