@@ -97,7 +97,7 @@ export function TesteInstancias() {
 
   const total = agentes.length;
   const conectadas = Object.values(resultados).filter((r) => r.state === "open").length;
-  const desconectadas = Object.values(resultados).filter((r) => r.state === "close" || r.state === "error").length;
+  const desconectadas = Object.values(resultados).filter((r) => r.state === "close" || r.state === "error" || r.state === "unauthorized").length;
 
   return (
     <div className="space-y-4">
