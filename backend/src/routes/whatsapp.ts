@@ -642,7 +642,7 @@ export default function whatsappRouter(pool: Pool): Router {
       }).catch(() => null);
 
       if (!r) {
-        return res.json({ state: 'close', instancia: cfg.instancia });
+        return res.json({ state: 'close', instancia: instancia });
       }
 
       // Tratamento explícito de 401 (API Key inválida ou instância deslogada forçadamente)
