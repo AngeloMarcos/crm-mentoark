@@ -29,7 +29,9 @@ const MAX_HISTORY = 60;
 function loadHistory(): Message[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const msgs: Message[] = raw ? JSON.parse(raw) : [];
+    // Limpeza na carga: remove mensagens de erro persistidas para não poluir
+    return msgs.filter(m => m.role !== 'error');
   } catch {
     return [];
   }
