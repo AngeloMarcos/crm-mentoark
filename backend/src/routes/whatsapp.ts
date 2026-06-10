@@ -633,8 +633,11 @@ export default function whatsappRouter(pool: Pool): Router {
     try {
       const cfg = await getEvolutionConfig(req.userId!);
       const base = cfg.url.replace(/\/$/, '');
+      
+      // Permite sobrescrever a instância para diagnósticos específicos (ex: TesteInstancias)
+      const instancia = (req.body?.instancia as string | undefined) || cfg.instancia;
 
-      const r = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, {
+      const r = await fetch(`${base}/instance/connectionState/${instancia}`, {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
