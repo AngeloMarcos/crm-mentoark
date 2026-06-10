@@ -745,21 +745,21 @@ export default function whatsappRouter(pool: Pool): Router {
         const state = stateData?.instance?.state || stateData?.state || stateData?.status || 'close';
         if (state === 'open' || state === 'CONNECTED' || state === 'connected') {
           // Só consideramos 'open' se tiver número/perfil vinculado
-          const hasPhone = !!(stateData?.instance?.profileName || stateData?.instance?.number);
+          const hasPhone = !!(stateData?.instance?.profileName || stateData?.instance?.number || stateData?.instance?.owner || stateData?.instance?.profile);
           
           if (hasPhone) {
             await registrarWebhook(base, cfg.api_key, cfg.instancia);
             await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
             return res.json({
               state: 'open',
-              phoneNumber: stateData?.instance?.profileName || stateData?.instance?.number || '',
+              phoneNumber: stateData?.instance?.profileName || stateData?.instance?.number || stateData?.instance?.owner || '',
               instancia: cfg.instancia,
             });
           } else {
-            console.log(`[WHATSAPP] Instância ${cfg.instancia} está em 'open' mas sem conta vinculada. Tratando como unauthorized.`);
+            console.log(`[WHATSAPP] Instância ${cfg.instancia} está em 'open' mas sem conta vinculada (owner missing). Tratando como unauthorized.`);
             return res.json({ 
               state: 'unauthorized', 
-              message: 'Instância sem conta do WhatsApp vinculada. Reconecte.',
+              message: 'Instância sem conta do WhatsApp vinculada. Por favor, reconecte escanendo o QR.',
               instancia: cfg.instancia 
             });
           }
