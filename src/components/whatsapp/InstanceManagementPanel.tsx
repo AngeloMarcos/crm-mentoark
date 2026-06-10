@@ -349,6 +349,8 @@ export function InstanceManagementPanel() {
       const state = (st.state ?? "close") as ConnState;
       
       lista.forEach(a => {
+        // Mostramos o status real para instâncias que coincidem com a oficial 
+        // ou um status genérico para outras registradas (legado)
         if (a.evolution_instancia) {
           map[a.id] = state;
         }
