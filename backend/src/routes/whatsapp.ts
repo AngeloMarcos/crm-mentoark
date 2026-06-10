@@ -665,7 +665,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // Re-registra webhook toda vez que a instância está conectada
       if (state === 'open' || state === 'connected' || state === 'CONNECTED') {
-        registrarWebhook(base, cfg.api_key, cfg.instancia).catch(() => {});
+        registrarWebhook(base, cfg.api_key, instancia).catch(() => {});
       }
 
       return res.json({ state, phoneNumber, instancia: cfg.instancia });
