@@ -8,7 +8,7 @@ const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoa
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
 const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
-const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 // Objeto interno do webhook (usado em instance/create e /webhook/set)
 function webhookInner(enabled = true) {
