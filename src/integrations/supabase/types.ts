@@ -2297,56 +2297,145 @@ export type Database = {
         }
         Relationships: []
       }
-      whatsapp_messages: {
+      whatsapp_chat_prefs: {
         Row: {
-          conteudo: string | null
+          archived: boolean | null
           created_at: string | null
-          from_me: boolean
           id: string
-          instancia: string
-          midia_mime: string | null
-          midia_nome: string | null
-          midia_url: string | null
-          push_name: string | null
+          muted_until: string | null
+          pinned: boolean | null
           remote_jid: string
-          session_id: string
-          status: string | null
-          timestamp_unix: number | null
-          tipo: string
+          updated_at: string | null
           user_id: string
         }
         Insert: {
-          conteudo?: string | null
+          archived?: boolean | null
           created_at?: string | null
-          from_me?: boolean
-          id: string
-          instancia: string
-          midia_mime?: string | null
-          midia_nome?: string | null
-          midia_url?: string | null
-          push_name?: string | null
+          id?: string
+          muted_until?: string | null
+          pinned?: boolean | null
           remote_jid: string
-          session_id: string
-          status?: string | null
-          timestamp_unix?: number | null
-          tipo?: string
+          updated_at?: string | null
           user_id: string
         }
         Update: {
-          conteudo?: string | null
+          archived?: boolean | null
           created_at?: string | null
+          id?: string
+          muted_until?: string | null
+          pinned?: boolean | null
+          remote_jid?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_chat_prefs_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_message_status: {
+        Row: {
+          id: string
+          instance_name: string
+          message_id: string
+          status: string
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          instance_name: string
+          message_id: string
+          status: string
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          instance_name?: string
+          message_id?: string
+          status?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      whatsapp_messages: {
+        Row: {
+          content: string | null
+          created_at: string | null
+          deleted_at: string | null
+          from_me: boolean
+          id: string
+          instance_name: string
+          is_hidden: boolean | null
+          is_read: boolean | null
+          media_mimetype: string | null
+          media_url: string | null
+          message_id: string | null
+          message_type: string
+          midia_nome: string | null
+          push_name: string | null
+          remote_jid: string
+          reply_to_content: string | null
+          reply_to_message_id: string | null
+          reply_to_sender: string | null
+          sent_by_user_id: string | null
+          session_id: string
+          status: string | null
+          timestamp_unix: number | null
+          user_id: string
+        }
+        Insert: {
+          content?: string | null
+          created_at?: string | null
+          deleted_at?: string | null
+          from_me?: boolean
+          id: string
+          instance_name: string
+          is_hidden?: boolean | null
+          is_read?: boolean | null
+          media_mimetype?: string | null
+          media_url?: string | null
+          message_id?: string | null
+          message_type?: string
+          midia_nome?: string | null
+          push_name?: string | null
+          remote_jid: string
+          reply_to_content?: string | null
+          reply_to_message_id?: string | null
+          reply_to_sender?: string | null
+          sent_by_user_id?: string | null
+          session_id: string
+          status?: string | null
+          timestamp_unix?: number | null
+          user_id: string
+        }
+        Update: {
+          content?: string | null
+          created_at?: string | null
+          deleted_at?: string | null
           from_me?: boolean
           id?: string
-          instancia?: string
-          midia_mime?: string | null
+          instance_name?: string
+          is_hidden?: boolean | null
+          is_read?: boolean | null
+          media_mimetype?: string | null
+          media_url?: string | null
+          message_id?: string | null
+          message_type?: string
           midia_nome?: string | null
-          midia_url?: string | null
           push_name?: string | null
           remote_jid?: string
+          reply_to_content?: string | null
+          reply_to_message_id?: string | null
+          reply_to_sender?: string | null
+          sent_by_user_id?: string | null
           session_id?: string
           status?: string | null
           timestamp_unix?: number | null
-          tipo?: string
           user_id?: string
         }
         Relationships: []

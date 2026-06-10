@@ -98,6 +98,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         carregarEquipeRole(s.access_token, s.user.id);
       }
       if (_event === "SIGNED_OUT") {
+        setSession(null);
+        setUser(null);
+        setIsAdmin(false);
         setModulos([]);
         setModulosLoading(false);
         setEquipeRole(null);

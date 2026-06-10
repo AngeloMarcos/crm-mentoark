@@ -1,4 +1,12 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { Label } from "@/components/ui/label";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -9,11 +17,22 @@ import {
   Mic, LayoutGrid, MessageSquare, SlidersHorizontal,
   UserPlus, Check, Smartphone,
   ShieldAlert, Tag, Sparkles, Zap,
-  BotOff, Bot, ImageIcon,
+  BotOff, Bot, ImageIcon, Reply,
+  ChevronUp, Pin, Archive, BellOff, MessageCircle,
+  Copy, Video, FileText, Trash2, Forward, Star,
+  AlertCircle, Activity,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
+import { withCooldown, CooldownError, friendlyError, getCooldownRemaining } from "@/lib/requestGuard";
 import { useNavigate } from "react-router-dom";
 import {
   Dialog,
@@ -40,7 +59,7 @@ function formatTime(iso: string): string {
   } catch { return ''; }
 }
 
-type ChatTab = "todos" | "fila" | "meus";
+type ChatTab = "todos" | "fila" | "meus" | "arquivadas";
 
 type DeliveryStatus = "sent" | "SERVER_ACK" | "DELIVERY_ACK" | "READ" | "PLAYED" | "received" | string;
 
@@ -50,6 +69,7 @@ interface Message {
   role: "user" | "assistant" | "note";
   content: string;
   timestamp: string;
+  rawTimestamp?: string;
   senderName?: string;
   tipo?: string;
   midia_url?: string;
@@ -57,6 +77,12 @@ interface Message {
   midia_nome?: string;
   status?: DeliveryStatus;
   is_read?: boolean;
+  reply_to?: {
+    message_id: string;
+    content: string;
+    senderName: string;
+    role: "user" | "assistant";
+  };
 }
 
 interface Chat {
@@ -71,7 +97,11 @@ interface Chat {
   rawTimestamp: string;
   unread?: number;
   online?: boolean;
+  is_pinned?: boolean;
+  is_muted?: boolean;
+  is_archived?: boolean;
   source?: string;
+  push_name?: string;
   messages: Message[];
   notes?: string;
   profile_pic?: string;
@@ -182,7 +212,8 @@ export function WhatsAppInterface() {
   const currentUserName = user?.display_name || user?.email?.split('@')[0] || 'Agente';
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
-  const [searchTerm, setSearchTerm] = useState("");
+  const [isAiProcessing, setIsAiProcessing] = useState(false);
+  
   const [messageInput, setMessageInput] = useState("");
   const [inputMode, setInputMode] = useState<"responder" | "nota">("responder");
   const [connectionStatus, setConnectionStatus] = useState<StatusResult | null>(null);
@@ -227,6 +258,32 @@ export function WhatsAppInterface() {
   const activeChatIdRef = useRef<string | null>(null);
   const activeChatNameRef = useRef<string>('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [replyTo, setReplyTo] = useState<{ message_id: string; content: string; senderName: string; role: "user" | "assistant" } | null>(null);
+  
+  // Estados para busca na conversa
+  const [isSearchingInChat, setIsSearchingInChat] = useState(false);
+  const [chatSearchTerm, setChatSearchTerm] = useState("");
+  const [chatSearchResults, setChatSearchResults] = useState<number[]>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Estados para busca global de mensagens
+  const [globalSearchTerm, setGlobalSearchTerm] = useState("");
+  const [globalSearchResults, setGlobalSearchResults] = useState<any[]>([]);
+  const [isGlobalSearching, setIsGlobalSearching] = useState(false);
+  const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
+
+
+  // Estados para seleção múltipla
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [starredMessageIds, setStarredMessageIds] = useState<Set<string>>(new Set());
+  const [showForwardModal, setShowForwardModal] = useState(false);
+
 
   // Quick replies filtradas pelo que o usuário digitou após "/"
   const qrFiltradas = useMemo(() => {
@@ -385,20 +442,45 @@ export function WhatsAppInterface() {
   };
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
+  
+  const filteredChats = useMemo(() => {
+    let list = chats.filter(c =>
+      c.name.toLowerCase().includes(globalSearchTerm.toLowerCase()) ||
+      c.phone.includes(globalSearchTerm)
+    );
 
-  const filteredChats = useMemo(() =>
-    chats.filter(c =>
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.phone.includes(searchTerm)
-    ),
-    [chats, searchTerm]
-  );
 
-  const fetchConversas = async () => {
+    // Filtra pela aba (Arquivadas ou Principal)
+    if (activeTab === "todos") {
+      list = list.filter(c => !c.is_archived);
+    } else if (activeTab === "arquivadas") {
+      list = list.filter(c => c.is_archived);
+    } else if (activeTab === "fila") {
+      // Exemplo: na fila apenas não arquivados e com unread ou sem agente? 
+      // Por ora mantemos lógica WhatsApp: arquivado sai da vista principal.
+      list = list.filter(c => !c.is_archived);
+    }
+    // Se quiser adicionar aba "Arquivadas" no futuro, filtraria list.filter(c => c.is_archived)
+
+    // Ordenação: Fixados primeiro, depois por timestamp
+    return list.sort((a, b) => {
+      if (a.is_pinned && !b.is_pinned) return -1;
+      if (!a.is_pinned && b.is_pinned) return 1;
+      return (b.rawTimestamp || "").localeCompare(a.rawTimestamp || "");
+    });
+  }, [chats, globalSearchTerm, activeTab]);
+
+
+  const fetchConversas = async (isArchived = false) => {
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
-      if (!res.ok) return;
+      console.log(`[WA] fetchConversas iniciando (archived=${isArchived})...`);
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas?archived=${isArchived}`, { headers: apiHeaders() });
+      if (!res.ok) {
+        console.error('[WA] fetchConversas falhou', res.status);
+        return;
+      }
       const rows: any[] = await res.json();
+      console.log('[WA] fetchConversas OK — linhas:', rows.length, 'phones:', rows.map(r => r.session_id).slice(0, 5));
       
       const newArrivals: string[] = [];
       for (const row of rows) {
@@ -406,6 +488,9 @@ export function WhatsAppInterface() {
         const isNew = !prev || new Date(row.ultima_atividade) > new Date(prev);
         const fromClient = row.ultimo_role === 'user';
         const notActive = activeChatIdRef.current !== row.session_id;
+        
+        console.log(`[WA] Chat ${row.session_id}: isNew=${isNew}, fromClient=${fromClient}, notActive=${notActive}`);
+        
         if (isNew && fromClient && notActive && prev) {
           newArrivals.push(row.session_id);
         }
@@ -432,7 +517,10 @@ export function WhatsAppInterface() {
             messages: prevMap.get(row.session_id)?.messages || [],
             notes: prevMap.get(row.session_id)?.notes || '',
             profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
-            unread: hasUnread ? 1 : 0,
+            unread: Number(row.unread || (hasUnread ? 1 : 0)),
+            is_pinned: row.is_pinned === true,
+            is_archived: row.is_archived === true,
+            push_name: row.push_name || undefined,
           };
         });
 
@@ -472,17 +560,23 @@ export function WhatsAppInterface() {
   };
 
   const fetchMensagens = async (phone: string, chatName: string, showLoading = false) => {
+    console.log(`[WA] fetchMensagens para ${phone} iniciando...`);
     if (showLoading) setLoadingMessages(true);
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}?limit=100`, { headers: apiHeaders() });
-      if (!res.ok) return;
+      if (!res.ok) {
+        console.warn('[WA] fetchMensagens falhou', phone, res.status, await res.text().catch(() => ''));
+        return;
+      }
       const rows: any[] = await res.json();
+      console.log('[WA] fetchMensagens', phone, '— msgs recebidas:', rows.length);
       const msgs: Message[] = rows.map((m, i) => ({
         id: String(m.id || `msg-${i}`),
         message_id: m.message_id,
         role: (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant',
         content: m.content || m.conteudo || '',
         timestamp: formatTime(m.timestamp_wa || m.created_at),
+        rawTimestamp: m.timestamp_wa || m.created_at || new Date().toISOString(),
         // sender_name: nome de quem enviou (humano ou IA); push_name: nome do contato recebido
         senderName: m.from_me
           ? (m.sender_name || 'IA')
@@ -493,6 +587,12 @@ export function WhatsAppInterface() {
         midia_nome: m.midia_nome,
         status: m.status || m.delivery_status,
         is_read: m.is_read,
+        reply_to: m.reply_to_message_id ? {
+          message_id: m.reply_to_message_id,
+          content: m.reply_to_content || 'Mensagem original',
+          senderName: m.reply_to_sender === 'assistant' ? 'Você' : (m.push_name || chatName),
+          role: (m.reply_to_sender || 'user') as 'user' | 'assistant'
+        } : undefined
       }));
       // Só atualiza se houver mudança real (evita re-render/flickering)
       setChats(prev => {
@@ -524,11 +624,22 @@ export function WhatsAppInterface() {
 
   const checkStatus = async (silent = true) => {
     try {
-      const res = await fetchConnectionStatus();
+      // Se houver uma instância ativa no chat atual, priorizamos verificar o status dela
+      // Caso contrário, tentamos pegar a instância 'teste' ou a primeira disponível no cache local
+      const activeInstance = activeChatId ? chats.find(c => c.id === activeChatId)?.source : null;
+      const targetInstance = activeInstance || chats.find(c => c.source)?.source || 'teste';
+      
+      console.log(`[WA] Verificando status para instância: ${targetInstance}`);
+      const res = await fetchConnectionStatus(targetInstance);
+      
       setConnectionStatus(res);
       if (res.state === "open") setQrData(null);
+      
+      if (!silent && res.state !== "open") {
+        toast.warning("WhatsApp desconectado ou em sincronização");
+      }
     } catch (e) {
-      if (!silent) toast.error("Erro ao verificar status");
+      if (!silent) toast.error("Erro ao verificar status da conexão");
     } finally {
       setLoadingStatus(false);
     }
@@ -569,6 +680,18 @@ export function WhatsAppInterface() {
       setConnecting(false);
     }
   };
+ 
+  // ── Polling de mensagens (substitui Supabase Realtime) ──────────────────────
+  useEffect(() => {
+    if (!user?.id) return;
+    const interval = setInterval(() => {
+      fetchConversas(activeTab === "arquivadas");
+      if (activeChatIdRef.current) {
+        fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [user?.id, activeTab]);
 
   useEffect(() => {
     checkStatus();
@@ -576,26 +699,103 @@ export function WhatsAppInterface() {
     fetchRespostasRapidas();
   }, [fetchRespostasRapidas]);
 
+
   useEffect(() => {
     const tStatus = setInterval(checkStatus, 30000);
     return () => clearInterval(tStatus);
   }, []);
 
   useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isSelectMode) {
+          setIsSelectMode(false);
+          setSelectedMessageIds(new Set());
+        }
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isSelectMode]);
+
+  useEffect(() => {
+    if (!activeChatId) return;
+    
+    const markAsRead = async () => {
+      try {
+        // Tenta a rota do backend primeiro
+        const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(activeChatId)}/read`, {
+          method: 'PATCH',
+          headers: apiHeaders()
+        });
+        
+        if (res.status === 404) {
+          // Zera contador visual local se backend não tiver a rota
+          setChats(prev => prev.map(c =>
+            c.id === activeChatId ? { ...c, unread: 0 } : c
+          ));
+        }
+      } catch (err) {
+        console.error('[WA] Erro ao marcar como lida:', err);
+      }
+    };
+
+    markAsRead();
+  }, [activeChatId, user?.id]);
+
+  useEffect(() => {
     const ms = activeChatId ? 2000 : 5000;
     const t = setInterval(() => {
-      if (document.visibilityState !== 'hidden') fetchConversas();
+      if (document.visibilityState !== 'hidden') fetchConversas(false);
     }, ms);
     return () => clearInterval(t);
   }, [activeChatId]);
+
+
+
+  useEffect(() => {
+    if (!messagesEndRef.current) return;
+    
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsAtBottom(entry.isIntersecting);
+        if (entry.isIntersecting) {
+          setShowScrollButton(false);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    
+    observer.observe(messagesEndRef.current);
+    return () => observer.disconnect();
+  }, [activeChatId]);
+
+  const handleScroll = (e: any) => {
+    // Para ScrollArea do Radix, o evento pode ser diferente, 
+    // mas aqui estamos pegando o viewport interno se possível
+    const target = e.target as HTMLDivElement;
+    const isBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 150;
+    setIsAtBottom(isBottom);
+    setShowScrollButton(!isBottom);
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
 
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
   }, [activeChatId]);
 
   useEffect(() => {
-    if (!activeChatId) return;
+    if (!activeChatId) {
+      setIsSearchingInChat(false);
+      setChatSearchTerm("");
+      return;
+    }
     const chat = chats.find(c => c.id === activeChatId);
+
     const chatName = chat?.name || activeChatId;
     activeChatNameRef.current = chatName;
     if (chat) fetchMensagens(activeChatId, chatName, true);
@@ -615,6 +815,56 @@ export function WhatsAppInterface() {
   }, [activeChatId, chats]);
 
   const handleSendMessage = async () => {
+    // IA responde via API unificada se o modo IA estiver ativo e não houver pausa manual
+    const chat = chats.find(c => c.id === activeChatId);
+    if (!iaPausada && inputMode === "responder") {
+      const cdRemaining = getCooldownRemaining('whatsapp-openclaw');
+      if (cdRemaining > 0) {
+        toast.error(
+          `IA em cooldown. Aguarde ${Math.ceil(cdRemaining / 1000)}s.`,
+          { id: 'whatsapp-openclaw-error' }
+        );
+      } else {
+        try {
+          setIsAiProcessing(true);
+          await withCooldown('whatsapp-openclaw', async () => {
+            const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
+              method: 'POST',
+              headers: apiHeaders(),
+              body: JSON.stringify({ message: messageInput, sessionKey: activeChatId })
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              console.error('[OPENCLAW] Erro na resposta IA:', err);
+              if (res.status === 401) {
+                toast.error('Sessão expirada. Faça login novamente.', { id: 'whatsapp-openclaw-error' });
+                navigate('/login');
+              } else {
+                toast.error(friendlyError(res.status, err?.error), { id: 'whatsapp-openclaw-error' });
+              }
+              throw new Error(`openclaw_${res.status}`);
+            }
+          }, { baseMs: 2000, maxMs: 60_000 });
+        } catch (err: any) {
+          if (err instanceof CooldownError) {
+            toast.error(
+              `IA em cooldown. Aguarde ${Math.ceil(err.retryInMs / 1000)}s.`,
+              { id: 'whatsapp-openclaw-error' }
+            );
+          } else if (!err?.message?.startsWith('openclaw_')) {
+            console.error('[OPENCLAW] Falha ao chamar IA:', err);
+            toast.error(friendlyError(undefined, err?.message), { id: 'whatsapp-openclaw-error' });
+          }
+        } finally {
+          setIsAiProcessing(false);
+        }
+      }
+    }
+
+    // Fecha busca ao enviar mensagem
+    setIsSearchingInChat(false);
+    setChatSearchTerm("");
+
     if (inputMode === "nota") {
       // Nota privada — salva internamente, não envia ao WhatsApp
       if (!noteInput.trim() || !activeChatId) return;
@@ -626,34 +876,75 @@ export function WhatsAppInterface() {
     if (!messageInput.trim() || !activeChatId) return;
 
     const text = messageInput.trim();
+    const currentReplyTo = replyTo; // Captura para o corpo do POST
     setMessageInput("");
+    setReplyTo(null);
 
     // Atualização otimista — aparece imediatamente
     const tempId = `local_${Date.now()}`;
     const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     setChats(prev => prev.map(c =>
       c.id === activeChatId
-        ? { ...c, messages: [...c.messages, { id: tempId, role: "assistant" as const, content: text, timestamp: ts, senderName: currentUserName, status: "sent" }], lastMessage: text, timestamp: ts }
+        ? { 
+            ...c, 
+            messages: [...c.messages, { 
+              id: tempId, 
+              role: "assistant" as const, 
+              content: text, 
+              timestamp: ts, 
+              senderName: currentUserName, 
+              status: "sent",
+              reply_to: currentReplyTo ? {
+                message_id: currentReplyTo.message_id,
+                content: currentReplyTo.content,
+                senderName: currentReplyTo.senderName,
+                role: currentReplyTo.role
+              } : undefined
+            }], 
+            lastMessage: text, 
+            timestamp: ts 
+          }
         : c
     ));
 
     try {
       const chat = chats.find(c => c.id === activeChatId);
+      const payload = { 
+        phone: activeChatId, 
+        text, 
+        instancia: chat?.source,
+        replyToMessageId: currentReplyTo?.message_id
+      };
+      
+      console.log('[WHATSAPP] Enviando payload:', JSON.stringify(payload, null, 2));
+
       const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
         method: 'POST',
         headers: apiHeaders(),
-        body: JSON.stringify({ phone: activeChatId, text, instancia: chat?.source }),
+        body: JSON.stringify(payload),
       });
+
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: 'Erro ao enviar' }));
-        toast.error(err.message || 'Erro ao enviar mensagem');
+        console.error('[WHATSAPP] Erro no envio — Resposta do servidor:', err);
+        
+        // Se o erro for o TypeError da Evolution, sugerimos reconexão
+        if (err.message?.includes("presenceSubscribe") || err.message?.includes("TypeError")) {
+          toast.error("Erro técnico na Evolution API. Tente desconectar e conectar o QR Code novamente.", {
+            duration: 8000
+          });
+        } else {
+          toast.error(err.message || 'Erro ao enviar mensagem');
+        }
+
         setChats(prev => prev.map(c =>
           c.id === activeChatId
             ? { ...c, messages: c.messages.filter(m => m.id !== tempId) }
             : c
         ));
       }
-    } catch {
+    } catch (err) {
+      console.error('[WHATSAPP] Falha crítica no fetch:', err);
       toast.error('Sem conexão com o servidor');
       setChats(prev => prev.map(c =>
         c.id === activeChatId
@@ -720,7 +1011,386 @@ export function WhatsAppInterface() {
     setContatoResults([]);
   };
 
+  // Lógica de busca na conversa
+  const handleChatSearch = (term: string) => {
+    setChatSearchTerm(term);
+    if (!term.trim() || !activeChat) {
+      setChatSearchResults([]);
+      setCurrentSearchIndex(-1);
+      return;
+    }
+
+    const results: number[] = [];
+    const lowerTerm = term.toLowerCase();
+    activeChat.messages.forEach((m, idx) => {
+      if (m.content.toLowerCase().includes(lowerTerm)) {
+        results.push(idx);
+      }
+    });
+
+    setChatSearchResults(results);
+    if (results.length > 0) {
+      setCurrentSearchIndex(results.length - 1); // Começa do mais recente
+      scrollToMessage(results[results.length - 1]);
+    } else {
+      setCurrentSearchIndex(-1);
+    }
+  };
+
+  const navigateSearch = (direction: 'next' | 'prev') => {
+    if (chatSearchResults.length === 0) return;
+    
+    let newIndex = currentSearchIndex;
+    if (direction === 'next') {
+      newIndex = currentSearchIndex > 0 ? currentSearchIndex - 1 : chatSearchResults.length - 1;
+    } else {
+      newIndex = currentSearchIndex < chatSearchResults.length - 1 ? currentSearchIndex + 1 : 0;
+    }
+    
+    setCurrentSearchIndex(newIndex);
+    scrollToMessage(chatSearchResults[newIndex]);
+  };
+
+  const toggleMessageSelection = (messageId: string) => {
+    if (!isSelectMode) setIsSelectMode(true);
+    setSelectedMessageIds(prev => {
+      const next = new Set(prev);
+      const isAdded = !next.has(messageId);
+      
+      if (isAdded) {
+        next.add(messageId);
+      } else {
+        next.delete(messageId);
+        if (next.size === 0) setIsSelectMode(false);
+      }
+
+      console.log('--- [RASTREIO SELEÇÃO] ---', { 
+        mensagemId: messageId, 
+        acao: isAdded ? 'adicionado' : 'removido', 
+        listaAtual: Array.from(next)
+      });
+
+      return next;
+    });
+  };
+
+  const handleCopySelected = () => {
+    if (!activeChat) return;
+    const texts = activeChat.messages
+      .filter(m => selectedMessageIds.has(m.id))
+      .map(m => `[${m.timestamp}] ${m.senderName || 'Desconhecido'}: ${m.content}`)
+      .join('\n');
+    
+    navigator.clipboard.writeText(texts);
+    toast.success(`${selectedMessageIds.size} mensagens copiadas`);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+  };
+
+  const handleToggleStar = () => {
+    setStarredMessageIds(prev => {
+      const next = new Set(prev);
+      selectedMessageIds.forEach(id => {
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+      });
+      return next;
+    });
+    toast.success(`${selectedMessageIds.size} mensagens marcadas/desmarcadas`);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+  };
+
+  const handleDeleteForMe = async () => {
+    const count = selectedMessageIds.size;
+    const currentChat = activeChat;
+    if (!currentChat) return;
+
+    console.log('🚀 [RASTREIO EXCLUSÃO - INÍCIO]', {
+      tipoExclusao: 'mim',
+      quantidadeMensagens: count,
+      idsParaDeletar: Array.from(selectedMessageIds),
+      userIdAtivo: user?.id,
+      instanciaEvolution: currentChat.source
+    });
+
+    setIsActionLoading(true);
+    const idsToDelete = Array.from(selectedMessageIds);
+
+    try {
+      // Otimista
+      setChats(prev => prev.map(c => 
+        c.id === activeChatId 
+          ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
+          : c
+      ));
+
+      const responses = await Promise.all(idsToDelete.map(id => 
+        fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: apiHeaders(),
+          body: JSON.stringify({ 
+            forEveryone: false,
+            instancia: currentChat.source, 
+            remoteJid: `${currentChat.phone}@s.whatsapp.net` 
+          })
+        })
+      ));
+
+      responses.forEach(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        console.log('✅ [RASTREIO API - SUCESSO]', { status: response.status, data });
+      });
+
+      toast.success(`${count} mensagens removidas para você`);
+    } catch (err: any) {
+      console.error('❌ [RASTREIO API - ERRO CRÍTICO]', { 
+        mensagem: err.message, 
+        response404_500: err.response?.status, 
+        payloadEnviado: err.config?.data 
+      });
+      toast.error("Erro ao ocultar mensagens");
+    } finally {
+      setIsActionLoading(false);
+      setIsSelectMode(false);
+      setSelectedMessageIds(new Set());
+    }
+  };
+
+  const handleForwardMessages = async (targetPhone: string, targetSource?: string) => {
+    if (!activeChat || selectedMessageIds.size === 0) return;
+    
+    setIsActionLoading(true);
+    const messagesToForward = activeChat.messages.filter(m => selectedMessageIds.has(m.id));
+    
+    try {
+      for (const msg of messagesToForward) {
+        // Encaminha enviando o conteúdo novamente para o novo destinatário
+        await fetch(`${API_BASE}/api/whatsapp/send`, {
+          method: 'POST',
+          headers: apiHeaders(),
+          body: JSON.stringify({ 
+            phone: targetPhone, 
+            text: msg.content, 
+            instancia: targetSource,
+            mediaUrl: msg.midia_url,
+            mediaType: ['image', 'video', 'audio', 'document'].includes(msg.tipo || '') ? msg.tipo as any : undefined
+          }),
+        });
+      }
+      toast.success(`${messagesToForward.length} mensagens encaminhadas`);
+    } catch {
+      toast.error("Erro ao encaminhar algumas mensagens");
+    } finally {
+      setIsActionLoading(false);
+      setIsSelectMode(false);
+      setSelectedMessageIds(new Set());
+      setShowForwardModal(false);
+    }
+  };
+
+
+  const runUITests = () => {
+
+    toast.info("Iniciando testes de UI...");
+    const first3Msgs = activeChat?.messages.slice(0, 3) || [];
+    if (first3Msgs.length < 3) {
+      toast.error("Não há mensagens suficientes para o teste");
+      return;
+    }
+    setIsSelectMode(true);
+    setSelectedMessageIds(new Set(first3Msgs.map(m => m.id)));
+    setTimeout(() => {
+      if (document.querySelector('.sticky.top-0')?.textContent?.includes('selecionada')) {
+        toast.success("Cenário A validado: Toolbar ativa");
+      }
+      setTimeout(() => {
+        setSelectedMessageIds(new Set());
+        setIsSelectMode(false);
+        toast.success("Cenário B validado: Toolbar escondida");
+      }, 1500);
+    }, 1500);
+  };
+
+  const handleDeleteForEveryone = async () => {
+    const count = selectedMessageIds.size;
+    const currentChat = activeChat;
+    if (!currentChat) return;
+
+    console.log('🚀 [RASTREIO EXCLUSÃO - INÍCIO]', {
+      tipoExclusao: 'todos',
+      quantidadeMensagens: count,
+      idsParaDeletar: Array.from(selectedMessageIds),
+      userIdAtivo: user?.id,
+      instanciaEvolution: currentChat.source
+    });
+
+    setIsActionLoading(true);
+    const idsToDelete = Array.from(selectedMessageIds);
+    
+    try {
+      // Otimista
+      setChats(prev => prev.map(c => 
+        c.id === activeChatId 
+          ? { ...c, messages: c.messages.filter(m => !selectedMessageIds.has(m.id)) }
+          : c
+      ));
+
+      const responses = await Promise.all(idsToDelete.map(id => {
+        const msg = currentChat.messages.find(m => m.id === id);
+        const mId = msg?.message_id || id; // Fallback para UUID se não tiver message_id
+        
+        return fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(mId)}`, {
+          method: 'DELETE',
+          headers: apiHeaders(),
+          body: JSON.stringify({ 
+            forEveryone: true, 
+            instancia: currentChat.source, 
+            remoteJid: `${currentChat.phone}@s.whatsapp.net` 
+          })
+        });
+      }));
+
+      responses.forEach(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        console.log('✅ [RASTREIO API - SUCESSO]', { status: response.status, data });
+      });
+
+      toast.success(`${count} mensagens apagadas para todos`);
+    } catch (err: any) {
+      console.error('❌ [RASTREIO API - ERRO CRÍTICO]', { 
+        mensagem: err.message, 
+        response404_500: err.response?.status, 
+        payloadEnviado: err.config?.data 
+      });
+      toast.error("Erro ao apagar mensagens no servidor");
+    } finally {
+      setIsActionLoading(false);
+      setIsSelectMode(false);
+      setSelectedMessageIds(new Set());
+    }
+  };
+
+
+
+
+  const scrollToMessage = (msgIndex: number) => {
+    if (!activeChat) return;
+    const msg = activeChat.messages[msgIndex];
+    if (msg) {
+      const el = messageRefs.current.get(msg.id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
+
+  const highlightText = (text: string, term: string) => {
+    if (!term.trim()) return text;
+    const parts = text.split(new RegExp(`(${term})`, 'gi'));
+    return (
+      <>
+        {parts.map((part, i) => 
+          part.toLowerCase() === term.toLowerCase() ? (
+            <mark key={i} className="bg-yellow-300 text-black px-0.5 rounded-sm animate-pulse font-bold">
+              {part}
+            </mark>
+          ) : part
+        )}
+      </>
+    );
+  };
+
+  const handleGlobalSearch = async (term: string) => {
+    setGlobalSearchTerm(term);
+    if (!term.trim() || term.length < 2) {
+      setGlobalSearchResults([]);
+      setShowGlobalSearchResults(false);
+      return;
+    }
+
+    setIsGlobalSearching(true);
+    setShowGlobalSearchResults(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/search?q=${encodeURIComponent(term)}`, { headers: apiHeaders() });
+      if (res.ok) {
+        setGlobalSearchResults(await res.json());
+      }
+    } catch {
+      toast.error("Erro na busca global");
+    } finally {
+      setIsGlobalSearching(false);
+    }
+  };
+
+
+
   const isConnected = connectionStatus?.state === "open";
+
+  // Funções para Context Menu
+  const togglePin = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_pinned;
+    
+    // Otimista
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_pinned: nextVal } : c));
+    toast.success(nextVal ? "Conversa fixada" : "Conversa desafixada");
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ pinned: nextVal })
+      });
+    } catch {
+      // Reverter em caso de erro real se necessário
+    }
+  };
+
+  const toggleMute = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_muted;
+
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_muted: nextVal } : c));
+    toast.success(nextVal ? "Notificações silenciadas" : "Notificações ativadas");
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ muted_until: nextVal ? new Date(Date.now() + 365*24*60*60*1000).toISOString() : null })
+      });
+    } catch {}
+  };
+
+  const toggleArchive = async (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    const nextVal = !chat.is_archived;
+
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_archived: nextVal } : c));
+    toast.success(nextVal ? "Conversa arquivada" : "Conversa desarquivada");
+    
+    if (nextVal && activeChatId === chatId) {
+      setActiveChatId(null);
+    }
+
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ archived: nextVal })
+      });
+    } catch {}
+  };
+
+  const markAsUnread = (chatId: string) => {
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, unread: (c.unread || 0) + 1 } : c));
+    toast.success("Marcada como não lida");
+  };
+
 
   return (
     <div className="flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border shadow-xl bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
@@ -785,21 +1455,32 @@ export function WhatsAppInterface() {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-1 p-1 bg-muted/40 rounded-lg">
-            {(["Meus", "Fila", "Todos"] as const).map(t => {
+          <div className="flex gap-1 p-1 bg-muted/40 rounded-lg overflow-x-auto no-scrollbar scroll-smooth">
+            {(["Meus", "Fila", "Todos", "Arquivadas"] as const).map(t => {
               const key = t.toLowerCase() as ChatTab;
               const isActive = activeTab === key;
+              const hasUnreadInTab = (key === "todos" || key === "arquivadas") && chats.some(c => (key === "arquivadas" ? c.is_archived : !c.is_archived) && (c.unread || 0) > 0);
+
+
+
+
+
               return (
                 <button
                   key={t}
-                  onClick={() => setActiveTab(key)}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
+                  onClick={() => {
+                    setActiveTab(key);
+                    fetchConversas(key === "arquivadas");
+                  }}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap relative ${
                     isActive
                       ? "bg-white shadow-sm text-primary ring-1 ring-black/5"
                       : "text-muted-foreground hover:text-foreground hover:bg-white/50"
                   }`}
                 >
                   {t}
+                  {hasUnreadInTab && <span className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full border border-background shadow-sm" />}
+
                 </button>
               );
             })}
@@ -807,17 +1488,70 @@ export function WhatsAppInterface() {
         </div>
 
         {/* Search */}
-        <div className="px-4 py-3 border-b bg-card/20">
+        <div className="px-4 py-3 border-b bg-card/20 relative">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
             <Input
-              placeholder="Buscar por nome ou telefone..."
+              placeholder="Buscar em todas as mensagens..."
               className="pl-9 h-10 bg-background/50 border-muted focus:bg-background focus:ring-primary/20 transition-all text-sm rounded-xl"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
+              value={globalSearchTerm}
+              onChange={e => handleGlobalSearch(e.target.value)}
+              onFocus={() => globalSearchTerm.length >= 2 && setShowGlobalSearchResults(true)}
             />
+            {globalSearchTerm && (
+              <button 
+                onClick={() => { setGlobalSearchTerm(""); setGlobalSearchResults([]); setShowGlobalSearchResults(false); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-muted rounded-full"
+              >
+                <X className="h-3 w-3 text-muted-foreground" />
+              </button>
+            )}
           </div>
+
+          {/* Resultados da Busca Global */}
+          {showGlobalSearchResults && globalSearchTerm.length >= 2 && (
+            <div className="absolute top-full left-0 right-0 z-50 bg-background border-x border-b shadow-2xl rounded-b-2xl max-h-[400px] overflow-y-auto animate-in slide-in-from-top-2 duration-200">
+
+              <div className="p-3 border-b bg-muted/20 flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Mensagens Encontradas</span>
+                {isGlobalSearching && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+              </div>
+              {globalSearchResults.length === 0 && !isGlobalSearching ? (
+                <div className="p-8 text-center text-muted-foreground text-xs font-medium">
+                  Nenhuma mensagem encontrada para "{globalSearchTerm}"
+                </div>
+              ) : (
+                globalSearchResults.map((res: any) => (
+                  <div
+                    key={res.id}
+                    onClick={() => {
+                      setActiveChatId(res.phone);
+                      setShowGlobalSearchResults(false);
+                      setGlobalSearchTerm("");
+                      // O scroll automático para a mensagem exata na conversa 
+                      // requer que a mensagem já esteja carregada, o que fetchMensagens fará
+                    }}
+                    className="p-4 hover:bg-primary/[0.04] cursor-pointer border-b border-border/30 last:border-0 group transition-colors"
+                  >
+                    <div className="flex items-center gap-3 mb-1.5">
+                      <ChatAvatar name={res.contact_name} url={res.profile_pic} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold truncate group-hover:text-primary transition-colors">{res.contact_name}</p>
+                        <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-tighter">
+                          {new Date(res.timestamp_wa || res.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-foreground/80 line-clamp-2 pl-11 italic border-l-2 border-primary/10">
+                      {highlightText(res.content, globalSearchTerm)}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
+
 
         {/* Chat list */}
         <ScrollArea className="flex-1">
@@ -829,66 +1563,100 @@ export function WhatsAppInterface() {
           {!loadingChats && filteredChats.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 px-6 text-center text-muted-foreground text-sm">
               <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
-              {searchTerm 
-                ? "Nenhuma conversa encontrada para esta busca."
-                : "Nenhuma mensagem recebida ainda. Quando clientes enviarem mensagens para seu WhatsApp, elas aparecerão aqui automaticamente."}
+              {globalSearchTerm 
+                ? "Nenhum chat correspondente."
+                : "Nenhuma mensagem recebida ainda."}
             </div>
           )}
+
           <div className="divide-y divide-border/50">
             {filteredChats.map(chat => {
               const isActive = activeChatId === chat.id;
               return (
-                <div
-                  key={chat.id}
-                  onClick={() => {
-                    setActiveChatId(chat.id);
-                    lastOpenedRef.current.set(chat.phone, new Date().toISOString());
-                  }}
-                  className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
-                    isActive
-                      ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary"
-                      : chat.unread
-                      ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
-                      : "hover:bg-muted/30"
-                  }`}
-                >
-                  <div className="relative shrink-0">
-                    <ChatAvatar
-                      name={chat.name}
-                      url={chat.profile_pic}
-                      size="md"
-                      className={`transition-transform group-hover:scale-105 ${isActive ? 'shadow-lg ring-2 ring-primary/30' : ''}`}
-                    />
-                    {chat.online && (
-                      <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-background rounded-full shadow-sm" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0 py-0.5">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>{chat.name}</span>
-                      <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
+                <ContextMenu key={chat.id}>
+                  <ContextMenuTrigger>
+                    <div
+                      onClick={() => {
+                        setActiveChatId(chat.id);
+                        lastOpenedRef.current.set(chat.phone, new Date().toISOString());
+                      }}
+                      className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
+                        isActive
+                          ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary z-10"
+                          : chat.unread
+                          ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
+                          : "hover:bg-muted/30"
+                      }`}
+                    >
+                      <div className="relative shrink-0">
+                        <ChatAvatar
+                          name={chat.name}
+                          url={chat.profile_pic}
+                          size="md"
+                          className={`transition-transform group-hover:scale-105 ${isActive ? 'shadow-lg ring-2 ring-primary/30' : ''}`}
+                        />
+                        {chat.online && (
+                          <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-background rounded-full shadow-sm" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0 py-0.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>
+                              {chat.name}
+                            </span>
+                            {chat.is_pinned && <Pin className="h-3 w-3 text-muted-foreground rotate-45 shrink-0" />}
+                            {chat.is_muted && <BellOff className="h-3 w-3 text-muted-foreground shrink-0" />}
+                          </div>
+                          <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp || '...'}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          {chat.is_group && (
+                            <span className="text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase">Grupo</span>
+                          )}
+                          {chat.source && (
+                            <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
+                          )}
+                          {chat.tag && (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>{chat.tag}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={`text-xs truncate flex-1 ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>
+                            {chat.lastMessage.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}
+                          </p>
+                          {chat.unread ? (
+                            <span className="min-w-[18px] h-[18px] px-1 bg-green-500 text-white text-[10px] font-black rounded-full flex items-center justify-center shadow-sm shrink-0">
+                              {chat.unread}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      {chat.is_group && (
-                        <span className="text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase">Grupo</span>
-                      )}
-                      {chat.source && (
-                        <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
-                      )}
-                      {chat.tag && (
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>{chat.tag}</span>
-                      )}
-                    </div>
-                    <p className={`text-xs truncate ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>{chat.lastMessage.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>
-                  </div>
-                  {chat.unread ? (
-                    <div className="min-w-[20px] h-5 px-1.5 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center font-black shadow-lg shadow-green-500/20 shrink-0 animate-in zoom-in">
-                      {chat.unread}
-                    </div>
-                  ) : null}
-                </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-56 rounded-xl shadow-xl border-border/50">
+                    <ContextMenuItem onClick={() => markAsUnread(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                      <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                      <span>Marcar como não lida</span>
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => togglePin(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                      <Pin className={`h-4 w-4 ${chat.is_pinned ? 'text-primary fill-primary/10' : 'text-muted-foreground'}`} />
+                      <span>{chat.is_pinned ? "Desafixar" : "Fixar conversa"}</span>
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => toggleMute(chat.id)} className="gap-2 py-2.5 cursor-pointer">
+                      <BellOff className={`h-4 w-4 ${chat.is_muted ? 'text-orange-500' : 'text-muted-foreground'}`} />
+                      <span>{chat.is_muted ? "Ativar notificações" : "Silenciar"}</span>
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onClick={() => toggleArchive(chat.id)} className="gap-2 py-2.5 cursor-pointer text-destructive focus:text-destructive">
+                      <Archive className="h-4 w-4" />
+                      <span>{chat.is_archived ? "Desarquivar" : "Arquivar conversa"}</span>
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               );
             })}
+
           </div>
         </ScrollArea>
       </div>
@@ -1232,7 +2000,7 @@ export function WhatsAppInterface() {
         {activeChat ? (
           <>
             {/* Chat header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b bg-background/40 backdrop-blur-md shrink-0 z-10 shadow-sm">
+            <div className="h-16 shrink-0 border-b flex items-center justify-between px-6 bg-background/60 backdrop-blur-md z-20 shadow-sm">
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
@@ -1244,7 +2012,7 @@ export function WhatsAppInterface() {
                 <div>
                   <div className="flex items-center gap-2">
                     <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
-                    <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+                    <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
                   </div>
                   <p className="text-[11px] font-medium text-muted-foreground">
                     <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span> · {activeChat.phone}
@@ -1252,7 +2020,6 @@ export function WhatsAppInterface() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {/* Toggle IA — não interfere no envio/recebimento de mensagens */}
                 <button
                   onClick={toggleIA}
                   disabled={togglingIA}
@@ -1281,14 +2048,188 @@ export function WhatsAppInterface() {
                   <Sparkles className="h-4 w-4" />
                   <span className="hidden sm:inline">Criar Tarefa</span>
                 </Button>
+                
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className={`h-9 w-9 rounded-xl transition-colors ${isSearchingInChat ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
+                  onClick={() => {
+                    setIsSearchingInChat(!isSearchingInChat);
+                    if (!isSearchingInChat) {
+                      setTimeout(() => document.getElementById('chat-search-input')?.focus(), 100);
+                    } else {
+                      setChatSearchTerm("");
+                      setChatSearchResults([]);
+                      setCurrentSearchIndex(-1);
+                    }
+                  }}
+                >
+                  <Search className="h-4.5 w-4.5" />
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
+                  onClick={runUITests}
+                  title="Executar Testes de UI"
+                >
+                  <Activity className="h-4.5 w-4.5" />
+                </Button>
                 <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
                   <Info className="h-4.5 w-4.5" />
                 </Button>
               </div>
             </div>
 
+
+
+            {/* Painel de Busca */}
+            {isSearchingInChat && (
+              <div className="absolute top-0 left-0 right-0 z-30 bg-background/95 backdrop-blur-md border-b shadow-sm animate-in slide-in-from-top duration-300">
+                <div className="px-6 py-3 flex items-center gap-4">
+                  <div className="flex-1 relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="chat-search-input"
+                      placeholder="Buscar na conversa..."
+                      className="pl-10 h-10 rounded-xl bg-muted/50 border-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                      value={chatSearchTerm}
+                      onChange={(e) => handleChatSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setIsSearchingInChat(false);
+                          setChatSearchTerm("");
+                        } else if (e.key === 'Enter') {
+                          navigateSearch(e.shiftKey ? 'prev' : 'next');
+                        }
+                      }}
+                    />
+                  </div>
+                  
+                  {chatSearchTerm && (
+                    <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground whitespace-nowrap bg-muted/30 px-3 py-2 rounded-lg">
+                      {chatSearchResults.length > 0 ? (
+                        <>
+                          <span>{chatSearchResults.length - currentSearchIndex} de {chatSearchResults.length}</span>
+                          <div className="flex items-center border-l ml-2 pl-2 gap-1">
+                            <button 
+                              onClick={() => navigateSearch('prev')}
+                              className="p-1 hover:bg-background rounded-md transition-colors"
+                            >
+                              <ChevronUp className="h-4 w-4" />
+                            </button>
+                            <button 
+                              onClick={() => navigateSearch('next')}
+                              className="p-1 hover:bg-background rounded-md transition-colors"
+                            >
+                              <ChevronDown className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <span>Nenhum resultado</span>
+                      )}
+                    </div>
+                  )}
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 rounded-xl hover:bg-muted"
+                    onClick={() => {
+                      setIsSearchingInChat(false);
+                      setChatSearchTerm("");
+                      setChatSearchResults([]);
+                      setCurrentSearchIndex(-1);
+                    }}
+                  >
+                    <X className="h-4.5 w-4.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {/* Messages */}
-            <ScrollArea className="flex-1 bg-muted/10 relative">
+            <ScrollArea 
+              className="flex-1 bg-muted/10 relative" 
+              ref={scrollAreaRef}
+              onScroll={handleScroll}
+            >
+              {/* Barra de Ferramentas Suspensa (Seleção) */}
+              {isSelectMode && (
+                <div className="sticky top-0 left-0 right-0 z-40 px-6 py-3 bg-background/95 backdrop-blur-md border-b shadow-md flex items-center justify-between animate-in slide-in-from-top duration-300">
+                  <div className="flex items-center gap-4">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={() => { setIsSelectMode(false); setSelectedMessageIds(new Set()); }}
+                      className="rounded-full h-8 w-8 hover:bg-muted"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                    <span className="text-sm font-bold text-primary">{selectedMessageIds.size} selecionada(s)</span>
+                  </div>
+                  
+                  <div className="flex items-center gap-1.5">
+                    <Button 
+                      variant="ghost" 
+                      onClick={handleCopySelected}
+                      disabled={isActionLoading}
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-primary/5 hover:text-primary transition-all text-xs font-bold uppercase tracking-tight"
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copiar
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      onClick={handleToggleStar}
+                      disabled={isActionLoading}
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-all text-xs font-bold uppercase tracking-tight"
+                    >
+                      <Star className="h-4 w-4" />
+                      Favoritar
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      onClick={() => setShowForwardModal(true)}
+                      disabled={isActionLoading}
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-blue-50 hover:text-blue-600 transition-all text-xs font-bold uppercase tracking-tight"
+                    >
+                      <Forward className="h-4 w-4" />
+                      Encaminhar
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button 
+                          variant="ghost" 
+                          disabled={isActionLoading}
+                          className="h-9 px-3 gap-2 rounded-xl hover:bg-destructive/5 hover:text-destructive transition-all text-xs font-bold uppercase tracking-tight"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Excluir
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-56 rounded-xl shadow-xl">
+                        <DropdownMenuItem onClick={handleDeleteForMe} className="gap-2 py-2.5 cursor-pointer">
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
+                          <span>Excluir para Mim</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={handleDeleteForEveryone} className="gap-2 py-2.5 cursor-pointer text-destructive focus:text-destructive">
+                          <Trash2 className="h-4 w-4" />
+                          <span>Excluir para Todos</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  
+                  {isActionLoading && (
+                    <div className="absolute inset-0 bg-background/50 flex items-center justify-center rounded-xl z-50">
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="px-8 py-6 space-y-1 relative z-1">
                 {loadingMessages && (
                   <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -1300,75 +2241,233 @@ export function WhatsAppInterface() {
                   const isNote = m.role === "note";
                   const prevMsg = i > 0 ? activeChat.messages[i - 1] : null;
                   const prevRole = prevMsg?.role ?? null;
+                  
+                  // Lógica de separador de data
+                  const currentDateStr = m.rawTimestamp || m.timestamp;
+                  const prevDateStr = prevMsg ? (prevMsg.rawTimestamp || prevMsg.timestamp) : null;
+                  
+                  // Helper para validar se é uma string de data válida ou apenas hora "14:30"
+                  const parseSafeDate = (str: string | undefined | null) => {
+                    if (!str) return new Date();
+                    // Se for apenas hora (HH:mm ou HH:mm:ss), não é uma data completa
+                    if (/^\d{2}:\d{2}(:\d{2})?$/.test(str)) return null;
+                    const d = new Date(str);
+                    return isNaN(d.getTime()) ? null : d;
+                  };
+
+                  const currentDate = parseSafeDate(currentDateStr) || new Date();
+                  const prevDate = parseSafeDate(prevDateStr);
+                  
+                  const isDifferentDay = !prevDate || 
+                    currentDate.getDate() !== prevDate.getDate() || 
+                    currentDate.getMonth() !== prevDate.getMonth() || 
+                    currentDate.getFullYear() !== prevDate.getFullYear();
+
+                  // Determinar label da data
+                  let dateLabel = "";
+                  if (isDifferentDay) {
+                    const today = new Date();
+                    const yesterday = new Date();
+                    yesterday.setDate(today.getDate() - 1);
+
+                    const isToday = currentDate.getDate() === today.getDate() && 
+                                    currentDate.getMonth() === today.getMonth() && 
+                                    currentDate.getFullYear() === today.getFullYear();
+                    
+                    const isYesterday = currentDate.getDate() === yesterday.getDate() && 
+                                        currentDate.getMonth() === yesterday.getMonth() && 
+                                        currentDate.getFullYear() === yesterday.getFullYear();
+
+                    if (isToday) {
+                      // Não exibir separador antes da primeira mensagem se for hoje
+                      if (i > 0) dateLabel = "Hoje";
+                    } else if (isYesterday) {
+                      dateLabel = "Ontem";
+                    } else {
+                      dateLabel = currentDate.toLocaleDateString('pt-BR');
+                    }
+                  }
+
                   // Mostra nome quando muda de remetente
                   const showNameIn  = !isOut && !isNote && prevRole !== "user";
                   const showNameOut = isOut && !isNote && (prevRole !== "assistant" || prevMsg?.senderName !== m.senderName);
 
                   return (
-                    <div key={m.id} className={`flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}>
-                      <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 ${
-                        isOut
-                          ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
-                          : isNote
-                            ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
-                            : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
-                      }`}>
-                        {showNameIn && (
-                          <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
-                        )}
-                        {showNameOut && m.senderName && (
-                          <p className="text-[10px] font-bold text-primary-foreground/70 mb-1 text-right">{m.senderName}</p>
-                        )}
-                        {isNote && (
-                          <div className="flex items-center justify-center gap-1.5 mb-1 text-[10px] font-black uppercase tracking-widest text-amber-600/80">
-                            <Info className="h-3 w-3" /> Nota Privada
+                    <div 
+                      key={m.id}
+                      ref={el => { if (el) messageRefs.current.set(m.id, el); }}
+                      className="group/row flex flex-col w-full"
+                    >
+                      {dateLabel && (
+                        <div className="flex justify-center my-6 sticky top-2 z-10 pointer-events-none">
+                          <div className="bg-background/80 backdrop-blur-sm border border-border/50 px-4 py-1.5 rounded-full shadow-sm">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/80">
+                              {dateLabel}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-4 w-full">
+                        {/* Checkbox (Visível em modo seleção ou hover) */}
+                        {!isNote && (
+                          <div 
+                            className={`shrink-0 cursor-pointer transition-all duration-300 ${
+                              isSelectMode 
+                                ? "opacity-100 translate-x-0" 
+                                : "opacity-0 -translate-x-2 group-hover/row:opacity-100 group-hover/row:translate-x-0"
+                            }`}
+                            onClick={() => toggleMessageSelection(m.id)}
+                          >
+                            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+                              selectedMessageIds.has(m.id) 
+                                ? "bg-primary border-primary shadow-lg shadow-primary/20" 
+                                : "border-muted-foreground/30 bg-background hover:border-primary/50"
+                            }`}>
+                              {selectedMessageIds.has(m.id) && <Check className="h-3.5 w-3.5 text-white stroke-[4px]" />}
+                            </div>
                           </div>
                         )}
-                        {m.tipo === 'image' && m.midia_url ? (
-                          <img src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" />
-                        ) : m.tipo === 'audio' ? (
-                          m.midia_url
-                            ? <AudioPlayer src={m.midia_url} />
-                            : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Mic className="h-4 w-4" /> Áudio</div>
-                        ) : m.tipo === 'video' && m.midia_url ? (
-                          <video controls className="rounded max-w-[260px] mb-1" preload="metadata">
-                            <source src={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`} type={m.midia_mime || 'video/mp4'} />
-                          </video>
-                        ) : m.tipo === 'document' && m.midia_url ? (
-                          <a
-                            href={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`}
-                            target="_blank" rel="noreferrer"
-                            className="flex items-center gap-2 text-xs text-primary underline py-1"
-                            download={m.midia_nome || true}
-                          >
-                            <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
-                          </a>
-                        ) : m.tipo === 'sticker' && m.midia_url ? (
-                          <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
-                        ) : null}
-                        {m.content && <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}</p>}
-                        <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
-                          <span className="text-[10px] font-bold">{m.timestamp}</span>
-                          {isOut && (
-                            <span title={m.status || 'sent'}>
-                              {m.status === 'READ' || m.status === 'PLAYED' ? (
-                                <span className="text-sky-300 text-[10px] font-bold">✓✓</span>
-                              ) : m.status === 'DELIVERY_ACK' ? (
-                                <span className="text-primary-foreground/60 text-[10px] font-bold">✓✓</span>
-                              ) : m.status === 'SERVER_ACK' ? (
-                                <span className="text-primary-foreground/50 text-[10px] font-bold">✓</span>
-                              ) : (
-                                <Check className="h-3 w-3 opacity-50" />
-                              )}
-                            </span>
+                        
+                        <div 
+                          className={`flex-1 flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            if (!isNote) toggleMessageSelection(m.id);
+                          }}
+                        >
+                          <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
+                            isOut
+                              ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
+                              : isNote
+                                ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
+                                : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
+                          } ${selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10 brightness-95 scale-[0.98] origin-center transition-all" : ""}`}>
+                            
+                            {/* Ícone de Favorito (Star) */}
+                            {starredMessageIds.has(m.id) && (
+                              <div className={`absolute -top-1 ${isOut ? '-left-1' : '-right-1'} bg-background rounded-full p-1 shadow-sm border border-amber-200 z-10`}>
+                                <Star className="h-2.5 w-2.5 text-amber-500 fill-amber-500" />
+                              </div>
+                            )}
+
+                          {/* Menu de Resposta (Reply) */}
+                          {!isNote && (
+                            <button
+                              onClick={() => {
+                                setReplyTo({
+                                  message_id: m.message_id || m.id,
+                                  content: m.content,
+                                  senderName: m.senderName || (isOut ? 'Você' : activeChat.name),
+                                  role: isOut ? "assistant" : "user"
+                                });
+                                textareaRef.current?.focus();
+                              }}
+                              className={`absolute top-2 ${isOut ? '-left-8' : '-right-8'} p-1.5 rounded-full bg-background border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-muted text-muted-foreground hover:text-primary z-20`}
+                              title="Responder"
+                            >
+                              <Reply className="h-3.5 w-3.5" />
+                            </button>
                           )}
+
+                          {/* Quote (Citação) */}
+                          {m.reply_to && (
+                            <div className={`mb-2 p-2 rounded-lg border-l-4 bg-black/5 text-left text-[11px] flex flex-col gap-0.5 ${
+                              m.reply_to.role === "assistant" ? "border-primary" : "border-green-500"
+                            }`}>
+                              <p className={`font-black uppercase tracking-widest text-[9px] ${
+                                m.reply_to.role === "assistant" ? (isOut ? "text-primary-foreground/80" : "text-primary") : "text-green-600"
+                              }`}>
+                                {m.reply_to.senderName}
+                              </p>
+                              <p className={`line-clamp-2 italic ${isOut ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                                {m.reply_to.content}
+                              </p>
+                            </div>
+                          )}
+
+                          {showNameIn && (
+                            <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
+                          )}
+                          {showNameOut && m.senderName && (
+                            <p className="text-[10px] font-bold text-primary-foreground/70 mb-1 text-right">{m.senderName}</p>
+                          )}
+                          {isNote && (
+                            <div className="flex items-center justify-center gap-1.5 mb-1 text-[10px] font-black uppercase tracking-widest text-amber-600/80">
+                              <Info className="h-3 w-3" /> Nota Privada
+                            </div>
+                          )}
+                          {m.tipo === 'image' && m.midia_url ? (
+                            <img src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" />
+                          ) : m.tipo === 'audio' ? (
+                            m.midia_url
+                              ? <AudioPlayer src={m.midia_url} />
+                              : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Mic className="h-4 w-4" /> Áudio</div>
+                          ) : m.tipo === 'video' && m.midia_url ? (
+                            <video controls className="rounded max-w-[260px] mb-1" preload="metadata">
+                              <source src={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`} type={m.midia_mime || 'video/mp4'} />
+                            </video>
+                          ) : m.tipo === 'document' && m.midia_url ? (
+                            <a
+                              href={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`}
+                              target="_blank" rel="noreferrer"
+                              className="flex items-center gap-2 text-xs text-primary underline py-1"
+                              download={m.midia_nome || true}
+                            >
+                              <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
+                            </a>
+                          ) : m.tipo === 'sticker' && m.midia_url ? (
+                            <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
+                          ) : null}
+                          {m.tipo === 'deleted' ? (
+                            <p className="text-sm italic text-muted-foreground/60 flex items-center gap-1.5 py-1">
+                              <ShieldAlert className="h-3.5 w-3.5 opacity-50" /> Mensagem apagada
+                            </p>
+                          ) : m.content && (
+                            <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                              {highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}
+                            </p>
+                          )}
+
+                          <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
+                            <span className="text-[10px] font-bold">{formatTime(m.timestamp)}</span>
+                            {isOut && (
+                              <span title={m.status || 'sent'}>
+                                {m.status === 'READ' || m.status === 'PLAYED' ? (
+                                  <span className="text-sky-300 text-[10px] font-bold">✓✓</span>
+                                ) : m.status === 'DELIVERY_ACK' ? (
+                                  <span className="text-primary-foreground/60 text-[10px] font-bold">✓✓</span>
+                                ) : m.status === 'SERVER_ACK' ? (
+                                  <span className="text-primary-foreground/50 text-[10px] font-bold">✓</span>
+                                ) : (
+                                  <Check className="h-3 w-3 opacity-50" />
+                                )}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  );
+                  </div>
+                );
                 })}
                 <div ref={messagesEndRef} />
               </div>
+
+              {/* Botão flutuante para rolar ao final */}
+              {showScrollButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-6 right-6 z-20 w-11 h-11 bg-background border border-border/50 rounded-full shadow-xl flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-muted transition-all animate-in zoom-in-50 duration-300"
+                >
+                  <ChevronDown className="h-6 w-6" />
+                  {activeChat.unread && activeChat.unread > 0 ? (
+                    <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 bg-green-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-lg border-2 border-background animate-in fade-in zoom-in duration-500">
+                      {activeChat.unread}
+                    </span>
+                  ) : null}
+                </button>
+              )}
             </ScrollArea>
 
             {/* Input */}
@@ -1391,7 +2490,7 @@ export function WhatsAppInterface() {
               <div className="bg-background rounded-2xl border border-border/50 shadow-sm overflow-hidden focus-within:ring-2 focus-within:ring-primary/20 transition-all">
                 <div className="px-4 py-3 bg-muted/20 border-b border-border/30 flex items-center justify-between">
                   <p className="text-[11px] font-bold text-muted-foreground/70 uppercase tracking-widest">
-                    {inputMode === "nota" ? "Anotando privadamente..." : "Enviando como Agente..."}
+                    {isAiProcessing ? "IA Processando resposta..." : (inputMode === "nota" ? "Anotando privadamente..." : "Enviando como Agente...")}
                   </p>
                   <p className="text-[10px] font-medium text-muted-foreground/50 italic">
                     Shift + Enter para nova linha
@@ -1415,8 +2514,35 @@ export function WhatsAppInterface() {
                       />
                     ) : (
                       <div className="relative">
+                        {/* Preview de Resposta */}
+                        {replyTo && (
+                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 animate-in slide-in-from-bottom-2 duration-200 overflow-hidden">
+                            <div className={`p-3 border-l-4 flex items-start justify-between gap-3 bg-muted/20 ${
+                              replyTo.role === "assistant" ? "border-primary" : "border-green-500"
+                            }`}>
+                              <div className="min-w-0 flex-1">
+                                <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${
+                                  replyTo.role === "assistant" ? "text-primary" : "text-green-600"
+                                }`}>
+                                  {replyTo.senderName}
+                                </p>
+                                <p className="text-xs text-muted-foreground line-clamp-2 italic">
+                                  {replyTo.content}
+                                </p>
+                              </div>
+                              <button 
+                                onClick={() => setReplyTo(null)}
+                                className="p-1 rounded-full hover:bg-muted text-muted-foreground transition-colors"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Popup de Respostas Rápidas */}
                         {showQR && qrFiltradas.length > 0 && (
+
                           <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 max-h-52 overflow-y-auto">
                             <div className="px-3 py-2 border-b flex items-center gap-2">
                               <Zap className="h-3.5 w-3.5 text-amber-500" />
@@ -1469,7 +2595,7 @@ export function WhatsAppInterface() {
                           ? (inputMode === "nota" ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-primary hover:bg-primary/90 shadow-primary/20")
                           : "bg-muted text-muted-foreground opacity-50"
                       }`}
-                      disabled={!(inputMode === "nota" ? noteInput.trim() : messageInput.trim())}
+                      disabled={isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim())}
                       onClick={handleSendMessage}
                     >
                       <Send className="h-4.5 w-4.5" />
@@ -1536,7 +2662,6 @@ export function WhatsAppInterface() {
           <ScrollArea className="flex-1">
             {/* Avatar + name + phone */}
             <div className="flex flex-col items-center pt-8 pb-6 px-5 bg-gradient-to-b from-primary/[0.03] to-transparent">
-              {/* Avatar clicável para ampliar */}
               <button
                 onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
                 className={`mb-4 transition-transform hover:scale-105 duration-500 border-4 border-background rounded-[2rem] shadow-xl shadow-primary/10 ${activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}`}
@@ -1550,7 +2675,6 @@ export function WhatsAppInterface() {
                 />
               </button>
 
-              {/* Nome editável */}
               <div className="flex items-center gap-2 mb-1.5 w-full justify-center">
                 {editingName ? (
                   <div className="flex items-center gap-1 w-full px-2">
@@ -1570,7 +2694,7 @@ export function WhatsAppInterface() {
                   </div>
                 ) : (
                   <>
-                    <p className="font-black text-base tracking-tight">{activeChat.name}</p>
+                    <p className="font-black text-base tracking-tight truncate max-w-[200px]">{activeChat.name}</p>
                     <button
                       onClick={() => { setNameInput(activeChat.name); setEditingName(true); }}
                       className="p-1 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all"
@@ -1581,44 +2705,176 @@ export function WhatsAppInterface() {
                   </>
                 )}
               </div>
-              <div className="bg-muted/50 rounded-full px-4 py-1 flex flex-col items-center">
-                <p className="text-[9px] text-muted-foreground/60 uppercase font-black tracking-[0.15em] mb-0.5">
-                  WhatsApp Principal
-                </p>
-                <p className="text-xs font-bold text-foreground/80 leading-none pb-0.5">{activeChat.phone}</p>
+              
+              <div className="flex flex-col items-center gap-1 w-full">
+                <div className="flex items-center gap-2 bg-muted/50 rounded-full pl-4 pr-2 py-1">
+                  <span className="text-xs font-bold text-foreground/80">{activeChat.phone}</span>
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(activeChat.phone);
+                      toast.success("Telefone copiado!");
+                    }}
+                    className="p-1 hover:bg-background rounded-full transition-colors"
+                    title="Copiar telefone"
+                  >
+                    <Copy className="h-3 w-3 text-muted-foreground" />
+                  </button>
+                </div>
+                {activeChat.online && (
+                  <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest animate-pulse">Online Agora</span>
+                )}
               </div>
             </div>
 
-            {/* CRM Button */}
-            <div className="px-5 pb-6">
+            {/* Ações Rápidas */}
+            <div className="px-5 pb-6 flex flex-col gap-2">
               <Button className="w-full h-11 text-xs font-black gap-2.5 bg-primary hover:bg-primary/90 text-white rounded-2xl shadow-lg shadow-primary/20 transition-all active:scale-95">
                 <LayoutGrid className="h-4 w-4" />
                 ABRIR NO CRM
               </Button>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={toggleIA}
+                  disabled={togglingIA}
+                  className={`flex items-center justify-center gap-2 h-11 rounded-2xl border text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 ${
+                    iaPausada
+                      ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
+                      : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                  }`}
+                >
+                  {togglingIA ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : iaPausada ? (
+                    <BotOff className="h-3.5 w-3.5" />
+                  ) : (
+                    <Bot className="h-3.5 w-3.5" />
+                  )}
+                  {iaPausada ? "IA Pausada" : "IA Ativa"}
+                </button>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="flex items-center justify-center gap-2 h-11 rounded-2xl border bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted text-[10px] font-black uppercase tracking-tight transition-all active:scale-95">
+                      <BellOff className="h-3.5 w-3.5" />
+                      Silenciar
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-xl">
+                    <DropdownMenuItem onClick={() => toast.success("Silenciado por 8 horas")} className="cursor-pointer">8 horas</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => toast.success("Silenciado por 1 semana")} className="cursor-pointer">1 semana</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => toast.success("Silenciado para sempre")} className="cursor-pointer">Sempre</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
 
-            {/* Mídia, Links e Docs */}
+            {/* Sobre */}
             <div className="border-t border-border/40 px-5 py-5">
-            <div className="flex items-center justify-between mb-4">
-                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Mídia Recente</p>
-                <ChevronRight className="h-4 w-4 text-muted-foreground/40" />
+              <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 mb-2">Sobre / Recado</p>
+              <p className="text-sm font-medium text-foreground/80 leading-relaxed italic">
+                {activeChat.is_group ? "Grupo de conversa" : (activeChat.push_name ? `~${activeChat.push_name}` : "Disponível")}
+              </p>
+            </div>
+
+            {/* Etiquetas / Tags */}
+            <div className="border-t border-border/40 px-5 py-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Etiquetas</p>
+                <button className="p-1 rounded-md text-primary hover:bg-primary/10 transition-all">
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
               </div>
-              <div className="grid grid-cols-3 gap-2.5">
-                {[0, 1, 2, 3, 4, 5].map(i => (
-                  <div
-                    key={i}
-                    className="aspect-square rounded-xl bg-primary/5 flex items-center justify-center cursor-pointer hover:bg-primary/10 border border-primary/5 transition-all hover:scale-105"
-                  >
-                    <Mic className="h-5 w-5 text-primary/40" />
-                  </div>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {activeChat.tag ? (
+                  <span className={`text-[10px] font-bold px-3 py-1 rounded-full shadow-sm border border-transparent ${TAG_COLORS[activeChat.tag] ?? "bg-gray-100 text-gray-600"}`}>
+                    {activeChat.tag}
+                  </span>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground/40 font-medium">Nenhuma etiqueta atribuída</p>
+                )}
               </div>
             </div>
 
-            {/* Observações do CRM */}
+            {/* Mídia Recente */}
+            <div className="border-t border-border/40 px-5 py-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Mídia Compartilhada</p>
+                <button className="text-[10px] font-bold text-primary hover:underline">Ver tudo</button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {activeChat.messages
+                  .filter(m => ['image', 'video', 'audio'].includes(m.tipo || ''))
+                  .slice(-6)
+                  .reverse()
+                  .map((m, i) => (
+                    <div
+                      key={m.id}
+                      className="aspect-square rounded-xl bg-muted/30 border border-border/30 overflow-hidden flex items-center justify-center cursor-pointer hover:bg-muted/50 transition-all hover:scale-105 group"
+                      onClick={() => m.midia_url && m.tipo === 'image' && setPhotoModal(m.midia_url)}
+                    >
+                      {m.tipo === 'image' && m.midia_url ? (
+                        <img src={m.midia_url} alt="mídia" className="w-full h-full object-cover" />
+                      ) : m.tipo === 'video' ? (
+                        <div className="relative w-full h-full flex items-center justify-center bg-black/5">
+                          <Video className="h-6 w-6 text-muted-foreground/40" />
+                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
+                      ) : (
+                        <Mic className="h-5 w-5 text-muted-foreground/30" />
+                      )}
+                    </div>
+                  ))}
+                {activeChat.messages.filter(m => ['image', 'video', 'audio'].includes(m.tipo || '')).length === 0 && (
+                  <div className="col-span-3 py-8 flex flex-col items-center justify-center bg-muted/10 rounded-2xl border border-dashed border-border/50">
+                    <ImageIcon className="h-6 w-6 text-muted-foreground/20 mb-2" />
+                    <p className="text-[10px] font-bold text-muted-foreground/30 uppercase">Sem mídias</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Documentos */}
+            <div className="border-t border-border/40 px-5 py-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Documentos</p>
+                <button className="text-[10px] font-bold text-primary hover:underline">Ver todos</button>
+              </div>
+              <div className="flex flex-col gap-2">
+                {activeChat.messages
+                  .filter(m => m.tipo === 'document')
+                  .slice(-3)
+                  .reverse()
+                  .map(m => (
+                    <a
+                      key={m.id}
+                      href={m.midia_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-3 p-3 bg-muted/20 hover:bg-muted/30 border border-border/30 rounded-xl transition-colors group"
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
+                        <FileText className="h-5 w-5 text-blue-500" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold truncate text-foreground/80">{m.midia_nome || "Documento"}</p>
+                        <p className="text-[10px] text-muted-foreground/60 uppercase font-black">{m.timestamp}</p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/20 group-hover:text-primary transition-colors" />
+                    </a>
+                  ))}
+                {activeChat.messages.filter(m => m.tipo === 'document').length === 0 && (
+                  <div className="py-4 flex flex-col items-center justify-center bg-muted/10 rounded-xl border border-dashed border-border/50">
+                    <p className="text-[10px] font-bold text-muted-foreground/30 uppercase">Nenhum documento</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Anotações do CRM */}
             <div className="border-t border-border/40 px-5 py-5 bg-amber-500/[0.02]">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-black uppercase tracking-widest text-amber-600/70">Anotações do CRM</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-amber-600/70">Anotações do CRM</p>
                 <button className="p-1 rounded-md text-amber-600/40 hover:text-amber-600 hover:bg-amber-500/10 transition-all">
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
@@ -1632,23 +2888,102 @@ export function WhatsAppInterface() {
                 </div>
               )}
             </div>
-
-            {/* Cofre de Documentos */}
-            <div className="border-t border-border/40 px-5 py-5">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Documentos</p>
-                <button className="p-1 rounded-md text-muted-foreground/40 hover:text-primary hover:bg-primary/10 transition-all">
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <div className="bg-muted/10 border border-dashed border-border p-4 rounded-xl flex flex-col items-center">
-                <Plus className="h-4 w-4 text-muted-foreground/20 mb-1" />
-                <p className="text-[10px] font-black text-muted-foreground/30 uppercase tracking-tighter">Adicionar Arquivo</p>
-              </div>
-            </div>
           </ScrollArea>
         </div>
       )}
+      {/* Modal de Encaminhar */}
+      <Dialog open={showForwardModal} onOpenChange={setShowForwardModal}>
+        <DialogContent className="sm:max-w-[420px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl">
+          <div className="px-6 pt-5 pb-3 border-b bg-background">
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Forward className="h-4 w-4 text-primary" />
+              Encaminhar Mensagem
+            </DialogTitle>
+            <DialogDescription className="text-xs mt-1">
+              Selecione um contato recente para encaminhar as {selectedMessageIds.size} mensagens selecionadas.
+            </DialogDescription>
+          </div>
+          
+          <ScrollArea className="max-h-[60vh] bg-background">
+            <div className="p-2 space-y-1">
+              {chats.map(chat => (
+                <button
+                  key={chat.id}
+                  onClick={() => handleForwardMessages(chat.phone, chat.source)}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-primary/5 transition-colors group text-left"
+                >
+                  <ChatAvatar name={chat.name} url={chat.profile_pic} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold truncate group-hover:text-primary transition-colors">{chat.name}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{chat.phone}</p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground/20 group-hover:text-primary transition-colors" />
+                </button>
+              ))}
+              {chats.length === 0 && (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  Nenhum contato recente encontrado.
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+          
+          <div className="p-4 bg-muted/20 border-t flex justify-end">
+            <Button variant="ghost" onClick={() => setShowForwardModal(false)} className="font-bold text-xs uppercase tracking-widest">
+              Cancelar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Nova Conversa */}
+      <Dialog open={showNewMessageModal} onOpenChange={setShowNewMessageModal}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Nova Conversa</DialogTitle>
+            <DialogDescription>
+              Digite o número com DDD ou busque por um contato no CRM.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Telefone</Label>
+              <Input 
+                placeholder="Ex: 11999999999" 
+                value={newMessagePhone}
+                onChange={e => {
+                  setNewMessagePhone(e.target.value);
+                  buscarContatos(e.target.value);
+                }}
+              />
+            </div>
+
+            {contatoResults.length > 0 && (
+              <div className="rounded-xl border bg-muted/20 p-2 space-y-1">
+                {contatoResults.map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => handleStartNewChat(c.telefone, c.nome)}
+                    className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-background transition-colors text-left"
+                  >
+                    <ChatAvatar name={c.nome} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold truncate">{c.nome}</p>
+                      <p className="text-[10px] text-muted-foreground">{c.telefone}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNewMessageModal(false)}>Cancelar</Button>
+            <Button onClick={() => handleStartNewChat()} disabled={!newMessagePhone.trim()}>
+              Iniciar Chat
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

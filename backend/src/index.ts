@@ -70,6 +70,7 @@ import integracoesRouter from './routes/integracoes';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
 import adminFirewallRouter, { createFirewallMiddleware } from './routes/admin_firewall';
 import suporteCopilotoRouter from './routes/suporte_copiloto';
+import { makeOpenClawRouter } from './routes/openclaw';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -136,6 +137,9 @@ app.use('/api/marketing', marketing.public); // Public part of marketing (callba
 // ── Rotas n8n (x-n8n-secret, sem JWT) ─────────────────────────────────────
 app.use('/api/n8n', n8nRouter(pool));
 
+// ── OpenClaw Admin (sem JWT — protegido por X-Openclaw-Key ou JWT) ──────────
+app.use('/api/openclaw', makeOpenClawRouter(pool));
+
 // Webhook público do Kanban (sem JWT, autenticado por x-webhook-secret)
 app.post('/api/kanban/webhook/n8n', kanbanWebhookN8n(pool));
 
@@ -173,8 +177,13 @@ app.get('/api/agent_prompts/ativo', n8nSecretMiddleware, async (req, res) => {
 
 // Endpoint do catálogo para n8n — protegido por segredo compartilhado
 app.get('/api/catalogo/n8n/:userId', async (req, res) => {
-  const secret = (req.headers['x-n8n-secret'] as string) || (req.query.secret as string);
-  if (process.env.N8N_CATALOG_SECRET && secret !== process.env.N8N_CATALOG_SECRET) {
+  const expected = process.env.N8N_CATALOG_SECRET;
+  if (!expected) {
+    console.error('[CATALOGO_N8N] N8N_CATALOG_SECRET não configurado — endpoint desabilitado');
+    return res.status(503).json({ error: 'Endpoint não configurado' });
+  }
+  const secret = req.headers['x-n8n-secret'] as string;
+  if (!secret || secret !== expected) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {

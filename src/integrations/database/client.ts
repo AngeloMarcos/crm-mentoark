@@ -2,11 +2,31 @@
 // Cliente HTTP customizado — espelha a interface @api/api-js
 // Todas as chamadas vão para VITE_API_URL (backend Express próprio)
 // NÃO usa Database real — zero dependência externa
+import { getAuthToken } from "@/lib/api-token";
+import { withCooldown, CooldownError, hasExceededRetries, resetCooldown } from "@/lib/requestGuard";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 
+const REFRESH_KEY = 'auth-refresh';
+const REFRESH_MAX_RETRIES = 3;
+
+function _hardSignOut() {
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  _currentUser = null;
+  _notify('SIGNED_OUT', null);
+  if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+    if (!sessionStorage.getItem('_redirected_login')) {
+      sessionStorage.setItem('_redirected_login', '1');
+      window.location.href = '/login?expired=1';
+    }
+  }
+}
+
 // ── Token helpers ─────────────────────────────────────────────
-function _getToken(): string | null { return localStorage.getItem('access_token'); }
+function _getToken(): string | null { 
+  return getAuthToken() || null; 
+}
 
 function _authHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -95,16 +115,39 @@ const auth = {
 
   async _refreshSilent(): Promise<boolean> {
     const r = localStorage.getItem('refresh_token');
-    if (!r) return false;
+    if (!r) {
+      _notify('SIGNED_OUT', null);
+      return false;
+    }
+    if (hasExceededRetries(REFRESH_KEY, REFRESH_MAX_RETRIES)) {
+      _hardSignOut();
+      return false;
+    }
     try {
-      const res = await fetch(`${API_BASE}/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: r }) });
-      if (!res.ok) return false;
-      const data = await res.json();
-      localStorage.setItem('access_token', data.access_token);
-      localStorage.setItem('refresh_token', data.refresh_token);
-      _currentUser = data.user;
-      return true;
-    } catch { return false; }
+      return await withCooldown(REFRESH_KEY, async () => {
+        const res = await fetch(`${API_BASE}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: r }),
+        });
+        if (res.status === 401) {
+          // Refresh inválido — não adianta repetir. Força signOut e estoura para contar como falha.
+          _hardSignOut();
+          throw new Error('refresh_invalid');
+        }
+        if (!res.ok) throw new Error(`refresh_${res.status}`);
+        const data = await res.json();
+        localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('refresh_token', data.refresh_token);
+        _currentUser = data.user;
+        sessionStorage.removeItem('_redirected_login');
+        return true;
+      }, { baseMs: 2000, maxMs: 60_000 });
+    } catch (err) {
+      if (err instanceof CooldownError) return false;
+      if (hasExceededRetries(REFRESH_KEY, REFRESH_MAX_RETRIES)) _hardSignOut();
+      return false;
+    }
   },
 
   onAuthStateChange(cb: (event: string, session: any) => void) {
@@ -239,10 +282,7 @@ class QueryBuilder {
     if (token && _isExpired(token)) {
       const ok = await auth._refreshSilent();
       if (!ok) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        _currentUser = null;
-        _notify('SIGNED_OUT', null);
+        // _hardSignOut() já trata redirect uma única vez via sessionStorage flag.
         return { data: null, error: { message: 'Sessão expirada. Faça login novamente.' } };
       }
     }

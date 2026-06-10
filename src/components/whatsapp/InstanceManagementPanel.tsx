@@ -56,6 +56,7 @@ import {
   createInstance,
   fetchConnectionStatus,
   disconnectInstance,
+  pollQr,
   type CreateInstanceResult,
 } from "@/services/evolutionService";
 
@@ -118,11 +119,13 @@ export function InstanceManagementPanel() {
   // ─── Conectar nova instância ───
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [newInstanceName, setNewInstanceName] = useState("");
   const [newInstancePhone, setNewInstancePhone] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [pollingConnect, setPollingConnect] = useState(false);
+  const [waitingQr, setWaitingQr] = useState(false); // Baileys ainda gerando QR
 
   const startConnect = async () => {
     if (!newInstanceName.trim()) {
@@ -142,7 +145,11 @@ export function InstanceManagementPanel() {
         carregar();
       } else if (res.qrCode || res.pairingCode) {
         toast.info("Escaneie o QR Code ou use o código de pareamento");
-        pollUntilConnected();
+        pollUntilConnected(res.instanceName || res.instancia);
+      } else if (res.qrPending) {
+        // Evolution v2: Baileys ainda inicializando — faz polling do QR
+        toast.info("Gerando QR Code, aguarde...");
+        pollQrLoop();
       } else {
         toast.error("Evolution não retornou QR Code");
       }
@@ -153,14 +160,48 @@ export function InstanceManagementPanel() {
     }
   };
 
-  const pollUntilConnected = async () => {
-    setPollingConnect(true);
+  // Polling do QR enquanto Baileys inicializa (Evolution v2.2.3)
+  const pollQrLoop = async () => {
+    setWaitingQr(true);
     const start = Date.now();
-    const TIMEOUT = 2 * 60 * 1000; // 2 min
+    const TIMEOUT = 90 * 1000; // 90 segundos
     while (Date.now() - start < TIMEOUT) {
       await new Promise(r => setTimeout(r, 3000));
       try {
-        const st = await fetchConnectionStatus();
+        const data = await pollQr();
+        if (data.state === "open") {
+          setWaitingQr(false);
+          setPollingConnect(false);
+          setShowQrModal(false);
+          setQrData(null);
+          setNewInstanceName("");
+          setNewInstancePhone("");
+          toast.success("✅ WhatsApp conectado com sucesso!");
+          carregar();
+          return;
+        }
+        if (data.qrCode) {
+          setQrData(prev => ({ ...prev, ...data }));
+          setWaitingQr(false);
+          toast.success("QR Code gerado! Escaneie agora.");
+          pollUntilConnected(data.instanceName || data.instancia);
+          return;
+        }
+      } catch {}
+    }
+    setWaitingQr(false);
+    toast.error("Tempo esgotado para gerar QR. Clique em 'Atualizar QR' para tentar novamente.");
+  };
+
+  const pollUntilConnected = async (instanciaNome?: string) => {
+    setPollingConnect(true);
+    const start = Date.now();
+    const TIMEOUT = 2 * 60 * 1000; // 2 min
+    const targetInstancia = instanciaNome || newInstanceName;
+    while (Date.now() - start < TIMEOUT) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const st = await fetchConnectionStatus(targetInstancia);
         if (st.state === "open") {
           setPollingConnect(false);
           setShowQrModal(false);
@@ -179,10 +220,18 @@ export function InstanceManagementPanel() {
   const refreshQr = async () => {
     try {
       setConnecting(true);
-      const phoneDigits = newInstancePhone.replace(/\D/g, "");
-      const res = await createInstance(newInstanceName.trim(), phoneDigits || undefined);
-      setQrData(res);
-      toast.success("Códigos atualizados!");
+      const data = await pollQr();
+      if (data.qrCode) {
+        setQrData(prev => ({ ...prev, ...data }));
+        toast.success("QR Code atualizado!");
+      } else if (data.state === "open") {
+        setShowQrModal(false);
+        toast.success("✅ WhatsApp já conectado!");
+        carregar();
+      } else {
+        toast.info("QR ainda não disponível, aguarde...");
+        pollQrLoop();
+      }
     } catch (e: any) {
       toast.error(`Erro: ${e.message}`);
     } finally {
@@ -275,17 +324,10 @@ export function InstanceManagementPanel() {
         .filter(a => !!a.evolution_instancia)
         .map(async (a) => {
           try {
-            const res = await fetch(
-              `${API_BASE}/api/whatsapp/evo/status/${encodeURIComponent(a.evolution_instancia!)}`,
-              { headers: t ? { Authorization: `Bearer ${t}` } : {} }
-            );
-            if (res.ok) {
-              const json = await res.json();
-              map[a.id] = (json.state ?? "close") as ConnState;
-            } else {
-              map[a.id] = "close";
-            }
-          } catch {
+            const st = await fetchConnectionStatus(a.evolution_instancia!);
+            map[a.id] = (st.state ?? "close") as ConnState;
+          } catch (error) {
+            console.error(`[WhatsApp] Erro ao buscar status para ${a.evolution_instancia}:`, error);
             map[a.id] = "close";
           }
         })
@@ -757,6 +799,7 @@ export function InstanceManagementPanel() {
             if (!o) {
               setQrData(null);
               setPollingConnect(false);
+              setWaitingQr(false);
               carregar();
             }
           }}
@@ -803,17 +846,27 @@ export function InstanceManagementPanel() {
                   {qrData?.qrCode?.startsWith("data:image") ? (
                     <img src={qrData.qrCode} alt="QR Code" className="w-56 h-56" />
                   ) : (
-                    <div className="w-56 h-56 flex items-center justify-center bg-muted/20 rounded-lg">
-                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    <div className="w-56 h-56 flex flex-col items-center justify-center gap-3 bg-muted/20 rounded-lg">
+                      <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+                      <span className="text-xs text-muted-foreground text-center px-4">
+                        {waitingQr ? "Inicializando WhatsApp...\nAguarde alguns segundos" : "Carregando QR Code..."}
+                      </span>
                     </div>
                   )}
                 </div>
               </div>
 
-              {pollingConnect && (
+              {pollingConnect && !waitingQr && (
                 <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground bg-muted/30 rounded-lg p-3">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Aguardando você escanear o código...
+                </div>
+              )}
+
+              {waitingQr && (
+                <div className="flex items-center justify-center gap-2 text-sm text-orange-600 bg-orange-500/10 rounded-lg p-3">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Aguardando WhatsApp inicializar... (pode levar até 30s)
                 </div>
               )}
             </div>
@@ -828,6 +881,41 @@ export function InstanceManagementPanel() {
               </Button>
             </DialogFooter>
           </DialogContent>
+        </Dialog>
+
+        {/* Modal para evitar erro de DialogTitle em outros diálogos se houver */}
+        <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
+           <DialogContent>
+             <DialogHeader>
+               <DialogTitle>Conectar Novo WhatsApp</DialogTitle>
+               <DialogDescription>Preencha os dados da nova instância.</DialogDescription>
+             </DialogHeader>
+             <div className="space-y-4 py-4">
+               <div className="space-y-2">
+                 <Label>Nome da Instância</Label>
+                 <Input 
+                   placeholder="Ex: Vendas" 
+                   value={newInstanceName}
+                   onChange={e => setNewInstanceName(e.target.value)}
+                 />
+               </div>
+               <div className="space-y-2">
+                 <Label>Telefone (opcional)</Label>
+                 <Input 
+                   placeholder="55..." 
+                   value={newInstancePhone}
+                   onChange={e => setNewInstancePhone(e.target.value)}
+                 />
+               </div>
+             </div>
+             <DialogFooter>
+               <Button variant="outline" onClick={() => setShowConnectModal(false)}>Cancelar</Button>
+               <Button onClick={startConnect} disabled={connecting}>
+                 {connecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Smartphone className="h-4 w-4 mr-2" />}
+                 Gerar Conexão
+               </Button>
+             </DialogFooter>
+           </DialogContent>
         </Dialog>
       </div>
     </TooltipProvider>

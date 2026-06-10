@@ -1,85 +1,40 @@
-# Diagnóstico: mensagem do WhatsApp não chega no CRM
+# Plano: Anti-loop, cooldown e erros amigáveis
 
-## Contexto observado
+## Problema
+- `POST /api/openclaw/chat` retorna 500 e o `checkStatus()` em `OpenClaw.tsx` repete a chamada a cada 30s usando `message:'ping'` (que ainda dispara o LLM no backend, gerando 500 em cascata).
+- `POST /auth/refresh` retorna 401 e o cliente em `src/integrations/database/client.ts` chama `_refreshSilent()` várias vezes em paralelo (cada query/sessão dispara um refresh próprio), criando rajadas de 401.
+- Erros são exibidos como strings cruas (ex.: "Erro 500", "Failed to fetch").
 
-- O frontend (`WhatsAppInterface`) está recebendo mensagens de outros contatos ("Teste", "Cliente Teste", "T") — os toasts apareceram no replay, então o pipeline **Evolution → webhook → DB → /api/whatsapp/conversas → UI** funciona.
-- O número `119991909106` (provavelmente JID `5511999190910X@s.whatsapp.net`) nunca aparece, mesmo com a mensagem entregue na Evolution.
+## Mudanças (somente frontend)
 
-Isso indica um filtro **específico daquele número** (não uma quebra global do webhook).
+### 1. `src/lib/requestGuard.ts` (novo)
+Utilitário compartilhado:
+- `singleflight(key, fn)`: dedupe — se já há uma promise em voo com a mesma chave, retorna ela.
+- `withCooldown(key, fn, { baseMs, maxMs, maxRetries })`: registra `nextAllowedAt` por chave; enquanto em cooldown, lança `CooldownError` sem chamar a rede. Em sucesso, reseta; em falha, dobra o atraso (exponencial com teto, ex. 1s → 2s → 4s → … até 60s).
+- `friendlyError(status, raw)`: mapeia 401/403/429/5xx para mensagens em PT-BR ("Sessão expirada", "Muitas requisições, aguarde…", "Serviço indisponível, tentando de novo em Ns").
 
-## Pontos do código onde a mensagem pode ser descartada silenciosamente
+### 2. `src/integrations/database/client.ts`
+- Envolver `_refreshSilent` em `singleflight('auth-refresh')` para garantir uma única chamada concorrente.
+- Aplicar `withCooldown('auth-refresh', …, { baseMs: 2000, maxMs: 60000, maxRetries: 3 })`. Após estourar `maxRetries`, executar signOut local + redirect para `/login?expired=1` uma única vez (flag em `sessionStorage`).
+- Não mais redirecionar dentro de `_exec()` em cada query — delegar ao guard.
 
-Em `backend/src/routes/webhook.ts` — todos retornam `200 ok` sem registrar no front:
+### 3. `src/pages/OpenClaw.tsx`
+- `checkStatus()`: substituir o "ping" que chama `/api/openclaw/chat` por `GET /health` (e remover o intervalo de 30s ou aumentar para 60s) — não usar o endpoint pago só para health.
+- `sendMessage()`: envolver em `withCooldown('openclaw-chat', …)`; se em cooldown, mostrar toast com tempo restante e não adicionar nova mensagem de erro à lista.
+- Bloquear botão de envio enquanto `isLoading` ou em cooldown.
+- Mapear `data.error` por `friendlyError(res.status, data.error)`; consolidar mensagens repetidas (se a última mensagem do assistente já é o mesmo erro, não duplicar — apenas atualizar timestamp).
 
-| # | Linha | Causa do descarte | Quem dispara |
-|---|------:|-------------------|--------------|
-| 1 | 178 | `data.status` = READ/PLAYED/DELIVERY_ACK | Evolution manda só ACK |
-| 2 | 184–187 | `remoteJid` vazio ou sem `@` | JID malformado |
-| 3 | 248 | `messageId` com prefixo `resp_`/`manual_` | falso positivo anti-loop |
-| 4 | 252 | `botMessageIds.has(messageId)` | id confundido com bot |
-| 5 | 260 | `botSentTexts.has(texto)` | texto idêntico a uma resposta recente da IA → **falso positivo cruzado**: se outro contato escrever "Olá" e a IA tiver respondido "Olá" há pouco, **bloqueia** |
-| 6 | 271 | já existe `from_me=true` com mesmo `message_id` | reentrega Evolution |
-| 7 | 341–350 | deduplicação por `webhook_mensagens_processadas` | `message_id` colidiu |
-| 8 | 457 | texto bate em `OPT_OUT_KEYWORDS` (sair/stop/parar/cancelar/remover/não quero) | usuário escreveu palavra-gatilho |
-| 9 | 520 | `userId` null (lookup falhou) | instância sem agent_config |
+### 4. `src/components/WhatsAppInterface.tsx` (linha ~820)
+- Mesma envoltória `withCooldown('whatsapp-openclaw', …)` + `friendlyError`.
 
-O culpado mais provável para "um número específico nunca chega" é **#5** (anti-loop por texto compartilhado em `botSentTexts`) ou **#7** (collision de `message_id`). A entrada `contatos.opt_out` também filtra na listagem se for usado em algum WHERE downstream.
+### 5. Toast deduplicação
+- Usar `toast.error(msg, { id: 'openclaw-error' })` (sonner já suporta `id`) para evitar pilha de toasts idênticos.
 
-## Plano
+## Resultado esperado
+- No máx. 1 request em voo por chave; falhas repetidas sofrem backoff 2s→4s→8s→…→60s.
+- Refresh 401 sai do loop após 3 tentativas e leva ao login uma vez só.
+- Usuário vê "Serviço da IA indisponível, tentando novamente em Xs" em vez de "Erro 500".
+- Nenhuma mudança em backend / banco / lógica de negócio.
 
-### 1. Coleta de evidências (sem alterar código)
-Como não posso `ssh` da sandbox, listo os comandos exatos que o usuário roda na VPS para confirmar a causa:
-
-```bash
-# a) ver se o webhook está sendo chamado para esse número
-ssh root@147.93.9.172 'docker logs crm-api --tail=400 2>&1 | grep -E "119991909|999190910"'
-
-# b) ver descartes recentes
-ssh root@147.93.9.172 'docker logs crm-api --tail=400 2>&1 | grep -E "WEBHOOK_ANTILOOP|WEBHOOK_REJECT|Opt-out"'
-
-# c) checar deduplicação e opt-out no banco
-ssh root@147.93.9.172 'docker exec crm-api psql $DATABASE_URL -c "
-  SELECT message_id, instancia, criado_em FROM webhook_mensagens_processadas
-  WHERE message_id LIKE '\''%119991909%'\'' OR instancia=$$crm_435ee4720fc3$$
-  ORDER BY criado_em DESC LIMIT 20;
-  SELECT telefone, opt_out, atendente_pausou_ia FROM contatos
-  WHERE telefone LIKE $$%99919091%$$;
-  SELECT telefone, motivo, created_at FROM disparo_optouts
-  WHERE telefone LIKE $$%99919091%$$;"'
-```
-
-### 2. Blindagem do webhook (mudanças de código)
-
-Mesmo antes do diagnóstico, há 4 correções no `webhook.ts` que evitam o tipo exato de bug relatado:
-
-1. **Log estruturado em TODO ponto de descarte** (linhas 178, 184, 187, 248, 252, 260, 271, 341, 350, 457, 520). Hoje só alguns logam via `wlog`; vou adicionar `wlog('WEBHOOK_DROP', motivo + remoteJid + messageId)` em cada `return` para que o `log_geral.txt` mostre exatamente qual filtro pegou cada mensagem.
-2. **Escopar `botSentTexts` por telefone** (linha 260). Hoje a chave é `${telefone}:${texto}`, mas o `Set` é global no processo; se a IA falar "Olá" para o cliente A e o cliente B escrever "Olá", o `botSentTexts.has` para B retorna `false` (chave inclui telefone) — então esse caso já está OK. Vou validar a regra e adicionar TTL explícito (já existe). Sem mudança se passou na verificação.
-3. **Deduplicação por `(message_id, instancia)`** (linha 347). Hoje o SELECT é só por `message_id` — se a Evolution gerar IDs curtos colidentes entre instâncias, mata mensagens válidas. Mudar para `WHERE message_id=$1 AND instancia=$2` e adicionar índice único `(message_id, instancia)`.
-4. **Tratar `contatos.opt_out`/`atendente_pausou_ia` como filtros apenas da IA, nunca do salvamento**. Já é o caso, mas vou confirmar que o INSERT em `whatsapp_messages` (linha 371) acontece ANTES de qualquer filtro de opt-out (já é).
-5. **Endpoint de diagnóstico** `GET /api/admin/webhook-trace?phone=119991909106` (admin only) que devolve as últimas 50 linhas do `log_geral.txt` filtradas por número, mais o status no banco (`whatsapp_messages`, `webhook_mensagens_processadas`, `contatos.opt_out`, `disparo_optouts`).
-
-### 3. UI: card de diagnóstico no Painel Admin
-Adicionar em `/admin/firewall` (ou nova aba `/admin/diagnostico-whatsapp`) um campo "Buscar número" que chama o endpoint acima e mostra:
-- ✅/❌ webhook recebeu  → tabela `whatsapp_messages`
-- ✅/❌ foi para `webhook_mensagens_processadas`
-- ✅/❌ contato está em opt-out
-- Linhas de log com motivo do descarte (se houver)
-
-### 4. Deploy
-Atualizar `backend/src/routes/webhook.ts` e dois arquivos auxiliares; usuário publica com:
-```
-scp backend/src/routes/webhook.ts root@147.93.9.172:/opt/crm/backend/src/routes/
-ssh root@147.93.9.172 'cd /opt/crm/backend && docker compose build --no-cache && docker compose up -d'
-```
-
-## Detalhes técnicos
-
-- Migração SQL nova: `CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_dedup_msgid_inst ON webhook_mensagens_processadas(message_id, instancia);` + `DELETE` das duplicatas antes de criar o índice.
-- `wlog('WEBHOOK_DROP', ...)` reusa o helper já existente — escreve no console e em `log_geral.txt`.
-- Endpoint `/api/admin/webhook-trace` em `backend/src/routes/admin_infra.ts`, protegido pelo middleware `requireAdmin` já existente.
-- Componente novo `src/pages/admin/DiagnosticoWhatsApp.tsx` com input + tabela; rota adicionada em `AppSidebar`.
-
-## O que NÃO faço neste plano
-- Não mudo o `agentEngine` nem a lógica de IA (escopo é "mensagem não aparece").
-- Não toco em `dados_cliente` / `contatos` schema.
-- Não altero a integração com a Evolution em si.
+## Fora do escopo
+- Corrigir a causa raiz do 500 no backend (`/api/openclaw/chat`) e do 401 no `/auth/refresh` — tratados nos prompts já enviados ao Claude Code da VPS.
