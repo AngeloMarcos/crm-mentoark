@@ -1154,7 +1154,7 @@ export default function whatsappRouter(pool: Pool): Router {
         evolutionResp = evolutionResp ?? await evoRes.json().catch(() => ({}));
       } else {
         // Envio de texto
-        const targetUrl = `${base}/message/sendText/${instancia}`;
+        const targetUrl = `${base}/message/sendText/${cfg.instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
         let evoRes: globalThis.Response;
         try {
