@@ -730,7 +730,12 @@ export default function whatsappRouter(pool: Pool): Router {
       }).catch(() => null);
 
       if (stateRes?.status === 401) {
-        return res.status(401).json({ state: 'unauthorized', message: 'API Key da Evolution inválida' });
+        console.warn(`[WHATSAPP] 401 durante connect — API Key inválida ou instância órfã: ${cfg.instancia}`);
+        return res.json({ 
+          state: 'unauthorized', 
+          message: 'API Key da Evolution inválida ou sessão expirada. Clique em Reconectar.',
+          instancia: cfg.instancia 
+        });
       }
 
       if (stateRes?.ok) {
