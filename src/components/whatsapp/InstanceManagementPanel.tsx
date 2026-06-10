@@ -249,6 +249,9 @@ export function InstanceManagementPanel() {
         setShowQrModal(false);
         toast.success("✅ WhatsApp já conectado!");
         carregar();
+      } else if (data.state === "unauthorized") {
+        setShowQrModal(false);
+        toast.error("Erro na Evolution: API Key ou Sessão inválida.");
       } else {
         toast.info("QR ainda não disponível, aguarde...");
         pollQrLoop();
