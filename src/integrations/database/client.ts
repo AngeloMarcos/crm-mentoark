@@ -13,6 +13,7 @@ const REFRESH_MAX_RETRIES = 3;
 function _hardSignOut() {
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
+  localStorage.removeItem('crm_access_token');
   _currentUser = null;
   _notify('SIGNED_OUT', null);
   if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
@@ -62,6 +63,7 @@ const auth = {
     if (!res.ok) { const e = await res.json().catch(() => ({})); return { data: null, error: { message: e.message || 'Login falhou' } }; }
     const data = await res.json();
     localStorage.setItem('access_token', data.access_token);
+    localStorage.setItem('crm_access_token', data.access_token);
     localStorage.setItem('refresh_token', data.refresh_token);
     _currentUser = data.user;
     const session = { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user };
@@ -78,6 +80,7 @@ const auth = {
     if (!res.ok) { const e = await res.json().catch(() => ({})); return { data: null, error: { message: e.message || 'Cadastro falhou' } }; }
     const data = await res.json();
     localStorage.setItem('access_token', data.access_token);
+    localStorage.setItem('crm_access_token', data.access_token);
     localStorage.setItem('refresh_token', data.refresh_token);
     _currentUser = data.user;
     const session = { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user };
@@ -91,6 +94,7 @@ const auth = {
     if (token) await fetch(`${API_BASE}/auth/logout`, { method: 'POST', headers: _authHeaders(), body: JSON.stringify({ refresh_token: refreshToken }) }).catch(() => {});
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    localStorage.removeItem('crm_access_token'); // Limpeza total do storage
     _currentUser = null;
     _notify('SIGNED_OUT', null);
     return { error: null };
@@ -99,7 +103,7 @@ const auth = {
   async getUser() {
     const token = _getToken();
     if (!token) return { data: { user: null }, error: null };
-    if (_isExpired(token)) { const ok = await auth._refreshSilent(); if (!ok) { localStorage.removeItem('access_token'); localStorage.removeItem('refresh_token'); _currentUser = null; return { data: { user: null }, error: null }; } }
+    if (_isExpired(token)) { const ok = await auth._refreshSilent(); if (!ok) { localStorage.removeItem('access_token'); localStorage.removeItem('crm_access_token'); localStorage.removeItem('refresh_token'); _currentUser = null; return { data: { user: null }, error: null }; } }
     if (!_currentUser) _currentUser = _decodeUser(localStorage.getItem('access_token')!);
     return { data: { user: _currentUser }, error: null };
   },
@@ -138,6 +142,7 @@ const auth = {
         if (!res.ok) throw new Error(`refresh_${res.status}`);
         const data = await res.json();
         localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('crm_access_token', data.access_token);
         localStorage.setItem('refresh_token', data.refresh_token);
         _currentUser = data.user;
         sessionStorage.removeItem('_redirected_login');
