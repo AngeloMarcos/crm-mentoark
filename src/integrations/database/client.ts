@@ -91,6 +91,7 @@ const auth = {
     if (token) await fetch(`${API_BASE}/auth/logout`, { method: 'POST', headers: _authHeaders(), body: JSON.stringify({ refresh_token: refreshToken }) }).catch(() => {});
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    localStorage.removeItem('crm_access_token'); // Limpeza total do storage
     _currentUser = null;
     _notify('SIGNED_OUT', null);
     return { error: null };
