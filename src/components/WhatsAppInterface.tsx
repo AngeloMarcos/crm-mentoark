@@ -1432,7 +1432,17 @@ export function WhatsAppInterface() {
               </span>
             </div>
             <div className="flex items-center gap-1">
-              {!isConnected && (
+              {connectionStatus?.state === "unauthorized" ? (
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-8 w-8 text-orange-500 hover:bg-orange-50 animate-pulse" 
+                  onClick={() => setShowConnectModal(true)} 
+                  title="Reconectar WhatsApp"
+                >
+                  <AlertCircle className="h-4.5 w-4.5" />
+                </Button>
+              ) : !isConnected && (
                 <Button 
                   variant="ghost" 
                   size="icon" 
