@@ -353,7 +353,8 @@ export default function whatsappRouter(pool: Pool): Router {
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
          LEFT JOIN users u ON u.id = m.sent_by_user_id
-         WHERE split_part(m.remote_jid, '@', 1) = $1
+         WHERE (split_part(m.remote_jid, '@', 1) = $1 OR split_part(m.remote_jid, '@', 1) = '55' || $1)
+
            AND m.user_id = $2
          ORDER BY COALESCE(m.timestamp_wa, m.created_at) ASC
          LIMIT $3 OFFSET $4`,
@@ -392,7 +393,7 @@ export default function whatsappRouter(pool: Pool): Router {
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
-         WHERE split_part(m.remote_jid, '@', 1) = $1 AND m.user_id = $2 AND m.from_me = true
+         WHERE (split_part(m.remote_jid, '@', 1) = $1 OR split_part(m.remote_jid, '@', 1) = '55' || $1) AND m.user_id = $2 AND m.from_me = true
          ORDER BY m.created_at DESC LIMIT 50`,
         [phone, userId]
       );

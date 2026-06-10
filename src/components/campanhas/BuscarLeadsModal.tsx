@@ -140,6 +140,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
   const segSelecionado = SEGMENTOS.find((s) => s.cnae === segmento);
 
   const buscar = async () => {
+    if (buscando) return;
     if (!segmento) { toast.error("Selecione um segmento"); return; }
     setBuscando(true);
     setResultados(null);

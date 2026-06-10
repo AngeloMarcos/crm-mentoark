@@ -58,7 +58,7 @@ const PLATAFORMA_ICON = {
 
 function CampanhaCard({ campanha, onPausar, onReativar }: {
   campanha: Campanha;
-  onPausar: () => void; onReativar: () => void;
+  onPausar: () => Promise<void>; onReativar: () => Promise<void>;
 }) {
   const cfg = STATUS_CONFIG[campanha.status];
   return (
@@ -82,13 +82,13 @@ function CampanhaCard({ campanha, onPausar, onReativar }: {
           <div className="flex gap-1 shrink-0">
             {campanha.status === "ACTIVE" ? (
               <Button size="icon" variant="ghost" className="h-7 w-7 hover:text-yellow-600"
-                onClick={() => { onPausar(); toast.success("Campanha pausada."); }}
+                onClick={async () => { try { await onPausar(); toast.success("Campanha pausada."); } catch { toast.error("Erro ao pausar."); } }}
                 title="Pausar">
                 <Pause className="h-3.5 w-3.5" />
               </Button>
             ) : campanha.status === "PAUSED" ? (
               <Button size="icon" variant="ghost" className="h-7 w-7 hover:text-green-600"
-                onClick={() => { onReativar(); toast.success("Campanha reativada."); }}
+                onClick={async () => { try { await onReativar(); toast.success("Campanha reativada."); } catch { toast.error("Erro ao reativar."); } }}
                 title="Reativar">
                 <Play className="h-3.5 w-3.5" />
               </Button>

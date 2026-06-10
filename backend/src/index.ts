@@ -339,6 +339,76 @@ app.get('/api/seguranca/status-chaves', authMiddleware, adminMiddleware, (_req, 
   res.json(chaves);
 });
 
+// ── Diagnóstico WhatsApp (admin) ─────────────────────────────
+// GET /api/admin/webhook-trace?phone=11999190910
+// Retorna: estado do número no banco + linhas do log_geral.txt filtradas.
+app.get('/api/admin/webhook-trace', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const phoneRaw = String(req.query.phone || '').replace(/\D/g, '');
+    if (!phoneRaw) return res.status(400).json({ message: 'phone obrigatório' });
+    const suffix = phoneRaw.slice(-11);
+    const like = `%${suffix}%`;
+
+    const [msgs, dedup, contato, optout] = await Promise.all([
+      pool.query(
+        `SELECT instance_name, remote_jid, message_id, from_me, message_type,
+                LEFT(content,200) AS content, status, timestamp_wa, created_at
+         FROM whatsapp_messages
+         WHERE remote_jid LIKE $1
+         ORDER BY created_at DESC LIMIT 30`,
+        [like]
+      ).catch(() => ({ rows: [] })),
+      pool.query(
+        `SELECT message_id, instancia, criado_em FROM webhook_mensagens_processadas
+         WHERE message_id LIKE $1 ORDER BY criado_em DESC LIMIT 20`,
+        [like]
+      ).catch(() => ({ rows: [] })),
+      pool.query(
+        `SELECT id, nome, push_name, telefone, opt_out, atendente_pausou_ia,
+                origem, status, updated_at
+         FROM contatos WHERE telefone LIKE $1 LIMIT 5`,
+        [like]
+      ).catch(() => ({ rows: [] })),
+      pool.query(
+        `SELECT telefone, motivo, created_at FROM disparo_optouts
+         WHERE telefone LIKE $1 ORDER BY created_at DESC LIMIT 5`,
+        [like]
+      ).catch(() => ({ rows: [] })),
+    ]);
+
+    // Ler tail do log_geral.txt filtrado pelo número
+    let logLines: string[] = [];
+    try {
+      const fs = await import('fs');
+      const path = '/opt/crm/backend/log_geral.txt';
+      if (fs.existsSync(path)) {
+        const stat = fs.statSync(path);
+        const size = stat.size;
+        const readSize = Math.min(size, 500_000); // últimos ~500KB
+        const fd = fs.openSync(path, 'r');
+        const buf = Buffer.alloc(readSize);
+        fs.readSync(fd, buf, 0, readSize, size - readSize);
+        fs.closeSync(fd);
+        const lines = buf.toString('utf8').split('\n');
+        logLines = lines.filter(l => l.includes(suffix) || l.includes(phoneRaw)).slice(-100);
+      }
+    } catch {}
+
+    res.json({
+      phone: phoneRaw,
+      suffix,
+      whatsapp_messages: msgs.rows,
+      dedup: dedup.rows,
+      contato: contato.rows,
+      opt_out: optout.rows,
+      logs: logLines,
+    });
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
 // ── Health check ─────────────────────────────────────────────
 app.get('/health', async (_req, res) => {
   try {
@@ -362,8 +432,13 @@ app.listen(PORT, '0.0.0.0', () => {
   initCronJobs();
   
   // Motor de disparos: verifica mensagens pendentes a cada 2 segundos
-  setInterval(() => {
-    processarDisparos(pool);
+  // Singleflight: se o batch anterior ainda não terminou, pula o tick
+  let disparosRunning = false;
+  setInterval(async () => {
+    if (disparosRunning) return;
+    disparosRunning = true;
+    try { await processarDisparos(pool); }
+    finally { disparosRunning = false; }
   }, 2000);
 });
 

@@ -138,8 +138,9 @@ export function useUltimasExecucoes({ limit = 20, agenteId, pollMs }: UseUltimas
 
   useEffect(() => {
     carregar();
-    if (pollMs && pollMs > 0) {
-      timerRef.current = setInterval(carregar, pollMs);
+    const safePollMs = pollMs && pollMs >= 5000 ? pollMs : 0;
+    if (safePollMs > 0) {
+      timerRef.current = setInterval(carregar, safePollMs);
       return () => {
         if (timerRef.current) clearInterval(timerRef.current);
       };

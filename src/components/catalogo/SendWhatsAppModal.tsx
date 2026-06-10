@@ -62,6 +62,7 @@ export function SendWhatsAppModal({ open, onOpenChange, type, id }: SendWhatsApp
   );
 
   const handleSend = async () => {
+    if (sending) return;
     if (selected.length === 0) {
       toast.error("Selecione pelo menos um contato");
       return;

@@ -68,6 +68,7 @@ interface Chat {
   tag?: string;
   lastMessage: string;
   timestamp: string;
+  rawTimestamp: string;
   unread?: number;
   online?: boolean;
   source?: string;
@@ -218,6 +219,9 @@ export function WhatsAppInterface() {
   // Sincronização de fotos
   const [syncingProfiles, setSyncingProfiles] = useState(false);
   // Cache de sessão: phone → foto_perfil buscada (evita repetir chamadas)
+  const prevConversasRef = useRef<Map<string, { ts: string; role: string }>>(new Map());
+  const prevUltimaAtividadeRef = useRef<Map<string, string>>(new Map());
+  const lastOpenedRef = useRef<Map<string, string>>(new Map());
   const picCacheRef = useRef<Map<string, string | null>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeChatIdRef = useRef<string | null>(null);
@@ -395,20 +399,64 @@ export function WhatsAppInterface() {
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas`, { headers: apiHeaders() });
       if (!res.ok) return;
       const rows: any[] = await res.json();
+      
+      const newArrivals: string[] = [];
+      for (const row of rows) {
+        const prev = prevUltimaAtividadeRef.current.get(row.session_id);
+        const isNew = !prev || new Date(row.ultima_atividade) > new Date(prev);
+        const fromClient = row.ultimo_role === 'user';
+        const notActive = activeChatIdRef.current !== row.session_id;
+        if (isNew && fromClient && notActive && prev) {
+          newArrivals.push(row.session_id);
+        }
+        prevUltimaAtividadeRef.current.set(row.session_id, row.ultima_atividade);
+      }
+
       setChats(prev => {
         const prevMap = new Map(prev.map(c => [c.id, c]));
-        const dbChats = rows.map(row => ({
-          id: row.session_id,
-          name: row.nome || row.session_id,
-          phone: row.session_id,
-          is_group: row.is_group || false,
-          source: row.instancia || undefined,
-          lastMessage: row.ultima_mensagem || '',
-          timestamp: formatTime(row.ultima_atividade),
-          messages: prevMap.get(row.session_id)?.messages || [],
-          notes: prevMap.get(row.session_id)?.notes || '',
-          profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
-        }));
+        
+        const dbChats = rows.map(row => {
+          const lastOpened = lastOpenedRef.current.get(row.session_id) ?? '';
+          const hasUnread = row.ultimo_role === 'user'
+            && new Date(row.ultima_atividade) > new Date(lastOpened);
+
+          return {
+            id: row.session_id,
+            name: row.nome || row.session_id,
+            phone: row.session_id,
+            is_group: row.is_group || false,
+            source: row.instancia || undefined,
+            lastMessage: row.ultima_mensagem || '',
+            timestamp: formatTime(row.ultima_atividade),
+            rawTimestamp: row.ultima_atividade,
+            messages: prevMap.get(row.session_id)?.messages || [],
+            notes: prevMap.get(row.session_id)?.notes || '',
+            profile_pic: row.profile_pic_url || prevMap.get(row.session_id)?.profile_pic || undefined,
+            unread: hasUnread ? 1 : 0,
+          };
+        });
+
+        // Toasts para novas mensagens
+        for (const sid of newArrivals) {
+          const chat = rows.find(r => r.session_id === sid);
+          const nome = chat?.nome || sid;
+          toast.info(`💬 ${nome}`, {
+            description: chat?.ultima_mensagem?.slice(0, 60) || 'Nova mensagem',
+            duration: 5000,
+          });
+        }
+
+        // Auto-selecionar novos contatos se não houver chat ativo
+        rows.forEach(row => {
+          const isNewContact = !prevMap.has(row.session_id);
+          if (isNewContact && row.ultimo_role === 'user') {
+            if (!activeChatIdRef.current) {
+              setActiveChatId(row.session_id);
+            } else {
+              toast.success(`📱 Novo contato: ${row.nome || row.session_id}`);
+            }
+          }
+        });
 
         // Preserva chat local ativo que ainda não chegou ao banco (ex: nova conversa antes do 1º envio)
         const activeId = activeChatIdRef.current;
@@ -452,7 +500,23 @@ export function WhatsAppInterface() {
         const currentIds = atual?.messages.map(m => m.id + (m.status || '')) ?? [];
         const newIds     = msgs.map(m => m.id + (m.status || ''));
         if (JSON.stringify(currentIds) === JSON.stringify(newIds)) return prev;
-        return prev.map(c => c.id === phone ? { ...c, messages: msgs } : c);
+        
+        const prevLen = prev.find(c => c.id === phone)?.messages.length ?? 0;
+        if (msgs.length > prevLen) {
+          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 80);
+        }
+
+        const now = new Date().toISOString();
+        return prev.map(c => c.id === phone 
+          ? { 
+              ...c, 
+              messages: msgs, 
+              rawTimestamp: now, 
+              timestamp: formatTime(now),
+              lastMessage: msgs.at(-1)?.content ?? c.lastMessage 
+            } 
+          : c
+        ).sort((a, b) => b.rawTimestamp.localeCompare(a.rawTimestamp));
       });
     } catch {}
     finally { if (showLoading) setLoadingMessages(false); }
@@ -510,10 +574,20 @@ export function WhatsAppInterface() {
     checkStatus();
     fetchConversas();
     fetchRespostasRapidas();
-    const tStatus = setInterval(checkStatus, 30000);
-    const tConversas = setInterval(fetchConversas, 5000);
-    return () => { clearInterval(tStatus); clearInterval(tConversas); };
   }, [fetchRespostasRapidas]);
+
+  useEffect(() => {
+    const tStatus = setInterval(checkStatus, 30000);
+    return () => clearInterval(tStatus);
+  }, []);
+
+  useEffect(() => {
+    const ms = activeChatId ? 2000 : 5000;
+    const t = setInterval(() => {
+      if (document.visibilityState !== 'hidden') fetchConversas();
+    }, ms);
+    return () => clearInterval(t);
+  }, [activeChatId]);
 
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
@@ -528,9 +602,9 @@ export function WhatsAppInterface() {
     fetchIaStatus(activeChatId);
     if (chat && !chat.profile_pic) fetchProfilePic(activeChatId);
     const tMsgs = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       const currentId = activeChatIdRef.current;
       if (!currentId) return;
-      // Usa ref para evitar stale closure sobre chats
       fetchMensagens(currentId, activeChatNameRef.current, false);
     }, 3000);
     return () => clearInterval(tMsgs);
@@ -632,6 +706,7 @@ export function WhatsAppInterface() {
         phone: cleanPhone,
         lastMessage: '',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        rawTimestamp: new Date().toISOString(),
         messages: [],
         notes: '',
       };
@@ -752,9 +827,11 @@ export function WhatsAppInterface() {
             </div>
           )}
           {!loadingChats && filteredChats.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground text-sm">
+            <div className="flex flex-col items-center justify-center py-12 px-6 text-center text-muted-foreground text-sm">
               <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
-              Nenhuma conversa
+              {searchTerm 
+                ? "Nenhuma conversa encontrada para esta busca."
+                : "Nenhuma mensagem recebida ainda. Quando clientes enviarem mensagens para seu WhatsApp, elas aparecerão aqui automaticamente."}
             </div>
           )}
           <div className="divide-y divide-border/50">
@@ -763,10 +840,15 @@ export function WhatsAppInterface() {
               return (
                 <div
                   key={chat.id}
-                  onClick={() => setActiveChatId(chat.id)}
+                  onClick={() => {
+                    setActiveChatId(chat.id);
+                    lastOpenedRef.current.set(chat.phone, new Date().toISOString());
+                  }}
                   className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
                     isActive
                       ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary"
+                      : chat.unread
+                      ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
                       : "hover:bg-muted/30"
                   }`}
                 >
@@ -783,7 +865,7 @@ export function WhatsAppInterface() {
                   </div>
                   <div className="flex-1 min-w-0 py-0.5">
                     <div className="flex items-center justify-between mb-1">
-                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : "text-foreground"}`}>{chat.name}</span>
+                      <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>{chat.name}</span>
                       <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp}</span>
                     </div>
                     <div className="flex items-center gap-1.5 mb-1.5">

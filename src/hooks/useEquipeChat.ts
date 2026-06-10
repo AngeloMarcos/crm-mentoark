@@ -21,6 +21,7 @@ export function useEquipeChat(equipeId?: string) {
 
   const fetchMensagens = useCallback(async (isInitial = false) => {
     if (!session?.access_token || !equipeId) return;
+    if (!isInitial && document.visibilityState === 'hidden') return;
 
     try {
       if (isInitial) setLoading(true);

@@ -153,17 +153,20 @@ export default function webhookRouter(pool: Pool): Router {
   router.post('/evolution', async (req: Request, res: Response) => {
     const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
     if (webhookSecret && !verificarAssinaturaEvolution(req, webhookSecret)) {
-      console.warn('[WEBHOOK] Assinatura inválida — requisição rejeitada');
+      wlog('WEBHOOK_AUTH_ERROR', 'Assinatura inválida — requisição rejeitada');
       return res.status(401).json({ error: 'Assinatura inválida' });
     }
 
     res.status(200).json({ ok: true });
 
+
     try {
       const payload = req.body as EvolutionPayload;
       // Correção 1 — normalizar evento removendo qualquer separador (_, ., /) e caixa
       const eventClean = (payload.event || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      console.log(`[WEBHOOK EVENTO] event="${payload.event}" → clean="${eventClean}" | instance="${payload.instance}"`);
+      const _rj = payload.data?.key?.remoteJid || '';
+      const _mid = payload.data?.key?.id || '';
+      wlog('WEBHOOK_IN', `event="${payload.event}" clean="${eventClean}" instance="${payload.instance}" jid="${_rj}" mid="${_mid}" fromMe=${payload.data?.key?.fromMe}`);
 
       if (eventClean === 'messagesupdate') {
         await handleStatusUpdate(payload);
@@ -171,32 +174,26 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // Aceita 'messagesupsert' (cobre MESSAGES_UPSERT, messages.upsert, messages_upsert etc.)
-      if (eventClean !== 'messagesupsert') return;
+      if (eventClean !== 'messagesupsert') {
+        wlog('WEBHOOK_DROP', `evento ignorado: "${eventClean}"`);
+        return;
+      }
 
       // Ignorar notificações de status sem conteúdo de mensagem
       const dataStatus = payload.data?.status;
       if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
-        wlog('WEBHOOK_DROP', `status-only event ignorado: ${dataStatus} | instance=${payload.instance}`);
+        wlog('WEBHOOK_DROP', `status-only (${dataStatus}) mid=${_mid} instance=${payload.instance}`);
         return;
       }
 
       const remoteJid = payload.data?.key?.remoteJid || '';
-
-      // Log para diagnóstico — nunca perder mensagens silenciosamente
-      console.log(`[WEBHOOK] remoteJid recebido: "${remoteJid}" | event: ${eventClean} | instance: ${payload.instance}`);
-      if (!remoteJid) {
-        wlog('WEBHOOK_DROP', `remoteJid vazio | instance=${payload.instance}`);
-        return;
-      }
-      if (!remoteJid.includes('@')) {
-        wlog('WEBHOOK_DROP', `remoteJid sem @ inválido: "${remoteJid}" | instance=${payload.instance}`);
-        return;
-      }
-      // Aceitar grupos (@g.us) e contatos individuais (@s.whatsapp.net / @lid)
+      if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio mid=${_mid} instance=${payload.instance}`); return; }
+      if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}" instance=${payload.instance}`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
 
       const messageId = payload.data?.key?.id || '';
-      if (!messageId) return;
+      if (!messageId) { wlog('WEBHOOK_DROP', `messageId vazio jid=${remoteJid}`); return; }
+
 
       const instancia  = payload.instance;
       const telefone   = remoteJid.split('@')[0]; // phone ou groupId
@@ -248,12 +245,27 @@ export default function webhookRouter(pool: Pool): Router {
         if (uRes.rows.length) userId = uRes.rows[0].id;
       }
 
-      wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);
+      // 4. Fallback Integracoes: busca na tabela integracoes_config
+      if (!userId) {
+        const intRes = await pool.query(
+          `SELECT user_id FROM integracoes_config
+           WHERE LOWER(instancia) = LOWER($1) AND tipo = 'whatsapp'
+           LIMIT 1`,
+          [instancia]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (intRes.rows.length) userId = intRes.rows[0].user_id;
+      }
+
+      if (!userId) {
+        wlog('WEBHOOK_DROP', `userId não encontrado para instancia="${instancia}". Verifique Configurações da IA ou Integrações. jid=${remoteJid} mid=${messageId}`);
+      } else {
+
+        wlog('WEBHOOK', `userId=${userId} | instancia="${instancia}" | palavraReativar="${palavraReativar}"`);
+      }
+
 
       // ── Mensagens do atendente (fromMe=true) → pausar IA ou reativar ─────────
       if (fromMe) {
-        // Proteção multicamada contra falso-positivo humano
-        // (cobre atrasos de rede: o ID pode chegar depois do botMessageIds já ter sido limpo)
         if (messageId.startsWith('resp_') || messageId.startsWith('manual_')) {
           wlog('WEBHOOK_ANTILOOP', `Prefixo de bot detectado — ignorando: ${messageId}`);
           return;
@@ -341,34 +353,30 @@ export default function webhookRouter(pool: Pool): Router {
              VALUES ($1, $2, $3, $4, true, $5, $6, 'sent', to_timestamp($7))
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
             [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
-          ).catch(err => console.error('[WEBHOOK INSERT fromMe whatsapp_messages]:', err.message));
+          ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao salvar msg fromMe: ${err.message}`));
         }
         return;
       }
 
-      // ── Deduplicação em memória ───────────────────────────────────────────────
+      // ── Deduplicação em memória (escopo por instância) ───────────────────────
       const dedupKey = `${instancia}:${messageId}`;
-      if (processados.has(dedupKey)) {
-        wlog('WEBHOOK_DROP', `dedup memória: ${messageId} | ${instancia}`);
-        return;
-      }
+      if (processados.has(dedupKey)) { wlog('WEBHOOK_DROP', `dedup memória mid=${messageId} inst=${instancia}`); return; }
       processados.add(dedupKey);
       setTimeout(() => processados.delete(dedupKey), 60000);
 
-      // ── Deduplicação no banco — usa (message_id, instancia) para evitar colisão cross-instância ──
+      // ── Deduplicação no banco (escopo por instância) ─────────────────────────
       const jaExiste = await pool.query(
         'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
         [messageId, instancia]
       );
-      if (jaExiste.rows.length) {
-        wlog('WEBHOOK_DROP', `dedup banco: ${messageId} | ${instancia}`);
-        return;
-      }
+      if (jaExiste.rows.length) { wlog('WEBHOOK_DROP', `dedup banco mid=${messageId} inst=${instancia}`); return; }
 
       await pool.query(
         'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [messageId, instancia]
-      ).catch(err => console.error('[WEBHOOK INSERT webhook_mensagens_processadas]:', err.message));
+      ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao inserir dedup banco: ${err.message}`));
+
+
 
       // ── Extrair dados ─────────────────────────────────────────────────────────
       const texto    = extrairTexto(payload.data);
@@ -393,7 +401,7 @@ export default function webhookRouter(pool: Pool): Router {
           [userId, instancia, remoteJid, messageId, tipo,
            texto || null, midia.url || null, midia.mime || null,
            pushNameFinal, tsVal]
-        ).catch(err => console.warn('[WEBHOOK] Falha ao salvar mensagem:', err.message));
+        ).catch(err => wlog('WEBHOOK_ERROR', `Falha ao salvar mensagem recebida: ${err.message}`));
 
         // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────
         if (!isGroup) {
@@ -407,7 +415,8 @@ export default function webhookRouter(pool: Pool): Router {
                  SET push_name          = COALESCE($1, push_name),
                      nome               = CASE WHEN nome = telefone THEN $1 ELSE nome END,
                      ultima_mensagem_em = NOW()
-                 WHERE user_id = $2 AND telefone ILIKE $3`,
+                 WHERE user_id = $2 AND telefone ILIKE $3
+                 RETURNING profile_pic_url`,
                 [pushName || null, userId, suffix]
               );
 
@@ -417,6 +426,8 @@ export default function webhookRouter(pool: Pool): Router {
                    VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)`,
                   [userId, nomeFinal, telefone, pushName || null]
                 ).catch(() => {});
+              } else if (upd.rows[0]?.profile_pic_url) {
+                return; // foto já salva — não chamar Evolution API
               }
 
               // Foto de perfil via Evolution API — usa agent_configs como fonte
@@ -461,7 +472,7 @@ export default function webhookRouter(pool: Pool): Router {
                 console.log(`[WEBHOOK] Foto de perfil atualizada para ${telefone}`);
               }
             } catch (e: any) {
-              console.warn('[WEBHOOK] Falha ao upsert contato:', e.message);
+              wlog('WEBHOOK_ERROR', `Falha ao upsert contato: ${e.message}`);
             }
           })();
         }
@@ -543,9 +554,12 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
       if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) {
-        wlog('WEBHOOK_DROP', `sem texto e tipo não-mídia: tipo=${tipo} | ${remoteJid} | ${messageId}`);
+        wlog('WEBHOOK_DROP', `sem texto e sem mídia tipo=${tipo} mid=${messageId} jid=${remoteJid}`);
         return;
       }
+
+      wlog('WEBHOOK_OK', `enfileirando IA tel=${telefone} tipo=${tipo} mid=${messageId} texto="${(texto||'').slice(0,80)}"`);
+
 
       processarComDebounce(pool, {
         instancia,
