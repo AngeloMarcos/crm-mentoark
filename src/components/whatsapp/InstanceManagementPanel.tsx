@@ -340,22 +340,23 @@ export function InstanceManagementPanel() {
   };
 
   const carregarStatus = async (lista: Agente[]) => {
-    const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-    const t = getAuthToken();
     const map: Record<string, ConnState> = {};
-    await Promise.all(
-      lista
-        .filter(a => !!a.evolution_instancia)
-        .map(async (a) => {
-          try {
-            const st = await fetchConnectionStatus(a.evolution_instancia!);
-            map[a.id] = (st.state ?? "close") as ConnState;
-          } catch (error) {
-            console.error(`[WhatsApp] Erro ao buscar status para ${a.evolution_instancia}:`, error);
-            map[a.id] = "close";
-          }
-        })
-    );
+    
+    // Agora o backend resolve a instância oficial automaticamente.
+    // Fazemos uma única chamada para pegar o status da conta
+    try {
+      const st = await fetchConnectionStatus();
+      const state = (st.state ?? "close") as ConnState;
+      
+      lista.forEach(a => {
+        if (a.evolution_instancia) {
+          map[a.id] = state;
+        }
+      });
+    } catch (error) {
+      console.error(`[WhatsApp] Erro ao buscar status global:`, error);
+    }
+    
     setStatuses(map);
   };
 
