@@ -83,34 +83,29 @@ export default function OpenClawPage() {
 
   useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, 30000);
+    const interval = setInterval(checkStatus, 60000);
     return () => clearInterval(interval);
   }, []);
 
   const checkStatus = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
-        method: 'POST',
-        headers: getOpenClawHeader(),
-        body: JSON.stringify(openClawBody({ message: 'ping', sessionKey: 'healthcheck' }))
-      });
-      setStatus((prev: any) => ({ ...prev, gateway: res.ok ? 'online' : 'offline' }));
-    } catch {
-      setStatus((prev: any) => ({ ...prev, gateway: 'offline' }));
-    }
-
+    // Health check leve — não bate em /openclaw/chat (que é pago e pode estar em cooldown).
     try {
       const res = await fetch(`${API_BASE}/health`);
-      setStatus((prev: any) => ({ ...prev, backend: res.ok ? 'online' : 'offline' }));
+      const ok = res.ok;
+      setStatus((prev: any) => ({
+        ...prev,
+        backend: ok ? 'online' : 'offline',
+        gateway: ok ? 'online' : 'offline',
+      }));
     } catch {
-      setStatus((prev: any) => ({ ...prev, backend: 'offline' }));
+      setStatus((prev: any) => ({ ...prev, backend: 'offline', gateway: 'offline' }));
     }
 
     try {
       const res = await fetchConnectionStatus();
-      setStatus((prev: any) => ({ 
-        ...prev, 
-        evolution: res.state === 'open' ? 'online' : 'offline', 
+      setStatus((prev: any) => ({
+        ...prev,
+        evolution: res.state === 'open' ? 'online' : 'offline',
         evolutionInstance: res.phoneNumber || 'Instância'
       }));
     } catch {
