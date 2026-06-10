@@ -149,8 +149,16 @@ export default function webhookRouter(pool: Pool): Router {
       }
     }
   }
-
-  router.post('/evolution', async (req: Request, res: Response) => {
+  
+  async function handleMessageDelete(payload: EvolutionPayload): Promise<void> {
+    const key = payload.data?.key;
+    if (!key?.id) return;
+    
+    await pool.query(
+      `DELETE FROM whatsapp_messages WHERE message_id = $1 AND instance_name = $2`,
+      [key.id, payload.instance]
+    ).catch(() => {});
+  }
     // ── TRACE 0: chegou no servidor ──────────────────────────────────────────
     const traceId = Date.now().toString(36);
     console.log(`\n${'═'.repeat(60)}`);
