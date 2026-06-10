@@ -144,7 +144,7 @@ export default function OpenClawPage() {
     };
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
+    const timeout = setTimeout(() => controller.abort(), 90000); // Aumentado para 90s pois VPS pode ser lenta
 
     try {
       await withCooldown('openclaw-chat', async () => {
@@ -155,22 +155,37 @@ export default function OpenClawPage() {
           signal: controller.signal,
         });
 
-        const data = await res.json().catch(() => ({}));
+        // Tenta ler o JSON. Se falhar, pode ser erro 500 ou Cloudflare
+        let data: any = {};
+        const responseText = await res.text();
+        try {
+          data = JSON.parse(responseText);
+        } catch (e) {
+          console.error("Erro ao parsear resposta do OpenClaw:", responseText);
+          data = { error: responseText.slice(0, 100) };
+        }
 
         if (!res.ok) {
-          const errMsg = friendlyError(res.status, data?.error);
+          const errMsg = friendlyError(res.status, data?.error || data?.message);
           toast.error(errMsg, { id: 'openclaw-error' });
           appendErrorOnce(errMsg);
           throw new Error(errMsg);
         }
 
         if (data.reply) {
-          setMessages([...newMessages, { role: 'assistant' as const, content: data.reply, toolCalls: data.toolCalls, timestamp: Date.now() }]);
+          setMessages([...newMessages, { 
+            role: 'assistant' as const, 
+            content: data.reply, 
+            toolCalls: data.toolCalls, 
+            timestamp: Date.now() 
+          }]);
         } else {
-          toast.error('Agente não retornou resposta', { id: 'openclaw-error' });
+          const fallbackMsg = "Agente não retornou resposta (vazio).";
+          toast.error(fallbackMsg, { id: 'openclaw-error' });
+          appendErrorOnce(fallbackMsg);
           throw new Error('no_reply');
         }
-      }, { baseMs: 2000, maxMs: 60_000 });
+      }, { baseMs: 3000, maxMs: 120_000 }); // Cooldown um pouco mais conservador
     } catch (err: any) {
       if (err instanceof CooldownError) {
         toast.error(
@@ -181,8 +196,9 @@ export default function OpenClawPage() {
         const msg = friendlyError(408);
         toast.error(msg, { id: 'openclaw-error' });
         appendErrorOnce(msg);
+      } else {
+        console.error("OpenClaw error:", err);
       }
-      // Outros erros já mostraram toast/mensagem acima.
     } finally {
       clearTimeout(timeout);
       setIsLoading(false);
