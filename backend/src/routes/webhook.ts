@@ -149,8 +149,16 @@ export default function webhookRouter(pool: Pool): Router {
       }
     }
   }
-
-  router.post('/evolution', async (req: Request, res: Response) => {
+  
+  async function handleMessageDelete(payload: EvolutionPayload): Promise<void> {
+    const key = payload.data?.key;
+    if (!key?.id) return;
+    
+    await pool.query(
+      `DELETE FROM whatsapp_messages WHERE message_id = $1 AND instance_name = $2`,
+      [key.id, payload.instance]
+    ).catch(() => {});
+  }
     // ── TRACE 0: chegou no servidor ──────────────────────────────────────────
     const traceId = Date.now().toString(36);
     console.log(`\n${'═'.repeat(60)}`);
@@ -185,6 +193,11 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
+      if (eventClean === 'messagesdelete') {
+        console.log(`[WH:${traceId}] → handleMessageDelete`);
+        await handleMessageDelete(payload);
+        return;
+      }
       if (eventClean !== 'messagesupsert') {
         console.log(`[WH:${traceId}] IGNORADO evento não é messagesupsert (é "${eventClean}")`);
         return;
@@ -192,13 +205,13 @@ export default function webhookRouter(pool: Pool): Router {
 
       const dataStatus = payload.data?.status;
       if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
-        wlog('WEBHOOK_DROP', `status-only (${dataStatus}) mid=${_mid} instance=${payload.instance}`);
+        wlog('WEBHOOK_DROP', `status-only (${dataStatus}) instance=${payload.instance}`);
         return;
       }
 
       const remoteJid = payload.data?.key?.remoteJid || '';
       console.log(`[WH:${traceId}] remoteJid="${remoteJid}"`);
-      if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio mid=${_mid} instance=${payload.instance}`); return; }
+      if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio instance=${payload.instance}`); return; }
       if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}" instance=${payload.instance}`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
 
@@ -401,14 +414,14 @@ export default function webhookRouter(pool: Pool): Router {
                ON CONFLICT (user_id, telefone) DO UPDATE
                  SET atendimento_ia = 'pause', pausa_timestamp = NOW()`,
               [userId, telefone]
-            ).catch(() =>
+            ).catch(async () => {
               // fallback sem UPSERT caso não exista constraint única
-              pool.query(
+              await pool.query(
                 `UPDATE dados_cliente SET atendimento_ia = 'pause', pausa_timestamp = NOW()
                  WHERE user_id = $1 AND telefone ILIKE $2`,
                 [userId, `%${telefone.slice(-11)}`]
-              ).catch(() => {})
-            );
+              ).catch(() => {});
+            });
 
             console.log(`[WEBHOOK HUMAN INTERVENTION] ${telefone} → IA pausada | msg: "${(textoFromMe || '').slice(0, 60)}"`);
           }

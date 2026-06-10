@@ -16,7 +16,7 @@ import { fetchConnectionStatus } from "@/services/evolutionService";
 import { withCooldown, CooldownError, friendlyError, getCooldownRemaining } from "@/lib/requestGuard";
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'error';
   content: string;
   toolCalls?: number;
   timestamp?: number;
@@ -29,7 +29,9 @@ const MAX_HISTORY = 60;
 function loadHistory(): Message[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const msgs: Message[] = raw ? JSON.parse(raw) : [];
+    // Limpeza na carga: remove mensagens de erro persistidas para não poluir
+    return msgs.filter(m => m.role !== 'error');
   } catch {
     return [];
   }
@@ -37,7 +39,9 @@ function loadHistory(): Message[] {
 
 function saveHistory(msgs: Message[]) {
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(msgs.slice(-MAX_HISTORY)));
+    // Não persistimos mensagens de erro para manter o histórico limpo entre recargas
+    const cleanMsgs = msgs.filter(m => m.role !== 'error').slice(-MAX_HISTORY);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(cleanMsgs));
   } catch {}
 }
 
@@ -84,14 +88,18 @@ export default function OpenClawPage() {
 
   useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, 60000);
+    // Aumentamos o intervalo para 90s para evitar fadiga de logs
+    const interval = setInterval(checkStatus, 90000);
     return () => clearInterval(interval);
   }, []);
 
   const checkStatus = async () => {
     // Health check leve — não bate em /openclaw/chat (que é pago e pode estar em cooldown).
     try {
-      const res = await fetch(`${API_BASE}/health`);
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 10000); // Timeout rápido para health check
+      const res = await fetch(`${API_BASE}/health`, { signal: controller.signal });
+      clearTimeout(t);
       const ok = res.ok;
       setStatus((prev: any) => ({
         ...prev,
@@ -112,7 +120,6 @@ export default function OpenClawPage() {
     } catch {
       setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
     }
-
   };
 
   const sendMessage = async (text?: string) => {
@@ -137,11 +144,10 @@ export default function OpenClawPage() {
     const appendErrorOnce = (msg: string) => {
       setMessages(prev => {
         const last = prev[prev.length - 1];
-        const tagged = `❌ ${msg}`;
-        if (last?.role === 'assistant' && last.content === tagged) {
+        if (last?.role === 'error' && last.content === msg) {
           return prev.map((m, i) => i === prev.length - 1 ? { ...m, timestamp: Date.now() } : m);
         }
-        return [...prev, { role: 'assistant' as const, content: tagged, timestamp: Date.now() }];
+        return [...prev, { role: 'error' as const, content: msg, timestamp: Date.now() }];
       });
     };
 
@@ -164,13 +170,15 @@ export default function OpenClawPage() {
           data = JSON.parse(responseText);
         } catch (e) {
           console.error("Erro ao parsear resposta do OpenClaw:", responseText);
-          data = { error: responseText.slice(0, 100) };
+          // Normaliza erro de proxy/Cloudflare
+          const errorPreview = responseText.includes('<html') ? 'Erro do Servidor (HTML)' : responseText.slice(0, 100);
+          data = { error: errorPreview };
         }
 
         if (!res.ok) {
           const errMsg = friendlyError(res.status, data?.error || data?.message);
           toast.error(errMsg, { id: 'openclaw-error' });
-          appendErrorOnce(errMsg);
+          if (res.status !== 401) appendErrorOnce(errMsg);
           throw new Error(errMsg);
         }
 
@@ -187,7 +195,7 @@ export default function OpenClawPage() {
           appendErrorOnce(fallbackMsg);
           throw new Error('no_reply');
         }
-      }, { baseMs: 3000, maxMs: 120_000 }); // Cooldown um pouco mais conservador
+      }, { baseMs: 5000, maxMs: 60_000 }); // Cooldown conservador 5s -> 60s
     } catch (err: any) {
       if (err instanceof CooldownError) {
         toast.error(
@@ -198,8 +206,10 @@ export default function OpenClawPage() {
         const msg = friendlyError(408);
         toast.error(msg, { id: 'openclaw-error' });
         appendErrorOnce(msg);
-      } else {
+      } else if (!err?.message?.includes('refresh_') && !err?.message?.includes('refresh-')) {
         console.error("OpenClaw error:", err);
+        const msg = friendlyError(undefined, err?.message);
+        toast.error(msg, { id: 'openclaw-error' });
       }
     } finally {
       clearTimeout(timeout);

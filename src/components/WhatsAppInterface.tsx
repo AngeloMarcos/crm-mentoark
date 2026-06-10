@@ -220,6 +220,7 @@ export function WhatsAppInterface() {
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [connecting, setConnecting] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [showNewMessageModal, setShowNewMessageModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
@@ -624,18 +625,20 @@ export function WhatsAppInterface() {
 
   const checkStatus = async (silent = true) => {
     try {
-      // Se houver uma instância ativa no chat atual, priorizamos verificar o status dela
-      // Caso contrário, tentamos pegar a instância 'teste' ou a primeira disponível no cache local
-      const activeInstance = activeChatId ? chats.find(c => c.id === activeChatId)?.source : null;
-      const targetInstance = activeInstance || chats.find(c => c.source)?.source || 'teste';
-      
-      console.log(`[WA] Verificando status para instância: ${targetInstance}`);
-      const res = await fetchConnectionStatus(targetInstance);
+      // O backend agora gerencia qual a instância oficial do usuário.
+      // Removemos a dependência de passar o nome da instância no frontend
+      // para evitar loops com instâncias órfãs.
+      const res = await fetchConnectionStatus();
       
       setConnectionStatus(res);
-      if (res.state === "open") setQrData(null);
+      if (res.state === "open") {
+        setQrData(null);
+        setRetryCount(0); // Reset retry on success
+      }
       
-      if (!silent && res.state !== "open") {
+      if (!silent && res.state === "unauthorized") {
+        toast.error("Sessão expirada. Por favor, reconecte seu WhatsApp.", { id: 'wa-unauthorized' });
+      } else if (!silent && res.state !== "open") {
         toast.warning("WhatsApp desconectado ou em sincronização");
       }
     } catch (e) {
@@ -645,37 +648,52 @@ export function WhatsAppInterface() {
     }
   };
 
-  const handleConnect = async () => {
-    if (!instanceName.trim()) {
-      toast.error("Informe um nome para a instância");
+  const handleConnect = async (isAutoRetry = false) => {
+    if (isAutoRetry && retryCount >= 3) {
+      console.warn("[WA] Limite de auto-retry atingido. Deixando para intervenção manual.");
       return;
     }
+
+    // Para "1 conta = 1 instância", usamos o nome estável gerado no backend.
+    // O nome informado aqui serve apenas para identificação inicial se for a primeira vez.
+    const name = instanceName.trim() || `WhatsApp ${currentUserName}`;
     
     try {
       setConnecting(true);
-      try { await disconnectInstance(); } catch {}
+      if (isAutoRetry) setRetryCount(prev => prev + 1);
       const phoneDigits = instancePhone.replace(/\D/g, '');
-      const res = await createInstance(instanceName, phoneDigits || undefined);
+      
+      // Chamada unificada ao backend. O backend agora gerencia a idempotência,
+      // limpeza de instâncias antigas e reuso da instância atual.
+      const res = await createInstance(name, phoneDigits || undefined);
+      
       setQrData(res);
       setShowConnectModal(false);
       setShowQrModal(true);
-      setShowConnectModal(false);
       
       if (res.state === "open") {
         setConnectionStatus({ state: "open", phoneNumber: res.phoneNumber });
-        toast.success("WhatsApp conectado!");
-      } else if (res.qrCode) {
-        toast.info("Escaneie o QR Code");
-        // Copiar mensagem ao conectar (simulado aqui pois a conexão real é via QR)
-        const messageToCopy = "Olá, acabei de conectar minha instância!";
-        navigator.clipboard.writeText(messageToCopy).then(() => {
-          toast.success("Mensagem de boas-vindas copiada!");
-        });
-      } else {
-        toast.error("Evolution não retornou QR Code");
+        toast.success("WhatsApp já está conectado!");
+        setShowQrModal(false);
+        fetchConversas();
+      } else if (res.qrCode || res.pairingCode) {
+        toast.info(res.pairingCode ? "Use o código de pareamento no seu celular" : "Escaneie o QR Code no seu WhatsApp");
+        
+        // Se o Evolution enviou QR, o processo de conexão iniciou
+        if (res.qrCode) {
+          const messageToCopy = "Olá, estou conectando meu WhatsApp ao CRM!";
+          navigator.clipboard.writeText(messageToCopy).catch(() => {});
+        }
+      } else if (res.qrPending) {
+        toast.info("Aguardando geração do QR Code pela Evolution...");
       }
     } catch (err: any) {
-      toast.error("Erro: " + err.message);
+      const msg = err.message || "";
+      if (msg.includes("401") || msg.includes("unauthorized")) {
+        toast.error("Erro de autenticação: Verifique a API Key da Evolution no servidor.");
+      } else {
+        toast.error("Erro ao conectar: " + msg);
+      }
     } finally {
       setConnecting(false);
     }
@@ -1411,7 +1429,17 @@ export function WhatsAppInterface() {
               </span>
             </div>
             <div className="flex items-center gap-1">
-              {!isConnected && (
+              {connectionStatus?.state === "unauthorized" ? (
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-8 w-8 text-orange-500 hover:bg-orange-50 animate-pulse" 
+                  onClick={() => setShowConnectModal(true)} 
+                  title="Reconectar WhatsApp"
+                >
+                  <AlertCircle className="h-4.5 w-4.5" />
+                </Button>
+              ) : !isConnected && (
                 <Button 
                   variant="ghost" 
                   size="icon" 
@@ -1878,7 +1906,7 @@ export function WhatsAppInterface() {
                 Cancelar
               </Button>
               <Button
-                onClick={handleConnect}
+                onClick={() => handleConnect(false)}
                 disabled={connecting || !instanceName.trim()}
                 className="h-11 px-6 rounded-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold shadow-lg shadow-green-500/30 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted disabled:from-muted disabled:to-muted disabled:text-muted-foreground disabled:shadow-none transition-all active:scale-[0.98]"
               >
@@ -2617,7 +2645,12 @@ export function WhatsAppInterface() {
                 Selecione um contato na lista ao lado para começar a interagir ou visualizar o histórico.
               </p>
             </div>
-            {!isConnected && !loadingStatus && (
+            {connectionStatus?.state === "unauthorized" ? (
+              <Button onClick={() => setShowConnectModal(true)} size="lg" className="rounded-2xl shadow-xl shadow-orange-500/20 gap-2 font-bold px-8 bg-orange-500 hover:bg-orange-600 animate-bounce">
+                <AlertCircle className="h-5 w-5" />
+                Reconectar WhatsApp
+              </Button>
+            ) : !isConnected && !loadingStatus && (
               <Button onClick={() => navigate("/whatsapp?tab=instancias")} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 gap-2 font-bold px-8">
                 <QrCode className="h-5 w-5" />
                 Conectar WhatsApp

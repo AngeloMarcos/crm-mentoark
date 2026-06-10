@@ -90,12 +90,13 @@ interface Profile {
   display_name: string | null;
 }
 
-type ConnState = "open" | "close" | "connecting";
+type ConnState = "open" | "close" | "connecting" | "unauthorized";
 
 function StatusChip({ state }: { state: ConnState }) {
   const cfg = {
     open: { label: "Conectado", className: "bg-emerald-500/15 text-emerald-600 border-emerald-500/30", Icon: Wifi },
     connecting: { label: "Reconectando", className: "bg-yellow-500/15 text-yellow-600 border-yellow-500/30", Icon: RefreshCw },
+    unauthorized: { label: "Reconecte seu WhatsApp", className: "bg-orange-500/15 text-orange-600 border-orange-500/30 font-bold animate-pulse", Icon: AlertOctagon },
     close: { label: "Desconectado", className: "bg-red-500/15 text-red-600 border-red-500/30", Icon: WifiOff },
   }[state];
   const I = cfg.Icon;
@@ -128,33 +129,41 @@ export function InstanceManagementPanel() {
   const [waitingQr, setWaitingQr] = useState(false); // Baileys ainda gerando QR
 
   const startConnect = async () => {
-    if (!newInstanceName.trim()) {
-      toast.error("Informe um nome para a instância");
-      return;
-    }
+    // Backend garante 1 instância por usuário usando nome estável.
+    const name = newInstanceName.trim() || `WhatsApp ${user?.display_name || 'Agente'}`;
+    
     try {
       setConnecting(true);
       const phoneDigits = newInstancePhone.replace(/\D/g, "");
-      const res = await createInstance(newInstanceName.trim(), phoneDigits || undefined);
+      
+      // Backend agora lida com a idempotência e limpeza de duplicatas
+      const res = await createInstance(name, phoneDigits || undefined);
+      
       setQrData(res);
       setShowConnectModal(false);
       setShowQrModal(true);
+      
       if (res.state === "open") {
-        toast.success("WhatsApp já está conectado!");
+        toast.success("✅ WhatsApp conectado com sucesso!");
         setShowQrModal(false);
+        setQrData(null);
         carregar();
       } else if (res.qrCode || res.pairingCode) {
         toast.info("Escaneie o QR Code ou use o código de pareamento");
         pollUntilConnected(res.instanceName || res.instancia);
       } else if (res.qrPending) {
-        // Evolution v2: Baileys ainda inicializando — faz polling do QR
-        toast.info("Gerando QR Code, aguarde...");
+        toast.info("Aguardando inicialização do Baileys. O QR aparecerá em instantes...");
         pollQrLoop();
       } else {
-        toast.error("Evolution não retornou QR Code");
+        toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
     } catch (err: any) {
-      toast.error(`Erro: ${err.message}`);
+      const msg = err.message || "";
+      if (msg.includes("401") || msg.includes("unauthorized")) {
+        toast.error("Erro na Evolution API: API Key inválida ou expirada.");
+      } else {
+        toast.error(`Falha ao conectar: ${msg}`);
+      }
     } finally {
       setConnecting(false);
     }
@@ -165,7 +174,7 @@ export function InstanceManagementPanel() {
     setWaitingQr(true);
     const start = Date.now();
     const TIMEOUT = 90 * 1000; // 90 segundos
-    while (Date.now() - start < TIMEOUT) {
+    while (Date.now() - start < TIMEOUT && waitingQr) {
       await new Promise(r => setTimeout(r, 3000));
       try {
         const data = await pollQr();
@@ -178,6 +187,12 @@ export function InstanceManagementPanel() {
           setNewInstancePhone("");
           toast.success("✅ WhatsApp conectado com sucesso!");
           carregar();
+          return;
+        }
+        if (data.state === "unauthorized") {
+          setWaitingQr(false);
+          setShowQrModal(false);
+          toast.error("Erro na Evolution: API Key ou Sessão inválida.");
           return;
         }
         if (data.qrCode) {
@@ -198,10 +213,10 @@ export function InstanceManagementPanel() {
     const start = Date.now();
     const TIMEOUT = 2 * 60 * 1000; // 2 min
     const targetInstancia = instanciaNome || newInstanceName;
-    while (Date.now() - start < TIMEOUT) {
+    while (Date.now() - start < TIMEOUT && pollingConnect && showQrModal) {
       await new Promise(r => setTimeout(r, 3000));
       try {
-        const st = await fetchConnectionStatus(targetInstancia);
+        const st = await fetchConnectionStatus();
         if (st.state === "open") {
           setPollingConnect(false);
           setShowQrModal(false);
@@ -210,6 +225,12 @@ export function InstanceManagementPanel() {
           setNewInstancePhone("");
           toast.success("✅ WhatsApp conectado com sucesso!");
           carregar();
+          return;
+        }
+        if (st.state === "unauthorized") {
+          setPollingConnect(false);
+          setShowQrModal(false);
+          toast.error("Erro na conexão: API Key ou Sessão inválida.");
           return;
         }
       } catch {}
@@ -228,6 +249,9 @@ export function InstanceManagementPanel() {
         setShowQrModal(false);
         toast.success("✅ WhatsApp já conectado!");
         carregar();
+      } else if (data.state === "unauthorized") {
+        setShowQrModal(false);
+        toast.error("Erro na Evolution: API Key ou Sessão inválida.");
       } else {
         toast.info("QR ainda não disponível, aguarde...");
         pollQrLoop();
@@ -316,22 +340,25 @@ export function InstanceManagementPanel() {
   };
 
   const carregarStatus = async (lista: Agente[]) => {
-    const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
-    const t = getAuthToken();
     const map: Record<string, ConnState> = {};
-    await Promise.all(
-      lista
-        .filter(a => !!a.evolution_instancia)
-        .map(async (a) => {
-          try {
-            const st = await fetchConnectionStatus(a.evolution_instancia!);
-            map[a.id] = (st.state ?? "close") as ConnState;
-          } catch (error) {
-            console.error(`[WhatsApp] Erro ao buscar status para ${a.evolution_instancia}:`, error);
-            map[a.id] = "close";
-          }
-        })
-    );
+    
+    // Agora o backend resolve a instância oficial automaticamente.
+    // Fazemos uma única chamada para pegar o status da conta
+    try {
+      const st = await fetchConnectionStatus();
+      const state = (st.state ?? "close") as ConnState;
+      
+      lista.forEach(a => {
+        // Mostramos o status real para instâncias que coincidem com a oficial 
+        // ou um status genérico para outras registradas (legado)
+        if (a.evolution_instancia) {
+          map[a.id] = state;
+        }
+      });
+    } catch (error) {
+      console.error(`[WhatsApp] Erro ao buscar status global:`, error);
+    }
+    
     setStatuses(map);
   };
 
@@ -540,7 +567,20 @@ export function InstanceManagementPanel() {
                   </div>
                 </div>
 
-                <StatusChip state={state} />
+                <div className="flex flex-col gap-2">
+                  <StatusChip state={state} />
+                  
+                  {state === "unauthorized" && (
+                    <Button 
+                      size="sm" 
+                      onClick={() => setShowConnectModal(true)} 
+                      className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold gap-2 animate-bounce"
+                    >
+                      <QrCode className="h-4 w-4" />
+                      Reconectar Agora
+                    </Button>
+                  )}
+                </div>
 
                 {isCritical && (
                   <div className="flex items-center gap-2 p-2 bg-red-500 text-white rounded-md text-[11px] font-bold animate-pulse">

@@ -8,12 +8,12 @@ const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoa
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
 const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
-const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 // Objeto interno do webhook (usado em instance/create e /webhook/set)
-function webhookInner() {
+function webhookInner(enabled = true) {
   return {
-    enabled: true,
+    enabled,
     url: WEBHOOK_URL,
     webhookByEvents: false,
     webhookBase64: false,
@@ -24,19 +24,19 @@ function webhookInner() {
 // Registra (ou atualiza) o webhook da instância no Evolution.
 // Evolution v2 exige formato { webhook: {...} } no endpoint /webhook/set.
 // Idempotente — pode ser chamado várias vezes sem efeito colateral.
-async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
+async function registrarWebhook(base: string, apiKey: string, instancia: string, enabled = true): Promise<void> {
   const cleanBase = sanitizeEvolutionUrl(base);
   try {
     const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
-      body: JSON.stringify({ webhook: webhookInner() }),
+      body: JSON.stringify({ webhook: webhookInner(enabled) }),
     });
     const body = await res.json().catch(() => ({}));
-    const enabled = (body as any)?.webhook?.enabled ?? (body as any)?.enabled;
-    console.log(`[whatsapp] webhook registrado ${instancia} → enabled=${enabled}`);
+    const actualEnabled = (body as any)?.webhook?.enabled ?? (body as any)?.enabled;
+    console.log(`[whatsapp] webhook ${enabled ? 'registrado' : 'removido'} ${instancia} → actual_enabled=${actualEnabled}`);
   } catch (err) {
-    console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
+    console.warn(`[whatsapp] Falha ao gerenciar webhook para ${instancia}:`, (err as Error).message);
   }
 }
 
@@ -47,14 +47,15 @@ function normalizeQr(raw: string | null | undefined): string | null {
 }
 
 export default function whatsappRouter(pool: Pool): Router {
-  const router = Router();
-  // Idempotency guard: evita criação paralela de instâncias para o mesmo usuário
+  // Cache em memória para evitar race conditions simultâneas no mesmo processo
   const connectingUsers = new Set<string>();
+  const router = Router();
 
   // Retorna config do agente, ou config global com nome de instância gerado
   async function getEvolutionConfig(userId: string): Promise<{
-    url: string; api_key: string; instancia: string; agenteId: string | null; isGlobal: boolean;
+    url: string; api_key: string; instancia: string; agenteId: string | null; isGlobal: boolean; stableInstancia: string;
   }> {
+    const stableInstancia = `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
     // 1. Tenta buscar em integracoes_config (onde o status de conexão principal é salvo)
     const intRes = await pool.query(
       `SELECT url, api_key, instancia FROM integracoes_config 
@@ -67,9 +68,10 @@ export default function whatsappRouter(pool: Pool): Router {
       return {
         url: row.url || DEFAULT_EVO_URL,
         api_key: row.api_key || DEFAULT_EVO_KEY,
-        instancia: row.instancia || `crm_${userId.replace(/-/g, '').slice(0, 12)}`,
+        instancia: row.instancia || stableInstancia,
         agenteId: null,
-        isGlobal: !row.url
+        isGlobal: !row.url,
+        stableInstancia
       };
     }
 
@@ -86,13 +88,12 @@ export default function whatsappRouter(pool: Pool): Router {
       const row = r.rows[0];
       const url = row.url || DEFAULT_EVO_URL;
       const api_key = row.api_key || DEFAULT_EVO_KEY;
-      const instancia = row.instancia || `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
-      return { url, api_key, instancia, agenteId: row.id, isGlobal: !row.url };
+      const instancia = row.instancia || stableInstancia;
+      return { url, api_key, instancia, agenteId: row.id, isGlobal: !row.url, stableInstancia };
     }
 
     // 3. Fallback final global
-    const instancia = `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
-    return { url: DEFAULT_EVO_URL, api_key: DEFAULT_EVO_KEY, instancia, agenteId: null, isGlobal: true };
+    return { url: DEFAULT_EVO_URL, api_key: DEFAULT_EVO_KEY, instancia: stableInstancia, agenteId: null, isGlobal: true, stableInstancia };
   }
 
   // Salva/atualiza a config Evolution no agente do usuário
@@ -627,38 +628,49 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // POST /api/whatsapp/status
+  // POST /api/whatsapp/status — Verifica status da conexão na Evolution
   router.post('/status', async (req: AuthRequest, res: Response) => {
     try {
       const cfg = await getEvolutionConfig(req.userId!);
       const base = cfg.url.replace(/\/$/, '');
+      
+      // Permite sobrescrever a instância para diagnósticos específicos (ex: TesteInstancias)
+      const instancia = (req.body?.instancia as string | undefined) || cfg.instancia;
 
-      const r = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, {
+      const r = await fetch(`${base}/instance/connectionState/${instancia}`, {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
       if (!r) {
-        return res.json({ state: 'close', instancia: cfg.instancia });
+        return res.json({ state: 'close', instancia: instancia });
       }
+
+      // Tratamento explícito de 401 (API Key inválida ou instância deslogada forçadamente)
       if (r.status === 401) {
-        return res.json({ state: 'unauthorized', instancia: cfg.instancia });
+        console.warn(`[WHATSAPP] Evolution retornou 401 para instância ${instancia}.`);
+        return res.json({ 
+          state: 'unauthorized', 
+          message: 'Sessão expirada ou API Key inválida. Por favor, reconecte.',
+          instancia: instancia 
+        });
       }
+
       if (!r.ok) {
-        return res.json({ state: 'close', instancia: cfg.instancia });
+        return res.json({ state: 'close', instancia: instancia });
       }
 
       const data: any = await r.json();
-      const state = data?.instance?.state || data?.state || 'close';
-      const phoneNumber = data?.instance?.profileName || data?.instance?.name || '';
+      const state = data?.instance?.state || data?.state || data?.status || 'close';
+      const phoneNumber = data?.instance?.profileName || data?.instance?.number || data?.instance?.owner || '';
 
       // Re-registra webhook toda vez que a instância está conectada
-      if (state === 'open') {
-        registrarWebhook(base, cfg.api_key, cfg.instancia).catch(() => {});
+      if (state === 'open' || state === 'connected' || state === 'CONNECTED') {
+        registrarWebhook(base, cfg.api_key, instancia).catch(() => {});
       }
 
-      return res.json({ state, phoneNumber, instancia: cfg.instancia });
+      return res.json({ state, phoneNumber, instancia: instancia });
     } catch (err: any) {
-      return res.json({ state: 'close', instancia: null });
+      return res.json({ state: 'close', instancia: null, error: err.message });
     }
   });
 
@@ -676,67 +688,93 @@ export default function whatsappRouter(pool: Pool): Router {
 
   // POST /api/whatsapp/connect — cria instância e retorna QR code
   router.post('/connect', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const lockKey = `connect:${userId}`;
+
+    if (connectingUsers.has(lockKey)) {
+      return res.status(429).json({ message: 'Conexão em andamento. Aguarde 30s e tente novamente se necessário.' });
+    }
+
+    connectingUsers.add(lockKey);
+    const timeout = setTimeout(() => connectingUsers.delete(lockKey), 30_000);
+
     try {
-      const cfg = await getEvolutionConfig(req.userId!);
+      const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
 
-      // Idempotency: segunda chamada paralela retorna 'connecting' em vez de criar nova instância
-      const lockKey = `connect:${req.userId!}`;
-      if (connectingUsers.has(lockKey)) {
-        return res.json({ state: 'connecting', instancia: cfg.instancia });
-      }
-      connectingUsers.add(lockKey);
-      setTimeout(() => connectingUsers.delete(lockKey), 30_000);
+      // 1. Limpeza de instâncias duplicadas/antigas na Evolution API
+      // Lista todas as instâncias e remove qualquer uma que contenha o ID do usuário mas não seja a atual
+      try {
+        const listRes = await fetch(`${base}/instance/fetchInstances`, {
+          headers: { apikey: cfg.api_key },
+        }).catch(() => null);
 
-      // 1. Verifica estado atual
+        if (listRes?.ok) {
+          const instances: any[] = await listRes.json();
+          const userIdShort = userId.replace(/-/g, '').slice(0, 12);
+          for (const inst of instances) {
+            const name = inst.instanceName || inst.name;
+            // Se o nome contém nosso padrão de ID de usuário mas NÃO é a instância oficial (estável)
+            if (name && name.includes(userIdShort) && name !== cfg.stableInstancia) {
+              console.log(`[WHATSAPP] Removendo instância duplicada/antiga: ${name}`);
+              // Remove webhook da duplicata antes de deletar
+              await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
+              await fetch(`${base}/instance/delete/${name}`, {
+                method: 'DELETE',
+                headers: { apikey: cfg.api_key },
+              }).catch(() => {});
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[WHATSAPP] Erro ao listar/limpar instâncias:', (err as Error).message);
+      }
+
+      // 2. Verifica estado da instância oficial
       const stateRes = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
       if (stateRes?.status === 401) {
-        return res.json({ state: 'unauthorized', instancia: cfg.instancia });
+        console.warn(`[WHATSAPP] 401 durante connect — API Key inválida ou instância órfã: ${cfg.instancia}`);
+        return res.json({ 
+          state: 'unauthorized', 
+          message: 'API Key da Evolution inválida ou sessão expirada. Clique em Reconectar.',
+          instancia: cfg.instancia 
+        });
       }
+
       if (stateRes?.ok) {
         const stateData: any = await stateRes.json();
-        const state = stateData?.instance?.state || stateData?.state || 'close';
-        if (state === 'open') {
-          // Sempre re-registra o webhook ao confirmar que está conectado
-          await registrarWebhook(base, cfg.api_key, cfg.instancia);
-          return res.json({
-            state: 'open',
-            phoneNumber: stateData?.instance?.profileName || '',
-            instancia: cfg.instancia,
-          });
+        const state = stateData?.instance?.state || stateData?.state || stateData?.status || 'close';
+        if (state === 'open' || state === 'CONNECTED' || state === 'connected') {
+          // Só consideramos 'open' se tiver número/perfil vinculado
+          const hasPhone = !!(stateData?.instance?.profileName || stateData?.instance?.number || stateData?.instance?.owner || stateData?.instance?.profile);
+          
+          if (hasPhone) {
+            await registrarWebhook(base, cfg.api_key, cfg.instancia);
+            await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+            return res.json({
+              state: 'open',
+              phoneNumber: stateData?.instance?.profileName || stateData?.instance?.number || stateData?.instance?.owner || '',
+              instancia: cfg.instancia,
+            });
+          } else {
+            console.log(`[WHATSAPP] Instância ${cfg.instancia} está em 'open' mas sem conta vinculada (owner missing). Tratando como unauthorized.`);
+            return res.json({ 
+              state: 'unauthorized', 
+              message: 'Instância sem conta do WhatsApp vinculada. Por favor, reconecte escanendo o QR.',
+              instancia: cfg.instancia 
+            });
+          }
         }
       }
 
-      // 2. Tenta conectar instância existente
-      const connectRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
-        headers: { apikey: cfg.api_key },
-      }).catch(() => null);
-
-      if (connectRes?.ok) {
-        const connectData: any = await connectRes.json();
-        const qrRaw = connectData?.base64 || connectData?.qrcode?.base64 || null;
-        // Só retorna aqui se tiver QR; se não tiver, segue para criar nova instância
-        if (qrRaw) {
-          await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
-          await registrarWebhook(base, cfg.api_key, cfg.instancia);
-          return res.json({
-            state: 'connecting',
-            qrCode: normalizeQr(qrRaw),
-            pairingCode: connectData?.pairingCode || null,
-            instanceName: cfg.instancia,
-            instancia: cfg.instancia,
-          });
-        }
-      }
-
-      // 3. Cria nova instância (webhook embutido — Evolution v2)
+      // 3. Tenta conectar ou criar
       const phoneNumber = (req.body?.phoneNumber as string | undefined)?.replace(/\D/g, '') || undefined;
       
       const createPayload = {
-        instanceName: cfg.instancia,
+        instanceName: cfg.stableInstancia,
         token: cfg.api_key,
         qrcode: true,
         integration: 'WHATSAPP-BAILEYS',
@@ -749,50 +787,43 @@ export default function whatsappRouter(pool: Pool): Router {
         webhook: webhookInner(),
       };
 
-      console.log(`[WHATSAPP] Criando instância em ${base}: ${cfg.instancia}`);
+      console.log(`[WHATSAPP] Criando/Conectando instância: ${cfg.stableInstancia}`);
       
       const createRes = await fetch(`${base}/instance/create`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json', 
-          'apikey': cfg.api_key 
-        },
+        headers: { 'Content-Type': 'application/json', 'apikey': cfg.api_key },
         body: JSON.stringify(createPayload),
       });
 
       const created: any = await createRes.json();
-      console.log(`[WHATSAPP] Resposta Evolution create:`, JSON.stringify(created).slice(0, 500));
-
-
-
-      // Se já existe, tenta conectar
-      if (!createRes.ok && (created?.message?.includes('already') || created?.message?.includes('exist'))) {
-        const reconnectRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
+      
+      // Se já existe, tenta conectar para obter QR
+      if (!createRes.ok && (created?.message?.includes('already') || created?.message?.includes('exist') || created?.message?.includes('conflict'))) {
+        const connectRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
           headers: { apikey: cfg.api_key },
         }).catch(() => null);
-        if (reconnectRes?.ok) {
-          const rcData: any = await reconnectRes.json();
+        
+        if (connectRes?.ok) {
+          const rcData: any = await connectRes.json();
           const qrRaw = rcData?.base64 || rcData?.qrcode?.base64 || rcData?.code || null;
-          await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
-          await registrarWebhook(base, cfg.api_key, cfg.instancia);
+          await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.stableInstancia);
+          await registrarWebhook(base, cfg.api_key, cfg.stableInstancia);
           return res.json({
             state: 'connecting',
             qrCode: normalizeQr(qrRaw),
             pairingCode: rcData?.pairingCode || rcData?.code || null,
-            instanceName: cfg.instancia,
-            instancia: cfg.instancia,
+            instanceName: cfg.stableInstancia,
+            instancia: cfg.stableInstancia,
           });
         }
       }
 
       let qrCode = created?.qrcode?.base64 || created?.hash?.qrcode || null;
-      let pairingCode =
-        created?.qrcode?.pairingCode || created?.pairingCode || created?.hash?.pairingCode || null;
+      let pairingCode = created?.qrcode?.pairingCode || created?.pairingCode || created?.hash?.pairingCode || null;
 
-      // Evolution v2.2.3: QR não vem no create; Baileys precisa de alguns segundos.
-      // Tenta até 6 vezes com 2s de intervalo (máx ~12s de espera).
-      if (!qrCode) {
-        for (let attempt = 0; attempt < 6 && !qrCode; attempt++) {
+      // Evolution v2 polling se QR não veio no create
+      if (!qrCode && createRes.ok) {
+        for (let attempt = 0; attempt < 5 && !qrCode; attempt++) {
           await new Promise(r => setTimeout(r, 2000));
           const qrRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
             headers: { apikey: cfg.api_key },
@@ -801,25 +832,27 @@ export default function whatsappRouter(pool: Pool): Router {
             const qrData: any = await qrRes.json();
             qrCode = qrData?.base64 || qrData?.qrcode?.base64 || null;
             pairingCode = pairingCode || qrData?.pairingCode || null;
-            if (qrCode) console.log(`[WHATSAPP] QR obtido na tentativa ${attempt + 1}`);
           }
         }
       }
 
-      await saveEvolutionConfig(req.userId!, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
-      // Garante webhook configurado mesmo se o create inline foi ignorado
-      await registrarWebhook(base, cfg.api_key, cfg.instancia);
+      await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.stableInstancia);
+      await registrarWebhook(base, cfg.api_key, cfg.stableInstancia);
 
       return res.json({
-        state: created?.instance?.state || 'connecting',
+        state: (qrCode || created?.qrcode?.base64) ? 'connecting' : (created?.instance?.state || created?.state || 'connecting'),
         qrCode: normalizeQr(qrCode),
-        qrPending: !qrCode, // sinaliza que frontend pode precisar de polling
+        qrPending: !qrCode,
         pairingCode,
-        instanceName: cfg.instancia,
-        instancia: cfg.instancia,
+        instanceName: cfg.stableInstancia,
+        instancia: cfg.stableInstancia,
       });
     } catch (err: any) {
+      console.error('[WHATSAPP connect] Erro:', err.message);
       return res.status(500).json({ message: err.message });
+    } finally {
+      clearTimeout(timeout);
+      connectingUsers.delete(lockKey);
     }
   });
 
@@ -862,7 +895,7 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // POST /api/whatsapp/disconnect
+  // POST /api/whatsapp/disconnect — Desconexão total e limpeza de estado
   router.post('/disconnect', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -870,20 +903,24 @@ export default function whatsappRouter(pool: Pool): Router {
       const base = cfg.url.replace(/\/$/, '');
       const instancia = cfg.instancia;
 
-      console.log(`[WHATSAPP] Desconectando instância: ${instancia} para o usuário ${userId}`);
+      console.log(`[WHATSAPP] Desconexão total iniciada para usuário ${userId} (instância: ${instancia})`);
 
-      // 1. Tentar fazer logout (desconecta o WhatsApp da instância)
+      // 1. Tentar remover webhook, logout e delete na Evolution API
+      // Remove webhook primeiro para evitar eventos residuais
+      await registrarWebhook(base, cfg.api_key, instancia, false).catch(() => {});
+
+      // Logout desconecta a conta do WhatsApp
       await fetch(`${base}/instance/logout/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(err => console.warn(`[WHATSAPP] Erro no logout de ${instancia}:`, err.message));
 
-      // 2. Tentar deletar a instância permanentemente da Evolution API
+      // Delete remove a instância completamente do servidor Evolution
       const deleteRes = await fetch(`${base}/instance/delete/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(err => {
-        console.error(`[WHATSAPP] Erro crítico ao deletar ${instancia}:`, err.message);
+        console.error(`[WHATSAPP] Erro ao deletar instância ${instancia} na Evolution:`, err.message);
         return null;
       });
 
@@ -892,27 +929,44 @@ export default function whatsappRouter(pool: Pool): Router {
         console.warn(`[WHATSAPP] Evolution retornou erro ao deletar ${instancia}: ${deleteRes.status} - ${errorText}`);
       }
 
-      // 3. Limpar referências em TODOS os agentes do usuário (independente de agenteId)
-      await pool.query(
-        `UPDATE agentes
-         SET evolution_instancia = NULL,
-             evolution_server_url = NULL,
-             evolution_api_key = NULL,
-             updated_at = NOW()
-         WHERE user_id = $1`,
-        [userId]
-      );
+      // 2. Limpeza profunda no Banco de Dados (Postgres)
+      // Removemos todo o histórico de mensagens e estados para evitar "estado sujo" ao reconectar
+      console.log(`[WHATSAPP] Limpando registros do BD para o usuário ${userId}`);
+      
+      const queries = [
+        // Remove mensagens do chat
+        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1`, [userId]),
+        // Remove status de entrega
+        pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [instancia]),
+        // Remove deduplicação de webhook para esta instância
+        pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [instancia]),
+        // Remove histórico de logs da IA (n8n_chat_histories)
+        pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1`, [userId]),
+        // Limpa configurações de integração (integracoes_config)
+        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`, [userId]),
+        // Reseta o status da IA nos contatos e dados_cliente para o padrão (Ativa)
+        pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
+        pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
+        // Limpa referências em TODOS os agentes do usuário (independente de agenteId)
+        pool.query(
+          `UPDATE agentes 
+           SET evolution_instancia = NULL, 
+               evolution_server_url = NULL, 
+               evolution_api_key = NULL, 
+               updated_at = NOW() 
+           WHERE user_id = $1`,
+          [userId]
+        )
+      ];
 
-      // 4. Limpar TODAS as configs Evolution do usuário — evita registros órfãos
-      await pool.query(
-        `DELETE FROM integracoes_config
-         WHERE user_id = $1 AND tipo = 'evolution'`,
-        [userId]
-      );
+      await Promise.allSettled(queries);
 
-      return res.json({ ok: true, message: 'Instância desconectada e removida com sucesso' });
+      return res.json({ 
+        ok: true, 
+        message: 'WhatsApp desconectado, instância removida e estado limpo com sucesso.' 
+      });
     } catch (err: any) {
-      console.error('[WHATSAPP] Erro ao processar disconnect:', err);
+      console.error('[WHATSAPP] Erro fatal no disconnect:', err);
       return res.status(500).json({ message: err.message });
     }
   });
@@ -921,9 +975,8 @@ export default function whatsappRouter(pool: Pool): Router {
   router.post('/sync-history', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
-      const instanciaParam = (req.body?.instancia as string | undefined)?.trim();
       const cfg = await getEvolutionConfig(userId);
-      const instancia = instanciaParam || cfg.instancia;
+      const instancia = cfg.instancia;
       const base = cfg.url.replace(/\/$/, '');
 
       // Buscar mensagens com paginação via /chat/findMessages
@@ -1010,10 +1063,10 @@ export default function whatsappRouter(pool: Pool): Router {
     console.log('[DEBUG SEND] userId:', userId);
     try {
       const {
-        phone, text, instancia: instanciaParam,
+        phone, text,
         mediaUrl, mediaType, mediaCaption, mediaFilename,
       } = req.body as {
-        phone: string; text?: string; instancia?: string;
+        phone: string; text?: string;
         mediaUrl?: string; mediaType?: 'image' | 'audio' | 'video' | 'document';
         mediaCaption?: string; mediaFilename?: string;
       };
@@ -1037,7 +1090,7 @@ export default function whatsappRouter(pool: Pool): Router {
         tokenPresente: !!cfg.api_key,
       });
 
-      const instancia = instanciaParam || cfg.instancia;
+      const instancia = cfg.instancia;
       const base = cfg.url.replace(/\/$/, '');
 
       let evolutionResp: any;
@@ -1061,7 +1114,7 @@ export default function whatsappRouter(pool: Pool): Router {
         if (mediaCaption) mediaPayload.caption = mediaCaption;
         if (mediaFilename) mediaPayload.fileName = mediaFilename;
 
-        const targetUrl = `${base}/message/${endpoint}/${instancia}`;
+        const targetUrl = `${base}/message/${endpoint}/${cfg.instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
         let evoRes: globalThis.Response;
         try {
@@ -1077,35 +1130,12 @@ export default function whatsappRouter(pool: Pool): Router {
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
-          if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
-            console.log(`[SEND] Instância ${instancia} não existe na Evolution — recriando automaticamente...`);
-            try {
-              await evolutionFetch(`${base}/instance/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ instanceName: instancia, qrcode: false, integration: 'WHATSAPP-BAILEYS' }),
-              });
-              await new Promise(r => setTimeout(r, 2000));
-              const retry = await evolutionFetch(targetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify(mediaPayload),
-              });
-              if (!retry.ok) {
-                return res.status(503).json({
-                  message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                  reconnect_required: true,
-                  instancia,
-                });
-              }
-              evolutionResp = await retry.json().catch(() => ({}));
-            } catch {
-              return res.status(503).json({
-                message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                reconnect_required: true,
-                instancia,
-              });
-            }
+            console.log(`[SEND] Instância ${instancia} não existe ou está deslogada na Evolution — solicitando reconexão manual...`);
+            return res.status(401).json({
+              message: 'Sessão do WhatsApp expirada ou não encontrada. Por favor, reconecte.',
+              reconnect_required: true,
+              instancia,
+            });
           } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
             // Socket Baileys ainda inicializando — retry após 3s
             console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
@@ -1127,7 +1157,7 @@ export default function whatsappRouter(pool: Pool): Router {
         evolutionResp = evolutionResp ?? await evoRes.json().catch(() => ({}));
       } else {
         // Envio de texto
-        const targetUrl = `${base}/message/sendText/${instancia}`;
+        const targetUrl = `${base}/message/sendText/${cfg.instancia}`;
         console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
         let evoRes: globalThis.Response;
         try {
@@ -1144,34 +1174,12 @@ export default function whatsappRouter(pool: Pool): Router {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
           if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
-            console.log(`[SEND] Instância ${instancia} não existe na Evolution — recriando automaticamente...`);
-            try {
-              await evolutionFetch(`${base}/instance/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ instanceName: instancia, qrcode: false, integration: 'WHATSAPP-BAILEYS' }),
-              });
-              await new Promise(r => setTimeout(r, 2000));
-              const retry = await evolutionFetch(targetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ number: phoneClean, text }),
-              });
-              if (!retry.ok) {
-                return res.status(503).json({
-                  message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                  reconnect_required: true,
-                  instancia,
-                });
-              }
-              evolutionResp = await retry.json().catch(() => ({}));
-            } catch {
-              return res.status(503).json({
-                message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                reconnect_required: true,
-                instancia,
-              });
-            }
+            console.log(`[SEND] Instância ${instancia} não existe ou está deslogada na Evolution — solicitando reconexão manual...`);
+            return res.status(401).json({
+              message: 'Sessão do WhatsApp expirada ou não encontrada. Por favor, reconecte.',
+              reconnect_required: true,
+              instancia,
+            });
           } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
             // Socket Baileys ainda inicializando — retry após 3s
             console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
@@ -1214,13 +1222,17 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // DELETE /api/whatsapp/instances/:name — remove instância na Evolution e desvincula do agente
+  // DELETE /api/whatsapp/instances/:name — remove instância na Evolution e limpa estado do agente
   router.delete('/instances/:name', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
       const name = req.params.name;
       const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
+
+      // 1. Evolution Cleanup
+      // Remove webhook primeiro
+      await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
 
       await fetch(`${base}/instance/logout/${name}`, {
         method: 'DELETE',
@@ -1232,13 +1244,29 @@ export default function whatsappRouter(pool: Pool): Router {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
-      await pool.query(
-        `UPDATE agentes SET evolution_instancia=NULL WHERE user_id=$1 AND evolution_instancia=$2`,
-        [userId, name]
-      );
+      // 2. DB Cleanup (Sincronizado com o fluxo de /disconnect)
+      await Promise.allSettled([
+        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1`, [userId]),
+        pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [name]),
+        pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [name]),
+        pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1`, [userId]),
+        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`, [userId]),
+        pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
+        pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
+        pool.query(
+          `UPDATE agentes 
+           SET evolution_instancia = NULL, 
+               evolution_server_url = NULL, 
+               evolution_api_key = NULL, 
+               updated_at = NOW() 
+           WHERE user_id = $1`,
+          [userId]
+        )
+      ]);
 
-      return res.json({ ok: true });
+      return res.json({ ok: true, message: 'Instância removida e estado limpo.' });
     } catch (err: any) {
+      console.error('[WHATSAPP] Erro ao deletar instância via DELETE:', err);
       return res.status(500).json({ message: err.message });
     }
   });
