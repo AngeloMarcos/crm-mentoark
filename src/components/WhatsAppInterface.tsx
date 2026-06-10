@@ -816,27 +816,46 @@ export function WhatsAppInterface() {
     // IA responde via API unificada se o modo IA estiver ativo e não houver pausa manual
     const chat = chats.find(c => c.id === activeChatId);
     if (!iaPausada && inputMode === "responder") {
-      try {
-        setIsAiProcessing(true);
-        const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
-          method: 'POST',
-          headers: apiHeaders(),
-          body: JSON.stringify({ message: messageInput, sessionKey: activeChatId })
-        });
-        if (!res.ok) {
-           const err = await res.json().catch(() => ({}));
-           console.error('[OPENCLAW] Erro na resposta IA:', err);
-           if (res.status === 401) {
-             toast.error('Sessão expirada. Faça login novamente.');
-             navigate('/login');
-           } else {
-             toast.error(err.error || 'Erro na resposta da IA');
-           }
+      const cdRemaining = getCooldownRemaining('whatsapp-openclaw');
+      if (cdRemaining > 0) {
+        toast.error(
+          `IA em cooldown. Aguarde ${Math.ceil(cdRemaining / 1000)}s.`,
+          { id: 'whatsapp-openclaw-error' }
+        );
+      } else {
+        try {
+          setIsAiProcessing(true);
+          await withCooldown('whatsapp-openclaw', async () => {
+            const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
+              method: 'POST',
+              headers: apiHeaders(),
+              body: JSON.stringify({ message: messageInput, sessionKey: activeChatId })
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              console.error('[OPENCLAW] Erro na resposta IA:', err);
+              if (res.status === 401) {
+                toast.error('Sessão expirada. Faça login novamente.', { id: 'whatsapp-openclaw-error' });
+                navigate('/login');
+              } else {
+                toast.error(friendlyError(res.status, err?.error), { id: 'whatsapp-openclaw-error' });
+              }
+              throw new Error(`openclaw_${res.status}`);
+            }
+          }, { baseMs: 2000, maxMs: 60_000 });
+        } catch (err: any) {
+          if (err instanceof CooldownError) {
+            toast.error(
+              `IA em cooldown. Aguarde ${Math.ceil(err.retryInMs / 1000)}s.`,
+              { id: 'whatsapp-openclaw-error' }
+            );
+          } else if (!err?.message?.startsWith('openclaw_')) {
+            console.error('[OPENCLAW] Falha ao chamar IA:', err);
+            toast.error(friendlyError(undefined, err?.message), { id: 'whatsapp-openclaw-error' });
+          }
+        } finally {
+          setIsAiProcessing(false);
         }
-      } catch (err) {
-        console.error('[OPENCLAW] Falha ao chamar IA:', err);
-      } finally {
-        setIsAiProcessing(false);
       }
     }
 
