@@ -174,7 +174,7 @@ export function InstanceManagementPanel() {
     setWaitingQr(true);
     const start = Date.now();
     const TIMEOUT = 90 * 1000; // 90 segundos
-    while (Date.now() - start < TIMEOUT) {
+    while (Date.now() - start < TIMEOUT && waitingQr) {
       await new Promise(r => setTimeout(r, 3000));
       try {
         const data = await pollQr();
@@ -187,6 +187,12 @@ export function InstanceManagementPanel() {
           setNewInstancePhone("");
           toast.success("✅ WhatsApp conectado com sucesso!");
           carregar();
+          return;
+        }
+        if (data.state === "unauthorized") {
+          setWaitingQr(false);
+          setShowQrModal(false);
+          toast.error("Erro na Evolution: API Key ou Sessão inválida.");
           return;
         }
         if (data.qrCode) {
