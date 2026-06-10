@@ -1061,10 +1061,10 @@ export default function whatsappRouter(pool: Pool): Router {
     console.log('[DEBUG SEND] userId:', userId);
     try {
       const {
-        phone, text, instancia: instanciaParam,
+        phone, text,
         mediaUrl, mediaType, mediaCaption, mediaFilename,
       } = req.body as {
-        phone: string; text?: string; instancia?: string;
+        phone: string; text?: string;
         mediaUrl?: string; mediaType?: 'image' | 'audio' | 'video' | 'document';
         mediaCaption?: string; mediaFilename?: string;
       };
