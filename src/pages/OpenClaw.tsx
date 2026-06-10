@@ -13,13 +13,18 @@ import { FileConfigCard } from '@/components/openclaw/FileConfigCard';
 import { toast } from 'sonner';
 import { getAuthToken } from "@/lib/api-token";
 import { fetchConnectionStatus } from "@/services/evolutionService";
-import { withCooldown, CooldownError, friendlyError, getCooldownRemaining } from "@/lib/requestGuard";
+import { withCooldown, CooldownError, friendlyError, getCooldownRemaining, singleflight } from "@/lib/requestGuard";
 
 interface Message {
   role: 'user' | 'assistant' | 'error';
   content: string;
   toolCalls?: number;
   timestamp?: number;
+}
+
+// Marca erros já tratados internamente para o catch externo não re-toastar.
+class _HandledError extends Error {
+  constructor(msg: string) { super(msg); this.name = '_HandledError'; }
 }
 
 const API_BASE = "https://api.mentoark.com.br";
@@ -94,32 +99,35 @@ export default function OpenClawPage() {
   }, []);
 
   const checkStatus = async () => {
-    // Health check leve — não bate em /openclaw/chat (que é pago e pode estar em cooldown).
-    try {
-      const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 10000); // Timeout rápido para health check
-      const res = await fetch(`${API_BASE}/health`, { signal: controller.signal });
-      clearTimeout(t);
-      const ok = res.ok;
-      setStatus((prev: any) => ({
-        ...prev,
-        backend: ok ? 'online' : 'offline',
-        gateway: ok ? 'online' : 'offline',
-      }));
-    } catch {
-      setStatus((prev: any) => ({ ...prev, backend: 'offline', gateway: 'offline' }));
-    }
+    // singleflight evita checagens simultâneas (remount, double-effect em dev)
+    singleflight('openclaw-status', async () => {
+      // Health check leve — não bate em /openclaw/chat (que é pago e pode estar em cooldown).
+      try {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 10000);
+        const res = await fetch(`${API_BASE}/health`, { signal: controller.signal });
+        clearTimeout(t);
+        const ok = res.ok;
+        setStatus((prev: any) => ({
+          ...prev,
+          backend: ok ? 'online' : 'offline',
+          gateway: ok ? 'online' : 'offline',
+        }));
+      } catch {
+        setStatus((prev: any) => ({ ...prev, backend: 'offline', gateway: 'offline' }));
+      }
 
-    try {
-      const res = await fetchConnectionStatus();
-      setStatus((prev: any) => ({
-        ...prev,
-        evolution: res.state === 'open' ? 'online' : 'offline',
-        evolutionInstance: res.phoneNumber || 'Instância'
-      }));
-    } catch {
-      setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
-    }
+      try {
+        const res = await fetchConnectionStatus();
+        setStatus((prev: any) => ({
+          ...prev,
+          evolution: res.state === 'open' ? 'online' : 'offline',
+          evolutionInstance: res.phoneNumber || 'Instância'
+        }));
+      } catch {
+        setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
+      }
+    }).catch(() => {}); // try/catch internos já cobrem tudo; este .catch evita unhandled rejection
   };
 
   const sendMessage = async (text?: string) => {
@@ -179,21 +187,21 @@ export default function OpenClawPage() {
           const errMsg = friendlyError(res.status, data?.error || data?.message);
           toast.error(errMsg, { id: 'openclaw-error' });
           if (res.status !== 401) appendErrorOnce(errMsg);
-          throw new Error(errMsg);
+          throw new _HandledError(errMsg);
         }
 
         if (data.reply) {
-          setMessages([...newMessages, { 
-            role: 'assistant' as const, 
-            content: data.reply, 
-            toolCalls: data.toolCalls, 
-            timestamp: Date.now() 
+          setMessages([...newMessages, {
+            role: 'assistant' as const,
+            content: data.reply,
+            toolCalls: data.toolCalls,
+            timestamp: Date.now()
           }]);
         } else {
           const fallbackMsg = "Agente não retornou resposta (vazio).";
           toast.error(fallbackMsg, { id: 'openclaw-error' });
           appendErrorOnce(fallbackMsg);
-          throw new Error('no_reply');
+          throw new _HandledError(fallbackMsg);
         }
       }, { baseMs: 5000, maxMs: 60_000 }); // Cooldown conservador 5s -> 60s
     } catch (err: any) {
@@ -202,14 +210,18 @@ export default function OpenClawPage() {
           `Aguarde ${Math.ceil(err.retryInMs / 1000)}s antes de tentar novamente.`,
           { id: 'openclaw-error' }
         );
+      } else if (err instanceof _HandledError) {
+        // Já foi tratado dentro do callback (toast + appendErrorOnce já chamados). Não faz nada.
       } else if (err?.name === 'AbortError') {
         const msg = friendlyError(408);
         toast.error(msg, { id: 'openclaw-error' });
         appendErrorOnce(msg);
       } else if (!err?.message?.includes('refresh_') && !err?.message?.includes('refresh-')) {
+        // Erro inesperado (rede, parse, etc.) — nunca visto pelo usuário antes
         console.error("OpenClaw error:", err);
         const msg = friendlyError(undefined, err?.message);
         toast.error(msg, { id: 'openclaw-error' });
+        appendErrorOnce(msg);
       }
     } finally {
       clearTimeout(timeout);
