@@ -391,7 +391,7 @@ export default function OpenClawPage() {
               <StatusCard title="OpenClaw Gateway" status={status.gateway === 'online' ? 'online' : 'offline'} info="gpt-4o-mini" />
               <StatusCard title="Backend API" status={status.backend === 'online' ? 'online' : 'offline'} info={status.backend === 'online' ? 'Ativo' : 'Offline'} />
               <StatusCard title="Evolution API" status={status.evolution === 'online' ? 'online' : 'offline'} info={status.evolutionInstance || 'Verificando...'} />
-              <StatusCard title="Banco de Dados" status="online" info="PostgreSQL 16 + pgvector" />
+              <StatusCard title="Banco de Dados" status="online" info={dbInfo} />
             </div>
 
             <div className="grid grid-cols-1 gap-4">
