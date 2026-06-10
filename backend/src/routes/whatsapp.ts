@@ -836,8 +836,8 @@ export default function whatsappRouter(pool: Pool): Router {
         }
       }
 
-      await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
-      await registrarWebhook(base, cfg.api_key, cfg.instancia);
+      await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.stableInstancia);
+      await registrarWebhook(base, cfg.api_key, cfg.stableInstancia);
 
       return res.json({
         state: (qrCode || created?.qrcode?.base64) ? 'connecting' : (created?.instance?.state || created?.state || 'connecting'),
