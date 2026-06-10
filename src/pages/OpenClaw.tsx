@@ -151,6 +151,7 @@ export default function OpenClawPage() {
     const timeout = setTimeout(() => controller.abort(), 90000); // Aumentado para 90s pois VPS pode ser lenta
 
     try {
+      const lockKey = `openclaw-chat-${messageText.length}`; // Lock leve por mensagem
       await withCooldown('openclaw-chat', async () => {
         const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
           method: 'POST',
@@ -166,7 +167,9 @@ export default function OpenClawPage() {
           data = JSON.parse(responseText);
         } catch (e) {
           console.error("Erro ao parsear resposta do OpenClaw:", responseText);
-          data = { error: responseText.slice(0, 100) };
+          // Normaliza erro de proxy/Cloudflare
+          const errorPreview = responseText.includes('<html') ? 'Erro do Servidor (HTML)' : responseText.slice(0, 100);
+          data = { error: errorPreview };
         }
 
         if (!res.ok) {
@@ -189,7 +192,7 @@ export default function OpenClawPage() {
           appendErrorOnce(fallbackMsg);
           throw new Error('no_reply');
         }
-      }, { baseMs: 3000, maxMs: 120_000 }); // Cooldown um pouco mais conservador
+      }, { baseMs: 5000, maxMs: 60_000 }); // Cooldown conservador 5s -> 60s
     } catch (err: any) {
       if (err instanceof CooldownError) {
         toast.error(
