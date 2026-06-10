@@ -203,8 +203,10 @@ export default function OpenClawPage() {
         const msg = friendlyError(408);
         toast.error(msg, { id: 'openclaw-error' });
         appendErrorOnce(msg);
-      } else {
+      } else if (!err?.message?.includes('refresh_') && !err?.message?.includes('refresh-')) {
         console.error("OpenClaw error:", err);
+        const msg = friendlyError(undefined, err?.message);
+        toast.error(msg, { id: 'openclaw-error' });
       }
     } finally {
       clearTimeout(timeout);
