@@ -5,7 +5,7 @@
 import { getAuthToken } from "@/lib/api-token";
 import { withCooldown, CooldownError, hasExceededRetries, friendlyError } from "@/lib/requestGuard";
 
-const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
+const API_BASE = (import.meta.env.VITE_API_URL as string) || 'https://api.mentoark.com.br';
 
 const REFRESH_KEY = 'auth-refresh';
 const REFRESH_MAX_RETRIES = 3;
@@ -32,7 +32,10 @@ function _getToken(): string | null {
 function _authHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   const t = _getToken();
-  if (t) h['Authorization'] = `Bearer ${t}`;
+  if (t) {
+    h['Authorization'] = `Bearer ${t}`;
+    h['x-auth-token'] = t; // Suporte para middlewares legados
+  }
   return h;
 }
 

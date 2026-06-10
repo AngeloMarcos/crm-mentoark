@@ -117,22 +117,42 @@ export default function LeadsPage() {
 
   // ============ CARREGAR DADOS ============
   const carregar = async () => {
-    if (!user) return;
+    if (!user) {
+      console.warn("[LeadsPage] Carregar abortado: usuário ausente");
+      return;
+    }
     setLoading(true);
-    const [{ data: l }, { data: c }, { data: tar }] = await Promise.all([
-      api.from("listas").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-      api.from("contatos").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-      api.from("tarefas").select("contato_id").eq("user_id", user.id).in("status", ["pendente", "em_andamento"]),
-    ]);
-    setListas(l ?? []);
-    setContatos(c ?? []);
-    const map = new Map<string, number>();
-    (tar ?? []).forEach((t: { contato_id: string | null }) => {
-      if (!t.contato_id) return;
-      map.set(t.contato_id, (map.get(t.contato_id) ?? 0) + 1);
-    });
-    setTarefasPendentes(map);
-    setLoading(false);
+    console.log("[LeadsPage] Carregando dados para user:", user.id);
+    
+    try {
+      const [{ data: l, error: el }, { data: c, error: ec }, { data: tar, error: et }] = await Promise.all([
+        api.from("listas").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+        api.from("contatos").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+        api.from("tarefas").select("contato_id").eq("user_id", user.id).in("status", ["pendente", "em_andamento"]),
+      ]);
+
+      if (el) console.error("[LeadsPage] Erro listas:", el);
+      if (ec) console.error("[LeadsPage] Erro contatos:", ec);
+      if (et) console.error("[LeadsPage] Erro tarefas:", et);
+
+      setListas(l ?? []);
+      setContatos(c ?? []);
+      const map = new Map<string, number>();
+      (tar ?? []).forEach((t: { contato_id: string | null }) => {
+        if (!t.contato_id) return;
+        map.set(t.contato_id, (map.get(t.contato_id) ?? 0) + 1);
+      });
+      setTarefasPendentes(map);
+    } catch (err) {
+      console.error("[LeadsPage] Erro crítico ao carregar:", err);
+      toast({
+        title: "Erro de conexão",
+        description: "Não foi possível carregar os dados. Verifique sua conexão.",
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const recarregarTarefas = async () => {
