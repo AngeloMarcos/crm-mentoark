@@ -656,7 +656,7 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       const data: any = await r.json();
-      const state = data?.instance?.state || data?.state || 'close';
+      const state = data?.instance?.state || data?.state || data?.status || 'close';
       const phoneNumber = data?.instance?.profileName || data?.instance?.number || '';
 
       // Re-registra webhook toda vez que a instância está conectada
