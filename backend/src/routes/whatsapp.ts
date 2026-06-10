@@ -656,7 +656,7 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       if (!r.ok) {
-        return res.json({ state: 'close', instancia: cfg.instancia });
+        return res.json({ state: 'close', instancia: instancia });
       }
 
       const data: any = await r.json();
