@@ -90,12 +90,13 @@ interface Profile {
   display_name: string | null;
 }
 
-type ConnState = "open" | "close" | "connecting";
+type ConnState = "open" | "close" | "connecting" | "unauthorized";
 
 function StatusChip({ state }: { state: ConnState }) {
   const cfg = {
     open: { label: "Conectado", className: "bg-emerald-500/15 text-emerald-600 border-emerald-500/30", Icon: Wifi },
     connecting: { label: "Reconectando", className: "bg-yellow-500/15 text-yellow-600 border-yellow-500/30", Icon: RefreshCw },
+    unauthorized: { label: "Reconecte seu WhatsApp", className: "bg-orange-500/15 text-orange-600 border-orange-500/30 font-bold animate-pulse", Icon: AlertOctagon },
     close: { label: "Desconectado", className: "bg-red-500/15 text-red-600 border-red-500/30", Icon: WifiOff },
   }[state];
   const I = cfg.Icon;
@@ -548,7 +549,20 @@ export function InstanceManagementPanel() {
                   </div>
                 </div>
 
-                <StatusChip state={state} />
+                <div className="flex flex-col gap-2">
+                  <StatusChip state={state} />
+                  
+                  {state === "unauthorized" && (
+                    <Button 
+                      size="sm" 
+                      onClick={() => setShowConnectModal(true)} 
+                      className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold gap-2 animate-bounce"
+                    >
+                      <QrCode className="h-4 w-4" />
+                      Reconectar Agora
+                    </Button>
+                  )}
+                </div>
 
                 {isCritical && (
                   <div className="flex items-center gap-2 p-2 bg-red-500 text-white rounded-md text-[11px] font-bold animate-pulse">
