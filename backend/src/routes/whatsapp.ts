@@ -647,7 +647,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // Tratamento explícito de 401 (API Key inválida ou instância deslogada forçadamente)
       if (r.status === 401) {
-        console.warn(`[WHATSAPP] Evolution retornou 401 para instância ${cfg.instancia}.`);
+        console.warn(`[WHATSAPP] Evolution retornou 401 para instância ${instancia}.`);
         return res.json({ 
           state: 'unauthorized', 
           message: 'Sessão expirada ou API Key inválida. Por favor, reconecte.',
