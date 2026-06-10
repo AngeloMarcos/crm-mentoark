@@ -1376,7 +1376,7 @@ export default function whatsappRouter(pool: Pool): Router {
   router.get('/evo/status', async (req: AuthRequest, res: Response) => {
     try {
       const cfg      = await getEvolutionConfig(req.userId!);
-      const instancia = cfg.instancia;
+      const instancia = (req.query['instancia'] as string | undefined) || cfg.instancia;
       if (!cfg.url || !cfg.api_key) return res.json({ state: 'nao_configurado' });
       const base = cfg.url.replace(/\/$/, '');
       const r    = await fetch(`${base}/instance/connectionState/${instancia}`, { headers: { apikey: cfg.api_key } }).catch(() => null);
