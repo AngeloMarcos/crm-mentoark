@@ -95,7 +95,7 @@ export default function LoginPage() {
     }
 
     try {
-      if (hasTurnstile && turnstileToken !== 'bypass') {
+      if (hasTurnstile && turnstileToken && turnstileToken !== 'bypass') {
         const verifyResp = await fetch(`${API_BASE}/auth/turnstile-verify`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -109,8 +109,15 @@ export default function LoginPage() {
       }
 
       if (isLogin) {
-        const { error } = await api.auth.signInWithPassword({ email, password });
+        const { error, data } = await api.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        
+        // Garantir que os tokens estão salvos antes de navegar
+        if (data?.session?.access_token) {
+          localStorage.setItem("access_token", data.session.access_token);
+          localStorage.setItem("crm_access_token", data.session.access_token);
+        }
+        
         navigate("/dashboard");
       } else {
         const { error } = await api.auth.signUp({
