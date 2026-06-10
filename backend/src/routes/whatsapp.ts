@@ -794,7 +794,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const created: any = await createRes.json();
       
       // Se já existe, tenta conectar para obter QR
-      if (!createRes.ok && (created?.message?.includes('already') || created?.message?.includes('exist'))) {
+      if (!createRes.ok && (created?.message?.includes('already') || created?.message?.includes('exist') || created?.message?.includes('conflict'))) {
         const connectRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
           headers: { apikey: cfg.api_key },
         }).catch(() => null);
