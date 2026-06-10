@@ -894,7 +894,20 @@ export default function whatsappRouter(pool: Pool): Router {
         console.warn(`[WHATSAPP] Evolution retornou erro ao deletar ${instancia}: ${deleteRes.status} - ${errorText}`);
       }
 
-      // 3. Limpar referências em TODOS os agentes do usuário (independente de agenteId)
+      // 3. Limpar histórico de mensagens para evitar "estado sujo" na próxima conexão
+      // O usuário solicitou "Sem estado sujo reaparecendo"
+      console.log(`[WHATSAPP] Limpando histórico de mensagens para o usuário ${userId}`);
+      await pool.query(
+        `DELETE FROM whatsapp_messages WHERE user_id = $1`,
+        [userId]
+      ).catch(err => console.error('[WHATSAPP] Erro ao limpar whatsapp_messages:', err.message));
+      
+      await pool.query(
+        `DELETE FROM whatsapp_message_status WHERE user_id = $1`,
+        [userId]
+      ).catch(() => {});
+
+      // 4. Limpar referências em TODOS os agentes do usuário (independente de agenteId)
       await pool.query(
         `UPDATE agentes
          SET evolution_instancia = NULL,
@@ -905,7 +918,7 @@ export default function whatsappRouter(pool: Pool): Router {
         [userId]
       );
 
-      // 4. Limpar TODAS as configs Evolution do usuário — evita registros órfãos
+      // 5. Limpar TODAS as configs Evolution do usuário — evita registros órfãos
       await pool.query(
         `DELETE FROM integracoes_config
          WHERE user_id = $1 AND tipo = 'evolution'`,
