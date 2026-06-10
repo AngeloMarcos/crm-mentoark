@@ -651,13 +651,19 @@ export function WhatsAppInterface() {
     }
   };
 
-  const handleConnect = async () => {
+  const handleConnect = async (isAutoRetry = false) => {
+    if (isAutoRetry && retryCount >= 3) {
+      console.warn("[WA] Limite de auto-retry atingido. Deixando para intervenção manual.");
+      return;
+    }
+
     // Para "1 conta = 1 instância", usamos o nome estável gerado no backend.
     // O nome informado aqui serve apenas para identificação inicial se for a primeira vez.
     const name = instanceName.trim() || `WhatsApp ${currentUserName}`;
     
     try {
       setConnecting(true);
+      if (isAutoRetry) setRetryCount(prev => prev + 1);
       const phoneDigits = instancePhone.replace(/\D/g, '');
       
       // Chamada unificada ao backend. O backend agora gerencia a idempotência,
