@@ -95,15 +95,17 @@ export default function LoginPage() {
     }
 
     try {
-      // Verificar token no backend antes de autenticar
-      const verifyResp = await fetch(`${API_BASE}/auth/turnstile-verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: turnstileToken }),
-      });
+      if (hasTurnstile && turnstileToken !== 'bypass') {
+        const verifyResp = await fetch(`${API_BASE}/auth/turnstile-verify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: turnstileToken }),
+        });
 
-      if (!verifyResp.ok) {
-        throw new Error("Falha na verificação de segurança. Tente novamente.");
+        if (!verifyResp.ok) {
+          const errData = await verifyResp.json().catch(() => ({}));
+          throw new Error(errData.error || "Falha na verificação de segurança. Tente novamente.");
+        }
       }
 
       if (isLogin) {

@@ -111,8 +111,11 @@ const auth = {
   async getSession() {
     const token = _getToken();
     if (!token) return { data: { session: null }, error: null };
-    if (_isExpired(token)) { const ok = await auth._refreshSilent(); if (!ok) return { data: { session: null }, error: null }; }
-    const t = localStorage.getItem('access_token')!;
+    if (_isExpired(token)) {
+      const ok = await auth._refreshSilent();
+      if (!ok) return { data: { session: null }, error: null };
+    }
+    const t = localStorage.getItem('access_token') || localStorage.getItem('crm_access_token')!;
     if (!_currentUser) _currentUser = _decodeUser(t);
     return { data: { session: { access_token: t, refresh_token: localStorage.getItem('refresh_token') ?? '', user: _currentUser } }, error: null };
   },
