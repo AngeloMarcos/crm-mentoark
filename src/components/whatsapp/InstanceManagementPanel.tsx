@@ -128,33 +128,41 @@ export function InstanceManagementPanel() {
   const [waitingQr, setWaitingQr] = useState(false); // Baileys ainda gerando QR
 
   const startConnect = async () => {
-    if (!newInstanceName.trim()) {
-      toast.error("Informe um nome para a instância");
-      return;
-    }
+    // Backend garante 1 instância por usuário usando nome estável.
+    const name = newInstanceName.trim() || `WhatsApp ${user?.display_name || 'Agente'}`;
+    
     try {
       setConnecting(true);
       const phoneDigits = newInstancePhone.replace(/\D/g, "");
-      const res = await createInstance(newInstanceName.trim(), phoneDigits || undefined);
+      
+      // Backend agora lida com a idempotência e limpeza de duplicatas
+      const res = await createInstance(name, phoneDigits || undefined);
+      
       setQrData(res);
       setShowConnectModal(false);
       setShowQrModal(true);
+      
       if (res.state === "open") {
-        toast.success("WhatsApp já está conectado!");
+        toast.success("✅ WhatsApp conectado com sucesso!");
         setShowQrModal(false);
+        setQrData(null);
         carregar();
       } else if (res.qrCode || res.pairingCode) {
         toast.info("Escaneie o QR Code ou use o código de pareamento");
         pollUntilConnected(res.instanceName || res.instancia);
       } else if (res.qrPending) {
-        // Evolution v2: Baileys ainda inicializando — faz polling do QR
-        toast.info("Gerando QR Code, aguarde...");
+        toast.info("Aguardando inicialização do Baileys. O QR aparecerá em instantes...");
         pollQrLoop();
       } else {
-        toast.error("Evolution não retornou QR Code");
+        toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
     } catch (err: any) {
-      toast.error(`Erro: ${err.message}`);
+      const msg = err.message || "";
+      if (msg.includes("401") || msg.includes("unauthorized")) {
+        toast.error("Erro na Evolution API: API Key inválida ou expirada.");
+      } else {
+        toast.error(`Falha ao conectar: ${msg}`);
+      }
     } finally {
       setConnecting(false);
     }
