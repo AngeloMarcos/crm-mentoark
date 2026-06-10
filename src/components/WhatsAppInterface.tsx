@@ -2648,7 +2648,12 @@ export function WhatsAppInterface() {
                 Selecione um contato na lista ao lado para começar a interagir ou visualizar o histórico.
               </p>
             </div>
-            {!isConnected && !loadingStatus && (
+            {connectionStatus?.state === "unauthorized" ? (
+              <Button onClick={() => setShowConnectModal(true)} size="lg" className="rounded-2xl shadow-xl shadow-orange-500/20 gap-2 font-bold px-8 bg-orange-500 hover:bg-orange-600 animate-bounce">
+                <AlertCircle className="h-5 w-5" />
+                Reconectar WhatsApp
+              </Button>
+            ) : !isConnected && !loadingStatus && (
               <Button onClick={() => navigate("/whatsapp?tab=instancias")} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 gap-2 font-bold px-8">
                 <QrCode className="h-5 w-5" />
                 Conectar WhatsApp
