@@ -32,7 +32,10 @@ function _getToken(): string | null {
 function _authHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   const t = _getToken();
-  if (t) h['Authorization'] = `Bearer ${t}`;
+  if (t) {
+    h['Authorization'] = `Bearer ${t}`;
+    h['x-auth-token'] = t; // Suporte para middlewares legados
+  }
   return h;
 }
 
