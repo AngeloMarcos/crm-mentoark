@@ -5,7 +5,7 @@
 import { getAuthToken } from "@/lib/api-token";
 import { withCooldown, CooldownError, hasExceededRetries, friendlyError } from "@/lib/requestGuard";
 
-const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
+const API_BASE = (import.meta.env.VITE_API_URL as string) || 'https://api.mentoark.com.br';
 
 const REFRESH_KEY = 'auth-refresh';
 const REFRESH_MAX_RETRIES = 3;
