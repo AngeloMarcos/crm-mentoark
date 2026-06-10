@@ -159,6 +159,8 @@ export default function webhookRouter(pool: Pool): Router {
       [key.id, payload.instance]
     ).catch(() => {});
   }
+
+  router.post('/evolution', async (req: Request, res: Response) => {
     // ── TRACE 0: chegou no servidor ──────────────────────────────────────────
     const traceId = Date.now().toString(36);
     console.log(`\n${'═'.repeat(60)}`);

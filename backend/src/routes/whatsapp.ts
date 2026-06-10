@@ -1130,6 +1130,7 @@ export default function whatsappRouter(pool: Pool): Router {
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
+          if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
             console.log(`[SEND] Instância ${instancia} não existe ou está deslogada na Evolution — solicitando reconexão manual...`);
             return res.status(401).json({
               message: 'Sessão do WhatsApp expirada ou não encontrada. Por favor, reconecte.',
