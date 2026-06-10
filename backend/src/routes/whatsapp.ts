@@ -53,8 +53,9 @@ export default function whatsappRouter(pool: Pool): Router {
 
   // Retorna config do agente, ou config global com nome de instância gerado
   async function getEvolutionConfig(userId: string): Promise<{
-    url: string; api_key: string; instancia: string; agenteId: string | null; isGlobal: boolean;
+    url: string; api_key: string; instancia: string; agenteId: string | null; isGlobal: boolean; stableInstancia: string;
   }> {
+    const stableInstancia = `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
     // 1. Tenta buscar em integracoes_config (onde o status de conexão principal é salvo)
     const intRes = await pool.query(
       `SELECT url, api_key, instancia FROM integracoes_config 
