@@ -774,7 +774,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const phoneNumber = (req.body?.phoneNumber as string | undefined)?.replace(/\D/g, '') || undefined;
       
       const createPayload = {
-        instanceName: cfg.instancia,
+        instanceName: cfg.stableInstancia,
         token: cfg.api_key,
         qrcode: true,
         integration: 'WHATSAPP-BAILEYS',
