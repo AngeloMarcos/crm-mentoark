@@ -13,6 +13,7 @@ import { FileConfigCard } from '@/components/openclaw/FileConfigCard';
 import { toast } from 'sonner';
 import { getAuthToken } from "@/lib/api-token";
 import { fetchConnectionStatus } from "@/services/evolutionService";
+import { withCooldown, CooldownError, friendlyError, getCooldownRemaining } from "@/lib/requestGuard";
 
 interface Message {
   role: 'user' | 'assistant';
@@ -82,34 +83,29 @@ export default function OpenClawPage() {
 
   useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, 30000);
+    const interval = setInterval(checkStatus, 60000);
     return () => clearInterval(interval);
   }, []);
 
   const checkStatus = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
-        method: 'POST',
-        headers: getOpenClawHeader(),
-        body: JSON.stringify(openClawBody({ message: 'ping', sessionKey: 'healthcheck' }))
-      });
-      setStatus((prev: any) => ({ ...prev, gateway: res.ok ? 'online' : 'offline' }));
-    } catch {
-      setStatus((prev: any) => ({ ...prev, gateway: 'offline' }));
-    }
-
+    // Health check leve — não bate em /openclaw/chat (que é pago e pode estar em cooldown).
     try {
       const res = await fetch(`${API_BASE}/health`);
-      setStatus((prev: any) => ({ ...prev, backend: res.ok ? 'online' : 'offline' }));
+      const ok = res.ok;
+      setStatus((prev: any) => ({
+        ...prev,
+        backend: ok ? 'online' : 'offline',
+        gateway: ok ? 'online' : 'offline',
+      }));
     } catch {
-      setStatus((prev: any) => ({ ...prev, backend: 'offline' }));
+      setStatus((prev: any) => ({ ...prev, backend: 'offline', gateway: 'offline' }));
     }
 
     try {
       const res = await fetchConnectionStatus();
-      setStatus((prev: any) => ({ 
-        ...prev, 
-        evolution: res.state === 'open' ? 'online' : 'offline', 
+      setStatus((prev: any) => ({
+        ...prev,
+        evolution: res.state === 'open' ? 'online' : 'offline',
         evolutionInstance: res.phoneNumber || 'Instância'
       }));
     } catch {
@@ -121,50 +117,72 @@ export default function OpenClawPage() {
     const messageText = text || input;
     if (!messageText.trim() || isLoading) return;
 
+    const cdRemaining = getCooldownRemaining('openclaw-chat');
+    if (cdRemaining > 0) {
+      toast.error(
+        `Aguarde ${Math.ceil(cdRemaining / 1000)}s antes de tentar novamente.`,
+        { id: 'openclaw-error' }
+      );
+      return;
+    }
+
     const userMsg: Message = { role: 'user', content: messageText, timestamp: Date.now() };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput('');
     setIsLoading(true);
 
+    const appendErrorOnce = (msg: string) => {
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        const tagged = `❌ ${msg}`;
+        if (last?.role === 'assistant' && last.content === tagged) {
+          return prev.map((m, i) => i === prev.length - 1 ? { ...m, timestamp: Date.now() } : m);
+        }
+        return [...prev, { role: 'assistant' as const, content: tagged, timestamp: Date.now() }];
+      });
+    };
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
 
     try {
-      const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
-        method: 'POST',
-        headers: getOpenClawHeader(),
-        body: JSON.stringify(openClawBody({ message: messageText, sessionKey: 'admin' })),
-        signal: controller.signal,
-      });
+      await withCooldown('openclaw-chat', async () => {
+        const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
+          method: 'POST',
+          headers: getOpenClawHeader(),
+          body: JSON.stringify(openClawBody({ message: messageText, sessionKey: 'admin' })),
+          signal: controller.signal,
+        });
 
-      const data = await res.json();
+        const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) {
-        const rawErr = data?.error || `Erro ${res.status}`;
-        const isRateLimit = rawErr.toLowerCase().includes('rate limit') || rawErr.toLowerCase().includes('tpm');
-        const errMsg = isRateLimit
-          ? '⏳ Limite de requisições atingido. Aguarde alguns segundos e tente novamente.'
-          : rawErr;
-        toast.error(errMsg);
-        const errMsgs = [...newMessages, { role: 'assistant' as const, content: `❌ ${errMsg}`, timestamp: Date.now() }];
-        setMessages(errMsgs);
-        return;
-      }
+        if (!res.ok) {
+          const errMsg = friendlyError(res.status, data?.error);
+          toast.error(errMsg, { id: 'openclaw-error' });
+          appendErrorOnce(errMsg);
+          throw new Error(errMsg);
+        }
 
-      if (data.reply) {
-        const updatedMsgs = [...newMessages, { role: 'assistant' as const, content: data.reply, toolCalls: data.toolCalls, timestamp: Date.now() }];
-        setMessages(updatedMsgs);
-      } else {
-        toast.error('Agente não retornou resposta');
-      }
+        if (data.reply) {
+          setMessages([...newMessages, { role: 'assistant' as const, content: data.reply, toolCalls: data.toolCalls, timestamp: Date.now() }]);
+        } else {
+          toast.error('Agente não retornou resposta', { id: 'openclaw-error' });
+          throw new Error('no_reply');
+        }
+      }, { baseMs: 2000, maxMs: 60_000 });
     } catch (err: any) {
-      const msg = err?.name === 'AbortError'
-        ? 'Agente demorou mais de 60s. Tente um comando mais simples.'
-        : 'Erro de conexão com o agente.';
-      toast.error(msg);
-      const errMsgs = [...newMessages, { role: 'assistant' as const, content: `❌ ${msg}`, timestamp: Date.now() }];
-      setMessages(errMsgs);
+      if (err instanceof CooldownError) {
+        toast.error(
+          `Aguarde ${Math.ceil(err.retryInMs / 1000)}s antes de tentar novamente.`,
+          { id: 'openclaw-error' }
+        );
+      } else if (err?.name === 'AbortError') {
+        const msg = friendlyError(408);
+        toast.error(msg, { id: 'openclaw-error' });
+        appendErrorOnce(msg);
+      }
+      // Outros erros já mostraram toast/mensagem acima.
     } finally {
       clearTimeout(timeout);
       setIsLoading(false);
