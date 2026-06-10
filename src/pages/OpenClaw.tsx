@@ -51,6 +51,7 @@ export default function OpenClawPage() {
     evolution: 'loading',
     db: 'online'
   });
+  const [dbInfo, setDbInfo] = useState<string>("PostgreSQL 16 + pgvector");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const getAuthHeader = useCallback(() => {
@@ -111,6 +112,24 @@ export default function OpenClawPage() {
     } catch {
       setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
     }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
+        method: 'POST',
+        headers: getOpenClawHeader(),
+        body: JSON.stringify(openClawBody({ message: 'health', sessionKey: 'health' })),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.reply) {
+          // Extrai info do banco se disponível no reply
+          if (data.reply.includes('PostgreSQL')) {
+             const match = data.reply.match(/PostgreSQL [0-9.]+/);
+             if (match) setDbInfo(match[0]);
+          }
+        }
+      }
+    } catch {}
   };
 
   const sendMessage = async (text?: string) => {
@@ -144,7 +163,7 @@ export default function OpenClawPage() {
     };
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
+    const timeout = setTimeout(() => controller.abort(), 90000); // Aumentado para 90s pois VPS pode ser lenta
 
     try {
       await withCooldown('openclaw-chat', async () => {
@@ -155,22 +174,37 @@ export default function OpenClawPage() {
           signal: controller.signal,
         });
 
-        const data = await res.json().catch(() => ({}));
+        // Tenta ler o JSON. Se falhar, pode ser erro 500 ou Cloudflare
+        let data: any = {};
+        const responseText = await res.text();
+        try {
+          data = JSON.parse(responseText);
+        } catch (e) {
+          console.error("Erro ao parsear resposta do OpenClaw:", responseText);
+          data = { error: responseText.slice(0, 100) };
+        }
 
         if (!res.ok) {
-          const errMsg = friendlyError(res.status, data?.error);
+          const errMsg = friendlyError(res.status, data?.error || data?.message);
           toast.error(errMsg, { id: 'openclaw-error' });
           appendErrorOnce(errMsg);
           throw new Error(errMsg);
         }
 
         if (data.reply) {
-          setMessages([...newMessages, { role: 'assistant' as const, content: data.reply, toolCalls: data.toolCalls, timestamp: Date.now() }]);
+          setMessages([...newMessages, { 
+            role: 'assistant' as const, 
+            content: data.reply, 
+            toolCalls: data.toolCalls, 
+            timestamp: Date.now() 
+          }]);
         } else {
-          toast.error('Agente não retornou resposta', { id: 'openclaw-error' });
+          const fallbackMsg = "Agente não retornou resposta (vazio).";
+          toast.error(fallbackMsg, { id: 'openclaw-error' });
+          appendErrorOnce(fallbackMsg);
           throw new Error('no_reply');
         }
-      }, { baseMs: 2000, maxMs: 60_000 });
+      }, { baseMs: 3000, maxMs: 120_000 }); // Cooldown um pouco mais conservador
     } catch (err: any) {
       if (err instanceof CooldownError) {
         toast.error(
@@ -181,8 +215,9 @@ export default function OpenClawPage() {
         const msg = friendlyError(408);
         toast.error(msg, { id: 'openclaw-error' });
         appendErrorOnce(msg);
+      } else {
+        console.error("OpenClaw error:", err);
       }
-      // Outros erros já mostraram toast/mensagem acima.
     } finally {
       clearTimeout(timeout);
       setIsLoading(false);
@@ -356,7 +391,7 @@ export default function OpenClawPage() {
               <StatusCard title="OpenClaw Gateway" status={status.gateway === 'online' ? 'online' : 'offline'} info="gpt-4o-mini" />
               <StatusCard title="Backend API" status={status.backend === 'online' ? 'online' : 'offline'} info={status.backend === 'online' ? 'Ativo' : 'Offline'} />
               <StatusCard title="Evolution API" status={status.evolution === 'online' ? 'online' : 'offline'} info={status.evolutionInstance || 'Verificando...'} />
-              <StatusCard title="Banco de Dados" status="online" info="PostgreSQL 16 + pgvector" />
+              <StatusCard title="Banco de Dados" status="online" info={dbInfo} />
             </div>
 
             <div className="grid grid-cols-1 gap-4">
