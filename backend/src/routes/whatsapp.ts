@@ -11,9 +11,9 @@ const WEBHOOK_URL =
 const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 // Objeto interno do webhook (usado em instance/create e /webhook/set)
-function webhookInner() {
+function webhookInner(enabled = true) {
   return {
-    enabled: true,
+    enabled,
     url: WEBHOOK_URL,
     webhookByEvents: false,
     webhookBase64: false,
