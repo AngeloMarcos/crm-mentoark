@@ -71,7 +71,7 @@ export function TesteInstancias() {
         body: JSON.stringify({ instancia: agente.evolution_instancia }),
       });
       const body = await res.json().catch(() => ({}));
-      const state = body?.state === "open" ? "open" : "close";
+      const state = body?.state === "open" ? "open" : body?.state === "unauthorized" ? "unauthorized" : "close";
       setResultados((r) => ({
         ...r,
         [key]: { state, phoneNumber: body?.phoneNumber, testadoEm: new Date().toISOString() },
