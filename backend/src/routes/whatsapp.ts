@@ -24,19 +24,19 @@ function webhookInner(enabled = true) {
 // Registra (ou atualiza) o webhook da instância no Evolution.
 // Evolution v2 exige formato { webhook: {...} } no endpoint /webhook/set.
 // Idempotente — pode ser chamado várias vezes sem efeito colateral.
-async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
+async function registrarWebhook(base: string, apiKey: string, instancia: string, enabled = true): Promise<void> {
   const cleanBase = sanitizeEvolutionUrl(base);
   try {
     const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
-      body: JSON.stringify({ webhook: webhookInner() }),
+      body: JSON.stringify({ webhook: webhookInner(enabled) }),
     });
     const body = await res.json().catch(() => ({}));
-    const enabled = (body as any)?.webhook?.enabled ?? (body as any)?.enabled;
-    console.log(`[whatsapp] webhook registrado ${instancia} → enabled=${enabled}`);
+    const actualEnabled = (body as any)?.webhook?.enabled ?? (body as any)?.enabled;
+    console.log(`[whatsapp] webhook ${enabled ? 'registrado' : 'removido'} ${instancia} → actual_enabled=${actualEnabled}`);
   } catch (err) {
-    console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
+    console.warn(`[whatsapp] Falha ao gerenciar webhook para ${instancia}:`, (err as Error).message);
   }
 }
 
