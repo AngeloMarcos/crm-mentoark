@@ -972,9 +972,8 @@ export default function whatsappRouter(pool: Pool): Router {
   router.post('/sync-history', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
-      const instanciaParam = (req.body?.instancia as string | undefined)?.trim();
       const cfg = await getEvolutionConfig(userId);
-      const instancia = instanciaParam || cfg.instancia;
+      const instancia = cfg.instancia;
       const base = cfg.url.replace(/\/$/, '');
 
       // Buscar mensagens com paginação via /chat/findMessages
