@@ -1899,7 +1899,7 @@ export function WhatsAppInterface() {
                 Cancelar
               </Button>
               <Button
-                onClick={handleConnect}
+                onClick={() => handleConnect(false)}
                 disabled={connecting || !instanceName.trim()}
                 className="h-11 px-6 rounded-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold shadow-lg shadow-green-500/30 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted disabled:from-muted disabled:to-muted disabled:text-muted-foreground disabled:shadow-none transition-all active:scale-[0.98]"
               >
