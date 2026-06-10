@@ -11,9 +11,9 @@ const WEBHOOK_URL =
 const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 // Objeto interno do webhook (usado em instance/create e /webhook/set)
-function webhookInner() {
+function webhookInner(enabled = true) {
   return {
-    enabled: true,
+    enabled,
     url: WEBHOOK_URL,
     webhookByEvents: false,
     webhookBase64: false,
@@ -24,19 +24,19 @@ function webhookInner() {
 // Registra (ou atualiza) o webhook da instância no Evolution.
 // Evolution v2 exige formato { webhook: {...} } no endpoint /webhook/set.
 // Idempotente — pode ser chamado várias vezes sem efeito colateral.
-async function registrarWebhook(base: string, apiKey: string, instancia: string): Promise<void> {
+async function registrarWebhook(base: string, apiKey: string, instancia: string, enabled = true): Promise<void> {
   const cleanBase = sanitizeEvolutionUrl(base);
   try {
     const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
-      body: JSON.stringify({ webhook: webhookInner() }),
+      body: JSON.stringify({ webhook: webhookInner(enabled) }),
     });
     const body = await res.json().catch(() => ({}));
-    const enabled = (body as any)?.webhook?.enabled ?? (body as any)?.enabled;
-    console.log(`[whatsapp] webhook registrado ${instancia} → enabled=${enabled}`);
+    const actualEnabled = (body as any)?.webhook?.enabled ?? (body as any)?.enabled;
+    console.log(`[whatsapp] webhook ${enabled ? 'registrado' : 'removido'} ${instancia} → actual_enabled=${actualEnabled}`);
   } catch (err) {
-    console.warn(`[whatsapp] Falha ao registrar webhook para ${instancia}:`, (err as Error).message);
+    console.warn(`[whatsapp] Falha ao gerenciar webhook para ${instancia}:`, (err as Error).message);
   }
 }
 
@@ -713,6 +713,8 @@ export default function whatsappRouter(pool: Pool): Router {
             // Se o nome contém nosso padrão de ID de usuário mas NÃO é a instância oficial
             if (name && name.includes(userIdShort) && name !== cfg.instancia) {
               console.log(`[WHATSAPP] Removendo instância duplicada/antiga: ${name}`);
+              // Remove webhook da duplicata antes de deletar
+              await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
               await fetch(`${base}/instance/delete/${name}`, {
                 method: 'DELETE',
                 headers: { apikey: cfg.api_key },
@@ -887,7 +889,10 @@ export default function whatsappRouter(pool: Pool): Router {
 
       console.log(`[WHATSAPP] Desconexão total iniciada para usuário ${userId} (instância: ${instancia})`);
 
-      // 1. Tentar logout e delete na Evolution API
+      // 1. Tentar remover webhook, logout e delete na Evolution API
+      // Remove webhook primeiro para evitar eventos residuais
+      await registrarWebhook(base, cfg.api_key, instancia, false).catch(() => {});
+
       // Logout desconecta a conta do WhatsApp
       await fetch(`${base}/instance/logout/${instancia}`, {
         method: 'DELETE',
@@ -1256,6 +1261,9 @@ export default function whatsappRouter(pool: Pool): Router {
       const base = cfg.url.replace(/\/$/, '');
 
       // 1. Evolution Cleanup
+      // Remove webhook primeiro
+      await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
+
       await fetch(`${base}/instance/logout/${name}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
