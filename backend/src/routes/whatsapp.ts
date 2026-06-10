@@ -806,14 +806,14 @@ export default function whatsappRouter(pool: Pool): Router {
         if (connectRes?.ok) {
           const rcData: any = await connectRes.json();
           const qrRaw = rcData?.base64 || rcData?.qrcode?.base64 || rcData?.code || null;
-          await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
-          await registrarWebhook(base, cfg.api_key, cfg.instancia);
+          await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.stableInstancia);
+          await registrarWebhook(base, cfg.api_key, cfg.stableInstancia);
           return res.json({
             state: 'connecting',
             qrCode: normalizeQr(qrRaw),
             pairingCode: rcData?.pairingCode || rcData?.code || null,
-            instanceName: cfg.instancia,
-            instancia: cfg.instancia,
+            instanceName: cfg.stableInstancia,
+            instancia: cfg.stableInstancia,
           });
         }
       }
