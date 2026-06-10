@@ -903,8 +903,8 @@ export default function whatsappRouter(pool: Pool): Router {
       ).catch(err => console.error('[WHATSAPP] Erro ao limpar whatsapp_messages:', err.message));
       
       await pool.query(
-        `DELETE FROM whatsapp_message_status WHERE user_id = $1`,
-        [userId]
+        `DELETE FROM whatsapp_message_status WHERE instance_name = $1`,
+        [instancia]
       ).catch(() => {});
 
       // 4. Limpar referências em TODOS os agentes do usuário (independente de agenteId)
