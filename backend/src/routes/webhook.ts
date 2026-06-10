@@ -205,7 +205,7 @@ export default function webhookRouter(pool: Pool): Router {
 
       const dataStatus = payload.data?.status;
       if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
-        wlog('WEBHOOK_DROP', `status-only (${dataStatus}) mid=${_mid} instance=${payload.instance}`);
+        wlog('WEBHOOK_DROP', `status-only (${dataStatus}) instance=${payload.instance}`);
         return;
       }
 
