@@ -1259,6 +1259,9 @@ export default function whatsappRouter(pool: Pool): Router {
       const base = cfg.url.replace(/\/$/, '');
 
       // 1. Evolution Cleanup
+      // Remove webhook primeiro
+      await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
+
       await fetch(`${base}/instance/logout/${name}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
