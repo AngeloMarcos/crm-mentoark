@@ -198,6 +198,7 @@ export default function webhookRouter(pool: Pool): Router {
         await handleMessageDelete(payload);
         return;
       }
+      if (eventClean !== 'messagesupsert') {
         console.log(`[WH:${traceId}] IGNORADO evento não é messagesupsert (é "${eventClean}")`);
         return;
       }
