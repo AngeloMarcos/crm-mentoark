@@ -51,6 +51,7 @@ export default function OpenClawPage() {
     evolution: 'loading',
     db: 'online'
   });
+  const [dbInfo, setDbInfo] = useState<string>("PostgreSQL 16 + pgvector");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const getAuthHeader = useCallback(() => {
