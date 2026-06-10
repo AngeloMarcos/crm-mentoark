@@ -549,7 +549,20 @@ export function InstanceManagementPanel() {
                   </div>
                 </div>
 
-                <StatusChip state={state} />
+                <div className="flex flex-col gap-2">
+                  <StatusChip state={state} />
+                  
+                  {state === "unauthorized" && (
+                    <Button 
+                      size="sm" 
+                      onClick={() => setShowConnectModal(true)} 
+                      className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold gap-2 animate-bounce"
+                    >
+                      <QrCode className="h-4 w-4" />
+                      Reconectar Agora
+                    </Button>
+                  )}
+                </div>
 
                 {isCritical && (
                   <div className="flex items-center gap-2 p-2 bg-red-500 text-white rounded-md text-[11px] font-bold animate-pulse">
