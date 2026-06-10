@@ -639,10 +639,10 @@ export function WhatsAppInterface() {
       if (!silent && res.state === "unauthorized") {
         toast.error("Sessão expirada. Por favor, reconecte seu WhatsApp.", { id: 'wa-unauthorized' });
       } else if (!silent && res.state !== "open") {
-        toast.warning("WhatsApp desconectado ou em sincronização");
+        toast.warning("WhatsApp desconectado ou em sincronização", { id: 'wa-status' });
       }
     } catch (e) {
-      if (!silent) toast.error("Erro ao verificar status da conexão");
+      if (!silent) toast.error("Erro ao verificar status da conexão", { id: 'wa-status-err' });
     } finally {
       setLoadingStatus(false);
     }
@@ -703,6 +703,7 @@ export function WhatsAppInterface() {
   useEffect(() => {
     if (!user?.id) return;
     const interval = setInterval(() => {
+      if (document.hidden) return;
       fetchConversas(activeTab === "arquivadas");
       if (activeChatIdRef.current) {
         fetchMensagens(activeChatIdRef.current, activeChatNameRef.current, false);
@@ -719,7 +720,7 @@ export function WhatsAppInterface() {
 
 
   useEffect(() => {
-    const tStatus = setInterval(checkStatus, 30000);
+    const tStatus = setInterval(() => { if (!document.hidden) checkStatus(); }, 30000);
     return () => clearInterval(tStatus);
   }, []);
 

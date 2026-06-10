@@ -93,8 +93,7 @@ export default function OpenClawPage() {
 
   useEffect(() => {
     checkStatus();
-    // Aumentamos o intervalo para 90s para evitar fadiga de logs
-    const interval = setInterval(checkStatus, 90000);
+    const interval = setInterval(() => { if (!document.hidden) checkStatus(); }, 90000);
     return () => clearInterval(interval);
   }, []);
 
