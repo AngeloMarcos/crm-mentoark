@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Terminal, Server, Bot, Database, Zap, RefreshCw, Send, LayoutGrid, Loader2, Activity, Settings, Trash2 } from 'lucide-react';
+import { Terminal, Bot, Database, Zap, RefreshCw, Send, LayoutGrid, Loader2, Activity, Settings, Trash2 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +51,7 @@ export default function OpenClawPage() {
     evolution: 'loading',
     db: 'online'
   });
-  const [dbInfo, setDbInfo] = useState<string>("PostgreSQL 16 + pgvector");
+  const dbInfo = "PostgreSQL 16 + pgvector";
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const getAuthHeader = useCallback(() => {
@@ -113,23 +113,6 @@ export default function OpenClawPage() {
       setStatus((prev: any) => ({ ...prev, evolution: 'offline' }));
     }
 
-    try {
-      const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
-        method: 'POST',
-        headers: getOpenClawHeader(),
-        body: JSON.stringify(openClawBody({ message: 'health', sessionKey: 'health' })),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.reply) {
-          // Extrai info do banco se disponível no reply
-          if (data.reply.includes('PostgreSQL')) {
-             const match = data.reply.match(/PostgreSQL [0-9.]+/);
-             if (match) setDbInfo(match[0]);
-          }
-        }
-      }
-    } catch {}
   };
 
   const sendMessage = async (text?: string) => {
