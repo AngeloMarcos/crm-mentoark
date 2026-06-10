@@ -39,7 +39,9 @@ function loadHistory(): Message[] {
 
 function saveHistory(msgs: Message[]) {
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(msgs.slice(-MAX_HISTORY)));
+    // Não persistimos mensagens de erro para manter o histórico limpo entre recargas
+    const cleanMsgs = msgs.filter(m => m.role !== 'error').slice(-MAX_HISTORY);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(cleanMsgs));
   } catch {}
 }
 
