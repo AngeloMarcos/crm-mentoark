@@ -80,6 +80,7 @@ const auth = {
     if (!res.ok) { const e = await res.json().catch(() => ({})); return { data: null, error: { message: e.message || 'Cadastro falhou' } }; }
     const data = await res.json();
     localStorage.setItem('access_token', data.access_token);
+    localStorage.setItem('crm_access_token', data.access_token);
     localStorage.setItem('refresh_token', data.refresh_token);
     _currentUser = data.user;
     const session = { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user };
