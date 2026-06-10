@@ -1231,7 +1231,7 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // DELETE /api/whatsapp/instances/:name — remove instância na Evolution e desvincula do agente
+  // DELETE /api/whatsapp/instances/:name — remove instância na Evolution e limpa estado do agente
   router.delete('/instances/:name', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -1239,6 +1239,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
 
+      // 1. Evolution Cleanup
       await fetch(`${base}/instance/logout/${name}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
@@ -1249,13 +1250,27 @@ export default function whatsappRouter(pool: Pool): Router {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
-      await pool.query(
-        `UPDATE agentes SET evolution_instancia=NULL WHERE user_id=$1 AND evolution_instancia=$2`,
-        [userId, name]
-      );
+      // 2. DB Cleanup (Sincronizado com o fluxo de /disconnect)
+      await Promise.allSettled([
+        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1`, [userId]),
+        pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [name]),
+        pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1`, [userId]),
+        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`, [userId]),
+        pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
+        pool.query(
+          `UPDATE agentes 
+           SET evolution_instancia = NULL, 
+               evolution_server_url = NULL, 
+               evolution_api_key = NULL, 
+               updated_at = NOW() 
+           WHERE user_id = $1`,
+          [userId]
+        )
+      ]);
 
-      return res.json({ ok: true });
+      return res.json({ ok: true, message: 'Instância removida e estado limpo.' });
     } catch (err: any) {
+      console.error('[WHATSAPP] Erro ao deletar instância via DELETE:', err);
       return res.status(500).json({ message: err.message });
     }
   });
