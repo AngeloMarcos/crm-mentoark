@@ -713,6 +713,8 @@ export default function whatsappRouter(pool: Pool): Router {
             // Se o nome contém nosso padrão de ID de usuário mas NÃO é a instância oficial
             if (name && name.includes(userIdShort) && name !== cfg.instancia) {
               console.log(`[WHATSAPP] Removendo instância duplicada/antiga: ${name}`);
+              // Remove webhook da duplicata antes de deletar
+              await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
               await fetch(`${base}/instance/delete/${name}`, {
                 method: 'DELETE',
                 headers: { apikey: cfg.api_key },
