@@ -787,7 +787,7 @@ export default function whatsappRouter(pool: Pool): Router {
         webhook: webhookInner(),
       };
 
-      console.log(`[WHATSAPP] Criando/Conectando instância: ${cfg.instancia}`);
+      console.log(`[WHATSAPP] Criando/Conectando instância: ${cfg.stableInstancia}`);
       
       const createRes = await fetch(`${base}/instance/create`, {
         method: 'POST',
