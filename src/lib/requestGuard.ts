@@ -83,7 +83,7 @@ export function friendlyError(status: number | undefined, raw?: string): string 
   if (text.includes("rate limit") || text.includes("tpm") || status === 429) {
     return "⏳ Muitas requisições. Aguarde alguns segundos e tente novamente.";
   }
-  if (status === 401) return "Sessão expirada. Faça login novamente.";
+  if (status === 401) return "Sessão expirada. Faça login novamente ou verifique se o backend está configurado.";
   if (status === 402) return "Plano sem créditos suficientes para essa ação.";
   if (status === 403) return "Você não tem permissão para essa ação.";
   if (status === 404) return "Recurso não encontrado.";
