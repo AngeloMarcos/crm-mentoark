@@ -213,7 +213,7 @@ export function InstanceManagementPanel() {
     const start = Date.now();
     const TIMEOUT = 2 * 60 * 1000; // 2 min
     const targetInstancia = instanciaNome || newInstanceName;
-    while (Date.now() - start < TIMEOUT && pollingConnect) {
+    while (Date.now() - start < TIMEOUT && pollingConnect && showQrModal) {
       await new Promise(r => setTimeout(r, 3000));
       try {
         const st = await fetchConnectionStatus(targetInstancia);
