@@ -668,7 +668,7 @@ export default function whatsappRouter(pool: Pool): Router {
         registrarWebhook(base, cfg.api_key, instancia).catch(() => {});
       }
 
-      return res.json({ state, phoneNumber, instancia: cfg.instancia });
+      return res.json({ state, phoneNumber, instancia: instancia });
     } catch (err: any) {
       return res.json({ state: 'close', instancia: null, error: err.message });
     }
