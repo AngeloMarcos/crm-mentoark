@@ -16,7 +16,7 @@ import { fetchConnectionStatus } from "@/services/evolutionService";
 import { withCooldown, CooldownError, friendlyError, getCooldownRemaining } from "@/lib/requestGuard";
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'error';
   content: string;
   toolCalls?: number;
   timestamp?: number;
