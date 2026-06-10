@@ -220,6 +220,7 @@ export function WhatsAppInterface() {
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [connecting, setConnecting] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [showNewMessageModal, setShowNewMessageModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
@@ -633,7 +634,10 @@ export function WhatsAppInterface() {
       const res = await fetchConnectionStatus(targetInstance);
       
       setConnectionStatus(res);
-      if (res.state === "open") setQrData(null);
+      if (res.state === "open") {
+        setQrData(null);
+        setRetryCount(0); // Reset retry on success
+      }
       
       if (!silent && res.state === "unauthorized") {
         toast.error("Sessão expirada. Por favor, reconecte seu WhatsApp.", { id: 'wa-unauthorized' });
@@ -647,13 +651,19 @@ export function WhatsAppInterface() {
     }
   };
 
-  const handleConnect = async () => {
+  const handleConnect = async (isAutoRetry = false) => {
+    if (isAutoRetry && retryCount >= 3) {
+      console.warn("[WA] Limite de auto-retry atingido. Deixando para intervenção manual.");
+      return;
+    }
+
     // Para "1 conta = 1 instância", usamos o nome estável gerado no backend.
     // O nome informado aqui serve apenas para identificação inicial se for a primeira vez.
     const name = instanceName.trim() || `WhatsApp ${currentUserName}`;
     
     try {
       setConnecting(true);
+      if (isAutoRetry) setRetryCount(prev => prev + 1);
       const phoneDigits = instancePhone.replace(/\D/g, '');
       
       // Chamada unificada ao backend. O backend agora gerencia a idempotência,
@@ -1422,7 +1432,17 @@ export function WhatsAppInterface() {
               </span>
             </div>
             <div className="flex items-center gap-1">
-              {!isConnected && (
+              {connectionStatus?.state === "unauthorized" ? (
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-8 w-8 text-orange-500 hover:bg-orange-50 animate-pulse" 
+                  onClick={() => setShowConnectModal(true)} 
+                  title="Reconectar WhatsApp"
+                >
+                  <AlertCircle className="h-4.5 w-4.5" />
+                </Button>
+              ) : !isConnected && (
                 <Button 
                   variant="ghost" 
                   size="icon" 
@@ -1889,7 +1909,7 @@ export function WhatsAppInterface() {
                 Cancelar
               </Button>
               <Button
-                onClick={handleConnect}
+                onClick={() => handleConnect(false)}
                 disabled={connecting || !instanceName.trim()}
                 className="h-11 px-6 rounded-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold shadow-lg shadow-green-500/30 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted disabled:from-muted disabled:to-muted disabled:text-muted-foreground disabled:shadow-none transition-all active:scale-[0.98]"
               >
@@ -2628,7 +2648,12 @@ export function WhatsAppInterface() {
                 Selecione um contato na lista ao lado para começar a interagir ou visualizar o histórico.
               </p>
             </div>
-            {!isConnected && !loadingStatus && (
+            {connectionStatus?.state === "unauthorized" ? (
+              <Button onClick={() => setShowConnectModal(true)} size="lg" className="rounded-2xl shadow-xl shadow-orange-500/20 gap-2 font-bold px-8 bg-orange-500 hover:bg-orange-600 animate-bounce">
+                <AlertCircle className="h-5 w-5" />
+                Reconectar WhatsApp
+              </Button>
+            ) : !isConnected && !loadingStatus && (
               <Button onClick={() => navigate("/whatsapp?tab=instancias")} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 gap-2 font-bold px-8">
                 <QrCode className="h-5 w-5" />
                 Conectar WhatsApp

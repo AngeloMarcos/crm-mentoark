@@ -15,7 +15,7 @@ type Agente = {
 };
 
 type TesteResultado = {
-  state: "open" | "close" | "error";
+  state: "open" | "close" | "error" | "unauthorized";
   phoneNumber?: string;
   error?: string;
   testadoEm?: string;
@@ -71,7 +71,7 @@ export function TesteInstancias() {
         body: JSON.stringify({ instancia: agente.evolution_instancia }),
       });
       const body = await res.json().catch(() => ({}));
-      const state = body?.state === "open" ? "open" : "close";
+      const state = body?.state === "open" ? "open" : body?.state === "unauthorized" ? "unauthorized" : "close";
       setResultados((r) => ({
         ...r,
         [key]: { state, phoneNumber: body?.phoneNumber, testadoEm: new Date().toISOString() },
@@ -97,7 +97,7 @@ export function TesteInstancias() {
 
   const total = agentes.length;
   const conectadas = Object.values(resultados).filter((r) => r.state === "open").length;
-  const desconectadas = Object.values(resultados).filter((r) => r.state === "close" || r.state === "error").length;
+  const desconectadas = Object.values(resultados).filter((r) => r.state === "close" || r.state === "error" || r.state === "unauthorized").length;
 
   return (
     <div className="space-y-4">
@@ -184,6 +184,12 @@ export function TesteInstancias() {
                       <div className="text-sm text-green-700 flex items-center gap-1">
                         <CheckCircle2 className="h-4 w-4" />
                         <span>Conectado{r.phoneNumber ? ` — ${r.phoneNumber}` : ""}</span>
+                      </div>
+                    )}
+                    {r?.state === "unauthorized" && (
+                      <div className="text-sm text-orange-700 flex items-center gap-1 font-bold animate-pulse">
+                        <AlertTriangle className="h-4 w-4" />
+                        <span>Sessão expirada — Reconecte</span>
                       </div>
                     )}
                     {r?.state === "close" && (

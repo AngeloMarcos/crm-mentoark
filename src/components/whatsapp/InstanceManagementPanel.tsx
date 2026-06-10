@@ -174,7 +174,7 @@ export function InstanceManagementPanel() {
     setWaitingQr(true);
     const start = Date.now();
     const TIMEOUT = 90 * 1000; // 90 segundos
-    while (Date.now() - start < TIMEOUT) {
+    while (Date.now() - start < TIMEOUT && waitingQr) {
       await new Promise(r => setTimeout(r, 3000));
       try {
         const data = await pollQr();
@@ -187,6 +187,12 @@ export function InstanceManagementPanel() {
           setNewInstancePhone("");
           toast.success("✅ WhatsApp conectado com sucesso!");
           carregar();
+          return;
+        }
+        if (data.state === "unauthorized") {
+          setWaitingQr(false);
+          setShowQrModal(false);
+          toast.error("Erro na Evolution: API Key ou Sessão inválida.");
           return;
         }
         if (data.qrCode) {
@@ -207,7 +213,7 @@ export function InstanceManagementPanel() {
     const start = Date.now();
     const TIMEOUT = 2 * 60 * 1000; // 2 min
     const targetInstancia = instanciaNome || newInstanceName;
-    while (Date.now() - start < TIMEOUT) {
+    while (Date.now() - start < TIMEOUT && pollingConnect && showQrModal) {
       await new Promise(r => setTimeout(r, 3000));
       try {
         const st = await fetchConnectionStatus(targetInstancia);
@@ -219,6 +225,12 @@ export function InstanceManagementPanel() {
           setNewInstancePhone("");
           toast.success("✅ WhatsApp conectado com sucesso!");
           carregar();
+          return;
+        }
+        if (st.state === "unauthorized") {
+          setPollingConnect(false);
+          setShowQrModal(false);
+          toast.error("Erro na conexão: API Key ou Sessão inválida.");
           return;
         }
       } catch {}
@@ -237,6 +249,9 @@ export function InstanceManagementPanel() {
         setShowQrModal(false);
         toast.success("✅ WhatsApp já conectado!");
         carregar();
+      } else if (data.state === "unauthorized") {
+        setShowQrModal(false);
+        toast.error("Erro na Evolution: API Key ou Sessão inválida.");
       } else {
         toast.info("QR ainda não disponível, aguarde...");
         pollQrLoop();

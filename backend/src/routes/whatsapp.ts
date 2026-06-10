@@ -8,7 +8,7 @@ const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoa
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
 const WEBHOOK_URL =
   process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
-const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 // Objeto interno do webhook (usado em instance/create e /webhook/set)
 function webhookInner(enabled = true) {
@@ -656,11 +656,11 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       const data: any = await r.json();
-      const state = data?.instance?.state || data?.state || 'close';
-      const phoneNumber = data?.instance?.profileName || data?.instance?.number || '';
+      const state = data?.instance?.state || data?.state || data?.status || 'close';
+      const phoneNumber = data?.instance?.profileName || data?.instance?.number || data?.instance?.owner || '';
 
       // Re-registra webhook toda vez que a instância está conectada
-      if (state === 'open') {
+      if (state === 'open' || state === 'connected' || state === 'CONNECTED') {
         registrarWebhook(base, cfg.api_key, cfg.instancia).catch(() => {});
       }
 
@@ -742,15 +742,27 @@ export default function whatsappRouter(pool: Pool): Router {
 
       if (stateRes?.ok) {
         const stateData: any = await stateRes.json();
-        const state = stateData?.instance?.state || stateData?.state || 'close';
-        if (state === 'open') {
-          await registrarWebhook(base, cfg.api_key, cfg.instancia);
-          await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
-          return res.json({
-            state: 'open',
-            phoneNumber: stateData?.instance?.profileName || stateData?.instance?.number || '',
-            instancia: cfg.instancia,
-          });
+        const state = stateData?.instance?.state || stateData?.state || stateData?.status || 'close';
+        if (state === 'open' || state === 'CONNECTED' || state === 'connected') {
+          // Só consideramos 'open' se tiver número/perfil vinculado
+          const hasPhone = !!(stateData?.instance?.profileName || stateData?.instance?.number || stateData?.instance?.owner || stateData?.instance?.profile);
+          
+          if (hasPhone) {
+            await registrarWebhook(base, cfg.api_key, cfg.instancia);
+            await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
+            return res.json({
+              state: 'open',
+              phoneNumber: stateData?.instance?.profileName || stateData?.instance?.number || stateData?.instance?.owner || '',
+              instancia: cfg.instancia,
+            });
+          } else {
+            console.log(`[WHATSAPP] Instância ${cfg.instancia} está em 'open' mas sem conta vinculada (owner missing). Tratando como unauthorized.`);
+            return res.json({ 
+              state: 'unauthorized', 
+              message: 'Instância sem conta do WhatsApp vinculada. Por favor, reconecte escanendo o QR.',
+              instancia: cfg.instancia 
+            });
+          }
         }
       }
 
@@ -782,7 +794,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const created: any = await createRes.json();
       
       // Se já existe, tenta conectar para obter QR
-      if (!createRes.ok && (created?.message?.includes('already') || created?.message?.includes('exist'))) {
+      if (!createRes.ok && (created?.message?.includes('already') || created?.message?.includes('exist') || created?.message?.includes('conflict'))) {
         const connectRes = await fetch(`${base}/instance/connect/${cfg.instancia}`, {
           headers: { apikey: cfg.api_key },
         }).catch(() => null);
@@ -824,7 +836,7 @@ export default function whatsappRouter(pool: Pool): Router {
       await registrarWebhook(base, cfg.api_key, cfg.instancia);
 
       return res.json({
-        state: qrCode ? 'connecting' : (created?.instance?.state || 'connecting'),
+        state: (qrCode || created?.qrcode?.base64) ? 'connecting' : (created?.instance?.state || created?.state || 'connecting'),
         qrCode: normalizeQr(qrCode),
         qrPending: !qrCode,
         pairingCode,
@@ -1115,35 +1127,12 @@ export default function whatsappRouter(pool: Pool): Router {
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
-          if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
-            console.log(`[SEND] Instância ${instancia} não existe na Evolution — recriando automaticamente...`);
-            try {
-              await evolutionFetch(`${base}/instance/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ instanceName: instancia, qrcode: false, integration: 'WHATSAPP-BAILEYS' }),
-              });
-              await new Promise(r => setTimeout(r, 2000));
-              const retry = await evolutionFetch(targetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify(mediaPayload),
-              });
-              if (!retry.ok) {
-                return res.status(503).json({
-                  message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                  reconnect_required: true,
-                  instancia,
-                });
-              }
-              evolutionResp = await retry.json().catch(() => ({}));
-            } catch {
-              return res.status(503).json({
-                message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                reconnect_required: true,
-                instancia,
-              });
-            }
+            console.log(`[SEND] Instância ${instancia} não existe ou está deslogada na Evolution — solicitando reconexão manual...`);
+            return res.status(401).json({
+              message: 'Sessão do WhatsApp expirada ou não encontrada. Por favor, reconecte.',
+              reconnect_required: true,
+              instancia,
+            });
           } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
             // Socket Baileys ainda inicializando — retry após 3s
             console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
@@ -1182,34 +1171,12 @@ export default function whatsappRouter(pool: Pool): Router {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
           if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
-            console.log(`[SEND] Instância ${instancia} não existe na Evolution — recriando automaticamente...`);
-            try {
-              await evolutionFetch(`${base}/instance/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ instanceName: instancia, qrcode: false, integration: 'WHATSAPP-BAILEYS' }),
-              });
-              await new Promise(r => setTimeout(r, 2000));
-              const retry = await evolutionFetch(targetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-                body: JSON.stringify({ number: phoneClean, text }),
-              });
-              if (!retry.ok) {
-                return res.status(503).json({
-                  message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                  reconnect_required: true,
-                  instancia,
-                });
-              }
-              evolutionResp = await retry.json().catch(() => ({}));
-            } catch {
-              return res.status(503).json({
-                message: 'Instância WhatsApp desconectada. Acesse WhatsApp → Instâncias e escaneie o QR Code para reconectar.',
-                reconnect_required: true,
-                instancia,
-              });
-            }
+            console.log(`[SEND] Instância ${instancia} não existe ou está deslogada na Evolution — solicitando reconexão manual...`);
+            return res.status(401).json({
+              message: 'Sessão do WhatsApp expirada ou não encontrada. Por favor, reconecte.',
+              reconnect_required: true,
+              instancia,
+            });
           } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
             // Socket Baileys ainda inicializando — retry após 3s
             console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
