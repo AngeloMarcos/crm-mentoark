@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
+import { withCooldown, CooldownError, friendlyError, getCooldownRemaining } from "@/lib/requestGuard";
 import { useNavigate } from "react-router-dom";
 import {
   Dialog,
