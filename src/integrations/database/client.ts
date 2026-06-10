@@ -13,6 +13,7 @@ const REFRESH_MAX_RETRIES = 3;
 function _hardSignOut() {
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
+  localStorage.removeItem('crm_access_token');
   _currentUser = null;
   _notify('SIGNED_OUT', null);
   if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
