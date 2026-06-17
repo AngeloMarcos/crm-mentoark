@@ -834,11 +834,16 @@ export function WhatsAppInterface() {
   }, [activeChatId, chats]);
 
   const handleSendMessage = async () => {
-    // IA responde via API unificada se o modo IA estiver ativo e não houver pausa manual
-    const chat = chats.find(c => c.id === activeChatId);
+    // aiReply fica no escopo da função para ser acessível após o bloco de IA
+    let aiReply = '';
+
+    // IA responde via API unificada se o modo IA estiver ativo e não houver pausa manual.
+    // Se a IA falhar ou estiver em cooldown, o fluxo não faz return: o texto do agente humano
+    // (messageInput) é enviado como fallback. Comportamento intencional para não bloquear o atendimento.
     if (!iaPausada && inputMode === "responder") {
       const cdRemaining = getCooldownRemaining('whatsapp-openclaw');
       if (cdRemaining > 0) {
+        // Cooldown ativo: mostra aviso mas não retorna — o texto do humano será enviado abaixo
         toast.error(
           `IA em cooldown. Aguarde ${Math.ceil(cdRemaining / 1000)}s.`,
           { id: 'whatsapp-openclaw-error' }
@@ -863,6 +868,8 @@ export function WhatsAppInterface() {
               }
               throw new Error(`openclaw_${res.status}`);
             }
+            const data = await res.json().catch(() => ({}));
+            if (data.reply) aiReply = data.reply;
           }, { baseMs: 2000, maxMs: 60_000 });
         } catch (err: any) {
           if (err instanceof CooldownError) {
@@ -894,8 +901,9 @@ export function WhatsAppInterface() {
 
     if (!messageInput.trim() || !activeChatId) return;
 
-    const text = messageInput.trim();
-    const currentReplyTo = replyTo; // Captura para o corpo do POST
+    // Se a IA gerou uma resposta, envia ela; caso contrário envia o texto do agente humano
+    const text = (aiReply || messageInput).trim();
+    const currentReplyTo = replyTo;
     setMessageInput("");
     setReplyTo(null);
 

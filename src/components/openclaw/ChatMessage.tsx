@@ -34,9 +34,9 @@ export const ChatMessage = ({ message }: ChatMessageProps) => {
         <div className="prose prose-sm max-w-none dark:prose-invert">
           <ReactMarkdown
             components={{
-              code({ node, inline, className, children, ...props }: any) {
+              code({ node, className, children, ...props }: any) {
                 const match = /language-(\w+)/.exec(className || '');
-                return !inline && match ? (
+                return match ? (
                   <SyntaxHighlighter
                     style={vscDarkPlus}
                     language={match[1]}

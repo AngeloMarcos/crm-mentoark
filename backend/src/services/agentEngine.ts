@@ -397,6 +397,8 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       historico.map(m => `${m.role === 'user' ? 'Cliente' : 'IA'}: ${m.content}`).join('\n')
     }\n\nCliente: ${textoFinal}`;
     try {
+      // openaiApiKey é repassado até callOpenAIDirect, que o usa como prioridade
+      // sobre a variável de ambiente OPENAI_API_KEY. Permite chaves por agente.
       respostaFinal = await chamarOpenClawAgent(
         prompt,
         sessionId,

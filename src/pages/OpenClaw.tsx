@@ -54,6 +54,7 @@ export default function OpenClawPage() {
   const [messages, setMessages] = useState<Message[]>(loadHistory);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [cooldownSec, setCooldownSec] = useState(0); // segundos restantes de cooldown — aciona re-render automático
   const [status, setStatus] = useState<any>({
     gateway: 'loading',
     backend: 'loading',
@@ -62,6 +63,13 @@ export default function OpenClawPage() {
   });
   const dbInfo = "PostgreSQL 16 + pgvector";
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Contador regressivo: decrementa cooldownSec a cada segundo até zerar
+  useEffect(() => {
+    if (cooldownSec <= 0) return;
+    const id = setInterval(() => setCooldownSec(s => (s <= 1 ? 0 : s - 1)), 1000);
+    return () => clearInterval(id);
+  }, [cooldownSec]);
 
   const getAuthHeader = useCallback(() => {
     const token = getAuthToken();
@@ -135,10 +143,9 @@ export default function OpenClawPage() {
 
     const cdRemaining = getCooldownRemaining('openclaw-chat');
     if (cdRemaining > 0) {
-      toast.error(
-        `Aguarde ${Math.ceil(cdRemaining / 1000)}s antes de tentar novamente.`,
-        { id: 'openclaw-error' }
-      );
+      const secs = Math.ceil(cdRemaining / 1000);
+      setCooldownSec(secs); // sincroniza o estado reativo caso o cooldown já estivesse ativo
+      toast.error(`Aguarde ${secs}s antes de tentar novamente.`, { id: 'openclaw-error' });
       return;
     }
 
@@ -205,10 +212,9 @@ export default function OpenClawPage() {
       }, { baseMs: 5000, maxMs: 60_000 }); // Cooldown conservador 5s -> 60s
     } catch (err: any) {
       if (err instanceof CooldownError) {
-        toast.error(
-          `Aguarde ${Math.ceil(err.retryInMs / 1000)}s antes de tentar novamente.`,
-          { id: 'openclaw-error' }
-        );
+        const secs = Math.ceil(err.retryInMs / 1000);
+        setCooldownSec(secs); // inicia contador regressivo — habilita botão automaticamente ao zerar
+        toast.error(`Aguarde ${secs}s antes de tentar novamente.`, { id: 'openclaw-error' });
       } else if (err instanceof _HandledError) {
         // Já foi tratado dentro do callback (toast + appendErrorOnce já chamados). Não faz nada.
       } else if (err?.name === 'AbortError') {
@@ -378,9 +384,10 @@ export default function OpenClawPage() {
                       <Button
                         className="h-11 w-11 shrink-0 bg-blue-600 hover:bg-blue-700 rounded-xl shadow-lg shadow-blue-900/20 transition-all active:scale-95"
                         onClick={() => sendMessage()}
-                        disabled={isLoading || !input.trim()}
+                        disabled={isLoading || !input.trim() || cooldownSec > 0}
+                        title={cooldownSec > 0 ? `Aguarde ${cooldownSec}s` : undefined}
                       >
-                        {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                        {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : cooldownSec > 0 ? <span className="text-[10px] font-bold">{cooldownSec}s</span> : <Send className="w-5 h-5" />}
                       </Button>
                     </div>
                   </div>
@@ -392,7 +399,7 @@ export default function OpenClawPage() {
           {/* ─── STATUS ─── */}
           <TabsContent value="status" className="space-y-4">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <StatusCard title="OpenClaw Gateway" status={status.gateway === 'online' ? 'online' : 'offline'} info="gpt-4o-mini" />
+              <StatusCard title="OpenClaw Gateway" status={status.gateway === 'online' ? 'online' : 'offline'} info="gpt-4.1-mini" />
               <StatusCard title="Backend API" status={status.backend === 'online' ? 'online' : 'offline'} info={status.backend === 'online' ? 'Ativo' : 'Offline'} />
               <StatusCard title="Evolution API" status={status.evolution === 'online' ? 'online' : 'offline'} info={status.evolutionInstance || 'Verificando...'} />
               <StatusCard title="Banco de Dados" status="online" info={dbInfo} />
