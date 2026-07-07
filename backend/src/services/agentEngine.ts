@@ -1,3 +1,14 @@
+/**
+ * agentEngine.ts — Motor de resposta automática da IA para mensagens do WhatsApp.
+ *
+ * Chamado por webhook.ts (via processarComDebounce, 3s de debounce por telefone) após uma
+ * mensagem recebida ser atribuída a um userId. Resolve o agente (tabela agentes) e a config de
+ * IA (agent_configs: prompt, modelo, provider), monta o histórico (n8n_chat_histories), chama o
+ * provider (OpenAI/Claude/Gemini/OpenClaw), faz parsing nativo da resposta (quebra em até 2
+ * mensagens, detecta sinal de pausa) e envia via Evolution API (enviarResposta). Mantém os Sets
+ * globais botMessageIds/botSentTexts que webhook.ts usa para não confundir a própria resposta
+ * do bot com uma intervenção humana (ver [WEBHOOK_ANTILOOP] em webhook.ts).
+ */
 import OpenAI from 'openai';
 import { Pool } from 'pg';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
@@ -336,6 +347,10 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   const sinalPausa = agentConfig?.sinal_pausa || '251213';
 
   // Override de Evolution a partir do agent_configs (tem precedência sobre o agente)
+  // [AUDITORIA] LÓGICA: só url e api_key vêm de agent_configs — evolution_instancia continua
+  // vindo exclusivamente de `agentes` (linha ~253 acima). É uma terceira variação de como este
+  // módulo trata agent_configs vs. agentes/integracoes_config — ver o achado mais completo sobre
+  // essa inconsistência entre tabelas em backend/src/routes/whatsapp.ts (getEvolutionConfig).
   if (agentConfig?.evolution_server_url) agente.evolution_server_url = agentConfig.evolution_server_url;
   if (agentConfig?.evolution_api_key)    agente.evolution_api_key    = agentConfig.evolution_api_key;
 
@@ -390,6 +405,18 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   let pausaAtivada = false;
 
   // ── Rota OpenClaw (motor_ia = 'openclaw' no agente ou agent_config) ───────
+  // [AUDITORIA] BUG: `agentConfig` vem do SELECT em agent_configs logo acima (linhas ~308-318),
+  // que NÃO inclui a coluna motor_ia — então `agentConfig?.motor_ia` é sempre undefined e este
+  // lado do OR nunca pode ser verdadeiro. `agente.motor_ia` (tabela agentes) funciona normalmente,
+  // pois vem de `SELECT *` (linha ~222) e a coluna existe de fato lá (confirmado em
+  // deploy_agora.sh: "UPDATE agentes SET motor_ia = 'openclaw' ..."). Não há evidência de que
+  // agent_configs tenha essa mesma coluna.
+  // [AUDITORIA] FIX PENDENTE (motivo: risco de coluna inexistente): adicionar motor_ia ao SELECT
+  // sem confirmar o schema real de agent_configs em produção pode quebrar a query inteira (erro
+  // "column does not exist"), derrubando o motor de IA para todo mundo — pior que o bug atual
+  // (silenciosamente inofensivo). Próxima sessão: rodar `\d agent_configs` na VPS; se a coluna
+  // existir, adicionar ao SELECT; se não existir, decidir com o usuário se vale criar a coluna ou
+  // remover este lado do OR (documentando que motor_ia só é configurável via tabela agentes).
   const usarOpenClaw = agente.motor_ia === 'openclaw' || agentConfig?.motor_ia === 'openclaw';
   if (usarOpenClaw) {
     console.log(`[ENGINE] Usando OpenClaw para ${entrada.telefone}`);
@@ -538,6 +565,10 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
        ON CONFLICT (message_id, instance_name) DO NOTHING`,
       [userIdFinal, agente.evolution_instancia || entrada.instancia,
        `${entrada.telefone}@s.whatsapp.net`,
+       // [AUDITORIA] LÓGICA: prefixo "resp_" é o sinal que webhook.ts usa (checagem
+       // messageId.startsWith('resp_')) para reconhecer que esta mensagem veio do próprio bot e
+       // não deve disparar a lógica de "atendente assumiu, pausar IA" — acoplamento implícito
+       // entre os dois arquivos, sem constante compartilhada.
        `resp_${entrada.messageId}`,
        respostaFinal,
        Math.floor(Date.now() / 1000),
