@@ -1,3 +1,12 @@
+/**
+ * TesteInstancias.tsx — Aba "Diagnóstico" de /whatsapp (não confundir com
+ * src/pages/admin/DiagnosticoWhatsApp.tsx, outra página). Lista todos os `agentes` com
+ * evolution_instancia preenchida e testa cada um individualmente via
+ * POST /api/whatsapp/status com `{ instancia }` no body — diferente de
+ * InstanceManagementPanel.carregarStatus(), que faz uma única chamada global e replica o mesmo
+ * resultado pra todas as instâncias (ver [AUDITORIA] BUG lá). Este arquivo é o padrão correto de
+ * "status por instância" caso aquele outro seja corrigido no futuro.
+ */
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

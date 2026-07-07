@@ -1,3 +1,13 @@
+/**
+ * WhatsApp.tsx — Página principal do módulo WhatsApp (/whatsapp), com 3 abas: Conversas
+ * (WhatsAppInterface, o chat em si), Instâncias (InstanceManagementPanel, conectar/desconectar
+ * Evolution) e Diagnóstico (TesteInstancias, ferramenta de teste de conectividade).
+ *
+ * [AUDITORIA] LÓGICA: a aba "Diagnóstico" aqui renderiza TesteInstancias, um componente
+ * diferente de src/pages/admin/DiagnosticoWhatsApp.tsx (outra página, rota separada, também
+ * auditada neste módulo). Nomes muito parecidos para propósitos parecidos mas distintos — vale
+ * ter isso em mente para não confundir os dois ao dar manutenção.
+ */
 import { CRMLayout } from "@/components/CRMLayout";
 import { WhatsAppInterface } from "@/components/WhatsAppInterface";
 import { InstanceManagementPanel } from "@/components/whatsapp/InstanceManagementPanel";

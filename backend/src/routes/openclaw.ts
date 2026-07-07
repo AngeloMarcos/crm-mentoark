@@ -263,7 +263,11 @@ Data/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_P
 
       if (!res.ok) {
         const errText = await res.text().catch(() => String(res.status));
-        const mapped = res.status === 401 ? 503 : res.status === 429 ? 429 : 502;
+        // insufficient_quota não é rate-limit transitório (o cliente não deve "tentar de novo em alguns segundos")
+        const mapped = res.status === 401 ? 503
+          : errText.includes('insufficient_quota') ? 402
+          : res.status === 429 ? 429
+          : 502;
         throw makeError(`OpenAI ${res.status}: ${errText.slice(0, 200)}`, mapped);
       }
 

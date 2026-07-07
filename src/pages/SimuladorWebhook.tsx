@@ -1,3 +1,8 @@
+/**
+ * SimuladorWebhook.tsx — Ferramenta de desenvolvimento (não deve ser exposta em produção, ver
+ * Alert no topo da página) para disparar manualmente um payload fake da Evolution API contra o
+ * endpoint real do webhook, sem precisar de uma instância WhatsApp de verdade conectada.
+ */
 import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -65,7 +70,12 @@ const SimuladorWebhook = () => {
     };
 
     try {
-      const res = await fetch(`${API_URL}/api/webhook/evolution`, {
+      // [AUDITORIA] BUG: a URL usava o prefixo /api/webhook/evolution, mas a rota real (montada
+      // em backend/src/index.ts como `app.use('/webhook', webhookRouter(pool))`) é
+      // /webhook/evolution — SEM /api. Toda chamada deste simulador caía num 404 de rota
+      // inexistente, nunca chegando de fato no handler do webhook.
+      // [AUDITORIA] FIX APLICADO: URL corrigida para o path real.
+      const res = await fetch(`${API_URL}/webhook/evolution`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -115,7 +125,12 @@ const SimuladorWebhook = () => {
     if (resposta.status === 200) {
       message = "✅ Mensagem processada pelo backend";
     } else if (resposta.status === 401) {
-      message = "🔐 HMAC obrigatório — configure EVOLUTION_WEBHOOK_SECRET como vazio no .env para testes";
+      // [AUDITORIA] BUG: mensagem desatualizada — deixar EVOLUTION_WEBHOOK_SECRET vazio no .env
+      // hoje faz o backend rejeitar TODA requisição com 401 (ver backend/src/routes/webhook.ts),
+      // o oposto de "liberar para testes". A autenticação atual aceita header HMAC OU um query
+      // param `?key=<EVOLUTION_WEBHOOK_SECRET>` na própria URL.
+      // [AUDITORIA] FIX APLICADO: mensagem atualizada para refletir o mecanismo real.
+      message = "🔐 Autenticação obrigatória — adicione ?key=<EVOLUTION_WEBHOOK_SECRET> na URL do simulador (mesmo valor do .env do backend) para testar";
       type = "warning";
     } else if (resposta.status >= 500) {
       message = "❌ Erro interno — ver logs do backend";

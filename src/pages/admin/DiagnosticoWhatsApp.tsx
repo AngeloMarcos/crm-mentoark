@@ -1,3 +1,14 @@
+/**
+ * DiagnosticoWhatsApp.tsx — Página admin (/admin/...) que consulta GET /api/admin/webhook-trace
+ * para um telefone específico: mensagens salvas, entradas de dedup, dados do contato, opt-out e
+ * tail do log_geral.txt filtrado. Não confundir com TesteInstancias.tsx (aba "Diagnóstico" de
+ * /whatsapp) — são páginas diferentes com nomes parecidos.
+ *
+ * [AUDITORIA] LÓGICA: o componente em si está correto; encontrei e corrigi um bug no endpoint
+ * backend que ele consome (GET /api/admin/webhook-trace, em backend/src/index.ts) — a seção
+ * "dedup" da query sempre voltava vazia por causa de um filtro que comparava message_id (hash)
+ * com um padrão de telefone. Ver [AUDITORIA-WHATSAPP] no index.ts para o fix aplicado.
+ */
 import { useState } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";

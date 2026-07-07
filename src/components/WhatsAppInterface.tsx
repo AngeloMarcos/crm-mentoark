@@ -1,3 +1,14 @@
+/**
+ * WhatsAppInterface.tsx — Componente principal do chat (aba "Conversas" de /whatsapp).
+ *
+ * Lista conversas (fetchConversas, poll a cada 2-5s), mensagens da conversa ativa
+ * (fetchMensagens, poll a cada 3s), envio de mensagem/nota (handleSendMessage — ver
+ * [AUDITORIA] BUG de severidade alta nessa função sobre uso indevido do OpenClaw Admin),
+ * seleção múltipla/exclusão/encaminhamento de mensagens, gestão de instância (conectar via QR/
+ * pairing code), toggle de IA por contato, busca global e por conversa, e painel de detalhes do
+ * contato (tags, mídia, documentos, notas do CRM). Não faz polling via WebSocket/SSE — tudo é
+ * feito com setInterval + fetch (ver comentário "substitui Supabase Realtime").
+ */
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Label } from "@/components/ui/label";
 import {
@@ -452,16 +463,22 @@ export function WhatsAppInterface() {
 
 
     // Filtra pela aba (Arquivadas ou Principal)
-    if (activeTab === "todos") {
+    // [AUDITORIA] BUG: a aba "Meus" é clicável de verdade (botão na lista de tabs logo abaixo,
+    // ~linha 1522, `["Meus","Fila","Todos","Arquivadas"]`), mas este if/else-if não tinha nenhum
+    // caso para activeTab === "meus" — o filtro caía direto pro sort sem excluir arquivados,
+    // deixando "Meus" pior que "Todos" (mostrava arquivados e não-arquivados juntos). O conceito
+    // de "conversas atribuídas a mim" também não existe no modelo de dados (Chat/Message não têm
+    // campo de agente responsável), então a aba não filtra por dono — só corrigi para não
+    // misturar arquivados, replicando o mesmo placeholder documentado que "fila" já usava.
+    // [AUDITORIA] FIX APLICADO: "meus" agora cai no mesmo filtro de "não-arquivados" que "todos"
+    // e "fila" — pequeno, isolado, e estritamente melhor que o comportamento anterior (misturar
+    // arquivados). Implementar o filtro real por agente responsável fica como melhoria futura,
+    // fora do escopo desta auditoria (exigiria coluna nova no banco).
+    if (activeTab === "todos" || activeTab === "fila" || activeTab === "meus") {
       list = list.filter(c => !c.is_archived);
     } else if (activeTab === "arquivadas") {
       list = list.filter(c => c.is_archived);
-    } else if (activeTab === "fila") {
-      // Exemplo: na fila apenas não arquivados e com unread ou sem agente? 
-      // Por ora mantemos lógica WhatsApp: arquivado sai da vista principal.
-      list = list.filter(c => !c.is_archived);
     }
-    // Se quiser adicionar aba "Arquivadas" no futuro, filtraria list.filter(c => c.is_archived)
 
     // Ordenação: Fixados primeiro, depois por timestamp
     return list.sort((a, b) => {
@@ -840,6 +857,32 @@ export function WhatsAppInterface() {
     // IA responde via API unificada se o modo IA estiver ativo e não houver pausa manual.
     // Se a IA falhar ou estiver em cooldown, o fluxo não faz return: o texto do agente humano
     // (messageInput) é enviado como fallback. Comportamento intencional para não bloquear o atendimento.
+    // [AUDITORIA] BUG (SEVERIDADE ALTA): o endpoint chamado logo abaixo é /api/openclaw/chat — o
+    // "OpenClaw Admin", agente de administração da VPS com acesso à ferramenta exec (shell real na
+    // VPS de produção; ver backend/src/routes/openclaw.ts, auditado nesta mesma sessão). O system
+    // prompt desse agente é fixo: "Você é o OpenClaw Admin... Você tem acesso à ferramenta exec
+    // para executar comandos shell diretamente na VPS." Não existe nenhum branch nesse endpoint
+    // que reconheça `sessionKey` (aqui = activeChatId, o telefone do cliente) como um modo
+    // "atendimento ao cliente" — é sempre o mesmo agente admin, independente do sessionKey.
+    // O padrão de chamada aqui (fetch a /api/openclaw/chat com {message, sessionKey}) é
+    // estruturalmente idêntico ao sendMessage() de src/pages/OpenClaw.tsx, sugerindo que este
+    // trecho foi copiado de lá sem trocar o endpoint para um gerador de resposta ao cliente.
+    // Impacto real: sempre que um atendente humano digita algo e envia com a IA não pausada
+    // (iaPausada começa false por padrão), o texto digitado é primeiro mandado ao agente admin da
+    // VPS; se ele responder QUALQUER coisa (aiReply), essa resposta — não o texto do atendente —
+    // é o que efetivamente vai pro cliente no WhatsApp (linha ~905: `(aiReply || messageInput)`).
+    // Na prática isso troca a mensagem enviada por uma resposta de um agente shell-admin, e no
+    // pior caso poderia vazar saída de um comando exec (nomes de containers, conteúdo de arquivo
+    // via read_file, etc.) diretamente para um cliente externo pelo WhatsApp.
+    // [AUDITORIA] FIX PENDENTE (motivo: mudança de comportamento no fluxo principal de envio de
+    // mensagens — apesar de eu ter alta confiança de que isso é um bug de endpoint trocado, a
+    // correção (remover esta chamada e sempre enviar messageInput como digitado, ou apontar para
+    // um endpoint de sugestão de resposta ao cliente que de fato exista) muda o comportamento do
+    // botão de enviar para toda conversa com IA ativa — decisão que prefiro deixar explícita para
+    // o usuário confirmar antes de qualquer sessão aplicar, dado o risco de segurança envolvido.
+    // Próxima sessão: confirmar com o usuário se existe (ou deveria existir) um endpoint de IA
+    // para sugestão de resposta ao cliente diferente do OpenClaw Admin; se não houver, o mais
+    // seguro é remover este bloco inteiro e enviar sempre o texto digitado pelo atendente.
     if (!iaPausada && inputMode === "responder") {
       const cdRemaining = getCooldownRemaining('whatsapp-openclaw');
       if (cdRemaining > 0) {
@@ -1388,6 +1431,24 @@ export function WhatsAppInterface() {
         method: 'POST',
         headers: apiHeaders(),
         body: JSON.stringify({ muted_until: nextVal ? new Date(Date.now() + 365*24*60*60*1000).toISOString() : null })
+      });
+    } catch {}
+  };
+
+  // [AUDITORIA] BUG: o menu "Silenciar" no painel de contato (dropdown com opções 8h/1 semana/
+  // sempre) chamava só toast.success(...) diretamente no onClick, sem nenhuma chamada à API nem
+  // atualização de estado — dizia "Silenciado por 8 horas" mas não silenciava nada de verdade.
+  // [AUDITORIA] FIX APLICADO: nova função muteChatPor(), que persiste via a mesma rota
+  // /chat-prefs usada por toggleMute, com o `muted_until` calculado pela duração escolhida.
+  const muteChatPor = async (chatId: string, ms: number, label: string) => {
+    const until = new Date(Date.now() + ms).toISOString();
+    setChats(prev => prev.map(c => c.id === chatId ? { ...c, is_muted: true } : c));
+    toast.success(`Silenciado por ${label}`);
+    try {
+      await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ muted_until: until })
       });
     } catch {}
   };
@@ -2803,9 +2864,9 @@ export function WhatsAppInterface() {
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-xl">
-                    <DropdownMenuItem onClick={() => toast.success("Silenciado por 8 horas")} className="cursor-pointer">8 horas</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => toast.success("Silenciado por 1 semana")} className="cursor-pointer">1 semana</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => toast.success("Silenciado para sempre")} className="cursor-pointer">Sempre</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => muteChatPor(activeChat.id, 8*60*60*1000, "8 horas")} className="cursor-pointer">8 horas</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => muteChatPor(activeChat.id, 7*24*60*60*1000, "1 semana")} className="cursor-pointer">1 semana</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => muteChatPor(activeChat.id, 365*24*60*60*1000, "sempre")} className="cursor-pointer">Sempre</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -2978,7 +3039,20 @@ export function WhatsAppInterface() {
         </DialogContent>
       </Dialog>
 
-      {/* Modal de Nova Conversa */}
+      {/*
+        [AUDITORIA] BUG: este "Modal de Nova Conversa" e o "Modal Nova Mensagem" lá em cima
+        (~linha 1737, mesmo componente) são controlados pelo MESMO estado `showNewMessageModal`.
+        Sempre que showNewMessageModal vira true (botão "Nova Mensagem" no header da lista, ou
+        seleção de resultado de busca de contato), os DOIS dialogs tentam abrir ao mesmo tempo —
+        duas sobreposições de Radix Dialog empilhadas, uma com busca de contato CRM +
+        campo telefone + autofocus (o de cima) e esta versão mais simples (só telefone + busca)
+        por baixo. Parece um resquício de uma refatoração onde o modal de cima substituiu este,
+        mas o antigo nunca foi removido.
+        [AUDITORIA] FIX PENDENTE (motivo: remoção de UI duplicada — protocolo pede confirmação do
+        usuário antes de apagar código "duplicado", mesmo dentro do mesmo arquivo): recomendo
+        remover este segundo Dialog inteiro (é um subconjunto funcional do primeiro) na próxima
+        sessão, após o usuário confirmar que não há dependência escondida nele.
+      */}
       <Dialog open={showNewMessageModal} onOpenChange={setShowNewMessageModal}>
         <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>

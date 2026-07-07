@@ -25,7 +25,10 @@
       "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'cd /opt/crm/backend && docker compose build --no-cache 2>&1 | tail -10 && docker compose up -d 2>&1 | tail -5')",
       "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'cd /opt/crm && docker compose build --no-cache 2>&1 | tail -10 && docker compose up -d 2>&1 | tail -5')",
       "PowerShell(wsl -u root -- sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'docker logs crm-api --tail 30 2>&1')",
-      "PowerShell(wsl -u root -- bash -c \"sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'cd /opt/crm/backend && docker compose build --no-cache 2>&1 | tail -5 && docker compose up -d 2>&1 | tail -3'\")"
+      "PowerShell(wsl -u root -- bash -c \"sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 'cd /opt/crm/backend && docker compose build --no-cache 2>&1 | tail -5 && docker compose up -d 2>&1 | tail -3'\")",
+      "PowerShell(Get-Command ssh -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command plink -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command wsl -ErrorAction SilentlyContinue)"
     ]
   }
 }

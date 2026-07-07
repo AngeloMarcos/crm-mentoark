@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+/**
+ * InstanceManagementPanel.tsx — Aba "Instâncias" de /whatsapp. Lista os `agentes` com
+ * evolution_instancia preenchida, mostra status de conexão/score de saúde (ScoreInstancia),
+ * permite conectar (QR/pairing code), desconectar, excluir e importar histórico, além de
+ * configurar comportamento/automação por instância (modal "Configurar Instância").
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getAuthToken } from "@/lib/api-token";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -127,6 +133,21 @@ export function InstanceManagementPanel() {
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [pollingConnect, setPollingConnect] = useState(false);
   const [waitingQr, setWaitingQr] = useState(false); // Baileys ainda gerando QR
+  // [AUDITORIA] BUG: pollQrLoop() e pollUntilConnected() (abaixo) usavam a variável de estado
+  // (waitingQr / pollingConnect / showQrModal) diretamente na condição do `while`. Como essas
+  // funções chamam `setWaitingQr(true)`/`setPollingConnect(true)` na própria primeira linha, a
+  // variável capturada no closure continua com o valor ANTIGO (de antes da chamada) durante toda
+  // a execução do loop — setState não muda o valor já capturado na clausura em execução, só
+  // agenda um novo render. Na prática, como esse valor antigo normalmente é `false`, a condição
+  // do while já nasce falsa e o loop inteiro é pulado: a função pula direto para o "Tempo
+  // esgotado", sem nunca de fato chamar pollQr()/fetchConnectionStatus() uma única vez.
+  // [AUDITORIA] FIX APLICADO: refs espelhando o estado, atualizadas de forma síncrona (refs não
+  // sofrem o batching/atraso do setState), usadas como condição real do loop. O estado
+  // (waitingQr/pollingConnect) continua existindo só para controlar a UI (spinners/textos).
+  const waitingQrRef = useRef(false);
+  const pollingConnectRef = useRef(false);
+  const showQrModalRef = useRef(false);
+  useEffect(() => { showQrModalRef.current = showQrModal; }, [showQrModal]);
 
   const startConnect = async () => {
     // Backend garante 1 instância por usuário usando nome estável.
@@ -172,15 +193,18 @@ export function InstanceManagementPanel() {
   // Polling do QR enquanto Baileys inicializa (Evolution v2.2.3)
   const pollQrLoop = async () => {
     setWaitingQr(true);
+    waitingQrRef.current = true;
     const start = Date.now();
     const TIMEOUT = 90 * 1000; // 90 segundos
-    while (Date.now() - start < TIMEOUT && waitingQr) {
+    while (Date.now() - start < TIMEOUT && waitingQrRef.current) {
       await new Promise(r => setTimeout(r, 3000));
       try {
         const data = await pollQr();
         if (data.state === "open") {
           setWaitingQr(false);
+          waitingQrRef.current = false;
           setPollingConnect(false);
+          pollingConnectRef.current = false;
           setShowQrModal(false);
           setQrData(null);
           setNewInstanceName("");
@@ -191,6 +215,7 @@ export function InstanceManagementPanel() {
         }
         if (data.state === "unauthorized") {
           setWaitingQr(false);
+          waitingQrRef.current = false;
           setShowQrModal(false);
           toast.error("Erro na Evolution: API Key ou Sessão inválida.");
           return;
@@ -198,6 +223,7 @@ export function InstanceManagementPanel() {
         if (data.qrCode) {
           setQrData(prev => ({ ...prev, ...data }));
           setWaitingQr(false);
+          waitingQrRef.current = false;
           toast.success("QR Code gerado! Escaneie agora.");
           pollUntilConnected(data.instanceName || data.instancia);
           return;
@@ -205,20 +231,28 @@ export function InstanceManagementPanel() {
       } catch {}
     }
     setWaitingQr(false);
+    waitingQrRef.current = false;
     toast.error("Tempo esgotado para gerar QR. Clique em 'Atualizar QR' para tentar novamente.");
   };
 
   const pollUntilConnected = async (instanciaNome?: string) => {
     setPollingConnect(true);
+    pollingConnectRef.current = true;
     const start = Date.now();
     const TIMEOUT = 2 * 60 * 1000; // 2 min
+    // [AUDITORIA] BUG: targetInstancia era calculado mas nunca usado — fetchConnectionStatus()
+    // era chamado sem argumento, checando a instância padrão do usuário em vez da instância que
+    // acabou de ser criada/conectada (relevante sobretudo se o usuário tiver mais de uma).
+    // [AUDITORIA] FIX APLICADO: passa targetInstancia adiante, agora que evolutionService.ts
+    // realmente encaminha esse parâmetro pro backend (fix aplicado no mesmo arquivo desta sessão).
     const targetInstancia = instanciaNome || newInstanceName;
-    while (Date.now() - start < TIMEOUT && pollingConnect && showQrModal) {
+    while (Date.now() - start < TIMEOUT && pollingConnectRef.current && showQrModalRef.current) {
       await new Promise(r => setTimeout(r, 3000));
       try {
-        const st = await fetchConnectionStatus();
+        const st = await fetchConnectionStatus(targetInstancia || undefined);
         if (st.state === "open") {
           setPollingConnect(false);
+          pollingConnectRef.current = false;
           setShowQrModal(false);
           setQrData(null);
           setNewInstanceName("");
@@ -229,6 +263,7 @@ export function InstanceManagementPanel() {
         }
         if (st.state === "unauthorized") {
           setPollingConnect(false);
+          pollingConnectRef.current = false;
           setShowQrModal(false);
           toast.error("Erro na conexão: API Key ou Sessão inválida.");
           return;
@@ -339,17 +374,32 @@ export function InstanceManagementPanel() {
     } catch {}
   };
 
+  // [AUDITORIA] BUG: esta função busca o status UMA VEZ (sem instancia — sempre a instância
+  // "oficial" do usuário, ver getEvolutionConfig em backend/src/routes/whatsapp.ts) e aplica o
+  // MESMO resultado para TODAS as instâncias da lista (`lista.forEach` só copia `state` pra cada
+  // `a.id`). Se um usuário tiver mais de um `agente` com `evolution_instancia` preenchida (o
+  // painel se chama "InstanceManagementPanel" e renderiza um card com Desconectar/Excluir por
+  // instância, sugerindo suporte a múltiplas), qualquer instância que não seja a "oficial" exibe
+  // um status que não é o dela de verdade — pode mostrar "Conectado" para uma instância desativada
+  // ou vice-versa.
+  // [AUDITORIA] FIX PENDENTE (motivo: mudança de comportamento com custo — trocar por N chamadas
+  // fetchConnectionStatus(a.evolution_instancia), uma por instância, aumenta chamadas à Evolution
+  // API e só faz diferença real se múltiplas instâncias por usuário for um cenário que ainda
+  // acontece de verdade hoje, dado que o backend inteiro converge pra "1 conta = 1 instância
+  // estável". Próxima sessão: confirmar com o usuário se multi-instância por conta ainda é
+  // suportado/esperado; se não for, o comportamento atual é aceitável e vale só um comentário
+  // explicando a limitação (já feito aqui); se for, trocar para status por instância.
   const carregarStatus = async (lista: Agente[]) => {
     const map: Record<string, ConnState> = {};
-    
+
     // Agora o backend resolve a instância oficial automaticamente.
     // Fazemos uma única chamada para pegar o status da conta
     try {
       const st = await fetchConnectionStatus();
       const state = (st.state ?? "close") as ConnState;
-      
+
       lista.forEach(a => {
-        // Mostramos o status real para instâncias que coincidem com a oficial 
+        // Mostramos o status real para instâncias que coincidem com a oficial
         // ou um status genérico para outras registradas (legado)
         if (a.evolution_instancia) {
           map[a.id] = state;
@@ -358,7 +408,7 @@ export function InstanceManagementPanel() {
     } catch (error) {
       console.error(`[WhatsApp] Erro ao buscar status global:`, error);
     }
-    
+
     setStatuses(map);
   };
 
@@ -839,7 +889,9 @@ export function InstanceManagementPanel() {
             if (!o) {
               setQrData(null);
               setPollingConnect(false);
+              pollingConnectRef.current = false;
               setWaitingQr(false);
+              waitingQrRef.current = false;
               carregar();
             }
           }}
@@ -923,7 +975,17 @@ export function InstanceManagementPanel() {
           </DialogContent>
         </Dialog>
 
-        {/* Modal para evitar erro de DialogTitle em outros diálogos se houver */}
+        {/*
+          [AUDITORIA] BUG: este segundo Dialog "Conectar Novo WhatsApp" usa o MESMO estado
+          (showConnectModal) do "Conectar nova instância WhatsApp" logo acima (~linha 824) — os
+          dois abririam juntos sempre que showConnectModal virar true. O próprio comentário
+          original ("para evitar erro de DialogTitle em outros diálogos se houver") sugere que
+          foi deixado como workaround de debug e nunca removido. É um subconjunto funcional do
+          primeiro modal (mesmos dois campos, mesmo startConnect).
+          [AUDITORIA] FIX PENDENTE (motivo: remoção de UI duplicada — protocolo pede confirmação
+          antes de apagar código "duplicado" mesmo dentro do mesmo arquivo): recomendo remover
+          este Dialog inteiro na próxima sessão após confirmação do usuário.
+        */}
         <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
            <DialogContent>
              <DialogHeader>

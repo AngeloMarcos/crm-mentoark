@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+/**
+ * MonitorWhatsApp.tsx — Página "Monitor WhatsApp ao Vivo" (visão read-only de todas as
+ * conversas, pensada para supervisão/operação). Mostra status geral do sistema (WhatsApp/IA/
+ * agente/prompt configurados), lista de conversas com filtros/ordenação, e um painel lateral
+ * (Sheet) com as últimas mensagens de uma conversa selecionada.
+ */
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -113,6 +119,19 @@ const MonitorWhatsApp = () => {
     }
   }, []);
 
+  // [AUDITORIA] BUG (severidade alta — polling nunca respeitava os 30s pretendidos):
+  // fetchConversas dependia de `[conversas]` no useCallback, mas a própria função chama
+  // `setConversas(data)` — toda vez que ela roda, muda `conversas`, o que recria a referência da
+  // função (novo useCallback), o que por sua vez recria o useEffect logo abaixo (que depende de
+  // `fetchConversas`), disparando fetchSystemStatus()+fetchConversas() de novo IMEDIATAMENTE e
+  // recriando o setInterval. Na prática isso vira um loop contínuo de requisições limitado só
+  // pela latência de rede, martelando /api/whatsapp/status, /api/ai-providers, /api/agentes,
+  // /api/agent_prompts e /api/whatsapp/conversas sem parar — não o polling de 30s que o "há X
+  // segundos" no header sugere.
+  // [AUDITORIA] FIX APLICADO: `conversas` anterior agora é lida de um ref (conversasRef), não do
+  // estado — fetchConversas não depende mais de `conversas`, então a referência da função fica
+  // estável entre renders e o useEffect/setInterval não é mais recriado a cada fetch.
+  const conversasRef = useRef<Conversa[]>([]);
   const fetchConversas = useCallback(async () => {
     try {
       const response = await fetch(`${API_URL}/api/whatsapp/conversas`, {
@@ -120,7 +139,8 @@ const MonitorWhatsApp = () => {
       });
       if (response.ok) {
         const data = await response.json();
-        setLastConversas(conversas);
+        setLastConversas(conversasRef.current);
+        conversasRef.current = data;
         setConversas(data);
         setLastUpdate(new Date());
         setSecondsSinceUpdate(0);
@@ -130,7 +150,7 @@ const MonitorWhatsApp = () => {
     } finally {
       setLoading(false);
     }
-  }, [conversas]);
+  }, []);
 
   const fetchMensagens = async (session_id: string) => {
     setLoadingMensagens(true);
