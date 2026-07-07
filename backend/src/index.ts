@@ -367,9 +367,21 @@ app.get('/api/admin/webhook-trace', authMiddleware, adminMiddleware, async (req,
          ORDER BY created_at DESC LIMIT 30`,
         [like]
       ).catch(() => ({ rows: [] })),
+      // [AUDITORIA-WHATSAPP] BUG (achado ao auditar src/pages/admin/DiagnosticoWhatsApp.tsx, o
+      // único consumidor desta rota): a query original filtrava `message_id LIKE '%sufixo-do-
+      // telefone%'`, mas message_id é o hash/ID da mensagem no WhatsApp — não contém dígitos do
+      // telefone. Essa condição nunca pode casar, então a seção "dedup" do diagnóstico sempre
+      // aparecia vazia, mesmo quando havia entradas de dedup reais para o número. A tabela
+      // webhook_mensagens_processadas não tem coluna de telefone/JID (só message_id, instancia,
+      // criado_em — ver backend/src/migrations.ts), então o telefone só pode ser inferido via
+      // JOIN com whatsapp_messages (que tem remote_jid).
+      // [AUDITORIA-WHATSAPP] FIX APLICADO: filtro trocado para um JOIN por message_id contra
+      // whatsapp_messages.remote_jid — mesma tabela e mesmo padrão LIKE já usados na query de
+      // `msgs` logo acima nesta função. Mudança isolada a esta única query, somente leitura.
       pool.query(
-        `SELECT message_id, instancia, criado_em FROM webhook_mensagens_processadas
-         WHERE message_id LIKE $1 ORDER BY criado_em DESC LIMIT 20`,
+        `SELECT d.message_id, d.instancia, d.criado_em FROM webhook_mensagens_processadas d
+         WHERE d.message_id IN (SELECT message_id FROM whatsapp_messages WHERE remote_jid LIKE $1)
+         ORDER BY d.criado_em DESC LIMIT 20`,
         [like]
       ).catch(() => ({ rows: [] })),
       pool.query(
