@@ -1,3 +1,13 @@
+/**
+ * whatsapp.ts — Todas as rotas REST de WhatsApp usadas pelo frontend (montadas em /api/whatsapp).
+ *
+ * Cobre: listar/ler conversas e mensagens, enviar texto/mídia, pausar/reativar IA por contato,
+ * conectar/desconectar instância na Evolution API (com QR code), sincronizar histórico, buscar
+ * fotos de perfil, e registrar o webhook da instância na Evolution (registrarWebhook/webhookInner).
+ * getEvolutionConfig()/saveEvolutionConfig() são a fonte de verdade da config Evolution (url,
+ * api_key, instancia) usada por toda ação de saída — ver [AUDITORIA] BUG logo abaixo sobre a
+ * relação (inconsistente) dessas funções com a tabela agent_configs.
+ */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
@@ -6,8 +16,15 @@ import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 // Default Evolution server (VPS local — disparo.mentoark.com.br)
 const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
-const WEBHOOK_URL =
-  process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
+// A Evolution API não calcula HMAC do corpo — o webhook.ts autentica via
+// segredo estático na própria URL (?key=...), então toda URL registrada aqui
+// precisa incluir esse segredo, senão o endpoint rejeita com 401.
+const WEBHOOK_URL = (() => {
+  const base = process.env.EVOLUTION_WEBHOOK_URL || 'https://api.mentoark.com.br/webhook/evolution';
+  const secret = process.env.EVOLUTION_WEBHOOK_SECRET;
+  if (!secret) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}key=${secret}`;
+})();
 const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
 // Objeto interno do webhook (usado em instance/create e /webhook/set)
@@ -52,6 +69,26 @@ export default function whatsappRouter(pool: Pool): Router {
   const router = Router();
 
   // Retorna config do agente, ou config global com nome de instância gerado
+  // [AUDITORIA] LÓGICA: esta função (e sua irmã saveEvolutionConfig logo abaixo) é a fonte de
+  // verdade para TODA ação de saída (send, connect, status, disconnect) desta rota — mas ela só
+  // olha integracoes_config e agentes, em NENHUM momento consulta agent_configs.
+  // [AUDITORIA] BUG: webhook.ts (mensagens recebidas) resolve o userId consultando agent_configs
+  // PRIMEIRO, antes de agentes/integracoes_config/prefixo UUID. Ou seja, existem dois caminhos de
+  // configuração da instância Evolution que nunca se enxergam: quem conecta pela tela que grava em
+  // agent_configs (syncEvolution() em integracoes.ts) fica com um cfg.instancia diferente do que
+  // getEvolutionConfig() calcula aqui (cai no fallback "stableInstancia" computado do userId, que
+  // pode não ser o nome real da instância). Isso pode fazer /send, /connect, /evo/status e
+  // /disconnect operarem sobre uma instância errada ou inexistente para esses usuários, e explica
+  // por que encontramos uma linha órfã em agent_configs (instancia="teste") que /disconnect e
+  // DELETE /instances/:name nunca limpam (só apagam integracoes_config e agentes).
+  // [AUDITORIA] FIX PENDENTE (motivo: decisão de produto + múltiplos arquivos): não dá para
+  // decidir sozinho qual tabela deveria ser a fonte canônica sem entender todos os consumidores de
+  // agent_configs (usado também fora do módulo WhatsApp, ex: configuração do agente de IA) e sem
+  // saber se algum usuário real depende hoje do valor gravado só em agent_configs. Próxima sessão:
+  // 1) rodar uma query em produção pra ver se existe overlap real (usuário com agent_configs mas
+  // sem integracoes_config/agentes correspondente); 2) se sim, decidir com o usuário se
+  // getEvolutionConfig deve incluir agent_configs como uma fonte adicional (em que prioridade) ou
+  // se agent_configs deve ser descontinuado a favor de integracoes_config/agentes.
   async function getEvolutionConfig(userId: string): Promise<{
     url: string; api_key: string; instancia: string; agenteId: string | null; isGlobal: boolean; stableInstancia: string;
   }> {
@@ -704,6 +741,21 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // 1. Limpeza de instâncias duplicadas/antigas na Evolution API
       // Lista todas as instâncias e remove qualquer uma que contenha o ID do usuário mas não seja a atual
+      // [AUDITORIA] BUG (relacionado ao achado em getEvolutionConfig acima): esta limpeza compara
+      // pelo nome exato `name !== cfg.stableInstancia`, mas cfg.instancia (o que o resto da função
+      // usa para checar estado/conectar) pode ser DIFERENTE de cfg.stableInstancia quando vem de
+      // integracoes_config/agentes com um nome histórico não-padrão. Nesse cenário, toda chamada a
+      // /connect apagaria a instância "oficial" atual (por não bater com stableInstancia) e criaria
+      // uma nova em seguida — um ciclo de delete+recreate a cada connect. Isso é consistente com um
+      // comportamento observado ao vivo nesta VPS (instanceId da Evolution mudando repetidamente
+      // entre verificações consecutivas, no mesmo dia desta auditoria).
+      // [AUDITORIA] FIX PENDENTE (motivo: precisa correlacionar com logs reais antes de mexer):
+      // não tenho confirmação de que isso realmente disparou no incidente observado (pode ter sido
+      // outra causa, como o crash loop do container Evolution que já foi corrigido separadamente).
+      // Próxima sessão: reproduzir chamando /connect duas vezes seguidas para um usuário cujo
+      // integracoes_config.instancia não siga o padrão crm_<12-hex> e confirmar se a instância é
+      // mesmo deletada; só então decidir o fix (ex: só deletar duplicatas que também estejam
+      // desconectadas, ou nunca deletar a que está em cfg.instancia independente do nome).
       try {
         const listRes = await fetch(`${base}/instance/fetchInstances`, {
           headers: { apikey: cfg.api_key },
