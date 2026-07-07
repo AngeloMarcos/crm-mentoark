@@ -84,27 +84,30 @@ VPS: `147.93.9.172`, acesso: `sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChe
 
 ## PROBLEMAS IDENTIFICADOS (para confirmar/corrigir)
 
-### P1 — CRÍTICO: Dois arquivos `whatsapp.ts` com implementações diferentes
-```
-/opt/crm/backend/src/routes/whatsapp.ts  → CORRIGIDO (enabled, webhookByEvents, webhookBase64)
-/opt/crm/backend/src/services/whatsapp.ts → ANTIGO/BUGADO (byEvents, base64)
-```
-**Verificar:** Em `/opt/crm/backend/src/index.ts`, qual dos dois é importado?
-Se `index.ts` importa o de `services/`, o webhook está quebrado (Evolution desativa a cada 30s).
+> **Atualizado em 2026-07-07 pela auditoria de código estático do módulo WhatsApp** (ver
+> `AUDITORIA_PROTOCOLO.md` / `AUDITORIA_LOG.md`). P1 e P2 abaixo estão **obsoletos** — já
+> resolvidos no código atual. P3 precisa reconfirmação (ver nota). P4-P7 continuam válidos como
+> tarefas de verificação em produção, fora do escopo da auditoria de código estático.
 
-### P2 — CRÍTICO: 4 rotas usadas pelo frontend NÃO existem no backend
-O `WhatsAppInterface.tsx` chama estas rotas que retornam 404:
-- `GET /api/whatsapp/search?q=TERMO` → busca global de mensagens
-- `DELETE /api/whatsapp/messages/:id` → apagar mensagem (para si / para todos)
-- `PATCH /api/whatsapp/conversas/:phone/read` → marcar conversa como lida
-- `POST /api/whatsapp/chat-prefs/:phone` → fixar, arquivar, silenciar conversa
+### P1 — ~~CRÍTICO: Dois arquivos `whatsapp.ts` com implementações diferentes~~ RESOLVIDO
+Confirmado durante a auditoria: `backend/src/index.ts` importa `./routes/whatsapp` (não
+`./services/whatsapp`). O arquivo `services/whatsapp.ts` não é importado em lugar nenhum do
+código — é código morto, marcado como candidato a remoção em `AUDITORIA_LOG.md` (não deletado
+sem confirmação do usuário, conforme protocolo).
 
-**Verificar:** Confirme os 404s nos logs: `docker logs crm-api --tail=200 | grep "404\|search\|messages\|read\|chat-prefs"`
+### P2 — ~~CRÍTICO: 4 rotas usadas pelo frontend NÃO existem no backend~~ RESOLVIDO
+As 4 rotas já existem em `backend/src/routes/whatsapp.ts` (confirmado lendo o arquivo inteiro
+nesta auditoria): `GET /search` (linha ~1401), `DELETE /messages/:id` (~1422),
+`PATCH /conversas/:phone/read` (~1443), `POST /chat-prefs/:phone` (~1455). Implementação bate
+com o código sugerido aqui embaixo (histórico, não precisa mais reaplicar).
 
 ### P3 — BUG: `evolutionService.ts` não verifica status real da Evolution
 `fetchConnectionStatus()` consulta o banco (`integracoes_config.status`), não a Evolution API.
 Resultado: painel mostra "Conectado" mesmo quando Evolution está desconectada.
 **Fix:** Deve chamar `GET /api/whatsapp/evo/status?instancia=NOME` no backend.
+**Nota da auditoria:** ainda não confirmado neste código — `evolutionService.ts` está na lista de
+arquivos a auditar (item 9 da varredura do módulo WhatsApp); esta seção será atualizada quando
+esse arquivo for lido.
 
 ### P4 — VERIFICAR: Instâncias no banco x Evolution
 Rodar na VPS:
