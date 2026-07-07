@@ -1,4 +1,20 @@
 /**
+ * [AUDITORIA] CÓDIGO MORTO — CONFIRMADO EM 2026-07-07.
+ *
+ * Nenhum arquivo do repositório importa `services/webhook` — confirmado via `git grep` e por
+ * `backend/src/index.ts`, que monta `app.use('/webhook', webhookRouter(pool))` importando de
+ * `./routes/webhook` (não deste arquivo). É uma versão mais antiga/simplificada de
+ * `backend/src/routes/webhook.ts`: sem log em arquivo (wlog), sem UPSERT antecipado de contato,
+ * sem antiloop via botMessageIds/botSentTexts para mensagens fromMe, sem roteamento N8N, sem
+ * confirmação de opt-out via Evolution. A autenticação aqui também é mais permissiva (deixa
+ * passar quando EVOLUTION_WEBHOOK_SECRET não está setado, em vez de rejeitar) — mais um indício
+ * de versão anterior à atual, não algo a "corrigir" já que o arquivo não roda.
+ *
+ * [AUDITORIA] FIX PENDENTE (motivo: remoção de arquivo requer confirmação do usuário, conforme
+ * protocolo de auditoria): candidato a remoção, mesma situação de services/whatsapp.ts.
+ */
+
+/**
  * webhook.ts — Receptor de eventos da Evolution API (WhatsApp)
  *
  * Melhorias v3:

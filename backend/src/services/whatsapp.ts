@@ -1,3 +1,18 @@
+/**
+ * [AUDITORIA] CÓDIGO MORTO — CONFIRMADO EM 2026-07-07.
+ *
+ * Nenhum arquivo do repositório (backend ou frontend) importa `services/whatsapp` — confirmado
+ * via `git grep` por "services/whatsapp" e por checagem direta de `backend/src/index.ts` (que
+ * importa `./routes/whatsapp`, não este arquivo). É uma versão mais antiga/limitada de
+ * `backend/src/routes/whatsapp.ts`: webhookPayload() usa o formato antigo sem `enabled`
+ * (`byEvents`/`base64` em vez de `webhookByEvents`/`webhookBase64`), faltam as rotas /search,
+ * DELETE /messages/:id, /conversas/:phone/read, /chat-prefs/:phone, e /evo/status não aceita
+ * `?instancia=`. Já era apontado como "ANTIGO/BUGADO" em DIAGNOSTICO_WHATSAPP_PROMPT.md (P1).
+ *
+ * [AUDITORIA] FIX PENDENTE (motivo: remoção de arquivo requer confirmação do usuário, conforme
+ * protocolo de auditoria): candidato a remoção. Não deletado nesta sessão — próxima sessão pode
+ * apagar após confirmação, ou manter se houver algum uso planejado que não ficou evidente aqui.
+ */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
