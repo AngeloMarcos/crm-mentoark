@@ -1,11 +1,16 @@
 /**
  * webhook.ts — Receptor de eventos da Evolution API (WhatsApp)
  *
- * Melhorias v3:
- * - Lookup de agente único com fallbacks (integracoes_config, whatsapp_instances, prefixo UUID)
- * - Validação de JID e filtragem de grupos antes de qualquer DB op
- * - Tratamento de MESSAGES_UPDATE para status de entrega/leitura
- * - Melhor logging e tratamento de erros
+ * Recebe POST /webhook/evolution (autenticado por EVOLUTION_WEBHOOK_SECRET via
+ * header HMAC opcional ou ?key= na URL — ver verificarAssinaturaEvolution/verificarChaveQuery).
+ * Resolve o dono (userId) da instância que disparou o evento em 5 níveis de fallback,
+ * nesta ordem: agent_configs → agentes → prefixo UUID (crm_<12-hex>) → integracoes_config
+ * → primeiro admin cadastrado. Sem userId, a mensagem é descartada (log [WEBHOOK_REJECT]).
+ * Também trata MESSAGES_UPDATE (status de entrega/leitura) e MESSAGES_DELETE.
+ *
+ * [AUDITORIA] LÓGICA: cabeçalho reescrito em 2026-07 — a versão anterior citava uma
+ * tabela "whatsapp_instances" que não existe mais no código (a lógica real usa
+ * agent_configs/agentes), ficara desatualizado de um refactor anterior.
  */
 
 import { Router, Request, Response } from 'express';
@@ -30,6 +35,19 @@ function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Evolution API (community) não calcula HMAC do corpo — o único jeito real de
+// autenticar o webhook global é um segredo estático embutido na própria URL
+// configurada em WEBHOOK_GLOBAL_URL (?key=...). O HMAC acima fica como opção
+// mais forte, caso o header algum dia seja enviado por uma integração customizada.
+function verificarChaveQuery(req: Request, secret: string): boolean {
+  const chaveRecebida = req.query.key as string | undefined;
+  if (!chaveRecebida) return false;
+  const a = Buffer.from(chaveRecebida);
+  const b = Buffer.from(secret);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 interface EvolutionPayload {
@@ -69,6 +87,17 @@ const REATIVAR_COMANDOS = new Set([
   'reativar ia', 'ativar ia', 'reativar', 'atendimento finalizado',
 ]);
 
+// [AUDITORIA] BUG: função escrita para validar o formato do remoteJid mas nunca chamada —
+// o código real (linha do handler POST /evolution) só verifica `remoteJid.includes('@')`,
+// uma checagem bem mais fraca que deixaria passar JIDs em formato inesperado (ex: futuros
+// sufixos do WhatsApp ainda não cobertos por essa regex, ou um payload malformado).
+// [AUDITORIA] FIX PENDENTE (motivo: mudança de comportamento de filtragem em produção sem
+// teste manual — se a regex não cobrir 100% dos formatos de JID que a Evolution realmente
+// envia hoje (ex: listas de transmissão "@broadcast", canais "@newsletter"), passar a usar
+// isValidJid() no lugar de `includes('@')` derrubaria mensagens legítimas em silêncio, o que
+// é pior que o risco atual. Próxima sessão: confirmar com logs reais quais sufixos de JID
+// aparecem em produção antes de trocar a validação, ou remover a função se decidido que não
+// vale o risco.
 function isValidJid(jid: string): boolean {
   return /^\d+@(s\.whatsapp\.net|g\.us|lid)$/.test(jid);
 }
@@ -172,11 +201,11 @@ export default function webhookRouter(pool: Pool): Router {
       console.error(`[WH:${traceId}] EVOLUTION_WEBHOOK_SECRET não configurado — rejeitando requisição`);
       return res.status(401).json({ error: 'Webhook secret não configurado no servidor' });
     }
-    const ok = verificarAssinaturaEvolution(req, webhookSecret);
-    console.log(`[WH:${traceId}] ASSINATURA válida=${ok}`);
+    const ok = verificarAssinaturaEvolution(req, webhookSecret) || verificarChaveQuery(req, webhookSecret);
+    console.log(`[WH:${traceId}] AUTENTICAÇÃO válida=${ok}`);
     if (!ok) {
-      console.warn(`[WH:${traceId}] Assinatura inválida — rejeitando`);
-      return res.status(401).json({ error: 'Assinatura inválida' });
+      console.warn(`[WH:${traceId}] Autenticação inválida — rejeitando`);
+      return res.status(401).json({ error: 'Autenticação inválida' });
     }
 
     res.status(200).json({ ok: true });
@@ -230,6 +259,13 @@ export default function webhookRouter(pool: Pool): Router {
       const fromMe     = payload.data?.key?.fromMe === true;
 
       // ── Lookup unificado: agent_configs → agentes → prefixo → integracoes_config → admin ──
+      // [AUDITORIA] LÓGICA: agent_configs guarda no máximo 1 instância ativa por usuário
+      // (UNIQUE(user_id)) — é a config "oficial" escrita por syncEvolution() em integracoes.ts
+      // quando o usuário conecta pela tela de Integrações. agentes permite várias instâncias
+      // por usuário (UNIQUE(user_id, evolution_instancia)) e é quem carrega n8n_webhook_url.
+      // Por isso agent_configs vem primeiro (é a fonte "canônica" de 1:1), mas só agentes
+      // consegue resolver o roteamento N8N — daí o lookup extra de n8nWebhookUrl logo abaixo
+      // mesmo quando o userId já veio de agent_configs.
       let userId: string | null = null;
       let palavraReativar = 'atendimento finalizado';
       let n8nWebhookUrl: string | null = null;
@@ -435,6 +471,13 @@ export default function webhookRouter(pool: Pool): Router {
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
             [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
           ).catch(err => console.error('[WEBHOOK INSERT fromMe whatsapp_messages]:', err.message));
+        } else {
+          // [AUDITORIA] BUG: mensagens fromMe=true de uma instância sem userId resolvido eram
+          // descartadas em silêncio (sem log), diferente do fluxo de mensagens recebidas (que loga
+          // [WEBHOOK_REJECT]). Isso dificultava diagnosticar "instância órfã" quando o primeiro
+          // sinal observável era justamente uma mensagem enviada pelo atendente.
+          // [AUDITORIA] FIX APLICADO: log adicionado, mesmo padrão usado no fluxo de recebidas.
+          wlog('WEBHOOK_REJECT', `NENHUM userId para instância (mensagem fromMe): "${instancia}" — descartada`);
         }
         return;
       }
@@ -444,9 +487,18 @@ export default function webhookRouter(pool: Pool): Router {
       if (processados.has(dedupKey)) { wlog('WEBHOOK_DROP', `dedup memória mid=${messageId} inst=${instancia}`); return; }
       processados.add(dedupKey);
       setTimeout(() => processados.delete(dedupKey), 60000);
+      // [AUDITORIA] BUG: a checagem original filtrava só por message_id, ignorando a coluna
+      // "instancia" (que o INSERT logo abaixo grava). Na prática as IDs geradas pelo WhatsApp
+      // são efetivamente únicas globalmente, então o risco real é baixíssimo, mas a checagem
+      // ficava inconsistente com o schema (que existe justamente para permitir esse escopo) e
+      // com os message_id sintéticos ("resp_"/"manual_") usados para respostas do bot, que têm
+      // mais chance de colidir entre instâncias diferentes.
+      // [AUDITORIA] FIX APLICADO: escopo por instancia adicionado ao SELECT, espelhando o INSERT
+      // logo abaixo. Mudança estritamente mais restritiva (só deixa passar o que antes seria
+      // incorretamente tratado como duplicata de outra instância) — sem risco de regressão.
       const jaExiste = await pool.query(
-        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1',
-        [messageId]
+        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
+        [messageId, instancia]
       );
       if (jaExiste.rows.length) return;
 
