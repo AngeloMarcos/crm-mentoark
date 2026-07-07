@@ -496,10 +496,36 @@ export default function webhookRouter(pool: Pool): Router {
       // [AUDITORIA] FIX APLICADO: escopo por instancia adicionado ao SELECT, espelhando o INSERT
       // logo abaixo. Mudança estritamente mais restritiva (só deixa passar o que antes seria
       // incorretamente tratado como duplicata de outra instância) — sem risco de regressão.
+      //
+      // [AUDITORIA] BUG (severidade potencialmente ALTA — precisa verificação em produção): esta
+      // query selecionava `id`, mas a tabela webhook_mensagens_processadas tem DUAS definições
+      // conflitantes de schema no código: o CREATE TABLE logo no topo deste arquivo (linha ~145)
+      // declara `id SERIAL PRIMARY KEY, ..., created_at`, enquanto backend/src/migrations.ts
+      // (a migration que de fato roda — confirmado via runMigrations importado em index.ts)
+      // declara `message_id TEXT PRIMARY KEY, instancia, criado_em` — SEM coluna `id`. Pior:
+      // `app.use('/webhook', webhookRouter(pool))` (index.ts linha ~118) executa ANTES de
+      // `runMigrations(pool)` (index.ts linha ~438) — ou seja, é uma condição de corrida entre
+      // dois `CREATE TABLE IF NOT EXISTS` decidindo qual schema "vence" na primeira vez que a
+      // tabela é criada. Se a versão de migrations.ts venceu (schema sem `id`), a query original
+      // `SELECT id FROM ...` lançaria erro de SQL ("column id does not exist") em TODA mensagem
+      // recebida, sem try/catch próprio — o erro subiria pro catch-all no fim do handler,
+      // abortando o processamento antes mesmo do INSERT em whatsapp_messages. Isso explicaria um
+      // sintoma muito mais fundamental que os já corrigidos nesta sessão (rede/webhook auth): NENHUMA
+      // mensagem real chegaria a ser salva, mesmo com toda a infra corrigida.
+      // [AUDITORIA] FIX APLICADO: troquei `SELECT id` por `SELECT 1` — funciona igual em ambos os
+      // schemas possíveis, já que só precisamos saber SE existe linha, não o valor de uma coluna
+      // específica. Também adicionei `.catch()` para não deixar esse SELECT (que é só uma
+      // otimização de dedup — a proteção real é o `ON CONFLICT DO NOTHING` do INSERT logo abaixo)
+      // derrubar o processamento inteiro da mensagem em caso de qualquer erro futuro de schema.
+      // [AUDITORIA] FIX PENDENTE (motivo: precisa confirmar em produção): rodar na VPS
+      // `docker exec -i postgres psql -U mentoark -d crm -c "\d webhook_mensagens_processadas"`
+      // para ver o schema real. Se a coluna for `criado_em` (sem `id`), o CREATE TABLE deste
+      // arquivo (linha ~145) está descrevendo um schema que nunca existiu de verdade e vale
+      // atualizá-lo ou removê-lo para não confundir; se for `created_at`+`id`, o oposto.
       const jaExiste = await pool.query(
-        'SELECT id FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
+        'SELECT 1 FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
         [messageId, instancia]
-      );
+      ).catch(() => ({ rows: [] as any[] }));
       if (jaExiste.rows.length) return;
 
       await pool.query(
