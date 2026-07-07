@@ -976,49 +976,11 @@ export function InstanceManagementPanel() {
         </Dialog>
 
         {/*
-          [AUDITORIA] BUG: este segundo Dialog "Conectar Novo WhatsApp" usa o MESMO estado
-          (showConnectModal) do "Conectar nova instância WhatsApp" logo acima (~linha 824) — os
-          dois abririam juntos sempre que showConnectModal virar true. O próprio comentário
-          original ("para evitar erro de DialogTitle em outros diálogos se houver") sugere que
-          foi deixado como workaround de debug e nunca removido. É um subconjunto funcional do
-          primeiro modal (mesmos dois campos, mesmo startConnect).
-          [AUDITORIA] FIX PENDENTE (motivo: remoção de UI duplicada — protocolo pede confirmação
-          antes de apagar código "duplicado" mesmo dentro do mesmo arquivo): recomendo remover
-          este Dialog inteiro na próxima sessão após confirmação do usuário.
+          [AUDITORIA] FIX APLICADO: removido o segundo Dialog "Conectar Novo WhatsApp" que existia
+          aqui (mesmo estado showConnectModal do "Conectar nova instância WhatsApp" ~linha 824 —
+          os dois abriam juntos). Era um subconjunto funcional do que ficou (mesmos dois campos,
+          mesmo startConnect), confirmado sem uso próprio antes da remoção.
         */}
-        <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
-           <DialogContent>
-             <DialogHeader>
-               <DialogTitle>Conectar Novo WhatsApp</DialogTitle>
-               <DialogDescription>Preencha os dados da nova instância.</DialogDescription>
-             </DialogHeader>
-             <div className="space-y-4 py-4">
-               <div className="space-y-2">
-                 <Label>Nome da Instância</Label>
-                 <Input 
-                   placeholder="Ex: Vendas" 
-                   value={newInstanceName}
-                   onChange={e => setNewInstanceName(e.target.value)}
-                 />
-               </div>
-               <div className="space-y-2">
-                 <Label>Telefone (opcional)</Label>
-                 <Input 
-                   placeholder="55..." 
-                   value={newInstancePhone}
-                   onChange={e => setNewInstancePhone(e.target.value)}
-                 />
-               </div>
-             </div>
-             <DialogFooter>
-               <Button variant="outline" onClick={() => setShowConnectModal(false)}>Cancelar</Button>
-               <Button onClick={startConnect} disabled={connecting}>
-                 {connecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Smartphone className="h-4 w-4 mr-2" />}
-                 Gerar Conexão
-               </Button>
-             </DialogFooter>
-           </DialogContent>
-        </Dialog>
       </div>
     </TooltipProvider>
   );

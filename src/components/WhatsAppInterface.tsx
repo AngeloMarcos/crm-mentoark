@@ -3040,66 +3040,11 @@ export function WhatsAppInterface() {
       </Dialog>
 
       {/*
-        [AUDITORIA] BUG: este "Modal de Nova Conversa" e o "Modal Nova Mensagem" lá em cima
-        (~linha 1737, mesmo componente) são controlados pelo MESMO estado `showNewMessageModal`.
-        Sempre que showNewMessageModal vira true (botão "Nova Mensagem" no header da lista, ou
-        seleção de resultado de busca de contato), os DOIS dialogs tentam abrir ao mesmo tempo —
-        duas sobreposições de Radix Dialog empilhadas, uma com busca de contato CRM +
-        campo telefone + autofocus (o de cima) e esta versão mais simples (só telefone + busca)
-        por baixo. Parece um resquício de uma refatoração onde o modal de cima substituiu este,
-        mas o antigo nunca foi removido.
-        [AUDITORIA] FIX PENDENTE (motivo: remoção de UI duplicada — protocolo pede confirmação do
-        usuário antes de apagar código "duplicado", mesmo dentro do mesmo arquivo): recomendo
-        remover este segundo Dialog inteiro (é um subconjunto funcional do primeiro) na próxima
-        sessão, após o usuário confirmar que não há dependência escondida nele.
+        [AUDITORIA] FIX APLICADO: removido o "Modal de Nova Conversa" duplicado que existia aqui
+        (mesmo estado showNewMessageModal do "Modal Nova Mensagem" ~linha 1737 — os dois abriam
+        juntos). O modal removido era um subconjunto funcional do que ficou (mesmos dois campos,
+        mesmo handleStartNewChat), confirmado sem uso próprio antes da remoção.
       */}
-      <Dialog open={showNewMessageModal} onOpenChange={setShowNewMessageModal}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Nova Conversa</DialogTitle>
-            <DialogDescription>
-              Digite o número com DDD ou busque por um contato no CRM.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label>Telefone</Label>
-              <Input 
-                placeholder="Ex: 11999999999" 
-                value={newMessagePhone}
-                onChange={e => {
-                  setNewMessagePhone(e.target.value);
-                  buscarContatos(e.target.value);
-                }}
-              />
-            </div>
-
-            {contatoResults.length > 0 && (
-              <div className="rounded-xl border bg-muted/20 p-2 space-y-1">
-                {contatoResults.map(c => (
-                  <button
-                    key={c.id}
-                    onClick={() => handleStartNewChat(c.telefone, c.nome)}
-                    className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-background transition-colors text-left"
-                  >
-                    <ChatAvatar name={c.nome} size="sm" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold truncate">{c.nome}</p>
-                      <p className="text-[10px] text-muted-foreground">{c.telefone}</p>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowNewMessageModal(false)}>Cancelar</Button>
-            <Button onClick={() => handleStartNewChat()} disabled={!newMessagePhone.trim()}>
-              Iniciar Chat
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
