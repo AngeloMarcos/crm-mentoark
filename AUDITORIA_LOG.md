@@ -22,3 +22,16 @@ Ver protocolo completo em `AUDITORIA_PROTOCOLO.md`. Status possíveis: `✅ revi
 | WhatsApp | src/pages/SimuladorWebhook.tsx                          | 🔧 corrigido | BUG: URL errada (/api/webhook/evolution em vez de /webhook/evolution) — simulador sempre batia em 404 → corrigido; mensagem de ajuda do erro 401 desatualizada → corrigida |
 | WhatsApp | backend/src/index.ts (lateral — só rota /api/admin/webhook-trace) | 🔧 corrigido | Filtro de dedup comparava message_id com padrão de telefone (nunca casava) → corrigido com JOIN em whatsapp_messages |
 | WhatsApp | backend/src/services/migrations.ts (lateral)            | 🗑️ candidato a remoção | Duplicata não importada de backend/src/migrations.ts (só este roda, via runMigrations em index.ts) — mesmo padrão de services/*.ts morto já visto |
+
+### Busca lateral — arquivos fora da lista original, avaliados como genuinamente parte do fluxo WhatsApp mas NÃO auditados nesta sessão (recomendo para a próxima)
+
+| Módulo   | Arquivo                                              | Status         | Resumo |
+|----------|-------------------------------------------------------|----------------|--------|
+| WhatsApp | backend/src/routes/integracoes.ts                       | ⚠️ pendente (não auditado) | Contém syncEvolution(), o outro caminho de escrita em agent_configs mencionado em vários FIX PENDENTE deste log — essencial para resolver a inconsistência agent_configs vs integracoes_config/agentes |
+| WhatsApp | backend/src/utils/resilientFetch.ts                     | ⚠️ pendente (não auditado) | evolutionFetch()/sanitizeEvolutionUrl() usados por quase todo request à Evolution API neste módulo — vale conferir timeouts/retry |
+| WhatsApp | src/pages/Integracoes.tsx                               | ⚠️ pendente (não auditado) | Tela de Integrações — contraparte de frontend do syncEvolution() |
+| WhatsApp | src/pages/Agentes.tsx                                   | ⚠️ pendente (não auditado) | Configuração de agentes, provavelmente edita evolution_instancia/evolution_server_url |
+| WhatsApp | src/pages/TesteConversas.tsx                            | ⚠️ pendente (não auditado) | Nome sugere ferramenta de teste de conversas — não confirmado |
+| WhatsApp | src/pages/OpenClaw.tsx                                  | ⚠️ pendente (não auditado formalmente) | Lido informalmente em sessão anterior (não como parte deste protocolo) — é o alvo do BUG SEVERO encontrado em WhatsAppInterface.tsx |
+
+Demais arquivos da busca lateral (`src/components/catalogo/*`, `src/components/marketing/*`, `src/components/campanhas/*`, `src/components/kanban/*`, `src/components/workflows/*`, `src/components/seguranca/*`, `src/pages/Disparos.tsx`, `src/pages/Campanhas.tsx`, `src/pages/CatalogoEnvios.tsx`, `App.tsx`, `AppSidebar.tsx`, `docs-content.ts`, `mockData.ts`, `tailwind.config.ts`, etc.) foram avaliados como menções incidentais (WhatsApp citado como um canal de envio entre outros, ou "evolution" usado como palavra comum) — não são núcleo do módulo WhatsApp, não adicionados à auditoria.
