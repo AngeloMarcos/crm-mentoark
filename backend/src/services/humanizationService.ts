@@ -34,9 +34,8 @@ REGRAS:
 // [AUDITORIA] LÓGICA: usa sempre process.env.OPENAI_API_KEY (chave global do servidor), nunca a
 // chave/provider configurado pelo usuário em ai_providers — diferente de agentEngine.ts, que
 // resolve provider por usuário (criarProvider) e permite OpenAI/Claude/Gemini. Não marquei como
-// bug porque pode ser intencional (custo de humanização de campanha centralizado na plataforma,
-// mesmo padrão do OpenClaw), mas vale confirmar com o usuário se cada conta deveria usar sua
-// própria chave/provider aqui também.
+// bug porque pode ser intencional (custo de humanização de campanha centralizado na plataforma),
+// mas vale confirmar com o usuário se cada conta deveria usar sua própria chave/provider aqui também.
 // [AUDITORIA] FIX PENDENTE (motivo: decisão de produto): se a intenção for usar o provider do
 // usuário, precisa receber userId/pool como parâmetro e reusar criarProvider() de providers/index
 // — mudança de assinatura que afeta o único chamador (disparoProcessor.ts), fora do escopo desta

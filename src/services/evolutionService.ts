@@ -1,7 +1,7 @@
 /**
  * evolutionService.ts — Cliente frontend para as rotas de conexão Evolution do backend
- * (/api/whatsapp/evo/status, /connect, /poll-qr, /disconnect). Usado por WhatsAppInterface,
- * InstanceManagementPanel e OpenClaw.tsx para checar/gerenciar o estado da conexão WhatsApp.
+ * (/api/whatsapp/evo/status, /connect, /poll-qr, /disconnect). Usado por WhatsAppInterface e
+ * InstanceManagementPanel para checar/gerenciar o estado da conexão WhatsApp.
  */
 import { getAuthToken } from "@/lib/api-token";
 
@@ -32,8 +32,8 @@ export interface StatusResult {
 // [AUDITORIA] BUG: o parâmetro `instancia` era aceito mas nunca usado — a URL chamada abaixo
 // nunca incluía `?instancia=`, mesmo o backend (GET /api/whatsapp/evo/status, ver
 // backend/src/routes/whatsapp.ts) aceitando esse query param para checar uma instância
-// específica. Nenhum dos 4 chamadores atuais (WhatsAppInterface, InstanceManagementPanel x2,
-// OpenClaw.tsx) passa esse argumento hoje, então não havia impacto visível ainda — mas a
+// específica. Nenhum dos chamadores atuais (WhatsAppInterface, InstanceManagementPanel x2)
+// passa esse argumento hoje, então não havia impacto visível ainda — mas a
 // assinatura da função sugeria (incorretamente) que dava pra checar uma instância específica.
 // [AUDITORIA] FIX APLICADO: query param agora é enviado quando `instancia` é passado. Mudança
 // aditiva/opcional — comportamento para todos os chamadores atuais (que não passam o argumento)

@@ -68,7 +68,6 @@ import integracoesRouter from './routes/integracoes';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
 import adminFirewallRouter, { createFirewallMiddleware } from './routes/admin_firewall';
 import suporteCopilotoRouter from './routes/suporte_copiloto';
-import { makeOpenClawRouter } from './routes/openclaw';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -151,9 +150,6 @@ app.use('/api/marketing', marketing.public); // Public part of marketing (callba
 
 // ── Rotas n8n (x-n8n-secret, sem JWT) ─────────────────────────────────────
 app.use('/api/n8n', n8nRouter(pool));
-
-// ── OpenClaw Admin (sem JWT — protegido por X-Openclaw-Key ou JWT) ──────────
-app.use('/api/openclaw', makeOpenClawRouter(pool));
 
 // Webhook público do Kanban (sem JWT, autenticado por x-webhook-secret)
 app.post('/api/kanban/webhook/n8n', kanbanWebhookN8n(pool));

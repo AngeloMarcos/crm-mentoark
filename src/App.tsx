@@ -51,7 +51,6 @@ import CargosPage from "./pages/Cargos";
 import FirewallPage from "./pages/admin/Firewall";
 import CopilotoPage from "./pages/admin/Copiloto";
 import DiagnosticoWhatsApp from "./pages/admin/DiagnosticoWhatsApp";
-import OpenClawPage from "./pages/OpenClaw";
 
 
 
@@ -105,7 +104,6 @@ const App = () => (
               <Route path="/admin/firewall" element={<ProtectedRoute requireAdmin>             <FirewallPage /></ProtectedRoute>} />
               <Route path="/admin/copiloto" element={<ProtectedRoute requireAdmin>             <CopilotoPage /></ProtectedRoute>} />
               <Route path="/admin/diagnostico-whatsapp" element={<ProtectedRoute requireAdmin> <DiagnosticoWhatsApp /></ProtectedRoute>} />
-              <Route path="/openclaw" element={<ProtectedRoute requireAdmin> <OpenClawPage /></ProtectedRoute>} />
 
 
               <Route path="/chat-equipe"  element={<ProtectedRoute requireModulo="whatsapp">   <ChatEquipePage /></ProtectedRoute>} />
