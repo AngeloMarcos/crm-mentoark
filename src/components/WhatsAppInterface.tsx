@@ -453,8 +453,15 @@ export function WhatsAppInterface() {
     return digits;
   };
 
+  // [AUDITORIA] LÓGICA — Camada 5 (render, rastreio "mensagens não atualizam", 2026-07-08):
+  // `chats` está corretamente nas dependências dos dois useMemo abaixo, e não há nenhum
+  // React.memo neste arquivo envolvendo os componentes que renderizam a lista de chats ou as
+  // mensagens (a lista e as mensagens são renderizadas inline no mesmo componente, não em
+  // filhos memoizados) — não há como um prop desatualizado ficar "preso" atrás de um memo aqui.
+  // Nenhum bug de render encontrado; se a Camada 1-4 entregam o dado atualizado em `chats`, a
+  // tela reflete sem necessidade de refresh manual.
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
-  
+
   const filteredChats = useMemo(() => {
     let list = chats.filter(c =>
       c.name.toLowerCase().includes(globalSearchTerm.toLowerCase()) ||
@@ -489,6 +496,12 @@ export function WhatsAppInterface() {
   }, [chats, globalSearchTerm, activeTab]);
 
 
+  // [AUDITORIA] LÓGICA — Camada 3 (rastreio "mensagens não atualizam", 2026-07-08): esta função
+  // SEMPRE cria um array novo (`dbChats = rows.map(...)`) e sempre chama `setChats(prev => ...)`
+  // retornando esse array novo — não há early-return por igualdade de conteúdo aqui (diferente de
+  // fetchMensagens, ver abaixo). Ou seja, toda vez que o polling roda, o React re-renderiza a
+  // lista de chats com o que a API retornou naquele instante; não há cache/staleness nesta função
+  // que pudesse "engolir" uma mensagem nova. Não encontrei bug aqui.
   const fetchConversas = async (isArchived = false) => {
     try {
       console.log(`[WA] fetchConversas iniciando (archived=${isArchived})...`);
@@ -612,6 +625,14 @@ export function WhatsAppInterface() {
           role: (m.reply_to_sender || 'user') as 'user' | 'assistant'
         } : undefined
       }));
+      // [AUDITORIA] LÓGICA — Camada 3, ponto que o rastreio pediu pra verificar com atenção: este
+      // early-return SÓ dispara se `currentIds` e `newIds` forem EXATAMENTE iguais (mesmo
+      // conteúdo, mesma ordem, mesmo tamanho). Uma mensagem nova aumenta `msgs.length` em relação
+      // a `atual.messages.length`, o que já torna os dois arrays de tamanho diferente — logo
+      // `JSON.stringify` nunca dá igual e o early-return nunca segura uma mensagem genuinamente
+      // nova. Esse guard só evita re-render quando a resposta do polling é idêntica à anterior
+      // (otimização legítima contra flicker, não um bug). Confirmado lendo a função inteira: não
+      // há outro early-return nem comparação de referência que descarte uma atualização real.
       // Só atualiza se houver mudança real (evita re-render/flickering)
       setChats(prev => {
         const atual = prev.find(c => c.id === phone);
@@ -716,7 +737,24 @@ export function WhatsAppInterface() {
     }
   };
  
-  // ── Polling de mensagens (substitui Supabase Realtime) ──────────────────────
+  // [AUDITORIA] LÓGICA — Camada 4 (rastreio "mensagens não atualizam", 2026-07-08): este é 1 de 3
+  // useEffect/setInterval independentes neste componente que fazem polling do mesmo estado
+  // (`chats`). Resumo dos três (comentados individualmente onde cada um aparece):
+  //   A (aqui, 5s): fetchConversas(respeitando activeTab) + fetchMensagens do chat ativo.
+  //   B (~linha 810, 2s com chat aberto / 5s sem): só fetchConversas — tinha um bug real, ver lá.
+  //   C (~linha 855, 3s): só fetchMensagens do chat ativo.
+  // Todos checam document.hidden/visibilityState antes de rodar (nomes de API diferentes pro
+  // mesmo conceito — não é bug, só inconsistência de estilo). O impacto real dos 3 juntos:
+  // requests HTTP redundantes (quando um chat está aberto, fetchConversas roda 2x via A+B a cada
+  // ~2-5s, fetchMensagens roda 2x via A+C a cada ~3-5s) — desperdício de banda/backend, mas SEM
+  // condição de corrida entre A e C (mesma chamada, mesmo parâmetro, resultado idêntico não causa
+  // flicker). B era diferente — tinha um bug de verdade, corrigido nesta sessão (ver lá).
+  // [AUDITORIA] FIX PENDENTE (motivo: risco de mudar comportamento perceptível): consolidar os 3
+  // intervals em 1 exigiria decidir uma cadência única (2s? 3s? 5s?) ou replicar a lógica
+  // condicional de cadência variável de B — não tenho certeza suficiente de que isso não muda a
+  // responsividade percebida pelo usuário (ex: hoje mensagens do chat aberto atualizam a cada 3s
+  // via C, mais rápido que os 5s de A). Deixando como está — funciona, só é redundante — até
+  // confirmação do usuário de que uma cadência única serve para todos os casos.
   useEffect(() => {
     if (!user?.id) return;
     const interval = setInterval(() => {
@@ -779,13 +817,27 @@ export function WhatsAppInterface() {
     markAsRead();
   }, [activeChatId, user?.id]);
 
+  // [AUDITORIA] BUG (Camada 4, Interval B — achado no rastreio de "mensagens não atualizam",
+  // 2026-07-08): este interval chamava `fetchConversas(false)` com `false` fixo, ignorando
+  // completamente `activeTab`. O Interval A (linha ~734) chama `fetchConversas(activeTab ===
+  // "arquivadas")` — ou seja, com a aba "Arquivadas" selecionada, os dois intervals brigavam pelo
+  // mesmo estado `chats`: A busca a lista arquivada, B (rodando a cada 2-5s, fora de sincronia com
+  // A) busca a lista NÃO arquivada e sobrescreve — a lista visualmente "pisca"/alterna entre
+  // arquivados e não-arquivados a cada poucos segundos nessa aba. Não é a causa do bug de mensagem
+  // nova reportado (esse é upstream no Evolution, ver webhook.ts), mas é um bug real e
+  // independente encontrado durante o rastreio.
+  // [AUDITORIA] FIX APLICADO: `fetchConversas` agora recebe o mesmo `activeTab === "arquivadas"`
+  // usado pelo Interval A, e `activeTab` foi adicionado às dependências do efeito (sem isso, o
+  // closure do setInterval usaria um valor de activeTab congelado no momento da criação do
+  // interval, o mesmo tipo de bug de closure obsoleto já corrigido em InstanceManagementPanel.tsx
+  // nesta auditoria). Mudança pequena e isolada — não altera a cadência (2s/5s), só o filtro.
   useEffect(() => {
     const ms = activeChatId ? 2000 : 5000;
     const t = setInterval(() => {
-      if (document.visibilityState !== 'hidden') fetchConversas(false);
+      if (document.visibilityState !== 'hidden') fetchConversas(activeTab === "arquivadas");
     }, ms);
     return () => clearInterval(t);
-  }, [activeChatId]);
+  }, [activeChatId, activeTab]);
 
 
 
@@ -837,6 +889,12 @@ export function WhatsAppInterface() {
     if (chat) fetchMensagens(activeChatId, chatName, true);
     fetchIaStatus(activeChatId);
     if (chat && !chat.profile_pic) fetchProfilePic(activeChatId);
+    // [AUDITORIA] LÓGICA — Camada 4, Interval C: usa activeChatIdRef.current (não activeChatId
+    // diretamente) dentro do setInterval — corretamente evita o bug de closure obsoleto (o ref
+    // sempre reflete o valor mais atual, atualizado pelo useEffect de activeChatIdRef.current logo
+    // acima no arquivo). Redundante com fetchMensagens do Interval A (mesma chamada, cadência
+    // diferente: 3s aqui vs 5s lá), mas sem risco de race condition — mesmos parâmetros, resultado
+    // idêntico independente de qual dos dois "vence".
     const tMsgs = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
       const currentId = activeChatIdRef.current;
