@@ -84,11 +84,27 @@ export default function whatsappRouter(pool: Pool): Router {
   // [AUDITORIA] FIX PENDENTE (motivo: decisão de produto + múltiplos arquivos): não dá para
   // decidir sozinho qual tabela deveria ser a fonte canônica sem entender todos os consumidores de
   // agent_configs (usado também fora do módulo WhatsApp, ex: configuração do agente de IA) e sem
-  // saber se algum usuário real depende hoje do valor gravado só em agent_configs. Próxima sessão:
-  // 1) rodar uma query em produção pra ver se existe overlap real (usuário com agent_configs mas
-  // sem integracoes_config/agentes correspondente); 2) se sim, decidir com o usuário se
-  // getEvolutionConfig deve incluir agent_configs como uma fonte adicional (em que prioridade) ou
-  // se agent_configs deve ser descontinuado a favor de integracoes_config/agentes.
+  // saber se algum usuário real depende hoje do valor gravado só em agent_configs.
+  //
+  // [AUDITORIA] QUERY EXECUTADA EM 2026-07-08 (overlap agent_configs x integracoes_config x
+  // agentes, em produção): resultado — HÁ divergência real, mas só para 1 usuário:
+  //   user_id=435ee472-0fc3-4015-995a-ae6e1c80606d (mentoark@gmail.com)
+  //   agent_configs.evolution_instancia = 'teste'          ← órfã/errada
+  //   integracoes_config.instancia      = 'crm_435ee4720fc3' ← correta
+  //   agentes.evolution_instancia       = 'crm_435ee4720fc3' ← correta
+  // Nenhum outro usuário tem agent_configs.evolution_instancia preenchido, então não há caso de
+  // "só existe em agent_configs, sem integracoes_config/agentes correspondente" — a pergunta original
+  // (overlap real) tem resposta NÃO: todo usuário com valor em agent_configs também tem o valor
+  // certo em agentes/integracoes_config. CONCLUSÃO: para este usuário, getEvolutionConfig() (que
+  // não lê agent_configs) já retorna a instancia CORRETA via integracoes_config (prioridade 1 desta
+  // função) — não é a causa de "/send etc. na instância errada" para ele. O lookup de userId em
+  // webhook.ts também não é afetado: falha em agent_configs (prioridade 1 lá, por causa do valor
+  // 'teste') mas resolve certo via agentes (prioridade 2, ver webhook.ts). Ou seja, essa divergência
+  // é real e vale limpar por higiene, mas NÃO é a causa raiz do bug "mensagens não atualizam na
+  // tela" investigado nesta sessão — descartada como causa antes de tocar em getEvolutionConfig().
+  // Ação de baixo risco ainda pendente (não aplicada — é escrita em produção, requer confirmação):
+  // `UPDATE agent_configs SET evolution_instancia = 'crm_435ee4720fc3' WHERE user_id =
+  // '435ee472-0fc3-4015-995a-ae6e1c80606d';` para eliminar a linha órfã.
   async function getEvolutionConfig(userId: string): Promise<{
     url: string; api_key: string; instancia: string; agenteId: string | null; isGlobal: boolean; stableInstancia: string;
   }> {
@@ -281,6 +297,17 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // [AUDITORIA] LÓGICA — RASTREIO "mensagens não atualizam" (Camada 2, 2026-07-08): esta query
+  // filtra só por `m.user_id = $1` (linha ~325), sem filtro de instance_name — confirmado que uma
+  // eventual divergência de nome de instância (ver [AUDITORIA] em getEvolutionConfig, mais acima
+  // neste arquivo) NÃO impede uma mensagem de aparecer aqui, desde que o webhook tenha gravado o
+  // user_id certo. `rn=1` sempre pega a mensagem mais recente por telefone (ORDER BY created_at
+  // DESC), então uma mensagem nova inserida em whatsapp_messages apareceria nesta resposta na
+  // consulta seguinte, sem qualquer cache/staleness nesta camada. Testado via curl direto nesta
+  // sessão (ver relatório) — a rota funciona corretamente para o histórico existente; não foi
+  // possível confirmar com uma mensagem NOVA porque a Camada 0 (Evolution API em si, fora de
+  // qualquer arquivo do CRM) não chegou a gravar nenhuma mensagem de teste no banco — ver
+  // [AUDITORIA] no topo do handler POST /evolution em backend/src/routes/webhook.ts.
   router.get('/conversas', async (req: AuthRequest, res: Response) => {
     console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId, query: req.query });
     try {
@@ -377,6 +404,11 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // GET /api/whatsapp/conversas/:phone
+  // [AUDITORIA] LÓGICA — Camada 2 (mensagens de uma conversa específica): filtra por
+  // `split_part(remote_jid,'@',1) = $1 AND user_id = $2`, sem cache/staleness — qualquer linha
+  // nova em whatsapp_messages para esse telefone+usuário aparece na próxima chamada. Mesma
+  // conclusão da rota /conversas acima: código correto, não reproduzível com dado novo nesta
+  // sessão porque a mensagem de teste nunca chegou ao banco (causa raiz é upstream, no Evolution).
   router.get('/conversas/:phone', async (req: AuthRequest, res: Response) => {
     console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId, params: req.params });
     try {

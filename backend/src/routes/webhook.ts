@@ -189,6 +189,34 @@ export default function webhookRouter(pool: Pool): Router {
     ).catch(() => {});
   }
 
+  // [AUDITORIA] LÓGICA — RASTREIO "mensagens não atualizam na tela" (2026-07-08):
+  // Teste ao vivo feito nesta sessão: com a instância crm_435ee4720fc3 conectada (status "open",
+  // número +55 11 97957-9548), uma mensagem de WhatsApp real foi enviada para esse número. Nenhum
+  // evento `messages.upsert` chegou a este handler (confirmado via `docker logs -f crm-api | grep
+  // WH:` rodando durante o teste, e via SELECT em whatsapp_messages — nenhuma linha nova). Eventos
+  // de metadata (chats.upsert, presence.update, contacts.update) da MESMA instância CHEGARAM
+  // normalmente, autenticados com sucesso, então a rota/auth deste arquivo está funcionando.
+  //
+  // CAUSA RAIZ ENCONTRADA — não é código deste arquivo nem de nenhuma camada do CRM: nos logs
+  // brutos do container `evolution` (não do crm-api), o processamento interno do evento
+  // messages.upsert lança uma exceção ANTES de disparar o webhook:
+  //   PrismaClientKnownRequestError em io.updateChatUnreadMessages (dist/main.js:285) chamado a
+  //   partir de `messages.upsert` (dist/main.js:245) — "Error querying the database: Named and
+  //   positional parameters mixed in one statement" (Prisma code P2010), numa query MySQL que o
+  //   Evolution roda internamente para atualizar contagem de não-lidas do chat.
+  // Ou seja: o Evolution API v2.3.7 (evoapicloud/evolution-api, atualizado nesta sessão) trava
+  // internamente ao processar QUALQUER mensagem recebida antes mesmo de despachar o webhook — o
+  // POST /webhook/evolution deste arquivo NUNCA é chamado pra mensagens reais recebidas nesta
+  // versão+provider (mysql). Nenhuma correção possível neste arquivo, nem em nenhum arquivo do
+  // CRM, resolve isso — o bug está no código interno do Evolution API, não no nosso.
+  // [AUDITORIA] FIX PENDENTE (motivo: mudança de infraestrutura fora do escopo desta auditoria de
+  // código — instrução explícita desta sessão foi "não fazer deploy, só commits locais"): opções a
+  // avaliar numa próxima sessão/com confirmação do usuário: (a) trocar DATABASE_PROVIDER de mysql
+  // para postgresql no compose do Evolution (usar o Postgres que o próprio CRM já roda) — pode
+  // contornar o bug se for específico do driver MySQL do Prisma; (b) fixar uma tag de imagem mais
+  // antiga/estável do evoapicloud/evolution-api em vez de :latest, já que essa parece ser uma
+  // regressão recente da lib; (c) reportar o bug upstream no repo do Evolution API. Nenhuma dessas
+  // ações foi tomada nesta sessão por serem mudanças de infra, não de código.
   router.post('/evolution', async (req: Request, res: Response) => {
     // ── TRACE 0: chegou no servidor ──────────────────────────────────────────
     const traceId = Date.now().toString(36);
