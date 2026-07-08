@@ -23,6 +23,21 @@ Ver protocolo completo em `AUDITORIA_PROTOCOLO.md`. Status possíveis: `✅ revi
 | WhatsApp | backend/src/index.ts (lateral — só rota /api/admin/webhook-trace) | 🔧 corrigido | Filtro de dedup comparava message_id com padrão de telefone (nunca casava) → corrigido com JOIN em whatsapp_messages |
 | WhatsApp | backend/src/services/migrations.ts (lateral)            | 🗑️ removido | Duplicata não importada de backend/src/migrations.ts — confirmado morto e removido (commit 2be8309) |
 
+### Rastreio "mensagens novas não atualizam na tela" (2026-07-08) — camada por camada
+
+Query pendente executada (overlap `agent_configs` x `integracoes_config` x `agentes`): confirmou 1 divergência real (`agent_configs.evolution_instancia='teste'` para mentoark@gmail.com vs `crm_435ee4720fc3` correto nas outras duas tabelas), mas **descartada como causa** — o lookup de userId em `webhook.ts` resolve certo via fallback `agentes`. Documentado no comentário [AUDITORIA] existente em `getEvolutionConfig()` (whatsapp.ts).
+
+Teste ao vivo (mensagem WhatsApp real enviada para instância conectada `crm_435ee4720fc3`, status "open"): **nenhum evento `messages.upsert` chegou ao webhook do CRM.** Causa raiz encontrada nos logs brutos do container `evolution` (não do CRM): `PrismaClientKnownRequestError` (code P2010, "Named and positional parameters mixed in one statement") dentro de `io.updateChatUnreadMessages`, chamado internamente por `messages.upsert` do próprio Evolution API v2.3.7 antes de despachar o webhook. **Bug upstream no Evolution API, não no código do CRM.**
+
+| Camada | Arquivo | Status | Resumo |
+|--------|---------|--------|--------|
+| 0 (Evolution API, fora do CRM) | N/A — infra | ❌ causa raiz confirmada | Bug interno do Evolution v2.3.7 (Prisma + MySQL) impede `messages.upsert` de ser despachado para qualquer mensagem recebida. FIX PENDENTE: trocar DATABASE_PROVIDER para postgresql, ou fixar versão anterior do Evolution — mudança de infra, não de código, fora do escopo desta sessão ("não fazer deploy") |
+| 1 — webhook.ts | backend/src/routes/webhook.ts | ✅ revisado sem bug | Rota/auth funcionam (confirmado com eventos reais chats.upsert/presence.update chegando); nunca recebe messages.upsert por causa da Camada 0 |
+| 2 — API GET /conversas, /conversas/:phone | backend/src/routes/whatsapp.ts | ✅ revisado sem bug | Ambas filtram corretamente por user_id, sem staleness; pegariam mensagem nova se ela existisse no banco |
+| 3 — fetch frontend | src/components/WhatsAppInterface.tsx (fetchConversas, fetchMensagens) | ✅ revisado sem bug | Early-return de fetchMensagens verificado a fundo — só bloqueia quando conteúdo é idêntico (tamanho de array já difere com msg nova); sem outro early-return ou comparação de referência problemática |
+| 4 — polling (3 intervals) | src/components/WhatsAppInterface.tsx | 🔧 corrigido | BUG real e independente encontrado: Interval B chamava `fetchConversas(false)` fixo, ignorando `activeTab` — brigava com Interval A na aba "Arquivadas", causando flicker entre listas arquivada/não-arquivada. Corrigido (agora usa `activeTab === "arquivadas"` + adicionado à dependência do efeito). Os 3 intervals continuam redundantes entre si (não é bug, é ineficiência) → consolidação FIX PENDENTE (risco de mudar cadência percebida) |
+| 5 — render | src/components/WhatsAppInterface.tsx | ✅ revisado sem bug | Sem React.memo em componentes filhos; useMemo com dependências corretas |
+
 ### Busca lateral — arquivos fora da lista original, avaliados como genuinamente parte do fluxo WhatsApp mas NÃO auditados nesta sessão (recomendo para a próxima)
 
 | Módulo   | Arquivo                                              | Status         | Resumo |
