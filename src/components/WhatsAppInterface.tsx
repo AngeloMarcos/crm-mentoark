@@ -2,8 +2,8 @@
  * WhatsAppInterface.tsx — Componente principal do chat (aba "Conversas" de /whatsapp).
  *
  * Lista conversas (fetchConversas, poll a cada 2-5s), mensagens da conversa ativa
- * (fetchMensagens, poll a cada 3s), envio de mensagem/nota (handleSendMessage — ver
- * [AUDITORIA] BUG de severidade alta nessa função sobre uso indevido do OpenClaw Admin),
+ * (fetchMensagens, poll a cada 3s), envio de mensagem/nota (handleSendMessage — não chama
+ * IA/OpenAI, envia sempre o texto digitado pelo atendente),
  * seleção múltipla/exclusão/encaminhamento de mensagens, gestão de instância (conectar via QR/
  * pairing code), toggle de IA por contato, busca global e por conversa, e painel de detalhes do
  * contato (tags, mídia, documentos, notas do CRM). Não faz polling via WebSocket/SSE — tudo é
@@ -43,7 +43,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { fetchConnectionStatus, createInstance, disconnectInstance, type StatusResult, type CreateInstanceResult } from "@/services/evolutionService";
 import { toast } from "sonner";
-import { withCooldown, CooldownError, friendlyError, getCooldownRemaining } from "@/lib/requestGuard";
 import { useNavigate } from "react-router-dom";
 import {
   Dialog,
@@ -909,85 +908,16 @@ export function WhatsAppInterface() {
   }, [activeChatId, chats]);
 
   const handleSendMessage = async () => {
-    // aiReply fica no escopo da função para ser acessível após o bloco de IA
-    let aiReply = '';
-
-    // IA responde via API unificada se o modo IA estiver ativo e não houver pausa manual.
-    // Se a IA falhar ou estiver em cooldown, o fluxo não faz return: o texto do agente humano
-    // (messageInput) é enviado como fallback. Comportamento intencional para não bloquear o atendimento.
-    // [AUDITORIA] BUG (SEVERIDADE ALTA): o endpoint chamado logo abaixo é /api/openclaw/chat — o
-    // "OpenClaw Admin", agente de administração da VPS com acesso à ferramenta exec (shell real na
-    // VPS de produção; ver backend/src/routes/openclaw.ts, auditado nesta mesma sessão). O system
-    // prompt desse agente é fixo: "Você é o OpenClaw Admin... Você tem acesso à ferramenta exec
-    // para executar comandos shell diretamente na VPS." Não existe nenhum branch nesse endpoint
-    // que reconheça `sessionKey` (aqui = activeChatId, o telefone do cliente) como um modo
-    // "atendimento ao cliente" — é sempre o mesmo agente admin, independente do sessionKey.
-    // O padrão de chamada aqui (fetch a /api/openclaw/chat com {message, sessionKey}) é
-    // estruturalmente idêntico ao sendMessage() de src/pages/OpenClaw.tsx, sugerindo que este
-    // trecho foi copiado de lá sem trocar o endpoint para um gerador de resposta ao cliente.
-    // Impacto real: sempre que um atendente humano digita algo e envia com a IA não pausada
-    // (iaPausada começa false por padrão), o texto digitado é primeiro mandado ao agente admin da
-    // VPS; se ele responder QUALQUER coisa (aiReply), essa resposta — não o texto do atendente —
-    // é o que efetivamente vai pro cliente no WhatsApp (linha ~905: `(aiReply || messageInput)`).
-    // Na prática isso troca a mensagem enviada por uma resposta de um agente shell-admin, e no
-    // pior caso poderia vazar saída de um comando exec (nomes de containers, conteúdo de arquivo
-    // via read_file, etc.) diretamente para um cliente externo pelo WhatsApp.
-    // [AUDITORIA] FIX PENDENTE (motivo: mudança de comportamento no fluxo principal de envio de
-    // mensagens — apesar de eu ter alta confiança de que isso é um bug de endpoint trocado, a
-    // correção (remover esta chamada e sempre enviar messageInput como digitado, ou apontar para
-    // um endpoint de sugestão de resposta ao cliente que de fato exista) muda o comportamento do
-    // botão de enviar para toda conversa com IA ativa — decisão que prefiro deixar explícita para
-    // o usuário confirmar antes de qualquer sessão aplicar, dado o risco de segurança envolvido.
-    // Próxima sessão: confirmar com o usuário se existe (ou deveria existir) um endpoint de IA
-    // para sugestão de resposta ao cliente diferente do OpenClaw Admin; se não houver, o mais
-    // seguro é remover este bloco inteiro e enviar sempre o texto digitado pelo atendente.
-    if (!iaPausada && inputMode === "responder") {
-      const cdRemaining = getCooldownRemaining('whatsapp-openclaw');
-      if (cdRemaining > 0) {
-        // Cooldown ativo: mostra aviso mas não retorna — o texto do humano será enviado abaixo
-        toast.error(
-          `IA em cooldown. Aguarde ${Math.ceil(cdRemaining / 1000)}s.`,
-          { id: 'whatsapp-openclaw-error' }
-        );
-      } else {
-        try {
-          setIsAiProcessing(true);
-          await withCooldown('whatsapp-openclaw', async () => {
-            const res = await fetch(`${API_BASE}/api/openclaw/chat`, {
-              method: 'POST',
-              headers: apiHeaders(),
-              body: JSON.stringify({ message: messageInput, sessionKey: activeChatId })
-            });
-            if (!res.ok) {
-              const err = await res.json().catch(() => ({}));
-              console.error('[OPENCLAW] Erro na resposta IA:', err);
-              if (res.status === 401) {
-                toast.error('Sessão expirada. Faça login novamente.', { id: 'whatsapp-openclaw-error' });
-                navigate('/login');
-              } else {
-                toast.error(friendlyError(res.status, err?.error), { id: 'whatsapp-openclaw-error' });
-              }
-              throw new Error(`openclaw_${res.status}`);
-            }
-            const data = await res.json().catch(() => ({}));
-            if (data.reply) aiReply = data.reply;
-          }, { baseMs: 2000, maxMs: 60_000 });
-        } catch (err: any) {
-          if (err instanceof CooldownError) {
-            toast.error(
-              `IA em cooldown. Aguarde ${Math.ceil(err.retryInMs / 1000)}s.`,
-              { id: 'whatsapp-openclaw-error' }
-            );
-          } else if (!err?.message?.startsWith('openclaw_')) {
-            console.error('[OPENCLAW] Falha ao chamar IA:', err);
-            toast.error(friendlyError(undefined, err?.message), { id: 'whatsapp-openclaw-error' });
-          }
-        } finally {
-          setIsAiProcessing(false);
-        }
-      }
-    }
-
+    // [AUDITORIA] FIX APLICADO (2026-07-08, a pedido do usuário — "tire o uso de tokens da OpenAI,
+    // só quero o chat por enquanto"): removido o bloco que chamava /api/openclaw/chat (o agente
+    // ADMIN da VPS com acesso a shell, ver backend/src/routes/openclaw.ts) antes de todo envio de
+    // mensagem com IA não pausada. Esse era o BUG SEVERO documentado na auditoria desta sessão:
+    // a resposta do agente admin (não o texto digitado) era o que ia pro cliente no WhatsApp, e
+    // com a chave OpenAI sem crédito (insufficient_quota) isso quebrava o envio por completo,
+    // impedindo até mensagens manuais simples de serem mandadas. Agora handleSendMessage sempre
+    // envia exatamente o texto digitado pelo atendente — sem chamar OpenAI/OpenClaw em nenhum
+    // ponto deste fluxo. Se no futuro fizer sentido reintroduzir uma sugestão de resposta via IA,
+    // precisa ser um endpoint de atendimento ao cliente de verdade, não o OpenClaw Admin.
     // Fecha busca ao enviar mensagem
     setIsSearchingInChat(false);
     setChatSearchTerm("");
@@ -1002,8 +932,7 @@ export function WhatsAppInterface() {
 
     if (!messageInput.trim() || !activeChatId) return;
 
-    // Se a IA gerou uma resposta, envia ela; caso contrário envia o texto do agente humano
-    const text = (aiReply || messageInput).trim();
+    const text = messageInput.trim();
     const currentReplyTo = replyTo;
     setMessageInput("");
     setReplyTo(null);
