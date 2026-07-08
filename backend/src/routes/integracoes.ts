@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 export default function integracoesRouter(pool: Pool): Router {
   const router = Router();
@@ -9,7 +10,7 @@ export default function integracoesRouter(pool: Pool): Router {
     try {
       await fn(req, res);
     } catch (err: any) {
-      console.error('[integracoes]', err.message);
+      log.error('INTEGRACOES', 'Erro', { err: err?.message, stack: err?.stack });
       res.status(500).json({ message: err.message });
     }
   };
@@ -39,7 +40,7 @@ export default function integracoesRouter(pool: Pool): Router {
          evolution_api_key    = EXCLUDED.evolution_api_key,
          updated_at           = NOW()`,
       [userId, instancia, url, apiKey]
-    ).catch(err => console.warn('[integracoes] sync agent_configs:', err.message));
+    ).catch(err => log.warn('INTEGRACOES', 'sync agent_configs', { err: err?.message, stack: err?.stack }));
   }
 
   // ── GET /api/integracoes_config ─────────────────────────────────────────────

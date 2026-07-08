@@ -32,6 +32,7 @@ import {
   AtualizarUrlIntegracaoArgsSchema,
   ReativarIaContatoArgsSchema,
 } from '../services/functionCallingSecurity';
+import { log } from '../logger';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constantes de validação
@@ -354,7 +355,7 @@ async function executarFerramenta(
       return createErrorResult(`Ferramenta não implementada: "${nomeFerramenta}"`);
   }
   } catch (err: any) {
-    console.error('[SUPORTE FERRAMENTA ERROR]', err.message);
+    log.error('SUPORTE FERRAMENTA ERROR', 'Erro ao executar ferramenta', { err: err?.message, stack: err?.stack });
     return createErrorResult(`Erro ao executar ferramenta: ${err.message}`);
   }
 }
@@ -440,10 +441,11 @@ export default function suporteRouter(pool: Pool): Router {
 
         // Sem tool_calls → resposta final do modelo
         if (!msg.tool_calls || msg.tool_calls.length === 0) {
-          console.log(
-            `[SUPORTE COPILOT] userId=${userId} | iteracoes=${iter + 1} | ` +
-            `ferramentas=${ferramentasExecutadas.length}`,
-          );
+          log.info('SUPORTE COPILOT', 'Resposta final do modelo', {
+            userId,
+            iteracoes: iter + 1,
+            ferramentas: ferramentasExecutadas.length,
+          });
           return res.json({
             resposta:              msg.content ?? '',
             ferramentas_executadas: ferramentasExecutadas,
@@ -464,18 +466,19 @@ export default function suporteRouter(pool: Pool): Router {
             args = {};
           }
 
-          console.log(
-            `[SUPORTE COPILOT] tool=${tc.function.name} ` +
-            `userId=${userId} args=${JSON.stringify(args)}`,
-          );
+          log.info('SUPORTE COPILOT', 'Executando tool call', {
+            tool: tc.function.name,
+            userId,
+            args,
+          });
 
           // Logs adicionais de auditoria de segurança
           if (FERRAMENTAS_PERMITIDAS.has(tc.function.name)) {
-            console.log(
-              `[SUPORTE COPILOT SEC] tool=${tc.function.name} ` +
-              `args_keys=${Object.keys(args).join(',')} ` +
-              `destructive_check=starting`
-            );
+            log.info('SUPORTE COPILOT SEC', 'Iniciando checagem destrutiva', {
+              tool: tc.function.name,
+              argsKeys: Object.keys(args).join(','),
+              destructiveCheck: 'starting',
+            });
           }
 
           const resultado = await executarFerramenta(
@@ -499,9 +502,10 @@ export default function suporteRouter(pool: Pool): Router {
       }
 
       // Ultrapassou o limite de iterações
-      console.warn(
-        `[SUPORTE COPILOT] Limite de ${MAX_ITERACOES} iterações atingido. userId=${userId}`,
-      );
+      log.warn('SUPORTE COPILOT', 'Limite de iterações atingido', {
+        maxIteracoes: MAX_ITERACOES,
+        userId,
+      });
       return res.status(200).json({
         resposta:              'Operação encerrada: limite de iterações atingido.',
         ferramentas_executadas: ferramentasExecutadas,
@@ -510,7 +514,7 @@ export default function suporteRouter(pool: Pool): Router {
 
     } catch (err: any) {
       const errMsg = err?.message ?? String(err);
-      console.error('[SUPORTE COPILOT] Erro:', errMsg);
+      log.error('SUPORTE COPILOT', 'Erro', { err: errMsg, stack: err?.stack });
 
       if (err?.status === 401 || err?.code === 'invalid_api_key') {
         return res.status(503).json({

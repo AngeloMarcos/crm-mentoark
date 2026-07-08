@@ -1,0 +1,24 @@
+- generic [ref=e3]:
+  - main [ref=e4]:
+    - main [ref=e7]:
+      - generic [ref=e10]:
+        - generic [ref=e11]:
+          - img [ref=e12]
+          - img [ref=e14]
+        - generic [ref=e18]:
+          - generic [ref=e20]: Sign in
+          - generic [ref=e23]:
+            - generic [ref=e25]:
+              - generic [ref=e30]: Email
+              - textbox "Email" [active] [ref=e34]:
+                - /placeholder: ""
+            - generic [ref=e36]:
+              - generic [ref=e41]: Password
+              - textbox "Password" [ref=e45]:
+                - /placeholder: ""
+          - button "Sign in" [ref=e47] [cursor=pointer]:
+            - generic [ref=e49]: Sign in
+          - link "Forgot my password" [ref=e51] [cursor=pointer]:
+            - /url: /forgot-password
+            - generic [ref=e53]: Forgot my password
+  - complementary

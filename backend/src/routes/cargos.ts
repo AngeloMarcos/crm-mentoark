@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest, adminMiddleware } from '../middleware';
+import { log } from '../logger';
 
 export default function cargosRouter(pool: Pool): Router {
   const router = Router();
@@ -9,7 +10,7 @@ export default function cargosRouter(pool: Pool): Router {
     try {
       await fn(req, res);
     } catch (err: any) {
-      console.error('[cargos]', err.message);
+      log.error('CARGOS', 'Erro', { err: err?.message, stack: err?.stack });
       res.status(500).json({ message: err.message });
     }
   };

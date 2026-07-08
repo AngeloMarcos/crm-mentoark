@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Antes de qualquer coisa, leia `STATUS.md`** — painel de status atual de todos os serviços e pendências abertas.
+
 ## Produto
 
 CRM + IA para automação comercial via WhatsApp. Stack: React/Vite/TypeScript (frontend) + Express.js/TypeScript (backend) + PostgreSQL 16 + pgvector.
@@ -78,8 +80,13 @@ PostgreSQL 16 com pgvector. Tabelas críticas para a IA:
 | n8n.mentoark.com.br | `n8n` | `/opt/n8n/docker-compose.yml` |
 | disparo.mentoark.com.br | `evolution` | `/opt/evolution/docker-compose.yml` |
 | pgadmin.mentoark.com.br | `pgadmin` | `/opt/postgres/docker-compose.yml` |
+| grafana.mentoark.com.br | `grafana` (+ `loki`, `alloy`, sem domínio próprio) | `/opt/observability/docker-compose.yml` |
 
 PostgreSQL: `147.93.9.172:5432` / db `crm` / user `mentoark`. Imagem `pgvector/pgvector:pg16` (extensões `pgcrypto` + `vector`).
+
+MySQL (`147.93.9.172:3306`, imagem `mysql:8.0`, `/opt/mysql/docker-compose.yml`) é compartilhado com o Evolution API (rede `mysql_default`) — não faz parte do banco do CRM.
+
+**Outros projetos na mesma VPS (não são do CRM — não mexer sem necessidade):** `pdv_prod` (pdv.mentoark.com.br, `/opt/pdv/prod/docker-compose.yml`), `hemoclinic_prod` (hemoclinic.mentoark.com.br, `/opt/hemoclinic/prod/docker-compose.yml`), `portainer` (portainer.mentoark.com.br, `/opt/portainer/docker-compose.yml`). Ver `diagnosticos/INVENTARIO_VPS.md` para detalhes completos de todos os containers da VPS.
 
 ### Deploy — Frontend
 

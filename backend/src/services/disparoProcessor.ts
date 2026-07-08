@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
 import { botSentTexts, botMessageIds } from './agentEngine';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
+import { log } from '../logger';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -26,7 +27,7 @@ export async function processarDisparos(pool: Pool) {
     
     if (!batch.rows.length) return;
 
-    console.log(`[DISPARO] Processando lote de ${batch.rows.length} mensagens`);
+    log.info('DISPARO', 'Processando lote de mensagens', { tamanhoLote: batch.rows.length });
 
     for (const msg of batch.rows) {
       const { log_id, disparo_id, user_id, telefone, mensagem, tipo_midia, url_midia, legenda_midia } = msg;
@@ -175,7 +176,7 @@ export async function processarDisparos(pool: Pool) {
             tipo_midia !== 'texto' && url_midia ? url_midia : null,
             tipo_midia === 'imagem' ? 'image/jpeg' : tipo_midia === 'audio' ? 'audio/ogg' : tipo_midia === 'documento' ? 'application/pdf' : null
           ]
-        ).catch(err => console.error('[DISPARO INSERT whatsapp_messages ERROR]:', err.message));
+        ).catch(err => log.error('DISPARO INSERT whatsapp_messages ERROR', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
 
         // 5. Atualizar status para enviado
         await pool.query(
@@ -188,7 +189,7 @@ export async function processarDisparos(pool: Pool) {
         );
 
       } catch (err: any) {
-        console.error(`[DISPARO] Erro no log ${log_id}:`, err.message);
+        log.error('DISPARO', 'Erro no log', { logId: log_id, err: err?.message, stack: err?.stack });
         
         // Marcar falha no log
         await pool.query(
@@ -206,6 +207,6 @@ export async function processarDisparos(pool: Pool) {
       await sleep(1500);
     }
   } catch (err: any) {
-    console.error('[DISPARO] Erro crítico no motor de processamento:', err.message);
+    log.error('DISPARO', 'Erro crítico no motor de processamento', { err: err?.message, stack: err?.stack });
   }
 }

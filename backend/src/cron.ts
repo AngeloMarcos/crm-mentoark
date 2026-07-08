@@ -1,11 +1,12 @@
 import cron from 'node-cron';
 import { pool } from './db';
+import { log } from './logger';
 
 export function initCronJobs() {
   // Todo dia às 03:00 (horário de Brasília) — Limpeza diária de tabelas de crescimento
   cron.schedule('0 3 * * *', async () => {
     try {
-      console.log('[CRON] Iniciando limpeza diária...');
+      log.info('CRON', 'Iniciando limpeza diária...');
 
       // 1. Limpar deduplicação de webhook (mais de 24h)
       const dedup = await pool.query(
@@ -27,16 +28,21 @@ export function initCronJobs() {
         "DELETE FROM oauth_state WHERE expires_at < NOW()"
       ).catch(() => ({ rowCount: 0 }));
 
-      console.log(`[CRON] Limpeza diária concluída: ${dedup.rowCount} dedups, ${tokens.rowCount} tokens, ${ratelimit.rowCount} ratelimits, ${oauth.rowCount} oauth_states removidos`);
+      log.info('CRON', 'Limpeza diária concluída', {
+        dedups: dedup.rowCount,
+        tokens: tokens.rowCount,
+        ratelimits: ratelimit.rowCount,
+        oauthStates: oauth.rowCount,
+      });
     } catch (err: any) {
-      console.error('[CRON] Erro na limpeza diária:', err.message);
+      log.error('CRON', 'Erro na limpeza diária', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 
   // Todo domingo às 02:00 (horário de Brasília) — limpeza de retenção LGPD (longo prazo)
   cron.schedule('0 2 * * 0', async () => {
     try {
-      console.log('[CRON] Iniciando limpeza semanal de retenção LGPD...');
+      log.info('CRON', 'Iniciando limpeza semanal de retenção LGPD...');
 
       // 1. disparo_logs: manter 90 dias
       const logs = await pool.query(
@@ -58,9 +64,13 @@ export function initCronJobs() {
         "DELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '2 years'"
       ).catch(() => ({ rowCount: 0 }));
 
-      console.log(`[CRON] Limpeza semanal concluída: ${logs.rowCount} disparos, ${catLogs.rowCount} catálogos, ${chats.rowCount} chats removidos`);
+      log.info('CRON', 'Limpeza semanal concluída', {
+        disparos: logs.rowCount,
+        catalogos: catLogs.rowCount,
+        chats: chats.rowCount,
+      });
     } catch (err: any) {
-      console.error('[CRON] Erro na limpeza semanal:', err.message);
+      log.error('CRON', 'Erro na limpeza semanal', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 
@@ -70,12 +80,12 @@ export function initCronJobs() {
       const r = await pool.query(`SELECT reativar_pausas_expiradas() AS reativados`);
       const count = Number(r.rows[0]?.reativados ?? 0);
       if (count > 0) {
-        console.log(`[CRON] ${count} pausa(s) de IA reativada(s) automaticamente`);
+        log.info('CRON', 'pausa(s) de IA reativada(s) automaticamente', { count });
       }
     } catch (err: any) {
-      console.error('[CRON] Erro ao reativar pausas:', err.message);
+      log.error('CRON', 'Erro ao reativar pausas', { err: err.message });
     }
   });
 
-  console.log('[CRON] Jobs de limpeza e retenção LGPD registrados');
+  log.info('CRON', 'Jobs de limpeza e retenção LGPD registrados');
 }

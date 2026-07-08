@@ -10,6 +10,7 @@ import {
   CriarAgendamentoArgsSchema,
   ConsultarFaqArgsSchema,
 } from '../functionCallingSecurity';
+import { log } from '../logger';
 
 export interface MCPTool {
   name: string;
@@ -259,7 +260,7 @@ export async function executarFerramenta(
         throw new Error(`Ferramenta "${nome}" não reconhecida`);
     }
   } catch (err: any) {
-    console.error(`[MCP SEC] Erro na ferramenta ${nome} userId=${userId}:`, err.message);
+    log.error('MCP SEC', 'Erro na ferramenta', { nome, userId, err: err?.message, stack: err?.stack });
     return `Erro ao executar ${nome}: ${err.message}`;
   }
 }

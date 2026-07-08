@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 export default function kanban(pool: Pool): Router {
   const router = Router();
@@ -62,8 +63,8 @@ export default function kanban(pool: Pool): Router {
               prioridade: parsed.prioridade || 'media'
             };
           }
-        } catch (err) {
-          console.error('[IA_KANBAN] Erro ao chamar Anthropic:', err);
+        } catch (err: any) {
+          log.error('IA_KANBAN', 'Erro ao chamar Anthropic', { err: err?.message, stack: err?.stack });
         }
       }
 
@@ -511,7 +512,7 @@ export function kanbanWebhookN8n(pool: Pool) {
 
       return res.json({ success: true, tarefa_id: r.rows[0].id, coluna: 'Backlog' });
     } catch (err: any) {
-      console.error('[KANBAN_WEBHOOK]', err.message);
+      log.error('KANBAN_WEBHOOK', 'Erro', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });
     }
   };

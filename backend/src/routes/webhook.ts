@@ -18,10 +18,11 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
+import { log } from '../logger';
 
 function wlog(tag: string, msg: string) {
   const line = `[${new Date().toISOString()}] [${tag}] ${msg}`;
-  console.log(line);
+  log.info(tag, msg);
   try { fs.appendFileSync('/opt/crm/backend/log_geral.txt', line + '\n'); } catch {}
 }
 
@@ -178,11 +179,11 @@ export default function webhookRouter(pool: Pool): Router {
       }
     }
   }
-  
+
   async function handleMessageDelete(payload: EvolutionPayload): Promise<void> {
     const key = payload.data?.key;
     if (!key?.id) return;
-    
+
     await pool.query(
       `DELETE FROM whatsapp_messages WHERE message_id = $1 AND instance_name = $2`,
       [key.id, payload.instance]
@@ -220,19 +221,22 @@ export default function webhookRouter(pool: Pool): Router {
   router.post('/evolution', async (req: Request, res: Response) => {
     // ── TRACE 0: chegou no servidor ──────────────────────────────────────────
     const traceId = Date.now().toString(36);
-    console.log(`\n${'═'.repeat(60)}`);
-    console.log(`[WH:${traceId}] ENTRADA POST /webhook/evolution`);
-    console.log(`[WH:${traceId}] headers.content-type="${req.headers['content-type']}" | body_keys="${Object.keys(req.body || {}).join(',')}"`);
+    log.info('WEBHOOK', 'ENTRADA POST /webhook/evolution', { traceId });
+    log.info('WEBHOOK', 'Headers recebidos', {
+      traceId,
+      contentType: req.headers['content-type'],
+      bodyKeys: Object.keys(req.body || {}),
+    });
 
     const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
     if (!webhookSecret) {
-      console.error(`[WH:${traceId}] EVOLUTION_WEBHOOK_SECRET não configurado — rejeitando requisição`);
+      log.error('WEBHOOK', 'EVOLUTION_WEBHOOK_SECRET não configurado — rejeitando requisição', { traceId });
       return res.status(401).json({ error: 'Webhook secret não configurado no servidor' });
     }
     const ok = verificarAssinaturaEvolution(req, webhookSecret) || verificarChaveQuery(req, webhookSecret);
-    console.log(`[WH:${traceId}] AUTENTICAÇÃO válida=${ok}`);
+    log.info('WEBHOOK', 'Autenticação verificada', { traceId, valida: ok });
     if (!ok) {
-      console.warn(`[WH:${traceId}] Autenticação inválida — rejeitando`);
+      log.warn('WEBHOOK', 'Autenticação inválida — rejeitando', { traceId });
       return res.status(401).json({ error: 'Autenticação inválida' });
     }
 
@@ -242,23 +246,37 @@ export default function webhookRouter(pool: Pool): Router {
       const payload = req.body as EvolutionPayload;
       const eventClean = (payload.event || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-      console.log(`[WH:${traceId}] EVENTO="${payload.event}" clean="${eventClean}" instance="${payload.instance}"`);
-      console.log(`[WH:${traceId}] DATA jid="${payload.data?.key?.remoteJid}" fromMe=${payload.data?.key?.fromMe} msgId="${payload.data?.key?.id}" pushName="${payload.data?.pushName}"`);
-      console.log(`[WH:${traceId}] TEXTO="${String(payload.data?.message?.conversation || payload.data?.message?.extendedTextMessage?.text || '').slice(0, 80)}"`);
+      log.info('WEBHOOK', 'Evento recebido', {
+        traceId,
+        evento: payload.event,
+        eventClean,
+        instance: payload.instance,
+      });
+      log.info('WEBHOOK', 'Dados da mensagem', {
+        traceId,
+        jid: payload.data?.key?.remoteJid,
+        fromMe: payload.data?.key?.fromMe,
+        msgId: payload.data?.key?.id,
+        pushName: payload.data?.pushName,
+      });
+      log.info('WEBHOOK', 'Texto extraído', {
+        traceId,
+        texto: String(payload.data?.message?.conversation || payload.data?.message?.extendedTextMessage?.text || '').slice(0, 80),
+      });
 
       if (eventClean === 'messagesupdate') {
-        console.log(`[WH:${traceId}] → handleStatusUpdate`);
+        log.info('WEBHOOK', '→ handleStatusUpdate', { traceId });
         await handleStatusUpdate(payload);
         return;
       }
 
       if (eventClean === 'messagesdelete') {
-        console.log(`[WH:${traceId}] → handleMessageDelete`);
+        log.info('WEBHOOK', '→ handleMessageDelete', { traceId });
         await handleMessageDelete(payload);
         return;
       }
       if (eventClean !== 'messagesupsert') {
-        console.log(`[WH:${traceId}] IGNORADO evento não é messagesupsert (é "${eventClean}")`);
+        log.info('WEBHOOK', 'IGNORADO evento não é messagesupsert', { traceId, eventClean });
         return;
       }
 
@@ -269,7 +287,7 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       const remoteJid = payload.data?.key?.remoteJid || '';
-      console.log(`[WH:${traceId}] remoteJid="${remoteJid}"`);
+      log.info('WEBHOOK', 'remoteJid resolvido', { traceId, remoteJid });
       if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio instance=${payload.instance}`); return; }
       if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}" instance=${payload.instance}`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
@@ -311,9 +329,9 @@ export default function webhookRouter(pool: Pool): Router {
       if (cfgRes.rows.length) {
         userId = cfgRes.rows[0].user_id;
         palavraReativar = (cfgRes.rows[0].palavra_reativar || palavraReativar).toLowerCase();
-        console.log(`[WH:${traceId}] USERID via agent_configs: ${userId}`);
+        log.info('WEBHOOK', 'USERID via agent_configs', { traceId, userId });
       } else {
-        console.log(`[WH:${traceId}] agent_configs: nenhum resultado para instancia="${instancia}"`);
+        log.info('WEBHOOK', 'agent_configs: nenhum resultado', { traceId, instancia });
       }
 
       // 2. Fallback legado: tabela agentes (também captura n8n_webhook_url)
@@ -328,9 +346,9 @@ export default function webhookRouter(pool: Pool): Router {
         if (agtRes.rows.length) {
           userId = agtRes.rows[0].user_id;
           n8nWebhookUrl = agtRes.rows[0].n8n_webhook_url || null;
-          console.log(`[WH:${traceId}] USERID via agentes: ${userId} | n8n: ${n8nWebhookUrl ? 'SIM' : 'NÃO'}`);
+          log.info('WEBHOOK', 'USERID via agentes', { traceId, userId, temN8n: !!n8nWebhookUrl });
         } else {
-          console.log(`[WH:${traceId}] agentes: nenhum resultado`);
+          log.info('WEBHOOK', 'agentes: nenhum resultado', { traceId });
         }
       }
       // Também verifica n8n_webhook_url se userId já foi resolvido via agent_configs
@@ -344,7 +362,7 @@ export default function webhookRouter(pool: Pool): Router {
         ).catch(() => ({ rows: [] as any[] }));
         if (n8nRes.rows.length) {
           n8nWebhookUrl = n8nRes.rows[0].n8n_webhook_url;
-          console.log(`[WH:${traceId}] n8n_webhook_url via agentes: ${n8nWebhookUrl}`);
+          log.info('WEBHOOK', 'n8n_webhook_url resolvido via agentes', { traceId, n8nWebhookUrl });
         }
       }
 
@@ -357,9 +375,9 @@ export default function webhookRouter(pool: Pool): Router {
         ).catch(() => ({ rows: [] as any[] }));
         if (uRes.rows.length) {
           userId = uRes.rows[0].id;
-          console.log(`[WH:${traceId}] USERID via prefixo UUID: ${userId}`);
+          log.info('WEBHOOK', 'USERID via prefixo UUID', { traceId, userId });
         } else {
-          console.log(`[WH:${traceId}] prefixo UUID "${prefixo}%": nenhum resultado`);
+          log.info('WEBHOOK', 'prefixo UUID: nenhum resultado', { traceId, prefixo });
         }
       }
 
@@ -373,9 +391,9 @@ export default function webhookRouter(pool: Pool): Router {
         ).catch(() => ({ rows: [] as any[] }));
         if (icRes.rows.length) {
           userId = icRes.rows[0].user_id;
-          console.log(`[WH:${traceId}] USERID via integracoes_config: ${userId}`);
+          log.info('WEBHOOK', 'USERID via integracoes_config', { traceId, userId });
         } else {
-          console.log(`[WH:${traceId}] integracoes_config: nenhum resultado para instancia="${instancia}"`);
+          log.info('WEBHOOK', 'integracoes_config: nenhum resultado', { traceId, instancia });
         }
       }
 
@@ -386,13 +404,13 @@ export default function webhookRouter(pool: Pool): Router {
         ).catch(() => ({ rows: [] as any[] }));
         if (adminRes.rows.length) {
           userId = adminRes.rows[0].id;
-          console.log(`[WH:${traceId}] USERID via admin-fallback: ${userId}`);
+          log.info('WEBHOOK', 'USERID via admin-fallback', { traceId, userId });
         } else {
-          console.log(`[WH:${traceId}] FATAL: nenhum userId encontrado para instancia="${instancia}"`);
+          log.error('WEBHOOK', 'FATAL: nenhum userId encontrado para instância', { traceId, instancia });
         }
       }
 
-      console.log(`[WH:${traceId}] RESOLUCAO FINAL userId=${userId} | fromMe=${fromMe} | isGroup=${isGroup}`);
+      log.info('WEBHOOK', 'Resolução final', { traceId, userId, fromMe, isGroup });
 
       // ── UPSERT antecipado de contato — garante que contatos novos existam antes de qualquer branch ──
       if (userId && !isGroup && remoteJid) {
@@ -406,7 +424,7 @@ export default function webhookRouter(pool: Pool): Router {
                  nome = CASE WHEN contatos.nome = contatos.telefone THEN EXCLUDED.nome ELSE contatos.nome END,
                  ultima_mensagem_em = NOW()`,
           [userId, nomeEarly, telefone, pushName || null]
-        ).catch(err => console.warn('[WEBHOOK UPSERT_CONTATO_EARLY]:', err.message));
+        ).catch(err => log.warn('WEBHOOK', 'Erro ao upsert contato antecipado', { traceId, err: err.message }));
       }
 
       // ── Mensagens do atendente (fromMe=true) → pausar IA ou reativar ─────────
@@ -459,7 +477,7 @@ export default function webhookRouter(pool: Pool): Router {
                WHERE user_id = $1 AND telefone ILIKE $2`,
               [userId, `%${telefone.slice(-11)}`]
             ).catch(() => {});
-            console.log(`[WEBHOOK] IA reativada (palavra_reativar): ${telefone}`);
+            log.info('WEBHOOK', 'IA reativada (palavra_reativar)', { traceId, telefone });
           } else {
             pool.query(
               `UPDATE contatos SET atendente_pausou_ia = true WHERE user_id = $1 AND telefone ILIKE $2`,
@@ -489,7 +507,11 @@ export default function webhookRouter(pool: Pool): Router {
               ).catch(() => {});
             });
 
-            console.log(`[WEBHOOK HUMAN INTERVENTION] ${telefone} → IA pausada | msg: "${(textoFromMe || '').slice(0, 60)}"`);
+            log.info('WEBHOOK', 'Intervenção humana — IA pausada', {
+              traceId,
+              telefone,
+              msg: (textoFromMe || '').slice(0, 60),
+            });
           }
 
           await pool.query(
@@ -498,7 +520,7 @@ export default function webhookRouter(pool: Pool): Router {
              VALUES ($1, $2, $3, $4, true, $5, $6, 'sent', to_timestamp($7))
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
             [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
-          ).catch(err => console.error('[WEBHOOK INSERT fromMe whatsapp_messages]:', err.message));
+          ).catch(err => log.error('WEBHOOK', 'Erro ao inserir mensagem fromMe', { traceId, err: err.message }));
         } else {
           // [AUDITORIA] BUG: mensagens fromMe=true de uma instância sem userId resolvido eram
           // descartadas em silêncio (sem log), diferente do fluxo de mensagens recebidas (que loga
@@ -559,7 +581,7 @@ export default function webhookRouter(pool: Pool): Router {
       await pool.query(
         'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [messageId, instancia]
-      ).catch(err => console.error('[WEBHOOK INSERT webhook_mensagens_processadas]:', err.message));
+      ).catch(err => log.error('WEBHOOK', 'Erro ao inserir webhook_mensagens_processadas', { traceId, err: err.message }));
 
       // ── Extrair dados ─────────────────────────────────────────────────────────
       const texto    = extrairTexto(payload.data);
@@ -574,7 +596,10 @@ export default function webhookRouter(pool: Pool): Router {
           ? (pushName ? `${pushName} (grupo)` : senderPhone)
           : pushName || null;
 
-        console.log(`[WH:${traceId}] INSERT whatsapp_messages userId=${userId} instancia="${instancia}" jid="${remoteJid}" msgId="${messageId}" tipo="${tipo}" texto="${(texto||'').slice(0,60)}"`);
+        log.info('WEBHOOK', 'INSERT whatsapp_messages', {
+          traceId, userId, instancia, jid: remoteJid, msgId: messageId, tipo,
+          texto: (texto || '').slice(0, 60),
+        });
 
         const insertResult = await pool.query(
           `INSERT INTO whatsapp_messages
@@ -586,10 +611,12 @@ export default function webhookRouter(pool: Pool): Router {
            texto || null, midia.url || null, midia.mime || null,
            pushNameFinal, tsVal]
         ).catch(err => {
-          console.error(`[WH:${traceId}] ERRO INSERT whatsapp_messages:`, err.message);
+          log.error('WEBHOOK', 'ERRO INSERT whatsapp_messages', { traceId, err: err.message });
           return { rowCount: -1 };
         });
-        console.log(`[WH:${traceId}] INSERT RESULT rowCount=${(insertResult as any).rowCount} (0=duplicata, 1=novo, -1=erro)`);
+        log.info('WEBHOOK', 'INSERT RESULT (0=duplicata, 1=novo, -1=erro)', {
+          traceId, rowCount: (insertResult as any).rowCount,
+        });
 
         // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────
         if (!isGroup) {
@@ -657,10 +684,10 @@ export default function webhookRouter(pool: Pool): Router {
                   `UPDATE contatos SET profile_pic_url = $1, foto_perfil = $1 WHERE user_id = $2 AND telefone ILIKE $3`,
                   [picUrl, userId, suffix]
                 ).catch(() => {});
-                console.log(`[WEBHOOK] Foto de perfil atualizada para ${telefone}`);
+                log.info('WEBHOOK', 'Foto de perfil atualizada', { traceId, telefone });
               }
             } catch (e: any) {
-              console.warn('[WEBHOOK] Falha ao upsert contato:', e.message);
+              log.warn('WEBHOOK', 'Falha ao upsert contato', { traceId, err: e.message });
             }
           })();
         }
@@ -703,7 +730,7 @@ export default function webhookRouter(pool: Pool): Router {
               }).catch(() => {});
             }
           } catch {}
-          console.log(`[WEBHOOK] Opt-out: ${telefone}`);
+          log.info('WEBHOOK', 'Opt-out', { traceId, telefone });
           return;
         }
 
@@ -718,7 +745,7 @@ export default function webhookRouter(pool: Pool): Router {
              WHERE user_id = $1 AND telefone ILIKE $2`,
             [userId, `%${telefone.slice(-11)}`]
           ).catch(() => {});
-          console.log(`[WEBHOOK] IA reativada: ${telefone}`);
+          log.info('WEBHOOK', 'IA reativada', { traceId, telefone });
           return;
         }
       }
@@ -730,7 +757,7 @@ export default function webhookRouter(pool: Pool): Router {
       }
       // Grupos não disparam IA automaticamente
       if (isGroup) {
-        console.log(`[WEBHOOK] Grupo ${telefone} — mensagem salva, IA não processada`);
+        log.info('WEBHOOK', 'Grupo — mensagem salva, IA não processada', { traceId, telefone });
         return;
       }
       if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) {
@@ -740,7 +767,7 @@ export default function webhookRouter(pool: Pool): Router {
 
       // Rota N8N: se agente tem n8n_webhook_url configurado, encaminha para lá
       if (n8nWebhookUrl) {
-        console.log(`[WEBHOOK] Roteando para N8N: ${n8nWebhookUrl}`);
+        log.info('WEBHOOK', 'Roteando para N8N', { traceId, n8nWebhookUrl });
         fetch(n8nWebhookUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -748,7 +775,7 @@ export default function webhookRouter(pool: Pool): Router {
             instancia, messageId, telefone, pushName, texto, tipo,
             midiaUrl: midia.url || null, timestamp: tsVal, userId, remoteJid,
           }),
-        }).catch(err => console.error(`[WEBHOOK] Erro ao encaminhar para N8N: ${err.message}`));
+        }).catch(err => log.error('WEBHOOK', 'Erro ao encaminhar para N8N', { traceId, err: err.message }));
         return;
       }
 
@@ -762,10 +789,10 @@ export default function webhookRouter(pool: Pool): Router {
         midiaUrl: midia.url || undefined,
         timestamp: tsVal,
         userId: userId || undefined,
-      }).catch(err => console.error(`[WEBHOOK] Erro ao processar ${messageId}:`, err));
+      }).catch(err => log.error('WEBHOOK', `Erro ao processar ${messageId}`, { traceId, err: err.message || String(err) }));
 
-    } catch (err) {
-      console.error('[WEBHOOK] Erro crítico:', err);
+    } catch (err: any) {
+      log.error('WEBHOOK', 'Erro crítico', { traceId, err: err?.message, stack: err?.stack });
     }
   });
 

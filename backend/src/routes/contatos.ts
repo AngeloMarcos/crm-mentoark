@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 export default function contatos(pool: Pool): Router {
   const router = makeCrud(pool, 'contatos');
@@ -82,7 +83,7 @@ export default function contatos(pool: Pool): Router {
       const r = await pool.query(sql, params);
       return res.json(r.rows);
     } catch (err: any) {
-      console.error('[contatos GET]', err.message);
+      log.error('CONTATOS', 'Erro no GET', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });
     }
   });

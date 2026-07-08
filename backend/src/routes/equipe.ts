@@ -25,6 +25,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 export default function equipeRouter(pool: Pool): Router {
   const router = Router();
@@ -33,7 +34,7 @@ export default function equipeRouter(pool: Pool): Router {
     try {
       await fn(req, res);
     } catch (err: any) {
-      console.error('[equipe]', err.message);
+      log.error('EQUIPE', 'Erro', { err: err?.message, stack: err?.stack });
       res.status(500).json({ message: err.message });
     }
   };

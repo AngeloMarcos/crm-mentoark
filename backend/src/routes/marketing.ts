@@ -2,6 +2,7 @@ import { Router, Response, Request } from 'express';
 import { Pool } from 'pg';
 import crypto from 'crypto';
 import { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 export default function marketing(pool: Pool) {
   const protectedRouter = Router();
@@ -306,7 +307,7 @@ export default function marketing(pool: Pool) {
       }
       res.json({ ok: true });
     } catch (err: any) {
-      console.error('Webhook error:', err);
+      log.error('MARKETING', 'Webhook error', { err: err?.message, stack: err?.stack });
       res.status(500).json({ message: err.message });
     }
   });

@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import rateLimit from 'express-rate-limit';
 import { pool } from './db';
 import { authMiddleware, AuthRequest } from './middleware';
+import { log } from './logger';
 
 const DEBUG_AUTH = process.env.NODE_ENV !== 'production';
 
@@ -83,18 +84,18 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
     );
     const user = rows[0];
     if (!user) {
-      if (DEBUG_AUTH) console.warn(`[AUTH] Login falhou: usuário ${email} não encontrado no banco ou inativo.`);
+      if (DEBUG_AUTH) log.warn('AUTH', 'Login falhou: usuário não encontrado no banco ou inativo', { email });
       return res.status(401).json({ message: 'E-mail ou senha incorretos' });
     }
 
-    if (DEBUG_AUTH) console.log(`[AUTH] Usuário encontrado: ${user.email} (ID: ${user.id}). Verificando senha...`);
+    if (DEBUG_AUTH) log.info('AUTH', 'Usuário encontrado. Verificando senha...', { email: user.email, userId: user.id });
 
     let valid = false;
 
     // Se a senha começa com $2, é bcrypt
     if (user.password_hash && user.password_hash.startsWith('$2')) {
       valid = await bcrypt.compare(password, user.password_hash);
-      if (DEBUG_AUTH) console.log(`[AUTH] Validação Bcrypt: ${valid}`);
+      if (DEBUG_AUTH) log.info('AUTH', 'Validação Bcrypt', { valid });
     } else if (user.password_hash) {
       // Fallback para hashes antigos ou migrados do Database
       const r = await pool.query(
@@ -102,17 +103,17 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
         [password, user.id]
       );
       valid = r.rows[0]?.ok === true;
-      if (DEBUG_AUTH) console.log(`[AUTH] Validação Pgcrypto: ${valid}`);
-      
+      if (DEBUG_AUTH) log.info('AUTH', 'Validação Pgcrypto', { valid });
+
       if (valid) {
         const newHash = await bcrypt.hash(password, 12);
         await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, user.id]);
-        if (DEBUG_AUTH) console.log(`[AUTH] Senha migrada para Bcrypt.`);
+        if (DEBUG_AUTH) log.info('AUTH', 'Senha migrada para Bcrypt');
       }
     }
 
     if (!valid) {
-      if (DEBUG_AUTH) console.warn(`[AUTH] Senha incorreta para o usuário: ${email}`);
+      if (DEBUG_AUTH) log.warn('AUTH', 'Senha incorreta para o usuário', { email });
       return res.status(401).json({ message: 'E-mail ou senha incorretos' });
     }
 
@@ -123,7 +124,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
 
     return res.json({ access_token, refresh_token, user: mapUser(user) });
   } catch (err: any) {
-    console.error('Login error:', err);
+    log.error('AUTH', 'Login error', { err: err?.message, stack: err?.stack });
     return res.status(500).json({ message: 'Erro interno do servidor' });
   }
 });
@@ -162,7 +163,7 @@ router.post('/register', registerLimiter, async (req: Request, res: Response) =>
 
     return res.status(201).json({ access_token, refresh_token, user: mapUser(user) });
   } catch (err: any) {
-    console.error('Register error:', err);
+    log.error('AUTH', 'Register error', { err: err?.message, stack: err?.stack });
     return res.status(500).json({ message: 'Erro interno do servidor' });
   }
 });
@@ -191,7 +192,7 @@ router.post('/refresh', async (req: Request, res: Response) => {
 
     return res.json({ access_token, refresh_token: new_refresh_token, user: mapUser(row) });
   } catch (err: any) {
-    console.error('Refresh error:', err);
+    log.error('AUTH', 'Refresh error', { err: err?.message, stack: err?.stack });
     return res.status(500).json({ message: 'Erro interno do servidor' });
   }
 });
@@ -277,7 +278,7 @@ router.patch('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
     );
     return res.json(mapUser(rows[0]));
   } catch (err: any) {
-    console.error('[PATCH /auth/me]', err.message);
+    log.error('AUTH', 'PATCH /auth/me', { err: err.message });
     return res.status(500).json({ message: 'Erro interno' });
   }
 });
@@ -294,7 +295,7 @@ router.post('/turnstile-verify', async (req, res) => {
   const secret = process.env.TURNSTILE_SECRET_KEY;
   if (!secret) {
     // Se não configurado no servidor, permite passar (dev sem variável)
-    console.warn('[Turnstile] TURNSTILE_SECRET_KEY não configurado — verificação ignorada');
+    log.warn('Turnstile', 'TURNSTILE_SECRET_KEY não configurado — verificação ignorada');
     return res.json({ success: true, dev: true });
   }
 
@@ -318,7 +319,7 @@ router.post('/turnstile-verify', async (req, res) => {
     const result = await cfResp.json() as { success: boolean; 'error-codes'?: string[] };
 
     if (!result.success) {
-      console.warn('[Turnstile] Falha na verificação:', result['error-codes']);
+      log.warn('Turnstile', 'Falha na verificação', { errorCodes: result['error-codes'] });
       return res.status(403).json({
         error: 'Verificação de segurança falhou. Tente novamente.',
         codes: result['error-codes'],
@@ -327,7 +328,7 @@ router.post('/turnstile-verify', async (req, res) => {
 
     return res.json({ success: true });
   } catch (err: any) {
-    console.error('[Turnstile] Erro ao verificar:', err.message);
+    log.error('Turnstile', 'Erro ao verificar', { err: err.message });
     return res.status(500).json({ error: 'Erro interno na verificação' });
   }
 });
@@ -397,7 +398,7 @@ router.get('/callback/google', async (req: Request, res: Response) => {
     });
     const tokenData = await tokenResp.json() as any;
     if (!tokenResp.ok || !tokenData.access_token) {
-      console.error('[GOOGLE] Token exchange falhou:', tokenData);
+      log.error('GOOGLE', 'Token exchange falhou', { tokenData });
       return res.status(400).send('Falha ao autenticar com Google');
     }
 
@@ -447,7 +448,7 @@ router.get('/callback/google', async (req: Request, res: Response) => {
     const hash = new URLSearchParams({ access_token, refresh_token, token_type: 'bearer' }).toString();
     return res.redirect(`${redirect_to}#${hash}`);
   } catch (err: any) {
-    console.error('[GOOGLE CALLBACK] erro:', err);
+    log.error('GOOGLE CALLBACK', 'erro', { err: err?.message, stack: err?.stack });
     return res.status(500).send('Erro interno no callback do Google');
   }
 });

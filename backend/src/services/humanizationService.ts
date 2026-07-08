@@ -7,6 +7,8 @@
  * lista de auditoria do WhatsApp porque opera sobre mensagens enviadas via Evolution API, mas é
  * um recurso do módulo de Disparos, não do chat em si.
  */
+import { log } from '../logger';
+
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 // [AUDITORIA] LÓGICA: chave de cache é o texto-base da campanha (mesma mensagem, muitos
@@ -43,7 +45,7 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    console.error('[RASTREIO IA - ERRO] humanizarMensagem: OPENAI_API_KEY ausente no ambiente — retornando original');
+    log.error('RASTREIO IA - ERRO', 'humanizarMensagem: OPENAI_API_KEY ausente no ambiente — retornando original');
     return mensagemBase;
   }
   if (!mensagemBase?.trim()) return mensagemBase;
@@ -56,13 +58,12 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
   }
 
   // ── [RASTREIO IA] Log pré-chamada ──────────────────────────────────────────
-  console.log(
-    '[RASTREIO IA] Enviando para OpenAI (humanização)',
-    '| Modelo:', MODEL,
-    '| ApiKey:', `OK (${apiKey.slice(0, 8)}...)`,
-    '| System Prompt:', SYSTEM_PROMPT.slice(0, 100).replace(/\n/g, ' '),
-    '| Mensagem do Usuário:', mensagemBase.slice(0, 150),
-  );
+  log.info('RASTREIO IA', 'Enviando para OpenAI (humanização)', {
+    modelo: MODEL,
+    apiKeyPreview: `OK (${apiKey.slice(0, 8)}...)`,
+    systemPrompt: SYSTEM_PROMPT.slice(0, 100).replace(/\n/g, ' '),
+    mensagemUsuario: mensagemBase.slice(0, 150),
+  });
 
   try {
     const resp = await fetch(OPENAI_API_URL, {
@@ -84,14 +85,13 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
-      console.error(
-        '[RASTREIO IA - ERRO] humanizarMensagem: OpenAI retornou erro',
-        '| Status HTTP:', resp.status,
-        '| Diagnóstico:', resp.status === 401 ? 'Chave inválida/expirada'
+      log.error('RASTREIO IA - ERRO', 'humanizarMensagem: OpenAI retornou erro', {
+        statusHttp: resp.status,
+        diagnostico: resp.status === 401 ? 'Chave inválida/expirada'
           : resp.status === 429 ? 'Rate limit ou sem saldo'
           : 'Erro no servidor OpenAI',
-        '| Detalhe:', errText.slice(0, 200),
-      );
+        detalhe: errText.slice(0, 200),
+      });
       return mensagemBase;
     }
 
@@ -99,16 +99,15 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
     const texto = data?.choices?.[0]?.message?.content?.trim();
 
     if (!texto) {
-      console.warn('[RASTREIO IA - ERRO] humanizarMensagem: resposta vazia da OpenAI — usando original');
+      log.warn('RASTREIO IA - ERRO', 'humanizarMensagem: resposta vazia da OpenAI — usando original');
       return mensagemBase;
     }
 
     // ── [RASTREIO IA] Log pós-resposta ─────────────────────────────────────
-    console.log(
-      '[RASTREIO IA] Resposta OpenAI recebida (humanização)',
-      '| TokensUsados:', data?.usage?.total_tokens ?? 'N/A',
-      '| Resultado:', texto.slice(0, 100),
-    );
+    log.info('RASTREIO IA', 'Resposta OpenAI recebida (humanização)', {
+      tokensUsados: data?.usage?.total_tokens ?? 'N/A',
+      resultado: texto.slice(0, 100),
+    });
 
     variacoes.push(texto);
     if (variacoes.length > CACHE_MAX) variacoes.shift();
@@ -116,12 +115,11 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
 
     return texto;
   } catch (err: any) {
-    console.error(
-      '[RASTREIO IA - ERRO] humanizarMensagem: exceção na chamada OpenAI',
-      '| Tipo:', err?.name ?? 'Error',
-      '| Mensagem:', err?.message,
-      '| Stack:', err?.stack?.split('\n')[1]?.trim() ?? 'N/A',
-    );
+    log.error('RASTREIO IA - ERRO', 'humanizarMensagem: exceção na chamada OpenAI', {
+      tipo: err?.name ?? 'Error',
+      err: err?.message,
+      stack: err?.stack,
+    });
     return mensagemBase;
   }
 }

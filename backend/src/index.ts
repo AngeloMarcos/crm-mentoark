@@ -1,33 +1,30 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import { log, runWithRequestContext } from './logger';
+
 // ============================================================
 // HANDLERS GLOBAIS DE ERRO — previne crash do processo Node
 // ============================================================
 process.on('uncaughtException', (error: Error) => {
-  console.error('[CRASH] uncaughtException:', {
-    message: error.message,
-    stack: error.stack,
-    timestamp: new Date().toISOString(),
-  });
+  log.error('CRASH', 'uncaughtException', { message: error.message, stack: error.stack });
   // Não chama process.exit — deixa o orquestrador (Docker/PM2) decidir
 });
 
 process.on('unhandledRejection', (reason: unknown) => {
-  console.error('[CRASH] unhandledRejection:', {
+  log.error('CRASH', 'unhandledRejection', {
     reason: reason instanceof Error ? reason.message : String(reason),
     stack: reason instanceof Error ? reason.stack : undefined,
-    timestamp: new Date().toISOString(),
   });
 });
 
 process.on('SIGTERM', () => {
-  console.log('[SHUTDOWN] SIGTERM recebido, encerrando graciosamente...');
+  log.info('SHUTDOWN', 'SIGTERM recebido, encerrando graciosamente...');
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
-  console.log('[SHUTDOWN] SIGINT recebido, encerrando...');
+  log.info('SHUTDOWN', 'SIGINT recebido, encerrando...');
   process.exit(0);
 });
 // ============================================================
@@ -35,6 +32,7 @@ process.on('SIGINT', () => {
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import { randomUUID } from 'crypto';
 
 import { pool } from './db';
 import { authMiddleware, adminMiddleware } from './middleware';
@@ -80,6 +78,23 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 const app = express();
 app.set('trust proxy', 1); // Traefik reverse proxy
 
+// ── Request context + access log (request_id, ip, status, duração) ─────────
+app.use((req, res, next) => {
+  const requestId = randomUUID();
+  const ip = (req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || '').split(',')[0].trim();
+  const start = Date.now();
+  res.setHeader('x-request-id', requestId);
+  runWithRequestContext({ requestId, ip, method: req.method, path: req.path }, () => {
+    res.on('finish', () => {
+      log.info('HTTP', `${req.method} ${req.path}`, {
+        status: res.statusCode,
+        duration_ms: Date.now() - start,
+      });
+    });
+    next();
+  });
+});
+
 // ── Middleware ──────────────────────────────────────────────
 const staticOrigins = (process.env.CORS_ORIGIN || 'https://crm.mentoark.com.br')
   .split(',')
@@ -102,7 +117,7 @@ app.use(express.json({ limit: '1mb' }));
 // ── Servir imagens de upload com log de auditoria ──────────────────────────
 app.use('/uploads', (req, res, next) => {
   const ip = (req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || '').split(',')[0].trim();
-  console.log(`[UPLOAD_ACCESS] ${new Date().toISOString()} ${ip} ${req.path}`);
+  log.info('UPLOAD_ACCESS', req.path, { ip });
   next();
 }, express.static(UPLOADS_DIR));
 
@@ -179,7 +194,7 @@ app.get('/api/agent_prompts/ativo', n8nSecretMiddleware, async (req, res) => {
 app.get('/api/catalogo/n8n/:userId', async (req, res) => {
   const expected = process.env.N8N_CATALOG_SECRET;
   if (!expected) {
-    console.error('[CATALOGO_N8N] N8N_CATALOG_SECRET não configurado — endpoint desabilitado');
+    log.error('CATALOGO_N8N', 'N8N_CATALOG_SECRET não configurado — endpoint desabilitado');
     return res.status(503).json({ error: 'Endpoint não configurado' });
   }
   const secret = req.headers['x-n8n-secret'] as string;
@@ -442,14 +457,14 @@ app.get('/health', async (_req, res) => {
 
 // ── Global error handler ─────────────────────────────────────
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('Unhandled error:', err);
+  log.error('HTTP', 'Unhandled error', { err: err?.message, stack: err?.stack });
   res.status(500).json({ message: 'Erro interno do servidor' });
 });
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
-runMigrations(pool).catch(err => console.error('[MIGRATIONS] Erro:', err));
+runMigrations(pool).catch(err => log.error('MIGRATIONS', 'Erro ao rodar migrations', { err: err?.message, stack: err?.stack }));
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`API running on port ${PORT}`);
+  log.info('STARTUP', `API running on port ${PORT}`);
   initCronJobs();
   
   // Motor de disparos: verifica mensagens pendentes a cada 2 segundos

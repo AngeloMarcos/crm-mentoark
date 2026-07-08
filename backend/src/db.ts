@@ -1,5 +1,6 @@
 import { Pool, types } from 'pg';
 import dotenv from 'dotenv';
+import { log } from './logger';
 dotenv.config();
 
 // OID 1700 = NUMERIC — pg retorna como string por padrão; forçar float
@@ -23,5 +24,5 @@ pool.on('connect', (client) => {
 });
 
 pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
+  log.error('DB', 'Unexpected error on idle client', { err: err?.message, stack: err?.stack });
 });

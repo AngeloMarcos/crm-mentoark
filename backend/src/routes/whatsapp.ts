@@ -12,6 +12,7 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
+import { log } from '../logger';
 
 // Default Evolution server (VPS local — disparo.mentoark.com.br)
 const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
@@ -51,9 +52,9 @@ async function registrarWebhook(base: string, apiKey: string, instancia: string,
     });
     const body = await res.json().catch(() => ({}));
     const actualEnabled = (body as any)?.webhook?.enabled ?? (body as any)?.enabled;
-    console.log(`[whatsapp] webhook ${enabled ? 'registrado' : 'removido'} ${instancia} → actual_enabled=${actualEnabled}`);
+    log.info('WHATSAPP', 'webhook atualizado', { action: enabled ? 'registrado' : 'removido', instancia, actualEnabled });
   } catch (err) {
-    console.warn(`[whatsapp] Falha ao gerenciar webhook para ${instancia}:`, (err as Error).message);
+    log.warn('WHATSAPP', 'Falha ao gerenciar webhook', { instancia, err: (err as Error).message });
   }
 }
 
@@ -309,7 +310,7 @@ export default function whatsappRouter(pool: Pool): Router {
   // qualquer arquivo do CRM) não chegou a gravar nenhuma mensagem de teste no banco — ver
   // [AUDITORIA] no topo do handler POST /evolution em backend/src/routes/webhook.ts.
   router.get('/conversas', async (req: AuthRequest, res: Response) => {
-    console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId, query: req.query });
+    log.info('WHATSAPP', 'request recebida', { method: req.method, path: req.path, userId: req.userId, query: req.query });
     try {
       const userId = req.userId!;
       const showArchived = req.query.archived === 'true';
@@ -398,7 +399,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       return res.json(conversas);
     } catch (err: any) {
-      console.error('[WHATSAPP conversas]:', err.message);
+      log.error('WHATSAPP conversas', 'Erro ao buscar conversas', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });
     }
   });
@@ -410,7 +411,7 @@ export default function whatsappRouter(pool: Pool): Router {
   // conclusão da rota /conversas acima: código correto, não reproduzível com dado novo nesta
   // sessão porque a mensagem de teste nunca chegou ao banco (causa raiz é upstream, no Evolution).
   router.get('/conversas/:phone', async (req: AuthRequest, res: Response) => {
-    console.log('[WHATSAPP]', req.method, req.path, { userId: req.userId, params: req.params });
+    log.info('WHATSAPP', 'request recebida', { method: req.method, path: req.path, userId: req.userId, params: req.params });
     try {
       const userId = req.userId!;
       // Aceita tanto "5511..." (com DDI) quanto "11..." (sem DDI) — remove tudo exceto dígitos
@@ -535,7 +536,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       return res.json({ ok: true, pausada: pausar });
     } catch (err: any) {
-      console.error('[IA-TOGGLE] Erro:', err.message);
+      log.error('IA-TOGGLE', 'Erro', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });
     }
   });
@@ -716,7 +717,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // Tratamento explícito de 401 (API Key inválida ou instância deslogada forçadamente)
       if (r.status === 401) {
-        console.warn(`[WHATSAPP] Evolution retornou 401 para instância ${instancia}.`);
+        log.warn('WHATSAPP', 'Evolution retornou 401 para instância', { instancia });
         return res.json({ 
           state: 'unauthorized', 
           message: 'Sessão expirada ou API Key inválida. Por favor, reconecte.',
@@ -800,7 +801,7 @@ export default function whatsappRouter(pool: Pool): Router {
             const name = inst.instanceName || inst.name;
             // Se o nome contém nosso padrão de ID de usuário mas NÃO é a instância oficial (estável)
             if (name && name.includes(userIdShort) && name !== cfg.stableInstancia) {
-              console.log(`[WHATSAPP] Removendo instância duplicada/antiga: ${name}`);
+              log.info('WHATSAPP', 'Removendo instância duplicada/antiga', { name });
               // Remove webhook da duplicata antes de deletar
               await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
               await fetch(`${base}/instance/delete/${name}`, {
@@ -811,7 +812,7 @@ export default function whatsappRouter(pool: Pool): Router {
           }
         }
       } catch (err) {
-        console.warn('[WHATSAPP] Erro ao listar/limpar instâncias:', (err as Error).message);
+        log.warn('WHATSAPP', 'Erro ao listar/limpar instâncias', { err: (err as Error).message });
       }
 
       // 2. Verifica estado da instância oficial
@@ -820,7 +821,7 @@ export default function whatsappRouter(pool: Pool): Router {
       }).catch(() => null);
 
       if (stateRes?.status === 401) {
-        console.warn(`[WHATSAPP] 401 durante connect — API Key inválida ou instância órfã: ${cfg.instancia}`);
+        log.warn('WHATSAPP', '401 durante connect — API Key inválida ou instância órfã', { instancia: cfg.instancia });
         return res.json({ 
           state: 'unauthorized', 
           message: 'API Key da Evolution inválida ou sessão expirada. Clique em Reconectar.',
@@ -844,7 +845,7 @@ export default function whatsappRouter(pool: Pool): Router {
               instancia: cfg.instancia,
             });
           } else {
-            console.log(`[WHATSAPP] Instância ${cfg.instancia} está em 'open' mas sem conta vinculada (owner missing). Tratando como unauthorized.`);
+            log.info('WHATSAPP', "Instância está em 'open' mas sem conta vinculada (owner missing). Tratando como unauthorized.", { instancia: cfg.instancia });
             return res.json({ 
               state: 'unauthorized', 
               message: 'Instância sem conta do WhatsApp vinculada. Por favor, reconecte escanendo o QR.',
@@ -871,7 +872,7 @@ export default function whatsappRouter(pool: Pool): Router {
         webhook: webhookInner(),
       };
 
-      console.log(`[WHATSAPP] Criando/Conectando instância: ${cfg.stableInstancia}`);
+      log.info('WHATSAPP', 'Criando/Conectando instância', { instancia: cfg.stableInstancia });
       
       const createRes = await fetch(`${base}/instance/create`, {
         method: 'POST',
@@ -932,7 +933,7 @@ export default function whatsappRouter(pool: Pool): Router {
         instancia: cfg.stableInstancia,
       });
     } catch (err: any) {
-      console.error('[WHATSAPP connect] Erro:', err.message);
+      log.error('WHATSAPP connect', 'Erro', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });
     } finally {
       clearTimeout(timeout);
@@ -987,7 +988,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const base = cfg.url.replace(/\/$/, '');
       const instancia = cfg.instancia;
 
-      console.log(`[WHATSAPP] Desconexão total iniciada para usuário ${userId} (instância: ${instancia})`);
+      log.info('WHATSAPP', 'Desconexão total iniciada', { userId, instancia });
 
       // 1. Tentar remover webhook, logout e delete na Evolution API
       // Remove webhook primeiro para evitar eventos residuais
@@ -997,25 +998,25 @@ export default function whatsappRouter(pool: Pool): Router {
       await fetch(`${base}/instance/logout/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
-      }).catch(err => console.warn(`[WHATSAPP] Erro no logout de ${instancia}:`, err.message));
+      }).catch(err => log.warn('WHATSAPP', 'Erro no logout', { instancia, err: err.message }));
 
       // Delete remove a instância completamente do servidor Evolution
       const deleteRes = await fetch(`${base}/instance/delete/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(err => {
-        console.error(`[WHATSAPP] Erro ao deletar instância ${instancia} na Evolution:`, err.message);
+        log.error('WHATSAPP', 'Erro ao deletar instância na Evolution', { instancia, err: err.message });
         return null;
       });
 
       if (deleteRes && !deleteRes.ok) {
         const errorText = await deleteRes.text().catch(() => 'Erro desconhecido');
-        console.warn(`[WHATSAPP] Evolution retornou erro ao deletar ${instancia}: ${deleteRes.status} - ${errorText}`);
+        log.warn('WHATSAPP', 'Evolution retornou erro ao deletar instância', { instancia, status: deleteRes.status, errorText });
       }
 
       // 2. Limpeza profunda no Banco de Dados (Postgres)
       // Removemos todo o histórico de mensagens e estados para evitar "estado sujo" ao reconectar
-      console.log(`[WHATSAPP] Limpando registros do BD para o usuário ${userId}`);
+      log.info('WHATSAPP', 'Limpando registros do BD', { userId });
       
       const queries = [
         // Remove mensagens do chat
@@ -1050,7 +1051,7 @@ export default function whatsappRouter(pool: Pool): Router {
         message: 'WhatsApp desconectado, instância removida e estado limpo com sucesso.' 
       });
     } catch (err: any) {
-      console.error('[WHATSAPP] Erro fatal no disconnect:', err);
+      log.error('WHATSAPP', 'Erro fatal no disconnect', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });
     }
   });
@@ -1130,7 +1131,7 @@ export default function whatsappRouter(pool: Pool): Router {
           );
           if (result.rowCount && result.rowCount > 0) inseridos++;
         } catch (err: any) {
-          console.warn('[SYNC] msg skip:', err.message);
+          log.warn('SYNC', 'msg skip', { err: err.message });
         }
       }
 
@@ -1143,8 +1144,8 @@ export default function whatsappRouter(pool: Pool): Router {
   // POST /api/whatsapp/send — envia mensagem manual (texto ou mídia)
   router.post('/send', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
-    console.log('[DEBUG SEND] Payload recebido do Lovable:', JSON.stringify(req.body, null, 2));
-    console.log('[DEBUG SEND] userId:', userId);
+    log.info('DEBUG SEND', 'Payload recebido do Lovable', { body: req.body });
+    log.info('DEBUG SEND', 'userId', { userId });
     try {
       const {
         phone, text,
@@ -1158,7 +1159,7 @@ export default function whatsappRouter(pool: Pool): Router {
       // Normaliza o telefone — remove tudo exceto dígitos
       const phoneClean = (phone || '').replace(/\D/g, '');
       if (!phoneClean || phoneClean.length < 8 || phoneClean.length > 15) {
-        console.warn('[DEBUG SEND] telefone inválido:', phone);
+        log.warn('DEBUG SEND', 'telefone inválido', { phone });
         return res.status(400).json({ message: `Número de telefone inválido: "${phone}"` });
       }
       if (!text && !mediaUrl) {
@@ -1166,7 +1167,7 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       const cfg = await getEvolutionConfig(userId);
-      console.log('[DEBUG SEND] Instância encontrada para o usuário:', {
+      log.info('DEBUG SEND', 'Instância encontrada para o usuário', {
         instancia: cfg.instancia,
         url: cfg.url,
         isGlobal: cfg.isGlobal,
@@ -1199,7 +1200,7 @@ export default function whatsappRouter(pool: Pool): Router {
         if (mediaFilename) mediaPayload.fileName = mediaFilename;
 
         const targetUrl = `${base}/message/${endpoint}/${cfg.instancia}`;
-        console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
+        log.info('DEBUG SEND', 'Disparando para Evolution', { targetUrl, tokenPresente: !!cfg.api_key });
         let evoRes: globalThis.Response;
         try {
           evoRes = await evolutionFetch(targetUrl, {
@@ -1208,14 +1209,14 @@ export default function whatsappRouter(pool: Pool): Router {
             body: JSON.stringify(mediaPayload),
           });
         } catch (err: any) {
-          console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (mídia):', err.message);
+          log.info('DEBUG SEND', 'Erro cru ao chamar Evolution API (mídia)', { err: err.message });
           return res.status(502).json({ message: `Sem resposta da Evolution API: ${err.message}` });
         }
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
           if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
-            console.log(`[SEND] Instância ${instancia} não existe ou está deslogada na Evolution — solicitando reconexão manual...`);
+            log.info('SEND', 'Instância não existe ou está deslogada na Evolution — solicitando reconexão manual', { instancia });
             return res.status(401).json({
               message: 'Sessão do WhatsApp expirada ou não encontrada. Por favor, reconecte.',
               reconnect_required: true,
@@ -1223,7 +1224,7 @@ export default function whatsappRouter(pool: Pool): Router {
             });
           } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
             // Socket Baileys ainda inicializando — retry após 3s
-            console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
+            log.info('SEND', 'presenceSubscribe — socket não pronto, aguardando 3s e reenviando...');
             await new Promise(r => setTimeout(r, 3000));
             const retry = await evolutionFetch(targetUrl, {
               method: 'POST',
@@ -1235,7 +1236,7 @@ export default function whatsappRouter(pool: Pool): Router {
             }
             evolutionResp = await retry.json().catch(() => ({}));
           } else {
-            console.error(`[DEBUG SEND] Evolution mídia falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
+            log.error('DEBUG SEND', 'Evolution mídia falhou', { status: evoRes.status, body: errText.slice(0, 400) });
             return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
           }
         }
@@ -1243,7 +1244,7 @@ export default function whatsappRouter(pool: Pool): Router {
       } else {
         // Envio de texto
         const targetUrl = `${base}/message/sendText/${cfg.instancia}`;
-        console.log(`[DEBUG SEND] Disparando para Evolution: ${targetUrl}`, { tokenPresente: !!cfg.api_key });
+        log.info('DEBUG SEND', 'Disparando para Evolution', { targetUrl, tokenPresente: !!cfg.api_key });
         let evoRes: globalThis.Response;
         try {
           evoRes = await evolutionFetch(targetUrl, {
@@ -1252,14 +1253,14 @@ export default function whatsappRouter(pool: Pool): Router {
             body: JSON.stringify({ number: phoneClean, text }),
           });
         } catch (err: any) {
-          console.log('[DEBUG SEND] Erro cru ao chamar Evolution API (texto):', err.message);
+          log.info('DEBUG SEND', 'Erro cru ao chamar Evolution API (texto)', { err: err.message });
           return res.status(502).json({ message: `Sem resposta da Evolution API: ${err.message}` });
         }
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
           if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
-            console.log(`[SEND] Instância ${instancia} não existe ou está deslogada na Evolution — solicitando reconexão manual...`);
+            log.info('SEND', 'Instância não existe ou está deslogada na Evolution — solicitando reconexão manual', { instancia });
             return res.status(401).json({
               message: 'Sessão do WhatsApp expirada ou não encontrada. Por favor, reconecte.',
               reconnect_required: true,
@@ -1267,7 +1268,7 @@ export default function whatsappRouter(pool: Pool): Router {
             });
           } else if (errText.includes('presenceSubscribe') || errText.includes('Cannot read properties of undefined')) {
             // Socket Baileys ainda inicializando — retry após 3s
-            console.log(`[SEND] presenceSubscribe — socket não pronto, aguardando 3s e reenviando...`);
+            log.info('SEND', 'presenceSubscribe — socket não pronto, aguardando 3s e reenviando...');
             await new Promise(r => setTimeout(r, 3000));
             const retry = await evolutionFetch(targetUrl, {
               method: 'POST',
@@ -1279,13 +1280,13 @@ export default function whatsappRouter(pool: Pool): Router {
             }
             evolutionResp = await retry.json().catch(() => ({}));
           } else {
-            console.error(`[DEBUG SEND] Evolution texto falhou — status=${evoRes.status} body=${errText.slice(0, 400)}`);
+            log.error('DEBUG SEND', 'Evolution texto falhou', { status: evoRes.status, body: errText.slice(0, 400) });
             return res.status(502).json({ message: `Evolution ${evoRes.status}: ${errText.slice(0, 200)}` });
           }
         } else {
           evolutionResp = await evoRes.json().catch(() => ({}));
         }
-        console.log(`[DEBUG SEND] Evolution respondeu ok — messageId=${evolutionResp?.key?.id}`);
+        log.info('DEBUG SEND', 'Evolution respondeu ok', { messageId: evolutionResp?.key?.id });
       }
 
       const messageId = evolutionResp?.key?.id || `manual_${Date.now()}`;
@@ -1299,7 +1300,7 @@ export default function whatsappRouter(pool: Pool): Router {
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
         [userId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
          messageId, msgType, content, mediaUrl || null]
-      ).catch(err => console.warn('[SEND] Falha ao salvar:', err.message));
+      ).catch(err => log.warn('SEND', 'Falha ao salvar', { err: err.message }));
 
       return res.json({ ok: true, messageId });
     } catch (err: any) {
@@ -1351,7 +1352,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       return res.json({ ok: true, message: 'Instância removida e estado limpo.' });
     } catch (err: any) {
-      console.error('[WHATSAPP] Erro ao deletar instância via DELETE:', err);
+      log.error('WHATSAPP', 'Erro ao deletar instância via DELETE', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });
     }
   });

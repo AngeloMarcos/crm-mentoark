@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 async function getKey(pool: Pool, userId: string, tipo: string, envKey: string): Promise<string | null> {
   const fromEnv = process.env[envKey];
@@ -65,7 +66,7 @@ export default function leadsBuscarRouter(pool: Pool): Router {
       );
       return res.json(r.rows);
     } catch (err: any) {
-      console.error('[leads/GET]', err.message);
+      log.error('LEADS_BUSCAR', 'Erro no GET', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ error: err.message });
     }
   });
@@ -350,7 +351,7 @@ export default function leadsBuscarRouter(pool: Pool): Router {
 
       return res.json({ sucesso: true, total: leadsComScore.length, leads: leadsComScore });
     } catch (err: any) {
-      console.error('[leads/buscar]', err.message);
+      log.error('LEADS_BUSCAR', 'Erro em /buscar', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ error: err.message });
     }
   });

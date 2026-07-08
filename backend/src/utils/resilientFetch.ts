@@ -13,6 +13,8 @@
  *   withAiFallback(fn, fallback)    — contingência para erros 401/429 da OpenAI
  */
 
+import { log } from '../logger';
+
 // ── Configuração via variáveis de ambiente ────────────────────────────────────
 
 const TIMEOUT_MS    = Number(process.env.EVOLUTION_FETCH_TIMEOUT_MS) || 20_000;
@@ -106,9 +108,12 @@ export async function resilientFetch(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const delay = retryDelays[attempt - 1] ?? retryDelays[retryDelays.length - 1];
-      console.warn(
-        `[resilientFetch] Tentativa ${attempt}/${maxRetries} em ${delay}ms — ${finalUrl}`,
-      );
+      log.warn('resilientFetch', 'nova tentativa agendada', {
+        attempt,
+        maxRetries,
+        delayMs: delay,
+        url: finalUrl,
+      });
       await sleep(delay);
     }
 
@@ -128,7 +133,10 @@ export async function resilientFetch(
         lastErr = new Error(
           `[resilientFetch] HTTP ${response.status} — agendando retry`,
         );
-        console.warn(lastErr.message, finalUrl);
+        log.warn('resilientFetch', 'HTTP status retentável — agendando retry', {
+          status: response.status,
+          url: finalUrl,
+        });
         continue; // vai para o próximo loop (com sleep acima)
       }
 
@@ -140,7 +148,11 @@ export async function resilientFetch(
       lastErr = e;
 
       if (isRetryableError(e) && attempt < maxRetries) {
-        console.warn(`[resilientFetch] Erro retentável (${e.name}/${(e as any).code}): ${e.message}`);
+        log.warn('resilientFetch', 'erro retentável', {
+          name: e.name,
+          code: (e as any).code,
+          message: e.message,
+        });
         continue;
       }
 
@@ -200,18 +212,16 @@ export async function withAiFallback<T>(
       err?.status ?? err?.response?.status ?? err?.statusCode;
 
     if (status === 401) {
-      console.error(
-        `[withAiFallback] ${context} — chave inválida (401). ` +
-        'Usando fallback. Atualize OPENAI_API_KEY no servidor.',
-      );
+      log.error('withAiFallback', 'chave inválida (401) — usando fallback. Atualize OPENAI_API_KEY no servidor.', {
+        context,
+      });
       return fallback;
     }
 
     if (status === 429) {
-      console.warn(
-        `[withAiFallback] ${context} — rate limit / sem saldo (429). ` +
-        'Usando fallback por contingência.',
-      );
+      log.warn('withAiFallback', 'rate limit / sem saldo (429) — usando fallback por contingência', {
+        context,
+      });
       return fallback;
     }
 

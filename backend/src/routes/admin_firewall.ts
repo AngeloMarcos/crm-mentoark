@@ -22,6 +22,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { Pool } from 'pg';
 import type { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 // ── Validação ─────────────────────────────────────────────────────────────────
 
@@ -129,7 +130,7 @@ export function createFirewallMiddleware(pool: Pool) {
       // MODO SIMULAÇÃO — loga, mas nunca bloqueia
       if (cfg.modo_simulacao) {
         if (bloqueado.rows.length)
-          console.warn(`[FIREWALL SIM] ${rawIp} ${req.path} — seria bloqueado`);
+          log.warn('FIREWALL SIM', 'seria bloqueado', { ip: rawIp, path: req.path });
         return next();
       }
 
@@ -187,7 +188,7 @@ export default function adminFirewallRouter(pool: Pool): Router {
         vals,
       );
       invalidarCache();
-      console.log(`[FIREWALL CONFIG] userId=${req.userId} → ${JSON.stringify(r.rows[0])}`);
+      log.info('FIREWALL CONFIG', 'configuração atualizada', { userId: req.userId, config: r.rows[0] });
       return res.json(r.rows[0]);
     } catch (e: any) {
       return res.status(500).json({ message: e.message });
@@ -281,7 +282,7 @@ export default function adminFirewallRouter(pool: Pool): Router {
          RETURNING id, ip, tipo, motivo, ativo, created_at, updated_at`,
         [ipClean, tipoClean, motivo ? sanitize(motivo) : null, ativo, req.userId],
       );
-      console.log(`[FIREWALL UI] userId=${req.userId} → ${ipClean} tipo=${tipoClean} ativo=${ativo}`);
+      log.info('FIREWALL UI', 'registro salvo', { userId: req.userId, ip: ipClean, tipo: tipoClean, ativo });
       return res.status(201).json(r.rows[0]);
     } catch (e: any) {
       return res.status(500).json({ message: e.message });
@@ -319,7 +320,7 @@ export default function adminFirewallRouter(pool: Pool): Router {
         [id],
       );
       if (!r.rowCount) return res.status(404).json({ message: 'Registro não encontrado.' });
-      console.log(`[FIREWALL UI] userId=${req.userId} removeu ${r.rows[0].ip}`);
+      log.info('FIREWALL UI', 'removido', { userId: req.userId, ip: r.rows[0].ip });
       return res.json({ ok: true, removido: r.rows[0] });
     } catch (e: any) {
       return res.status(500).json({ message: e.message });

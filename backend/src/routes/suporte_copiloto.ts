@@ -28,6 +28,7 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import OpenAI from 'openai';
 import type { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -221,7 +222,7 @@ async function executar(
         return { ok: false, data: { erro: `Ferramenta não mapeada: "${nome}"` } };
     }
   } catch (err: any) {
-    console.error(`[COPILOTO] Erro em ferramenta ${nome}:`, err.message);
+    log.error('COPILOTO', 'Erro em ferramenta', { nome, err: err?.message, stack: err?.stack });
     return { ok: false, data: { erro: `Erro interno: ${err.message}` } };
   }
 }
@@ -298,7 +299,11 @@ export default function suporteCopilotoRouter(pool: Pool): Router {
 
         // Sem tool_calls → resposta final
         if (!msg.tool_calls?.length) {
-          console.log(`[COPILOTO] userId=${userId} iter=${iter + 1} tools=${ferramentasExecutadas.length}`);
+          log.info('COPILOTO', 'resposta final', {
+            userId,
+            iter: iter + 1,
+            tools: ferramentasExecutadas.length,
+          });
           return res.json({
             resposta:               msg.content ?? '',
             ferramentas_executadas: ferramentasExecutadas,
@@ -311,7 +316,7 @@ export default function suporteCopilotoRouter(pool: Pool): Router {
           let args: Record<string, unknown> = {};
           try { args = JSON.parse(tc.function.arguments) ?? {}; } catch { args = {}; }
 
-          console.log(`[COPILOTO] tool=${tc.function.name} userId=${userId}`);
+          log.info('COPILOTO', 'executando ferramenta', { tool: tc.function.name, userId });
 
           const resultado = await executar(pool, userId, tc.function.name, args);
 
@@ -333,7 +338,7 @@ export default function suporteCopilotoRouter(pool: Pool): Router {
       });
 
     } catch (err: any) {
-      console.error('[COPILOTO] Erro:', err.message);
+      log.error('COPILOTO', 'Erro', { err: err?.message, stack: err?.stack });
       if (err?.status === 401) return res.status(503).json({ message: 'OPENAI_API_KEY inválida.' });
       if (err?.status === 429) return res.status(429).json({ message: 'Rate limit OpenAI. Tente em instantes.' });
       return res.status(500).json({ message: err.message });

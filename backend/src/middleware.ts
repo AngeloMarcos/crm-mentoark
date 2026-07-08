@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { pool } from './db';
+import { log, setRequestUserId } from './logger';
 
 export interface AuthRequest extends Request {
   userId?: string;
@@ -44,6 +45,7 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
     req.userId    = String(payload.sub);
     req.userRole  = payload.role;
     req.userEmail = payload.email;
+    setRequestUserId(req.userId);
     next();
   } catch {
     return res.status(401).json({ message: 'Token inválido ou expirado', code: 'TOKEN_EXPIRED' });
@@ -75,7 +77,7 @@ export async function adminMiddleware(req: AuthRequest, res: Response, next: Nex
     }
     return res.status(403).json({ message: 'Acesso restrito a administradores' });
   } catch (err: any) {
-    console.error('[Middleware] Erro ao verificar admin:', err.message);
+    log.error('MIDDLEWARE', 'Erro ao verificar admin', { err: err?.message });
     return res.status(500).json({ message: 'Erro interno ao validar permissões' });
   }
 }

@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 // ── Rate limiting persistente via banco ──────────────────────────────────────
 async function checkRateLimit(pool: Pool, userId: string): Promise<boolean> {
@@ -237,7 +238,7 @@ export default function disparos(pool: Pool): Router {
 
       return res.json({ ok: true });
     } catch (err: any) {
-      console.error('[DISPARO/ENVIAR]', err.message);
+      log.error('DISPARO/ENVIAR', 'Erro', { err: err?.message, stack: err?.stack });
       await pool.query(
         `UPDATE disparo_logs SET status = 'failed', erro = $1 WHERE id = $2 AND user_id = $3`,
         [err.message, disparo_log_id, userId]

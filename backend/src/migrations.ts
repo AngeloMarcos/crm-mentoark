@@ -16,6 +16,7 @@
  */
 
 import { Pool } from 'pg';
+import { log } from './logger';
 
 export async function runMigrations(pool: Pool): Promise<void> {
   // whatsapp_messages v1 (schema PT legado) removida — criada pela migration 002 em schema EN canônico
@@ -204,7 +205,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`
     ALTER TABLE marketing_leads
       ALTER COLUMN user_id SET NOT NULL
-  `).catch(err => console.warn('[MIGRATIONS] marketing_leads.user_id já NOT NULL ou tem NULLs:', err.message));
+  `).catch(err => log.warn('MIGRATIONS', 'marketing_leads.user_id já NOT NULL ou tem NULLs', { err: err.message }));
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_marketing_leads_user_capturado
@@ -215,7 +216,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`
     ALTER TABLE facebook_campanhas
       ALTER COLUMN user_id SET NOT NULL
-  `).catch(err => console.warn('[MIGRATIONS] facebook_campanhas.user_id já NOT NULL ou tem NULLs:', err.message));
+  `).catch(err => log.warn('MIGRATIONS', 'facebook_campanhas.user_id já NOT NULL ou tem NULLs', { err: err.message }));
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_facebook_campanhas_user
@@ -554,7 +555,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
         next_msgs.mensagem_enviada, next_msgs.tipo_midia, next_msgs.url_midia, next_msgs.legenda_midia;
     END;
     $$ LANGUAGE plpgsql;
-  `).catch(err => console.error('[MIGRATIONS] Erro ao criar function get_next_disparo_batch:', err.message));
+  `).catch(err => log.error('MIGRATIONS', 'Erro ao criar function get_next_disparo_batch', { err: err.message }));
 
   // Garantir tabela integracoes_config
   await pool.query(`
@@ -637,12 +638,12 @@ export async function runMigrations(pool: Pool): Promise<void> {
         ALTER TABLE dados_cliente
           ALTER COLUMN atendimento_ia TYPE TEXT
           USING (CASE WHEN atendimento_ia THEN 'pause' ELSE 'ativo' END)
-      `).catch(err => console.warn('[MIGRATIONS] atendimento_ia migration:', err.message));
+      `).catch(err => log.warn('MIGRATIONS', 'atendimento_ia migration', { err: err.message }));
       await pool.query(`
         ALTER TABLE dados_cliente
           ALTER COLUMN atendimento_ia SET DEFAULT 'ativo'
       `).catch(() => {});
-      console.log('[MIGRATIONS] atendimento_ia migrado de BOOLEAN → TEXT');
+      log.info('MIGRATIONS', 'atendimento_ia migrado de BOOLEAN → TEXT');
     }
   }
 
@@ -733,7 +734,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
       RETURN reativados;
     END;
     $$ LANGUAGE plpgsql;
-  `).catch(err => console.warn('[MIGRATIONS] reativar_pausas_expiradas:', err.message));
+  `).catch(err => log.warn('MIGRATIONS', 'reativar_pausas_expiradas', { err: err.message }));
 
   // 9. Índices de performance para n8n + FK de ia_pausa_log + unique dados_cliente(user_id, telefone)
   await pool.query(`
@@ -756,7 +757,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
       ADD CONSTRAINT fk_ia_pausa_log_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   `).catch(() => {});
 
-  console.log('[MIGRATIONS] Sprint CRM+n8n concluído');
+  log.info('MIGRATIONS', 'Sprint CRM+n8n concluído');
 
   // ── Migration 002: whatsapp_messages ────────────────────────────────────
 
@@ -768,7 +769,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
     `).catch(() => ({ rows: [] as any[] }));
     if (oldSchema.rows.length > 0) {
       await pool.query(`DROP TABLE IF EXISTS whatsapp_messages CASCADE`).catch(() => {});
-      console.log('[MIGRATIONS] whatsapp_messages schema antigo removido');
+      log.info('MIGRATIONS', 'whatsapp_messages schema antigo removido');
     }
   }
 
@@ -825,7 +826,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
       timestamp_wa AS ultimo_timestamp, created_at AS ultimo_created_at
     FROM whatsapp_messages
     ORDER BY user_id, instance_name, remote_jid, timestamp_wa DESC NULLS LAST
-  `).catch(err => console.warn('[MIGRATIONS] whatsapp_conversations view:', err.message));
+  `).catch(err => log.warn('MIGRATIONS', 'whatsapp_conversations view', { err: err.message }));
 
   // Função para IA buscar histórico
   await pool.query(`
@@ -851,9 +852,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
       ORDER BY timestamp_wa ASC NULLS LAST
       LIMIT p_limit;
     $$
-  `).catch(err => console.warn('[MIGRATIONS] get_conversation_history fn:', err.message));
+  `).catch(err => log.warn('MIGRATIONS', 'get_conversation_history fn', { err: err.message }));
 
-  console.log('[MIGRATIONS] 002_whatsapp_messages OK');
+  log.info('MIGRATIONS', '002_whatsapp_messages OK');
 
   // ── Sprint Equipe / Kanban / Sub-perfis ──────────────────────────────────
 
@@ -1027,7 +1028,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   `).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_sub_perfis_user ON sub_perfis(user_id)`).catch(() => {});
 
-  console.log('[MIGRATIONS] Equipe/Kanban/SubPerfis OK');
+  log.info('MIGRATIONS', 'Equipe/Kanban/SubPerfis OK');
 
   // ── AI Providers & Uso ────────────────────────────────────────────────────
 
@@ -1100,7 +1101,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // Coluna provider_id em agentes (para associar ao ai_providers)
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS provider_id UUID REFERENCES ai_providers(id) ON DELETE SET NULL`).catch(() => {});
 
-  console.log('[MIGRATIONS] AI Providers/Uso OK');
+  log.info('MIGRATIONS', 'AI Providers/Uso OK');
 
   // ── WhatsApp Instances (fluxo QR simplificado) ───────────────────────────
   await pool.query(`
@@ -1138,7 +1139,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE integracoes_config ALTER COLUMN nome SET DEFAULT ''`).catch(() => {});
   await pool.query(`ALTER TABLE integracoes_config ALTER COLUMN nome DROP NOT NULL`).catch(() => {});
 
-  console.log('[MIGRATIONS] WhatsApp Instances + patches finais OK');
+  log.info('MIGRATIONS', 'WhatsApp Instances + patches finais OK');
 
   // ── Garantir usuários admin master ────────────────────────────────────────
   // Lê MASTER_EMAILS do ambiente e garante que cada um existe como admin.
@@ -1162,7 +1163,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
              VALUES ($1, crypt($2, gen_salt('bf', 10)), $3, 'admin', true, true)`,
             [email, defaultPassword, defaultNames[email] || email.split('@')[0]]
           );
-          console.log(`[MIGRATIONS] Usuário admin criado: ${email}`);
+          log.info('MIGRATIONS', 'Usuário admin criado', { email });
         } else {
           // Garantir que é admin e está ativo
           await pool.query(
@@ -1171,10 +1172,10 @@ export async function runMigrations(pool: Pool): Promise<void> {
           );
         }
       } catch (err: any) {
-        console.warn(`[MIGRATIONS] Erro ao garantir admin ${email}:`, err.message);
+        log.warn('MIGRATIONS', 'Erro ao garantir admin', { email, err: err.message });
       }
     }
-    console.log('[MIGRATIONS] Usuários master verificados OK');
+    log.info('MIGRATIONS', 'Usuários master verificados OK');
   }
 
   // ── whatsapp_message_status (status de entrega/leitura por messageId) ───────
@@ -1201,7 +1202,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS sent_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_sent_by ON whatsapp_messages(sent_by_user_id) WHERE sent_by_user_id IS NOT NULL`).catch(() => {});
 
-  console.log('[MIGRATIONS] whatsapp_message_status + patches OK');
+  log.info('MIGRATIONS', 'whatsapp_message_status + patches OK');
 
   // ── Colunas de configuração avançada de agentes (modo de operação, distribuição, etc.) ──
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS operation_mode    TEXT`).catch(() => {});
@@ -1249,7 +1250,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
     END $$;
   `).catch(() => {});
 
-  console.log('[MIGRATIONS] agentes advanced columns OK');
+  log.info('MIGRATIONS', 'agentes advanced columns OK');
 
   // ── agent_configs: colunas de compatibilidade com frontend ───────────────────
   await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS health_score     INTEGER DEFAULT 100`).catch(() => {});
@@ -1257,7 +1258,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS provider         VARCHAR`).catch(() => {});
   await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS provider_id      VARCHAR`).catch(() => {});
 
-  console.log('[MIGRATIONS] agent_configs compat columns OK');
+  log.info('MIGRATIONS', 'agent_configs compat columns OK');
 
   // ── users.owner_id: vincula usuários comuns ao admin que os criou ─────────
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
@@ -1270,13 +1271,13 @@ export async function runMigrations(pool: Pool): Promise<void> {
     WHERE u.role = 'user' AND u.owner_id IS NULL
   `).catch(() => {});
 
-  console.log('[MIGRATIONS] users.owner_id OK');
+  log.info('MIGRATIONS', 'users.owner_id OK');
 
   // ── integracoes_config: remover UNIQUE(user_id, tipo) para permitir múltiplas instâncias ──
   await pool.query(`DROP INDEX IF EXISTS idx_integracoes_user_tipo`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_integracoes_user_tipo ON integracoes_config(user_id, tipo)`).catch(() => {});
 
-  console.log('[MIGRATIONS] integracoes_config multi-instancia OK');
+  log.info('MIGRATIONS', 'integracoes_config multi-instancia OK');
 
   // ── Super Admin: Firewall — tabelas de configuração e IPs ────────────────
   //
@@ -1339,7 +1340,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ON CONFLICT (id) DO NOTHING
   `).catch(() => {});
 
-  console.log('[MIGRATIONS] Super Admin firewall_ips + firewall_config OK');
+  log.info('MIGRATIONS', 'Super Admin firewall_ips + firewall_config OK');
 
   // ── Auditoria de IA: colunas estruturadas para rastrear respostas do modelo ─
   //
@@ -1378,7 +1379,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
       conteudo = LEFT(COALESCE(message->>'content', message->>'text', ''), 10000)
     WHERE contato_telefone IS NULL
       AND message IS NOT NULL
-  `).catch(err => console.warn('[MIGRATIONS] backfill n8n_chat_histories:', err.message));
+  `).catch(err => log.warn('MIGRATIONS', 'backfill n8n_chat_histories', { err: err.message }));
 
   // ── chat_messages: mesmas colunas para uniformidade ──────────────────────
   await pool.query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS contato_telefone VARCHAR(30)`).catch(() => {});
@@ -1394,9 +1395,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
       papel   = CASE WHEN bot_message IS NOT NULL AND bot_message <> '' THEN 'assistant' ELSE 'user' END,
       conteudo = COALESCE(bot_message, user_message, '')
     WHERE contato_telefone IS NULL
-  `).catch(err => console.warn('[MIGRATIONS] backfill chat_messages:', err.message));
+  `).catch(err => log.warn('MIGRATIONS', 'backfill chat_messages', { err: err.message }));
 
-  console.log('[MIGRATIONS] Auditoria IA: colunas papel/conteudo/tokens OK');
+  log.info('MIGRATIONS', 'Auditoria IA: colunas papel/conteudo/tokens OK');
 
-  console.log('[MIGRATIONS] OK');
+  log.info('MIGRATIONS', 'OK');
 }

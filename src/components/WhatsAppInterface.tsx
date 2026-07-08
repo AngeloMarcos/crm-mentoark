@@ -2515,7 +2515,17 @@ export function WhatsAppInterface() {
                           )}
 
                           <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
-                            <span className="text-[10px] font-bold">{formatTime(m.timestamp)}</span>
+                            {/* [AUDITORIA] BUG: m.timestamp já vem pré-formatado (ex: "13:57") de
+                                formatTime(m.timestamp_wa||m.created_at) em fetchMensagens (linha ~608)
+                                ou de new Date().toLocaleTimeString() no envio otimista (linha ~942).
+                                Chamar formatTime() de novo aqui fazia new Date("13:57") — string não
+                                parseável — e toLocaleTimeString() de uma Invalid Date retorna
+                                literalmente o texto "Invalid Date" (não lança exceção, então o
+                                try/catch de formatTime não pega). Era isso que aparecia embaixo de
+                                toda mensagem enviada.
+                                [AUDITORIA] FIX APLICADO: renderizar m.timestamp direto, sem
+                                reformatar — já é a string de exibição pronta. */}
+                            <span className="text-[10px] font-bold">{m.timestamp}</span>
                             {isOut && (
                               <span title={m.status || 'sent'}>
                                 {m.status === 'READ' || m.status === 'PLAYED' ? (

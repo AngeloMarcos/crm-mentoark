@@ -2,10 +2,11 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import jwt from 'jsonwebtoken';
 import { exec as nodeExec } from 'child_process';
+import { log } from '../logger';
 
 const ADMIN_KEY = process.env.OPENCLAW_ADMIN_KEY;
 if (!ADMIN_KEY) {
-  console.warn('[OPENCLAW] OPENCLAW_ADMIN_KEY não configurado — acesso via admin key desabilitado (apenas JWT funcionará)');
+  log.warn('OPENCLAW', 'OPENCLAW_ADMIN_KEY não configurado — acesso via admin key desabilitado (apenas JWT funcionará)');
 }
 
 function checkAuth(req: Request, res: Response): boolean {
@@ -51,7 +52,7 @@ export function makeOpenClawRouter(_pool: Pool): Router {
       const result = await callProxy(message.trim(), sessionKey?.trim() || 'default');
       return res.json(result);
     } catch (err: any) {
-      console.error('[OPENCLAW] Erro:', err.message);
+      log.error('OPENCLAW', 'Erro', { err: err?.message, stack: err?.stack });
       const statusCode = (err as any).statusCode ?? 500;
       return res.status(statusCode).json({ error: err.message || 'Erro ao chamar OpenClaw' });
     }
@@ -97,7 +98,10 @@ async function callProxy(
     if (!res.ok) {
       // O body do erro é lido mas não repassado ao fallback — útil só para debug local.
       const errBody = await res.text().catch(() => String(res.status));
-      console.warn(`[OPENCLAW] Proxy falhou (${res.status}): ${errBody.slice(0, 120)}, usando OpenAI direto`);
+      log.warn('OPENCLAW', 'Proxy falhou, usando OpenAI direto', {
+        status: res.status,
+        errBody: errBody.slice(0, 120),
+      });
       return callOpenAIDirect(message, timeoutMs, apiKey);
     }
 
@@ -111,7 +115,7 @@ async function callProxy(
     // err.message pode ser undefined se err não for um Error padrão (ex: rejeição de Promise com string)
     const msg: string = err?.message ?? '';
     if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET')) {
-      console.warn('[OPENCLAW] Proxy inacessível, usando OpenAI direto');
+      log.warn('OPENCLAW', 'Proxy inacessível, usando OpenAI direto');
       return callOpenAIDirect(message, timeoutMs, apiKey);
     }
     throw err;
@@ -299,7 +303,7 @@ Data/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_P
             } else if (isCommandBlocked(cmd)) {
               toolResult = `Comando bloqueado por política de segurança: "${cmd}"`;
             } else {
-              console.log(`[OPENCLAW] exec: ${cmd}`);
+              log.info('OPENCLAW', 'exec', { cmd });
               toolResult = await runExec(cmd);
             }
           } else if (tc.function.name === 'read_file') {

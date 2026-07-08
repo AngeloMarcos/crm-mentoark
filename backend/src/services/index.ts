@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import crypto from 'crypto';
 import { Pool } from 'pg';
 import type { MCPTool } from '../mcp/tools';
+import { log } from '../logger';
 
 export interface AIMessage {
   role: 'user' | 'assistant' | 'system';
@@ -178,7 +179,7 @@ export async function criarProvider(
       decipher.final(),
     ]).toString();
   } catch {
-    console.warn('[PROVIDER] Falha ao descriptografar api_key — usando variável de ambiente');
+    log.warn('PROVIDER', 'Falha ao descriptografar api_key — usando variável de ambiente');
     apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '';
   }
 

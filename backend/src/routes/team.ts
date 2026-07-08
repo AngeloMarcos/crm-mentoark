@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 /**
  * /api/team/*  — pessoas, perfis (roles), permissões e convites.
@@ -14,7 +15,7 @@ export default function teamRouter(pool: Pool): Router {
   const wrap = (fn: Function) => async (req: AuthRequest, res: Response) => {
     try { await fn(req, res); }
     catch (err: any) {
-      console.error('[team]', err.message);
+      log.error('TEAM', 'Erro', { err: err?.message, stack: err?.stack });
       res.status(500).json({ message: err.message });
     }
   };

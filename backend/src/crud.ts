@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from './middleware';
+import { log } from './logger';
 
 export interface CrudOptions {
   userIdCol?: string | null; // null = no user scoping (e.g. n8n_chat_histories)
@@ -110,7 +111,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     try {
       await fn(req, res);
     } catch (err: any) {
-      console.error(`[${tableName}]`, err.message);
+      log.error(tableName, 'Erro na query', { err: err.message });
       res.status(500).json({ message: err.message });
     }
   };

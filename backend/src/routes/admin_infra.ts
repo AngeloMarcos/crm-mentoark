@@ -26,6 +26,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { Pool } from 'pg';
 import type { AuthRequest } from '../middleware';
+import { log } from '../logger';
 
 // ── Validadores ───────────────────────────────────────────────────────────────
 
@@ -120,10 +121,10 @@ export function createFirewallMiddleware(pool: Pool) {
       // ── MODO SIMULAÇÃO — log apenas, sem bloqueio real ────────────────────
       if (cfg.modo_simulacao) {
         if (isBlocked) {
-          console.warn(
-            `[FIREWALL SIM] ${new Date().toISOString()} ` +
-            `IP=${clientIp} path=${req.path} — seria bloqueado (simulação)`,
-          );
+          log.warn('FIREWALL SIM', 'seria bloqueado (simulação)', {
+            ip: clientIp,
+            path: req.path,
+          });
         }
         return next(); // nunca bloqueia em modo simulação
       }
@@ -133,10 +134,10 @@ export function createFirewallMiddleware(pool: Pool) {
       // Não é o estado atual (defaults: false / true), mas o código está aqui
       // para quando o painel for ativado pelo admin.
       if (isBlocked) {
-        console.warn(
-          `[FIREWALL BLOCK] ${new Date().toISOString()} ` +
-          `IP=${clientIp} path=${req.path}`,
-        );
+        log.warn('FIREWALL BLOCK', 'acesso bloqueado', {
+          ip: clientIp,
+          path: req.path,
+        });
         res.status(403).json({ message: 'Acesso bloqueado.' });
         return;
       }
@@ -206,10 +207,11 @@ export default function adminInfraRouter(pool: Pool): Router {
 
       invalidateConfigCache();
 
-      console.log(
-        `[FIREWALL CONFIG] userId=${req.userId} ` +
-        `ligado=${r.rows[0]?.firewall_ligado} simulacao=${r.rows[0]?.modo_simulacao}`,
-      );
+      log.info('FIREWALL CONFIG', 'configuração de firewall atualizada', {
+        userId: req.userId,
+        firewallLigado: r.rows[0]?.firewall_ligado,
+        modoSimulacao: r.rows[0]?.modo_simulacao,
+      });
 
       return res.json(r.rows[0]);
     } catch (err: any) {
@@ -312,10 +314,12 @@ export default function adminInfraRouter(pool: Pool): Router {
         [ipClean, tipoClean, motivoClean, ativoClean, req.userId],
       );
 
-      console.log(
-        `[FIREWALL UI] userId=${req.userId} ` +
-        `ip=${ipClean} tipo=${tipoClean} ativo=${ativoClean} — registro salvo (sem bloqueio)`,
-      );
+      log.info('FIREWALL UI', 'registro salvo (sem bloqueio)', {
+        userId: req.userId,
+        ip: ipClean,
+        tipo: tipoClean,
+        ativo: ativoClean,
+      });
 
       return res.status(201).json(r.rows[0]);
     } catch (err: any) {
@@ -404,7 +408,7 @@ export default function adminInfraRouter(pool: Pool): Router {
         return res.status(404).json({ message: 'Registro não encontrado.' });
       }
 
-      console.log(`[FIREWALL UI] userId=${req.userId} ip=${r.rows[0].ip} removido da UI`);
+      log.info('FIREWALL UI', 'removido da UI', { userId: req.userId, ip: r.rows[0].ip });
 
       return res.json({ ok: true, removido: r.rows[0] });
     } catch (err: any) {

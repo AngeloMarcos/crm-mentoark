@@ -15,6 +15,7 @@ import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
 import { chamarOpenClawAgent } from '../routes/openclaw';
+import { log } from '../logger';
 
 // Cliente global — usado como fallback; substituído pela chave do banco sempre que possível
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -65,7 +66,7 @@ async function transcreverAudio(url: string, apiKey?: string): Promise<string | 
       body: form,
     });
     if (!resp.ok) {
-      console.warn('[ENGINE] Whisper erro:', resp.status, await resp.text().catch(() => ''));
+      log.warn('ENGINE', 'Whisper erro', { status: resp.status, body: await resp.text().catch(() => '') });
       return null;
     }
     return ((await resp.json()) as any).text || null;
@@ -164,7 +165,7 @@ async function salvarHistorico(
       content.slice(0, 10000),          // conteudo: texto puro (limite seguro)
       tokensConsumidos ?? null,         // tokens_consumidos: só preenchido na resposta
     ],
-  ).catch(err => console.error('[ENGINE INSERT n8n_chat_histories]:', err.message));
+  ).catch(err => log.error('ENGINE INSERT n8n_chat_histories', 'Falha ao inserir histórico', { err: err?.message, stack: err?.stack }));
 }
 
 // ── Parser nativo — sem segunda chamada à API (zero custo, zero latência) ──────
@@ -211,7 +212,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // Higienizar e validar telefone antes de qualquer operação
   const telefoneDigitos = entrada.telefone.replace(/\D/g, '');
   if (telefoneDigitos.length < 10 || telefoneDigitos.length > 13) {
-    console.warn(`[ENGINE START] Telefone inválido, abortando: "${entrada.telefone}" → "${telefoneDigitos}" (${telefoneDigitos.length} dígitos)`);
+    log.warn('ENGINE START', 'Telefone inválido, abortando', {
+      telefoneOriginal: entrada.telefone,
+      telefoneDigitos,
+      quantidadeDigitos: telefoneDigitos.length,
+    });
     return;
   }
   entrada = { ...entrada, telefone: telefoneDigitos };
@@ -219,14 +224,19 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // ── Lock de concorrência: evita duas respostas simultâneas ao mesmo número ──
   const lockKey = `${entrada.instancia}:${telefoneDigitos}`;
   if (atendimentosAtivos.has(lockKey)) {
-    console.log(`[ENGINE] Concorrência detectada para ${telefoneDigitos} — reagendando após 4s`);
+    log.info('ENGINE', 'Concorrência detectada — reagendando após 4s', { telefone: telefoneDigitos });
     setTimeout(() => processarMensagem(pool, entrada).catch(() => {}), 4000);
     return;
   }
   atendimentosAtivos.add(lockKey);
 
   try {
-  console.log(`[ENGINE START] instancia="${entrada.instancia}" telefone="${entrada.telefone}" tipo="${entrada.tipo}" userId="${entrada.userId || 'N/A'}"`);
+  log.info('ENGINE START', 'Nova mensagem recebida', {
+    instancia: entrada.instancia,
+    telefone: entrada.telefone,
+    tipo: entrada.tipo,
+    userId: entrada.userId || 'N/A',
+  });
 
   // 1. Buscar agente — prioriza o agente do usuário correto, depois qualquer um da instância
   const r1 = await pool.query(
@@ -247,12 +257,12 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     );
     agenteRows = r2.rows;
     if (agenteRows.length) {
-      console.log(`[ENGINE] Agente via userId fallback: ${agenteRows[0].nome}`);
+      log.info('ENGINE', 'Agente via userId fallback', { nomeAgente: agenteRows[0].nome });
     }
   }
 
   if (!agenteRows.length) {
-    console.warn(`[ENGINE] Nenhum agente. instancia="${entrada.instancia}" userId="${entrada.userId}"`);
+    log.warn('ENGINE', 'Nenhum agente encontrado', { instancia: entrada.instancia, userId: entrada.userId });
     return;
   }
 
@@ -269,7 +279,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // 2. Verificar opt-out
   const contato = await upsertContato(pool, userIdFinal, entrada.telefone, entrada.pushName);
   if (contato.opt_out) {
-    console.log(`[ENGINE] Contato ${entrada.telefone} com opt_out=true — ignorando`);
+    log.info('ENGINE', 'Contato com opt_out=true — ignorando', { telefone: entrada.telefone });
     return;
   }
 
@@ -287,18 +297,22 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     pausaRes.rows[0]?.atendimento_ia === 'pause' ||
     pausaRes.rows[0]?.atendente_pausou_ia === true
   ) {
-    console.log(`[ENGINE] IA pausada para ${entrada.telefone} (atendimento_ia=${pausaRes.rows[0]?.atendimento_ia} / atendente_pausou_ia=${pausaRes.rows[0]?.atendente_pausou_ia})`);
+    log.info('ENGINE', 'IA pausada', {
+      telefone: entrada.telefone,
+      atendimentoIa: pausaRes.rows[0]?.atendimento_ia,
+      atendentePausouIa: pausaRes.rows[0]?.atendente_pausou_ia,
+    });
     return;
   }
 
   // 4. Criar provider ANTES de resolver mídia (a apiKey é necessária para Whisper/Vision)
   const providerInfo = await criarProvider(pool, userIdFinal, agente.provider_id ?? null);
   if (!providerInfo) {
-    console.warn(`[ENGINE] Nenhum ai_provider encontrado para user_id=${userIdFinal}. Configure em Integrações > Configuração de IA.`);
+    log.warn('ENGINE', 'Nenhum ai_provider encontrado. Configure em Integrações > Configuração de IA.', { userId: userIdFinal });
   }
   const envKey = process.env.OPENAI_API_KEY || '';
   if (!providerInfo && !envKey) {
-    console.error(`[ENGINE] ATENÇÃO: sem provider no banco E OPENAI_API_KEY vazio — a IA não conseguirá responder!`);
+    log.error('ENGINE', 'ATENÇÃO: sem provider no banco E OPENAI_API_KEY vazio — a IA não conseguirá responder!');
   }
   // apiKey descritografada do banco (usada por Whisper, Vision e Parser)
   const openaiApiKey = (providerInfo?.providerSlug === 'openai' ? providerInfo?.apiKey : null)
@@ -308,8 +322,8 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   let textoFinal = entrada.texto;
   if (entrada.tipo === 'audio' && entrada.midiaUrl) {
     textoFinal = await transcreverAudio(entrada.midiaUrl, openaiApiKey);
-    if (!textoFinal) { console.warn('[ENGINE] Falha na transcrição'); return; }
-    console.log(`[ENGINE] Áudio transcrito: "${textoFinal.slice(0, 60)}"`);
+    if (!textoFinal) { log.warn('ENGINE', 'Falha na transcrição'); return; }
+    log.info('ENGINE', 'Áudio transcrito', { textoTranscrito: textoFinal.slice(0, 60) });
   } else if (entrada.tipo === 'image' && entrada.midiaUrl) {
     textoFinal = await analisarImagem(entrada.midiaUrl, entrada.texto || undefined, openaiApiKey);
   }
@@ -395,7 +409,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
   const modelo = providerInfo?.modelo || agentConfig?.modelo_llm || agente.modelo || 'gpt-4.1';
   const providerSlug = providerInfo?.providerSlug || 'openai';
-  console.log(`[ENGINE] Provider: ${providerInfo ? providerSlug + '/' + modelo : 'FALLBACK env'} | user=${userIdFinal} | apiKey: ${openaiApiKey ? 'OK' : 'VAZIA'}`);
+  log.info('ENGINE', 'Provider selecionado', {
+    provider: providerInfo ? providerSlug + '/' + modelo : 'FALLBACK env',
+    userId: userIdFinal,
+    apiKeyPresente: !!openaiApiKey,
+  });
 
   // 8. Loop agêntico — máximo 5 iterações
   const MAX_ITER = 5;
@@ -419,7 +437,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // remover este lado do OR (documentando que motor_ia só é configurável via tabela agentes).
   const usarOpenClaw = agente.motor_ia === 'openclaw' || agentConfig?.motor_ia === 'openclaw';
   if (usarOpenClaw) {
-    console.log(`[ENGINE] Usando OpenClaw para ${entrada.telefone}`);
+    log.info('ENGINE', 'Usando OpenClaw', { telefone: entrada.telefone });
     const prompt = systemPrompt + `\n\nHistórico:\n${
       historico.map(m => `${m.role === 'user' ? 'Cliente' : 'IA'}: ${m.content}`).join('\n')
     }\n\nCliente: ${textoFinal}`;
@@ -432,9 +450,9 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         openaiApiKey,
         40_000,
       );
-      console.log(`[ENGINE] OpenClaw respondeu: ${respostaFinal.slice(0, 100)}`);
+      log.info('ENGINE', 'OpenClaw respondeu', { resposta: respostaFinal.slice(0, 100) });
     } catch (err: any) {
-      console.error('[ENGINE] OpenClaw falhou, usando fallback OpenAI:', err.message);
+      log.error('ENGINE', 'OpenClaw falhou, usando fallback OpenAI', { err: err?.message, stack: err?.stack });
     }
   }
 
@@ -442,16 +460,15 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   for (let iter = 0; iter < MAX_ITER; iter++) { // eslint-disable-line no-lone-blocks
     // ── [RASTREIO IA] Log pré-chamada ────────────────────────────────────────
-    console.log(
-      '[RASTREIO IA] Enviando para OpenAI',
-      '| Telefone:', entrada.telefone,
-      '| Provider:', providerSlug + '/' + modelo,
-      '| Iter:', iter,
-      '| HistLen:', mensagens.length,
-      '| ApiKey:', openaiApiKey ? `OK (${openaiApiKey.slice(0, 8)}...)` : 'VAZIA ← PROBLEMA',
-      '| System Prompt:', systemPrompt.slice(0, 150).replace(/\n/g, ' '),
-      '| Mensagem do Usuário:', textoFinal?.slice(0, 200),
-    );
+    log.info('RASTREIO IA', 'Enviando para OpenAI', {
+      telefone: entrada.telefone,
+      provider: providerSlug + '/' + modelo,
+      iter,
+      histLen: mensagens.length,
+      apiKey: openaiApiKey ? `OK (${openaiApiKey.slice(0, 8)}...)` : 'VAZIA ← PROBLEMA',
+      systemPrompt: systemPrompt.slice(0, 150).replace(/\n/g, ' '),
+      mensagemUsuario: textoFinal?.slice(0, 200),
+    });
 
     let resp: Awaited<ReturnType<typeof provider.complete>> | null = null;
     try {
@@ -465,36 +482,34 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         `ENGINE provider.complete (${modelo})`,
       );
     } catch (err: any) {
-      console.error(
-        '[RASTREIO IA - ERRO] Chamada OpenAI falhou',
-        '| Telefone:', entrada.telefone,
-        '| Provider:', providerSlug + '/' + modelo,
-        '| Status HTTP:', err?.status ?? err?.statusCode ?? 'N/A',
-        '| Código:', err?.code ?? 'N/A',
-        '| Mensagem:', err?.message,
-      );
+      log.error('RASTREIO IA - ERRO', 'Chamada OpenAI falhou', {
+        telefone: entrada.telefone,
+        provider: providerSlug + '/' + modelo,
+        statusHttp: err?.status ?? err?.statusCode ?? 'N/A',
+        codigo: err?.code ?? 'N/A',
+        err: err?.message,
+        stack: err?.stack,
+      });
       throw err; // propaga para o caller registrar e liberar o lock
     }
 
     if (!resp) {
-      console.error(
-        '[RASTREIO IA - ERRO] Provider retornou null (401/429)',
-        '| Telefone:', entrada.telefone,
-        '| Provider:', providerSlug + '/' + modelo,
-        '| Diagnóstico: verifique OPENAI_API_KEY no .env do servidor',
-      );
+      log.error('RASTREIO IA - ERRO', 'Provider retornou null (401/429)', {
+        telefone: entrada.telefone,
+        provider: providerSlug + '/' + modelo,
+        diagnostico: 'verifique OPENAI_API_KEY no .env do servidor',
+      });
       return;
     }
 
     // ── [RASTREIO IA] Log pós-resposta ───────────────────────────────────────
-    console.log(
-      '[RASTREIO IA] Resposta OpenAI recebida',
-      '| Telefone:', entrada.telefone,
-      '| TokensIn:', resp.inputTokens,
-      '| TokensOut:', resp.outputTokens,
-      '| ToolCalls:', resp.toolCalls.length,
-      '| Resposta:', resp.text?.slice(0, 120),
-    );
+    log.info('RASTREIO IA', 'Resposta OpenAI recebida', {
+      telefone: entrada.telefone,
+      tokensIn: resp.inputTokens,
+      tokensOut: resp.outputTokens,
+      toolCalls: resp.toolCalls.length,
+      resposta: resp.text?.slice(0, 120),
+    });
 
     tokensEntrada += resp.inputTokens;
     tokensSaida += resp.outputTokens;
@@ -506,7 +521,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     // Executar ferramentas e adicionar resultados
     const toolResults: AIMessage[] = [];
     for (const tc of resp.toolCalls) {
-      console.log(`[ENGINE] Tool: ${tc.name}(${JSON.stringify(tc.input).slice(0, 80)})`);
+      log.info('ENGINE', 'Executando tool', { nome: tc.name, input: JSON.stringify(tc.input).slice(0, 80) });
       const resultado = await executarFerramenta(pool, userIdFinal, tc.name, tc.input);
 
       if (resultado.startsWith('PAUSA_ATIVADA:')) {
@@ -527,7 +542,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
 
   if (!respostaFinal && !pausaAtivada) {
-    console.warn('[ENGINE] Sem resposta após loop agêntico');
+    log.warn('ENGINE', 'Sem resposta após loop agêntico');
     return;
   }
 
@@ -573,7 +588,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
        respostaFinal,
        Math.floor(Date.now() / 1000),
        nomeAgente]
-    ).catch(err => console.error('[ENGINE INSERT whatsapp_messages]:', err.message));
+    ).catch(err => log.error('ENGINE INSERT whatsapp_messages', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
   }
 
   // 12. Registrar uso de tokens
@@ -588,7 +603,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
            tokens_saida    = ai_uso_diario.tokens_saida    + $5,
            updated_at = now()`,
       [userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida]
-    ).catch(err => console.error('[ENGINE INSERT ai_uso_diario]:', err.message));
+    ).catch(err => log.error('ENGINE INSERT ai_uso_diario', 'Falha ao registrar uso de tokens', { err: err?.message, stack: err?.stack }));
   }
 
   // 13. Enviar mensagens (replica o Loop do n8n: 3s entre cada parte)
@@ -596,19 +611,19 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     // Correção 1 — Validar telefone antes de enviar
     const telefoneDigitos = entrada.telefone.replace(/\D/g, '');
     if (telefoneDigitos.length < 10 || telefoneDigitos.length > 13) {
-      console.warn(`[ENGINE] Telefone inválido, abortando envio: ${entrada.telefone}`);
+      log.warn('ENGINE', 'Telefone inválido, abortando envio', { telefone: entrada.telefone });
       return;
     }
     const numerosProibidos = ['5511999900001', '5511999900002', '5511999900003'];
     if (numerosProibidos.some(n => entrada.telefone.includes(n))) {
-      console.warn(`[ENGINE] Número de teste detectado, abortando: ${entrada.telefone}`);
+      log.warn('ENGINE', 'Número de teste detectado, abortando', { telefone: entrada.telefone });
       return;
     }
 
     // Correção 2 — Verificar que o agente tem Evolution configurado
     if (!agente.evolution_server_url || !agente.evolution_api_key) {
-      console.error(`[ENGINE] Agente sem Evolution configurado — não enviando resposta`);
-      console.error(`[ENGINE] Configure evolution_server_url e evolution_api_key no agente`);
+      log.error('ENGINE', 'Agente sem Evolution configurado — não enviando resposta');
+      log.error('ENGINE', 'Configure evolution_server_url e evolution_api_key no agente');
       return;
     }
 
@@ -627,12 +642,12 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   // 14. Ações de pausa
   if (pausaAtivada) {
-    console.log(`[ENGINE] Pausa ativada para ${entrada.telefone}`);
+    log.info('ENGINE', 'Pausa ativada', { telefone: entrada.telefone });
     await pool.query(
       `UPDATE dados_cliente SET atendimento_ia = 'pause', pausa_timestamp = NOW()
        WHERE user_id = $1 AND telefone ILIKE $2`,
       [userIdFinal, `%${entrada.telefone.slice(-11)}`]
-    ).catch(err => console.error('[ENGINE UPDATE dados_cliente pause]:', err.message));
+    ).catch(err => log.error('ENGINE UPDATE dados_cliente pause', 'Falha ao atualizar dados_cliente', { err: err?.message, stack: err?.stack }));
 
     if (respostaFinal) {
       const historicoRes = await pool.query(
@@ -666,11 +681,16 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
           instance_name: entrada.instancia,
           prioridade: 'alta',
         }),
-      }).catch(err => console.warn('[ENGINE] Falha ao criar card Kanban:', err.message));
+      }).catch(err => log.warn('ENGINE', 'Falha ao criar card Kanban', { err: err?.message, stack: err?.stack }));
     }
   }
 
-  console.log(`[ENGINE] ✓ ${entrada.telefone} | ${providerSlug}/${modelo} | msgs: ${parserMessages.length} | pausa: ${pausaAtivada}`);
+  log.info('ENGINE', 'Processamento concluído', {
+    telefone: entrada.telefone,
+    provider: `${providerSlug}/${modelo}`,
+    quantidadeMensagens: parserMessages.length,
+    pausa: pausaAtivada,
+  });
 
   } finally {
     // Liberar lock independente de sucesso ou erro
@@ -702,7 +722,7 @@ export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada)
     const entradaFinal = { ...buf.entrada };
     if (buf.mensagens.length > 1) entradaFinal.texto = buf.mensagens.join(' ');
     await processarMensagem(pool, entradaFinal).catch(err =>
-      console.error('[ENGINE] Erro:', err)
+      log.error('ENGINE', 'Erro', { err: err?.message, stack: err?.stack })
     );
   }, DEBOUNCE_MS);
 }
