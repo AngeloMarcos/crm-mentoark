@@ -44,6 +44,27 @@ Regra: **nunca deixe um `BUG:` sem um `FIX APLICADO:` ou `FIX PENDENTE:` corresp
 7. `git add` + `git commit` com mensagem `audit(<módulo>): <arquivo> — <resumo>` a cada arquivo ou pequeno grupo de arquivos relacionados. Isso cria histórico revisável e reversível.
 8. Atualizar `AUDITORIA_LOG.md` (tabela abaixo) com o resultado do arquivo.
 
+## Absorver e excluir documentos de diagnóstico (regra desde 2026-07)
+
+A partir de agora, conhecimento sobre bugs/lógica não vive mais em arquivos `PROMPT_CLAUDE_CODE_*.md`, `DIAGNOSTICO_*.md` soltos — vive **no código**, como comentário `[AUDITORIA]` no local exato da lógica que ele descreve. Documentos avulsos acumulam, ficam desatualizados e pesam o repositório sem necessidade.
+
+Ao encontrar um documento desse tipo relevante ao módulo em auditoria:
+1. Ler o documento inteiro.
+2. Para cada achado/decisão relevante nele, localizar o arquivo e o trecho de código correspondente e inserir o comentário `[AUDITORIA]` ali (LÓGICA/BUG/FIX APLICADO/FIX PENDENTE, conforme o caso) — **não copiar o documento inteiro**, extrair só o que é necessário pra entender a lógica e o estado do bug.
+3. **Não assumir que o documento está atualizado** — antes de marcar algo como `FIX APLICADO`, verificar contra o código/sistema real (o documento pode descrever um plano que nunca foi executado, ou um bug já corrigido por outra via). Se não der pra confirmar com certeza, registrar como `FIX PENDENTE` mesmo que o documento sugira que já foi resolvido.
+4. Depois que a informação estiver preservada no código, apagar o documento (`git rm arquivo.md`).
+5. **Exceções — nunca apagar sem perguntar ao usuário:** `STATUS.md`, `AUDITORIA_LOG.md`, `AUDITORIA_PROTOCOLO.md`, `INVENTARIO_VPS.md`, e qualquer prompt de infraestrutura (Grafana, deploy, VPS) que ainda **não foi executado** — esses continuam como tarefa pendente até serem rodados, não são "explicação de problema" a absorver.
+
+## Relatório prospectivo ao final de cada sprint (regra desde 2026-07)
+
+Quando o escopo do sprint estiver perto do fim (~80%), parar antes de fechar e escrever, **dentro do relatório final da sessão** (não em arquivo novo), um raio-x do que ainda falta:
+- Bugs encontrados mas não resolvidos (`FIX PENDENTE`), com motivo de cada um.
+- Código do módulo que ainda não foi lido/comentado, se houver.
+- Dependências ou suspeitas que apontam pra outro módulo (ex: "achei algo em X que provavelmente afeta o módulo Y também").
+- Uma sugestão objetiva de qual deveria ser o próximo sprint e por quê.
+
+Isso é o que permite ao usuário decidir e ordenar o próximo prompt de sprint — não criar o próximo prompt sozinho, só dar a visão pra quem vai decidir.
+
 ## AUDITORIA_LOG.md — formato
 
 Manter um único arquivo `AUDITORIA_LOG.md` na raiz do projeto, atualizado a cada arquivo revisado:
