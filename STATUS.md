@@ -1,6 +1,6 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-10 20:05 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-10 20:15 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Núcleo CRM
 
@@ -44,6 +44,8 @@
 **Rodada 2** (3 achados): **corrigidos** (1) `fetch` fire-and-forget pro N8N sem timeout — `AbortController` 8s, mesmo padrão do achado B; (3) loop de `handleStatusUpdate` sem guarda contra item inválido no array — `TypeError` interromperia o resto do lote. **Verificado e descartado** (2) suspeita de que upsert de contato + foto de perfil rodariam sem `userId` — confirmado no código real que já está protegido por `if (userId)`, falso positivo da revisão externa (que só recebe o texto colado, sem ver o aninhamento), comentário `[AUDITORIA] LÓGICA` adicionado pra não reabrir a dúvida. Commit `0a8f82a`. Avaliação: achados isolados de leitura linha-a-linha em `webhook.ts` parecem esgotados — o que resta é `FIX PENDENTE` que exige decisão/dado externo (ILIKE, isValidJid, schema a confirmar, bug upstream Prisma).
 
 Build do backend validado em ambas as rodadas.
+
+**Sprint 6 (fechamento):** 3ª rodada, 1 achado — fetch de confirmação de opt-out sem timeout, mesmo padrão `AbortController` 5s aplicado (3º lugar do arquivo). Commit `d3ce8b2`. **`webhook.ts` está fechado** para esta linha de auditoria: os únicos itens em aberto são os 2 já conhecidos que exigem decisão de infra/produto (migração `telefone`→E.164, e o bug upstream Prisma P2010) — nenhum achado de código pendente.
 
 ## Sessão 2026-07-10 (noite) — Sprint 3: contorno testado, 401 e instância órfã investigados
 
