@@ -819,11 +819,24 @@ export default function webhookRouter(pool: Pool): Router {
             if (cfgOptOut.rows.length) {
               const { url: evoUrl, api_key: evoApiKey, instancia: evoInst } = cfgOptOut.rows[0];
               const base = (evoUrl || '').trim().replace(/\/+$/, '');
+              // [AUDITORIA] BUG (achado da revisão externa/Google AI Studio, Sprint 6): este
+              // fetch rodava com `await` direto no corpo do handler, sem timeout — se a
+              // Evolution travasse exatamente nesse momento, a requisição do webhook ficava
+              // presa esperando resposta. Volume baixo comparado ao roteamento N8N (Sprint 5),
+              // mas mesmo vetor de risco.
+              // [AUDITORIA] FIX APLICADO: terceiro lugar do arquivo a receber o mesmo padrão de
+              // AbortController com timeout (5s) — mesmo usado no fetch de foto de perfil
+              // (Sprint 4) e no roteamento N8N (Sprint 5).
+              const optOutController = new AbortController();
+              const optOutTimer = setTimeout(() => optOutController.abort(), 5000);
               await fetch(`${base}/message/sendText/${evoInst}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', apikey: evoApiKey },
                 body: JSON.stringify({ number: telefone, text: 'Você foi removido da nossa lista. Para se reinscrever, envie "reativar".' }),
-              }).catch(() => {});
+                signal: optOutController.signal,
+              })
+                .catch(() => {})
+                .finally(() => clearTimeout(optOutTimer));
             }
           } catch {}
           log.info('WEBHOOK', 'Opt-out', { traceId, telefone });
