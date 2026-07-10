@@ -179,6 +179,11 @@ export default function webhookRouter(pool: Pool): Router {
   const processados = new Set<string>();
 
   async function handleStatusUpdate(payload: EvolutionPayload): Promise<void> {
+    // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
+    // as queries abaixo usam payload.instance sem checar presença — payload malformado sem esse
+    // campo faria as queries falharem silenciosamente (mascarado pelos .catch(() => {})) em vez
+    // de simplesmente não processar o evento. Guarda defensiva explícita no início da função.
+    if (!payload?.instance) return;
     const updates = payload.data?.update;
     if (!Array.isArray(updates)) return;
 
@@ -213,6 +218,9 @@ export default function webhookRouter(pool: Pool): Router {
   }
 
   async function handleMessageDelete(payload: EvolutionPayload): Promise<void> {
+    // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
+    // mesmo caso de handleStatusUpdate acima — payload.instance sem checagem de presença.
+    if (!payload?.instance) return;
     const key = payload.data?.key;
     if (!key?.id) return;
 
@@ -592,6 +600,11 @@ export default function webhookRouter(pool: Pool): Router {
       const dedupKey = `${instancia}:${messageId}`;
       if (processados.has(dedupKey)) { wlog('WEBHOOK_DROP', `dedup memória mid=${messageId} inst=${instancia}`); return; }
       processados.add(dedupKey);
+      // [AUDITORIA] FIX PENDENTE (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10;
+      // motivo: otimização, não bug — um setTimeout individual por mensagem pode acumular sob
+      // volume alto de mensagens, já que cada um vive isolado por 60s até disparar. Não é urgente
+      // hoje; só compensa refatorar pra uma janela rolante com um único setInterval quando o
+      // volume de mensagens crescer a ponto disso se tornar um problema real de memória).
       setTimeout(() => processados.delete(dedupKey), 60000);
       // [AUDITORIA] BUG: a checagem original filtrava só por message_id, ignorando a coluna
       // "instancia" (que o INSERT logo abaixo grava). Na prática as IDs geradas pelo WhatsApp
@@ -864,19 +877,20 @@ export default function webhookRouter(pool: Pool): Router {
         wlog('WEBHOOK_REJECT', `NENHUM userId para instância: "${instancia}" — mensagem descartada`);
         return;
       }
-      // Grupos não disparam IA automaticamente
-      if (isGroup) {
-        log.info('WEBHOOK', 'Grupo — mensagem salva, IA não processada', { traceId, telefone });
-        return;
-      }
       if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) {
         wlog('WEBHOOK_DROP', `sem texto e sem mídia tipo=${tipo} mid=${messageId} jid=${remoteJid}`);
         return;
       }
 
-      // Rota N8N: se agente tem n8n_webhook_url configurado, encaminha para lá
+      // Rota N8N: se agente tem n8n_webhook_url configurado, encaminha para lá.
+      // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
+      // este bloco rodava DEPOIS do `if (isGroup) return;` abaixo, então mensagens de grupo
+      // nunca chegavam ao N8N do usuário — mesmo quando a intenção era só auditoria/enriquecimento
+      // via N8N, sem disparar a IA. Movido para antes do descarte de grupo: agora grupo com
+      // n8n_webhook_url configurado é encaminhado normalmente (e sai por aqui, sem tocar a IA);
+      // grupo sem N8N configurado continua caindo no `if (isGroup) return;` como antes.
       if (n8nWebhookUrl) {
-        log.info('WEBHOOK', 'Roteando para N8N', { traceId, n8nWebhookUrl });
+        log.info('WEBHOOK', 'Roteando para N8N', { traceId, n8nWebhookUrl, isGroup });
         // [AUDITORIA] BUG (achado 1 da revisão externa/Google AI Studio, sprint seguinte à
         // Sprint 4): mesmo problema já corrigido no achado B da Sprint 4 (fetch nativo do Node
         // sem timeout), mas aqui é mais grave — n8nWebhookUrl é configurado por qualquer usuário
@@ -891,12 +905,18 @@ export default function webhookRouter(pool: Pool): Router {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             instancia, messageId, telefone, pushName, texto, tipo,
-            midiaUrl: midia.url || null, timestamp: tsVal, userId, remoteJid,
+            midiaUrl: midia.url || null, timestamp: tsVal, userId, remoteJid, isGroup,
           }),
           signal: n8nController.signal,
         })
           .catch(err => log.error('WEBHOOK', 'Erro ao encaminhar para N8N', { traceId, err: err.message }))
           .finally(() => clearTimeout(n8nTimer));
+        return;
+      }
+
+      // Grupos não disparam IA automaticamente (só chega aqui se não há N8N configurado)
+      if (isGroup) {
+        log.info('WEBHOOK', 'Grupo — mensagem salva, IA não processada', { traceId, telefone });
         return;
       }
 
