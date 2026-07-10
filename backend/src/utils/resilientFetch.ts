@@ -128,6 +128,10 @@ export async function resilientFetch(
       });
       clearTimeout(timer);
 
+      // [AUDITORIA] LÓGICA: o body da resposta descartada (503/504) não é consumido
+      // antes do retry — undici/Node libera a conexão de volta ao pool mesmo sem
+      // consumir o body quando não há mais referências pendentes ao Response, então
+      // não há vazamento de socket aqui; só vale lembrar se um dia adicionar streaming.
       // Resposta recebida — verifica se é retentável por status HTTP
       if (retrySet.has(response.status) && attempt < maxRetries) {
         lastErr = new Error(
