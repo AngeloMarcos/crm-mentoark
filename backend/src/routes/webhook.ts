@@ -228,6 +228,20 @@ export default function webhookRouter(pool: Pool): Router {
   // messages <jid>" e sempre antes do WebhookController disparar chats.update/
   // contacts.update (que chegam normais ao crm-api) — nunca messages.upsert. Ainda não
   // corrigido, mesma causa raiz, nenhuma das 3 opções abaixo foi tentada.
+  //
+  // SPRINT 3 (2026-07-10) — TESTADO E DESCARTADO: hipótese de que `DATABASE_SAVE_DATA_CHATS=false`
+  // (env var do Evolution que controla se ele persiste chats/contador de não-lidas na própria base)
+  // pularia o trecho de código que crasha, já que o CRM não depende dessa tabela interna do
+  // Evolution. Aplicado em /opt/evolution/docker-compose.yml, container reiniciado, instância
+  // reconectou normalmente ("open"). Testado com mensagem real de fora: MESMO stack trace P2010
+  // continuou disparando, idêntico, mesma frequência — a variável não afeta esse code path.
+  // Revertido imediatamente (backup em docker-compose.yml.bak-sprint3-20260710 na VPS),
+  // confirmado reconectado. Também descoberto nesta sessão: esse bug em `Chat.unreadMessages` já
+  // foi reportado em outras versões do Evolution (2.1.0, 2.2.0) rodando em PostgreSQL — ou seja,
+  // NÃO é exclusivo do MySQL nem da v2.3.7, então as opções (a) trocar DATABASE_PROVIDER e (b)
+  // fixar versão antiga têm garantia baixa de resolver, podem só trocar o código do erro. Opção
+  // (c) reportar/rastrear issue upstream (Evolution API GitHub) passa a ser a mais indicada antes
+  // de mais tentativas de configuração local. Nenhuma das 3 opções foi aplicada em definitivo.
   router.post('/evolution', async (req: Request, res: Response) => {
     // ── TRACE 0: chegou no servidor ──────────────────────────────────────────
     const traceId = Date.now().toString(36);
