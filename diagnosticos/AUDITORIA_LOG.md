@@ -51,6 +51,14 @@ Teste ao vivo (mensagem WhatsApp real enviada para instância conectada `crm_435
 
 Demais arquivos da busca lateral (`src/components/catalogo/*`, `src/components/marketing/*`, `src/components/campanhas/*`, `src/components/kanban/*`, `src/components/workflows/*`, `src/components/seguranca/*`, `src/pages/Disparos.tsx`, `src/pages/Campanhas.tsx`, `src/pages/CatalogoEnvios.tsx`, `App.tsx`, `AppSidebar.tsx`, `docs-content.ts`, `mockData.ts`, `tailwind.config.ts`, etc.) foram avaliados como menções incidentais (WhatsApp citado como um canal de envio entre outros, ou "evolution" usado como palavra comum) — não são núcleo do módulo WhatsApp, não adicionados à auditoria.
 
+### Sprint 3 (2026-07-10, tarde) — teste de contorno do P2010 + itens pendentes
+
+| Item | Resultado |
+|------|-----------|
+| Tarefa A — `DATABASE_SAVE_DATA_CHATS=false` | ❌ Testado ao vivo (backup + restart + mensagem real de fora), **descartado**: mesmo crash `PrismaClientKnownRequestError P2010`, mesma frequência, revertido e instância reconectada. Pesquisa adicional: esse bug em `Chat.unreadMessages` já ocorre em outras versões do Evolution rodando em PostgreSQL também — não é exclusivo do MySQL/v2.3.7. `FIX PENDENTE`, ver comentário `[AUDITORIA]` atualizado em `webhook.ts`. |
+| Tarefa B — 401 em `/api/whatsapp/*` | ✅ Investigado. Confirmado que **não é bug específico do WhatsApp** — o mesmo IP recebe 401 em `/api/dados_cliente` (rota não relacionada) de forma consistente por 25+ minutos, sem nenhuma request bem-sucedida no meio. Conclusão: sessão/token expirado ou inválido no navegador do usuário, não um bug de código. Ação recomendada: logout/login. |
+| Tarefa C — instância órfã `crm_5319f0ed61b3` | ⚠️ pendente (decisão do usuário). `connectionState: "connecting"` confirmado (nunca pareia). **Correção ao ground truth da Sprint 3:** não está referenciada em nenhuma das 3 tabelas (`agent_configs`, `agentes`, `integracoes_config`) para nenhum usuário — inclusive a config de "Cris" (`agent_configs`) existe mas está com `evolution_instancia` vazio e `ativo=false`, contradizendo a premissa de "N8N routing ativo" citada no prompt. Instância genuinamente órfã, sem vínculo ativo no CRM. `DEL_INSTANCE=true` já habilitado no Evolution, então deletar é tecnicamente simples — mas é ação destrutiva num serviço externo de produção, `FIX PENDENTE` aguardando confirmação do usuário (deletar vs. deixar disponível pra pareamento manual futuro). |
+
 ### Continuação da busca lateral (2026-07-10) — os 5 arquivos pendentes acima, revisados
 
 | Módulo   | Arquivo                                              | Status         | Resumo |
