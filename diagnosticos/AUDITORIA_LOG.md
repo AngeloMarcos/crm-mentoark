@@ -51,6 +51,14 @@ Teste ao vivo (mensagem WhatsApp real enviada para instância conectada `crm_435
 
 Demais arquivos da busca lateral (`src/components/catalogo/*`, `src/components/marketing/*`, `src/components/campanhas/*`, `src/components/kanban/*`, `src/components/workflows/*`, `src/components/seguranca/*`, `src/pages/Disparos.tsx`, `src/pages/Campanhas.tsx`, `src/pages/CatalogoEnvios.tsx`, `App.tsx`, `AppSidebar.tsx`, `docs-content.ts`, `mockData.ts`, `tailwind.config.ts`, etc.) foram avaliados como menções incidentais (WhatsApp citado como um canal de envio entre outros, ou "evolution" usado como palavra comum) — não são núcleo do módulo WhatsApp, não adicionados à auditoria.
 
+### Revisão externa (Google AI Studio) sobre webhook.ts — rodada 3 / Sprint 6 (2026-07-10, noite) — fechamento
+
+| Achado | Descrição | Ação |
+|--------|-----------|------|
+| — | Fetch de confirmação de opt-out (`message/sendText`) com `await` direto, sem timeout — terceiro lugar do arquivo com o mesmo risco (Evolution travar prende a requisição do webhook) | 🔧 corrigido — `AbortController` 5s, mesmo padrão dos fetches de foto de perfil (rodada 1) e N8N (rodada 2) |
+
+**Fechamento de `webhook.ts`:** com esta rodada, todos os achados de revisão externa (linha-a-linha, 3 rodadas, 9 achados no total: A-E na rodada 1, 1-3 na rodada 2, 1 nesta rodada) foram corrigidos, verificados como falso positivo, ou documentados como `FIX PENDENTE`. Os únicos itens em aberto no arquivo são os 2 que exigem decisão de infraestrutura/produto, não código: (1) migração de `telefone` pra E.164 antes de trocar `ILIKE '%...'` por igualdade exata (~9 ocorrências, documentado no cabeçalho do arquivo); (2) bug upstream Prisma P2010 do Evolution API (causa raiz de "zero mensagens recebidas", 3 opções de contorno levantadas, nenhuma aplicada — decisão do usuário). Nenhum achado de código pendente. `webhook.ts` está fechado para esta linha de auditoria.
+
 ### Revisão externa (Google AI Studio) sobre webhook.ts — rodada 2 (2026-07-10, noite) — 3 achados
 
 | Achado | Descrição | Ação |
