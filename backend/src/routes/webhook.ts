@@ -218,6 +218,16 @@ export default function webhookRouter(pool: Pool): Router {
   // antiga/estável do evoapicloud/evolution-api em vez de :latest, já que essa parece ser uma
   // regressão recente da lib; (c) reportar o bug upstream no repo do Evolution API. Nenhuma dessas
   // ações foi tomada nesta sessão por serem mudanças de infra, não de código.
+  //
+  // RECONFIRMADO AO VIVO em 2026-07-10 (Sprint 2, mesmo teste repetido): mensagem real
+  // enviada de fora para 5511979579548 (crm_435ee4720fc3, "open"). Capturado em tempo
+  // real via `docker logs -f evolution` durante o teste: o MESMO stack trace
+  // PrismaClientKnownRequestError P2010 dispara repetidamente (várias vezes por
+  // segundo, não só na mensagem de teste — sugere que toda atualização de status/
+  // recibo passa por esse mesmo código quebrado), sempre logo após "Update not read
+  // messages <jid>" e sempre antes do WebhookController disparar chats.update/
+  // contacts.update (que chegam normais ao crm-api) — nunca messages.upsert. Ainda não
+  // corrigido, mesma causa raiz, nenhuma das 3 opções abaixo foi tentada.
   router.post('/evolution', async (req: Request, res: Response) => {
     // ── TRACE 0: chegou no servidor ──────────────────────────────────────────
     const traceId = Date.now().toString(36);
