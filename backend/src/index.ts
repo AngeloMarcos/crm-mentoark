@@ -111,7 +111,18 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '1mb' }));
+// [AUDITORIA] BUG: limite de 1mb rejeitava payloads do Webhook-Global do Evolution
+// com PayloadTooLargeError sempre que a mensagem trazia mídia em base64 (imagem/
+// áudio/documento) — confirmado ao vivo em 2026-07-08: 14 ocorrências/1h, payload
+// real chegando com 1.391.947 bytes vs. limite de 1.048.576. O Evolution recebia 500
+// do crm-api e entrava em retry no Webhook-Global, sem nunca conseguir entregar a
+// mensagem. Candidato forte para "mensagem enviada mas não recebida de volta pelo
+// CRM" quando envolve mídia.
+// [AUDITORIA] FIX APLICADO: limite elevado para 5mb (margem sobre os ~1.4MB
+// observados) — troca de um número em middleware local, reversível com git
+// checkout, não escreve em produção. Deploy (scp + docker compose) ainda pendente,
+// decisão do usuário.
+app.use(express.json({ limit: '5mb' }));
 
 // ── Servir imagens de upload com log de auditoria ──────────────────────────
 app.use('/uploads', (req, res, next) => {
