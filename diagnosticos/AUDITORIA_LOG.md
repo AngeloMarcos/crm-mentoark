@@ -51,7 +51,17 @@ Teste ao vivo (mensagem WhatsApp real enviada para instância conectada `crm_435
 
 Demais arquivos da busca lateral (`src/components/catalogo/*`, `src/components/marketing/*`, `src/components/campanhas/*`, `src/components/kanban/*`, `src/components/workflows/*`, `src/components/seguranca/*`, `src/pages/Disparos.tsx`, `src/pages/Campanhas.tsx`, `src/pages/CatalogoEnvios.tsx`, `App.tsx`, `AppSidebar.tsx`, `docs-content.ts`, `mockData.ts`, `tailwind.config.ts`, etc.) foram avaliados como menções incidentais (WhatsApp citado como um canal de envio entre outros, ou "evolution" usado como palavra comum) — não são núcleo do módulo WhatsApp, não adicionados à auditoria.
 
-### Revisão externa (Google AI Studio) sobre webhook.ts (2026-07-10, noite) — 5 achados
+### Revisão externa (Google AI Studio) sobre webhook.ts — rodada 2 (2026-07-10, noite) — 3 achados
+
+| Achado | Descrição | Ação |
+|--------|-----------|------|
+| 1 | `fetch` fire-and-forget pro N8N (`n8nWebhookUrl`) sem timeout — instância N8N lenta de um usuário podia degradar recepção de webhook pra todos | 🔧 corrigido — `AbortController` 8s, mesmo padrão do achado B da rodada 1 |
+| 2 | Suspeita de que upsert de contato + fetch de foto de perfil rodariam sem `userId` resolvido, gastando query+HTTP antes do descarte | ✅ verificado, **falso positivo** — bloco já está aninhado dentro de `if (userId)`; comentário `[AUDITORIA] LÓGICA` adicionado, nenhuma mudança funcional |
+| 3 | Loop de `handleStatusUpdate` sem guarda contra item `null`/`undefined` em `updates` — `TypeError` interromperia o resto do lote | 🔧 corrigido — `if (!upd \|\| typeof upd !== 'object') continue;` |
+
+**Avaliação de cobertura:** com esta rodada, os achados conhecidos de `webhook.ts` (linha isolada, sem contexto de sistema) parecem esgotados — os itens que restam (`ILIKE` sem índice, `isValidJid` não usado, schema `webhook_mensagens_processadas` a confirmar, bug upstream Prisma P2010) já são `FIX PENDENTE` documentados que exigem decisão/dado externo, não mais bugs de lógica isolados que uma leitura linha-a-linha do arquivo colado consiga achar. Mandar pra mais uma rodada só faz sentido se algo mudar no arquivo.
+
+### Revisão externa (Google AI Studio) sobre webhook.ts — rodada 1 (2026-07-10, noite) — 5 achados
 
 | Achado | Descrição | Ação |
 |--------|-----------|------|
