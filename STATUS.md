@@ -1,15 +1,15 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-10 17:50 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-10 18:45 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Núcleo CRM
 
 | Serviço    | Status | Detalhe                                      | Diagnóstico/Fix relacionado |
 |------------|--------|-----------------------------------------------|------------------------------|
-| crm-api    | 🟡 | **Confirmado ao vivo (2026-07-08):** rejeitando payloads do Evolution acima de 1MB (`PayloadTooLargeError`, limite atual 1.048.576 bytes vs. payload de 1.391.947 bytes) — **14 ocorrências na última 1h**. Isso responde com 500 pro Evolution, que fica em retry (ver linha `evolution` abaixo). | `diagnosticos/PROMPT_CLAUDE_CODE_WEBHOOK_GLOBAL_E_PAYLOAD.md` (payload grande) |
-| crm        | 🟢     | Sem problema conhecido                        | — |
+| crm-api    | 🟢 | **Corrigido e deployado (2026-07-10):** limite de payload do Express elevado de 1mb para 5mb (era `PayloadTooLargeError` com payloads do Evolution >1MB — mídia em base64 passa fácil disso). Confirmado subindo saudável em produção. | `backend/src/index.ts`, commit `edc921f` |
+| crm        | 🟡 | **Achado novo (2026-07-10), não investigado ainda:** durante teste ao vivo, todas as chamadas de `/api/whatsapp/*` vindas do IP do usuário (177.143.119.69) retornaram **401** (`conversas`, `conversas/:phone`, `send`) — sessão do navegador pode ter expirado no meio do teste. Recomendação imediata: dar logout/login de novo no CRM. Se persistir, investigar em sessão futura. | — |
 | postgres   | 🟢     | 14MB, saudável                                | — |
-| evolution  | 🟡 | **Confirmado ao vivo:** erro Prisma `P2010` ainda ocorre (5x nas últimas 2h — não foi resolvido pela troca de imagem). Além disso, `Webhook-Global` está em retry ativo agora (tentativas 3/10 a 7/10 observadas nos últimos 15min, todas com "Request failed with status code 500") — consequência direta do 413 do crm-api acima, não um problema isolado do Evolution. | `diagnosticos/PROMPT_CLAUDE_CODE_FIX_EVOLUTION_BUG.md`, `diagnosticos/PROMPT_CLAUDE_CODE_WEBHOOK_GLOBAL_E_PAYLOAD.md` |
+| evolution  | 🟡 | **RECONFIRMADO AO VIVO (2026-07-10):** erro Prisma `P2010` em `io.updateChatUnreadMessages` dispara a cada mensagem/atualização de status recebida, **antes** do Evolution despachar `messages.upsert` pro webhook — só `chats.update`/`contacts.update` (que não passam por esse código) chegam ao crm-api. **Esta é a causa raiz confirmada de "zero mensagens recebidas".** Documentado com comentário `[AUDITORIA]` em `backend/src/routes/webhook.ts`. Bug upstream do Evolution v2.3.7 — nenhuma correção possível no código do CRM. | `backend/src/routes/webhook.ts` (comentário `[AUDITORIA]`), `diagnosticos/PROMPT_CLAUDE_CODE_FIX_EVOLUTION_BUG.md` |
 
 ## Observabilidade — ✅ 4 dashboards, logs/métricas saudáveis, chat WhatsApp isolado (2026-07-10)
 
@@ -30,6 +30,13 @@
 - **ACHADO CRÍTICO no painel de recebimento — ponto de partida da próxima investigação:** nas últimas 72h, **zero eventos reais `eventClean:"messagesupsert"`** chegaram ao crm-api (a contagem inicial de "571 eventos" era falso-positivo — a query batia também na string do log `"IGNORADO evento não é messagesupsert"`, corrigido). Descoberto que há **duas instâncias Evolution**: `crm_5319f0ed61b3` está presa em loop de reconexão (`connectionStatus: "connecting"`, 448 eventos `qrcode.updated` em 6h — nunca pareia, mesmo problema já registrado em sessão anterior de 07-03, aparentemente nunca resolvido) e `crm_435ee4720fc3` está **conectada de verdade** (`connectionStatus: "open"`, número `5511979579548`, 1119 mensagens/22 chats/452 contatos no histórico do Evolution). Isolando os eventos só da instância conectada nas últimas 6h: apenas 9 eventos webhook no total (`contacts.update`, `chats.update/upsert`, `send.message`) — nenhum `messages.upsert`. Não dá para concluir com certeza se é porque ninguém mandou mensagem real nesse período ou se há uma falha silenciosa de encaminhamento — **não há erro logado em nenhum lugar da cadeia** (zero `ERRO INSERT whatsapp_messages`, zero `FATAL: nenhum userId`). **Próximo passo, exatamente como o prompt original pediu:** mandar uma mensagem de teste de verdade de outro número para `5511979579548` com o dashboard "WhatsApp - Envio e Recebimento" aberto e ver ao vivo se `messagesupsert`/`INSERT whatsapp_messages` aparecem.
 - Instância órfã `crm_5319f0ed61b3` (nunca pareada, loop de QR) não foi removida — ação destrutiva em produção, decisão do usuário.
 
+## Sessão 2026-07-10 (tarde) — Sprint 2: teste ao vivo de recebimento
+
+- **PASSO 0 aplicado:** havia mudanças locais não commitadas de sessões anteriores (`AUDITORIA_PROTOCOLO.md` com 2 seções novas, `SPRINT_1_COMENTAR_CHAT_WHATSAPP.md` nunca executado) — investigadas e commitadas/preservadas antes de iniciar tarefa nova, nada foi descartado.
+- **Sprint 1 nunca tinha sido executada de fato** (arquivo `SPRINT_1_COMENTAR_CHAT_WHATSAPP.md` existia só como prompt preparado, untracked, nunca rodado) — seu ground truth citado pela Sprint 2 ("payload já deve ter sido corrigido") estava **errado**: confirmado que o limite ainda era 1mb. Fix aplicado e deployado nesta sessão (ver tabela Núcleo CRM acima).
+- **Tarefa A (teste ao vivo) — CONCLUÍDA, causa raiz confirmada:** mensagem real enviada de fora para `5511979579548` durante a sessão, monitorada ao vivo via `docker logs -f` em `evolution` e `crm-api` simultaneamente. Resultado: o Evolution processa a mensagem internamente e falha com `PrismaClientKnownRequestError` (P2010) dentro de `io.updateChatUnreadMessages`, repetidamente, antes de conseguir despachar o evento `messages.upsert` pro webhook. Só os eventos derivados `chats.update`/`contacts.update` (que não passam por esse código quebrado) chegam ao crm-api — nunca a mensagem em si. Isso bate exatamente com o achado já documentado na sessão de 07-08 em `AUDITORIA_LOG.md`, agora **reconfirmado ao vivo, ainda sem fix, 2 dias depois**. Não é ausência de tráfego — é um bug upstream ativo bloqueando 100% das mensagens recebidas.
+- **5 arquivos laterais do módulo WhatsApp auditados** (continuação da varredura de 07-08): `integracoes.ts`/`Integracoes.tsx` (bug real corrigido — `syncEvolution()` confiava em status não verificado, causa da divergência `agent_configs` já documentada), `resilientFetch.ts` (sem bug), `Agentes.tsx` (bug documentado, `FIX PENDENTE`), `TesteConversas.tsx` (bug documentado, `FIX PENDENTE`, baixa prioridade — ferramenta DEV). Ver `AUDITORIA_LOG.md` para detalhes.
+
 ## Concluído em 2026-07-08
 
 - **OpenClaw Admin removido por completo** do sistema (backend, frontend, rotas, menu) — confirmado que a coluna `motor_ia` não existe em produção, então nenhum agente real dependia dele. Deploy validado: JS bundle sem referência a "OpenClaw", endpoint antigo agora se comporta como qualquer rota inexistente (401 genérico do middleware de auth).
@@ -43,12 +50,14 @@
 
 ## Pendências abertas (ordem de prioridade)
 
-1. **CRÍTICO — confirmar se mensagens recebidas de verdade chegam ao CRM.** Ver achado detalhado na sessão 2026-07-10 acima. Ação: mandar mensagem de teste de número externo para `5511979579548` (instância `crm_435ee4720fc3`, a única realmente conectada) com o novo dashboard "WhatsApp - Envio e Recebimento" (pasta "Chat WhatsApp" no Grafana) aberto, e observar se aparece em `messagesupsert`/`INSERT whatsapp_messages`.
-2. Instância Evolution `crm_5319f0ed61b3` presa em loop de reconexão há dias (nunca pareia, gera ruído constante de `qrcode.updated`) — mesmo problema aberto desde 07-03 (ver [[project_evolution_whatsapp_infra]]), aparentemente nunca resolvido. Decidir: tentar corrigir (forçar versão do Baileys) ou remover a instância órfã.
-3. **Webhook-Global do Evolution em retry ativo por causa do limite de payload (1MB) do crm-api** — confirmado ao vivo em 07-08. Aplicar `diagnosticos/PROMPT_CLAUDE_CODE_WEBHOOK_GLOBAL_E_PAYLOAD.md` (aumentar o limite do body-parser do Express no crm-api para acomodar payloads do Evolution com mídia).
-4. Erro Prisma `P2010` do Evolution (`io.updateChatUnreadMessages`) continua ocorrendo — bug upstream do Evolution v2.3.7, ver `diagnosticos/PROMPT_CLAUDE_CODE_FIX_EVOLUTION_BUG.md` para as opções de contorno já levantadas (trocar DATABASE_PROVIDER, fixar versão anterior).
-5. Alerta WhatsApp via n8n — aguardando número de destino do usuário (`diagnosticos/PROMPT_CLAUDE_CODE_ALERTA_WHATSAPP.md`)
-6. n8n `DB_TYPE` inválido — investigar quando sair do standby
+1. **CRÍTICO — corrigir o bug upstream do Evolution (Prisma P2010) que bloqueia 100% das mensagens recebidas.** Causa raiz confirmada e reconfirmada ao vivo (ver Sprint 2 acima e comentário `[AUDITORIA]` em `backend/src/routes/webhook.ts`). Opções ainda não tentadas, decisão do usuário: (a) trocar `DATABASE_PROVIDER` de mysql pra postgresql no compose do Evolution; (b) fixar uma tag de imagem mais antiga/estável do `evoapicloud/evolution-api`; (c) reportar bug upstream no repositório do Evolution API.
+2. **Achado novo — 401 em todas as chamadas `/api/whatsapp/*` do frontend durante o teste ao vivo de hoje.** Não investigado ainda. Testar se é sessão expirada (relogar) ou algo mais sério.
+3. Instância Evolution `crm_5319f0ed61b3` presa em loop de reconexão há dias (nunca pareia, gera ruído constante de `qrcode.updated`) — mesmo problema aberto desde 07-03 (ver [[project_evolution_whatsapp_infra]]), aparentemente nunca resolvido. Decidir: tentar corrigir (forçar versão do Baileys) ou remover a instância órfã.
+4. `backend/src/routes/integracoes.ts` — validar `status='conectado'` contra a Evolution API de verdade antes de sincronizar com `agent_configs` (mitigação parcial já aplicada no frontend, ver `AUDITORIA_LOG.md`).
+5. `src/pages/Agentes.tsx` — `testarEvolution()` não testa a instância específica do agente (ver `AUDITORIA_LOG.md`).
+6. Alerta WhatsApp via n8n — aguardando número de destino do usuário (`diagnosticos/PROMPT_CLAUDE_CODE_ALERTA_WHATSAPP.md`)
+7. n8n `DB_TYPE` inválido — investigar quando sair do standby
+8. Documentos de diagnóstico ainda não absorvidos/apagados: `diagnosticos/SPRINT_1_COMENTAR_CHAT_WHATSAPP.md` propunha uma lista grande (Tarefa B) de `PROMPT_CLAUDE_CODE_*.md`/`DIAGNOSTICO_*.md` para absorver e apagar — não executado ainda, decisão de escopo em aberto (ver relatório da sessão).
 
 ## Regra para sessões futuras
 
