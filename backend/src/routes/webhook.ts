@@ -183,6 +183,13 @@ export default function webhookRouter(pool: Pool): Router {
     if (!Array.isArray(updates)) return;
 
     for (const upd of updates) {
+      // [AUDITORIA] BUG (achado 3 da revisão externa/Google AI Studio, sprint seguinte à
+      // Sprint 4): um item null/undefined no array `updates` (payload malformado da Evolution)
+      // lançaria TypeError ao acessar `.id`/`.status`, interrompendo o loop e perdendo as
+      // atualizações de status seguintes no mesmo lote (erro só silenciado pelo catch externo
+      // do handler, sem processar o resto do array).
+      // [AUDITORIA] FIX APLICADO: guarda defensiva no início do loop.
+      if (!upd || typeof upd !== 'object') continue;
       const messageId = (upd as any).id || payload.data?.key?.id;
       const status = (upd as any).status || upd.status;
       if (!messageId || !status) continue;
@@ -639,6 +646,18 @@ export default function webhookRouter(pool: Pool): Router {
       const ts       = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
       const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
+      // [AUDITORIA] LÓGICA (achado 2 da revisão externa/Google AI Studio, sprint seguinte à
+      // Sprint 4 — verificado, FALSO POSITIVO): a revisão apontou que o bloco de upsert de
+      // contato + fetch de foto de perfil (linhas ~670-770) rodaria mesmo sem userId resolvido,
+      // já que a checagem `if (!userId) { wlog('WEBHOOK_REJECT', ...); return; }` só aparece
+      // mais abaixo (seção "Motor IA"). Na prática NÃO é um bug: todo o bloco de persistência
+      // (INSERT whatsapp_messages + upsert de contato + fetch de foto) já está aninhado dentro
+      // deste `if (userId)` — se userId for null/undefined, nada disso executa, nenhuma query
+      // nem request HTTP é disparada. A checagem redundante mais abaixo é só o log/return
+      // explícito do caminho "Motor IA" para instância órfã, não a única proteção. A revisão
+      // externa perdeu esse contexto de indentação/escopo por só receber o texto colado, sem
+      // ver o aninhamento real. Nenhuma mudança de código aqui — registrado pra não reabrir essa
+      // dúvida numa sprint futura.
       // ── Persistir mensagem recebida ───────────────────────────────────────────
       if (userId) {
         const pushNameFinal = isGroup
@@ -845,6 +864,15 @@ export default function webhookRouter(pool: Pool): Router {
       // Rota N8N: se agente tem n8n_webhook_url configurado, encaminha para lá
       if (n8nWebhookUrl) {
         log.info('WEBHOOK', 'Roteando para N8N', { traceId, n8nWebhookUrl });
+        // [AUDITORIA] BUG (achado 1 da revisão externa/Google AI Studio, sprint seguinte à
+        // Sprint 4): mesmo problema já corrigido no achado B da Sprint 4 (fetch nativo do Node
+        // sem timeout), mas aqui é mais grave — n8nWebhookUrl é configurado por qualquer usuário
+        // (agentes.n8n_webhook_url), então uma instância N8N lenta/instável de UM usuário pode
+        // prender sockets de saída e degradar a recepção de webhook pra todo mundo.
+        // [AUDITORIA] FIX APLICADO: mesmo padrão do achado B (Sprint 4) — AbortController com
+        // timeout, aqui 8s (N8N processa workflows, tende a ser mais lento que a Evolution).
+        const n8nController = new AbortController();
+        const n8nTimer = setTimeout(() => n8nController.abort(), 8000);
         fetch(n8nWebhookUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -852,7 +880,10 @@ export default function webhookRouter(pool: Pool): Router {
             instancia, messageId, telefone, pushName, texto, tipo,
             midiaUrl: midia.url || null, timestamp: tsVal, userId, remoteJid,
           }),
-        }).catch(err => log.error('WEBHOOK', 'Erro ao encaminhar para N8N', { traceId, err: err.message }));
+          signal: n8nController.signal,
+        })
+          .catch(err => log.error('WEBHOOK', 'Erro ao encaminhar para N8N', { traceId, err: err.message }))
+          .finally(() => clearTimeout(n8nTimer));
         return;
       }
 
