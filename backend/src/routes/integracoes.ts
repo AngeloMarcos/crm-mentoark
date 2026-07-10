@@ -3,6 +3,12 @@ import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 
+// [AUDITORIA] LÓGICA: CRUD de `integracoes_config` (Evolution, N8N, OpenAI, etc.),
+// consumido por src/pages/Integracoes.tsx ("Conectores"). Quando uma integração do
+// tipo 'evolution' é salva com status='conectado', syncEvolution() espelha
+// instancia/url/api_key para agent_configs — a tabela que webhook.ts lê PRIMEIRO
+// para resolver o userId de mensagens recebidas (antes de cair nos fallbacks
+// agentes/integracoes_config/prefixo UUID). Ver BUG em syncEvolution() abaixo.
 export default function integracoesRouter(pool: Pool): Router {
   const router = Router();
 
@@ -26,6 +32,22 @@ export default function integracoesRouter(pool: Pool): Router {
     return { ...row, api_key: maskKey(row.api_key) };
   }
 
+  // [AUDITORIA] BUG: syncEvolution() é chamada sempre que o registro salvo em
+  // integracoes_config tem status==='conectado' — mas esse status vem direto do
+  // corpo da requisição (POST/PUT), escrito pelo frontend em Integracoes.tsx.
+  // O frontend, por sua vez, seta status='conectado' apenas com base em
+  // `/instance/fetchInstances` responder HTTP 200 (API key válida), SEM checar se a
+  // instância específica está de fato pareada (connectionStatus==='open'). Resultado:
+  // uma instância presa em loop de QR (nunca pareada) pode ser marcada 'conectado' e
+  // sobrescrever agent_configs com uma instancia errada/obsoleta — bate exatamente
+  // com a divergência já documentada em AUDITORIA_LOG.md (agent_configs.evolution_instancia
+  // ='teste' enquanto agentes/integracoes_config tinham a instância correta).
+  // FIX PENDENTE (motivo: validar de verdade exigiria o backend chamar a Evolution API
+  // (serviço externo) antes de confiar no status enviado pelo cliente — mudança de
+  // modelo de confiança em rota de produção, precisa decisão do usuário sobre se vale
+  // a latência extra numa chamada síncrona). Mitigação parcial aplicada no frontend:
+  // ver [AUDITORIA] FIX APLICADO em Integracoes.tsx (testar() agora só marca
+  // 'conectado' se a instância aparecer com connectionStatus:'open' na resposta).
   // Sincroniza instância Evolution conectada com agent_configs
   async function syncEvolution(
     userId: string, instancia: string, url: string, apiKey: string

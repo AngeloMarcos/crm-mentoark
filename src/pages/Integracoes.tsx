@@ -37,6 +37,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// [AUDITORIA] LÓGICA: página "Conectores" — CRUD de integracoes_config (Evolution,
+// N8N, OpenAI, etc.) via backend/src/routes/integracoes.ts, e CRUD separado de
+// ai_providers. Para tipo 'evolution', é a fonte "oficial" de configuração de URL/API
+// Key/instância — mas backend/src/routes/webhook.ts resolve o userId de mensagens
+// recebidas primeiro por agent_configs (sincronizada por syncEvolution() no backend
+// quando esta página salva com status='conectado'), depois cai em fallbacks
+// (agentes, integracoes_config, prefixo UUID). Ver Agentes.tsx para o outro lugar
+// que também guarda um evolution_instancia por agente (acoplamento documentado).
 const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
 
 type Status = "conectado" | "inativo" | "erro" | "atencao" | "sincronizando";
@@ -204,15 +212,39 @@ export default function IntegracoesPage() {
     setTesting(true);
     try {
       if (form.tipo === "evolution") {
+        // [AUDITORIA] LÓGICA: /instance/fetchInstances só valida que a URL+API Key são
+        // válidas — retorna 200 mesmo se a instância nunca pareou com o WhatsApp
+        // (ex: presa em loop de QR code, connectionStatus:"connecting" para sempre).
         const base = form.url.trim().replace(/\/$/, "");
         const res = await fetch(`${base}/instance/fetchInstances`, {
           headers: { apikey: form.api_key.trim() },
         });
         if (res.ok) {
           const data = await res.json().catch(() => []);
-          const count = Array.isArray(data) ? data.length : 0;
-          setForm(f => ({ ...f, status: "conectado" }));
-          toast.success(`Evolution conectada — ${count} instância(s)`);
+          const list: any[] = Array.isArray(data) ? data : [];
+          // [AUDITORIA] FIX APLICADO: antes, HTTP 200 sozinho já marcava status
+          // 'conectado' — mesmo para uma instância nunca pareada. Isso permitia que
+          // syncEvolution() (backend/src/routes/integracoes.ts) sobrescrevesse
+          // agent_configs com uma instância "conectada" só na aparência, causando a
+          // divergência já documentada em AUDITORIA_LOG.md. Agora só marca
+          // 'conectado' se a instância informada aparecer com connectionStatus:'open'
+          // na resposta real da Evolution — reversível via git checkout, não toca em
+          // produção/banco, só corrige a interpretação da resposta no cliente.
+          const nomeInstancia = form.instancia.trim();
+          const match = nomeInstancia ? list.find(i => i?.name === nomeInstancia) : undefined;
+          if (!nomeInstancia) {
+            setForm(f => ({ ...f, status: "atencao" }));
+            toast.error(`API respondeu (${list.length} instância(s) no servidor), mas informe o "Nome da Instância" para confirmar o pareamento.`);
+          } else if (match?.connectionStatus === "open") {
+            setForm(f => ({ ...f, status: "conectado" }));
+            toast.success(`Evolution conectada — instância "${nomeInstancia}" pareada com o WhatsApp`);
+          } else if (match) {
+            setForm(f => ({ ...f, status: "atencao" }));
+            toast.error(`Instância "${nomeInstancia}" existe mas não está pareada (status: ${match.connectionStatus}). Escaneie o QR Code no servidor Evolution.`);
+          } else {
+            setForm(f => ({ ...f, status: "atencao" }));
+            toast.error(`API respondeu, mas nenhuma instância chamada "${nomeInstancia}" foi encontrada no servidor.`);
+          }
         } else {
           setForm(f => ({ ...f, status: "erro" }));
           toast.error(`Falha HTTP ${res.status}`);
