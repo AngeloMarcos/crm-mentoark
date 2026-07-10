@@ -48,6 +48,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// [AUDITORIA] LÓGICA: página de CRUD de `agentes` (personalidade/modelo/RAG/MCP tools).
+// O campo evolution_instancia aqui é só um "rótulo" de qual instância este agente
+// usa — URL/API Key reais ficam centralizadas em Conectores (Integracoes.tsx). Esse
+// mesmo campo evolution_instancia também existe em agent_configs (ver
+// backend/src/routes/integracoes.ts syncEvolution()) — duas tabelas guardando o
+// mesmo dado, sem sincronização automática entre si, é a causa do tipo de divergência
+// já documentada em AUDITORIA_LOG.md (agent_configs desalinhado com agentes/
+// integracoes_config para um usuário específico).
 interface Agente {
   id: string;
   user_id: string;
@@ -314,6 +322,21 @@ export default function AgentesPage() {
     carregar();
   };
 
+  // [AUDITORIA] BUG: testarEvolution() exige que form.evolution_instancia esteja
+  // preenchido (linha abaixo), mas NUNCA envia esse valor pro backend — GET
+  // /api/whatsapp/status não recebe instancia como parâmetro, então o backend
+  // resolve e retorna o status de QUALQUER instância que ele conseguir achar pro
+  // userId (via a mesma cadeia de fallback agent_configs → agentes →
+  // integracoes_config documentada em webhook.ts). Se este agente específico tiver
+  // um evolution_instancia diferente do que o backend resolve (cenário real: usuário
+  // com 2 agentes/instâncias, ou a divergência agent_configs já documentada), o botão
+  // mostra "✅ Evolution conectada" mesmo que A INSTÂNCIA DESTE AGENTE não esteja
+  // pareada — falso positivo. FIX PENDENTE (motivo: corrigir direito exige o backend
+  // aceitar um parâmetro de instância em /api/whatsapp/status e testar
+  // especificamente ela contra a Evolution API — mudança de contrato de rota usada
+  // por outras telas, e depende de decisão de produto sobre se agentes devem
+  // realmente suportar instâncias diferentes entre si ou se é sempre uma instância
+  // global por usuário).
   const testarEvolution = async () => {
     if (!form.evolution_instancia) {
       toast.error("Informe o nome da instância antes de testar.");
