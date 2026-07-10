@@ -11,6 +11,18 @@
  * [AUDITORIA] LÓGICA: cabeçalho reescrito em 2026-07 — a versão anterior citava uma
  * tabela "whatsapp_instances" que não existe mais no código (a lógica real usa
  * agent_configs/agentes), ficara desatualizado de um refactor anterior.
+ *
+ * [AUDITORIA] BUG (achado C da revisão externa/Google AI Studio): toda busca por telefone
+ * neste arquivo usa `telefone ILIKE $N` com parâmetro `%${telefone.slice(-11)}` — curinga no
+ * início da string impede o Postgres de usar índice B-Tree em `telefone`, forçando full table
+ * scan em toda mensagem recebida. Piora conforme a base de contatos cresce. Ocorrências atuais
+ * (linhas aproximadas, conferir na íntegra pois deslocam com futuras edições): 509, 514, 520,
+ * 542 (bloco de pausa/reativação de IA por mensagem fromMe), 670, 749 (upsert de contato/foto
+ * de perfil), 767, 805, 810 (opt-out e reativação por comando de texto).
+ * [AUDITORIA] FIX PENDENTE (motivo: exige migração de dados, não só código — normalizar a
+ * coluna `telefone` para formato E.164 antes de trocar `ILIKE '%...'` por igualdade exata
+ * `=`; decisão do usuário sobre quando rodar essa migração em produção, dado o volume de
+ * linhas existentes em `contatos`/`dados_cliente`).
  */
 
 import { Router, Request, Response } from 'express';
@@ -20,10 +32,17 @@ import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
 import { log } from '../logger';
 
+// [AUDITORIA] FIX APLICADO (achado D da revisão externa/Google AI Studio): fs.appendFileSync
+// bloqueava o event loop a cada chamada (todo webhook recebido, update de status, descarte)
+// — sob tráfego alto isso degradaria a latência de TODA a API, não só desta rota. Trocado
+// por fs.appendFile assíncrono (fire-and-forget, erro de escrita em log auxiliar é ignorável).
+// [AUDITORIA] LÓGICA: este arquivo plano parece redundante com log.info() (grava o mesmo
+// conteúdo em dois destinos) — não removido porque pode haver script/monitoramento externo
+// lendo log_geral.txt especificamente; confirmar com o usuário antes de remover essa escrita.
 function wlog(tag: string, msg: string) {
   const line = `[${new Date().toISOString()}] [${tag}] ${msg}`;
   log.info(tag, msg);
-  try { fs.appendFileSync('/opt/crm/backend/log_geral.txt', line + '\n'); } catch {}
+  fs.appendFile('/opt/crm/backend/log_geral.txt', line + '\n', () => {});
 }
 
 function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
@@ -99,6 +118,12 @@ const REATIVAR_COMANDOS = new Set([
 // é pior que o risco atual. Próxima sessão: confirmar com logs reais quais sufixos de JID
 // aparecem em produção antes de trocar a validação, ou remover a função se decidido que não
 // vale o risco.
+// [AUDITORIA] ATUALIZAÇÃO (achado E da revisão externa/Google AI Studio): além do ponto acima,
+// a regex candidata abaixo (`/^\d+@(s\.whatsapp\.net|g\.us|lid)$/`) está ela mesma incorreta
+// para grupos — JIDs de grupo (@g.us) frequentemente têm um hífen no meio (ex:
+// "120363190000000000-1620000000@g.us"), não são só dígitos. Se algum dia esta função for
+// ativada, essa regex específica descartaria grupos legítimos — não usar como está, precisa
+// permitir hífen na parte antes do "@" para @g.us antes de cogitar ativação.
 function isValidJid(jid: string): boolean {
   return /^\d+@(s\.whatsapp\.net|g\.us|lid)$/.test(jid);
 }
@@ -660,9 +685,18 @@ export default function webhookRouter(pool: Pool): Router {
               );
 
               if (!upd.rowCount) {
+                // [AUDITORIA] BUG (achado A da revisão externa/Google AI Studio): condição de
+                // corrida com o upsert antecipado logo no início do handler. Se duas mensagens
+                // do mesmo contato novo chegarem próximas, ambas podem ver rowCount=0 no UPDATE
+                // acima e colidir aqui neste INSERT sem ON CONFLICT — um dos dois falhava em
+                // silêncio via `.catch(() => {})`.
+                // [AUDITORIA] FIX APLICADO: adicionado ON CONFLICT (user_id, telefone) DO NOTHING,
+                // espelhando o padrão já usado no upsert antecipado. Mudança pequena e isolada,
+                // reversível, não altera comportamento fora do cenário de corrida.
                 await pool.query(
                   `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, ultima_mensagem_em, atendente_pausou_ia)
-                   VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)`,
+                   VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)
+                   ON CONFLICT (user_id, telefone) DO NOTHING`,
                   [userId, nomeFinal, telefone, pushName || null]
                 ).catch(() => {});
               } else if (upd.rows[0]?.profile_pic_url) {
@@ -678,27 +712,46 @@ export default function webhookRouter(pool: Pool): Router {
               const evoUrl = (cfgEvo.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br').replace(/\/$/, '');
               const evoKey = cfgEvo.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
 
+              // [AUDITORIA] BUG (achado B da revisão externa/Google AI Studio): fetch nativo do
+              // Node não tem timeout padrão — se a Evolution travar/ficar lenta, essas conexões
+              // ficavam penduradas indefinidamente, esgotando o pool de conexões de saída sob
+              // volume alto.
+              // [AUDITORIA] FIX APLICADO: AbortController com timeout de 5s em ambas as chamadas.
               let picUrl: string | null = null;
               try {
-                const r = await fetch(`${evoUrl}/chat/fetchProfilePictureUrl/${instancia}`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', apikey: evoKey },
-                  body: JSON.stringify({ number: telefone }),
-                });
-                if (r.ok) {
-                  const d: any = await r.json().catch(() => ({}));
-                  picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
+                const controller1 = new AbortController();
+                const timer1 = setTimeout(() => controller1.abort(), 5000);
+                try {
+                  const r = await fetch(`${evoUrl}/chat/fetchProfilePictureUrl/${instancia}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', apikey: evoKey },
+                    body: JSON.stringify({ number: telefone }),
+                    signal: controller1.signal,
+                  });
+                  if (r.ok) {
+                    const d: any = await r.json().catch(() => ({}));
+                    picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
+                  }
+                } finally {
+                  clearTimeout(timer1);
                 }
               } catch {}
 
               if (!picUrl) {
                 try {
-                  const r = await fetch(`${evoUrl}/fetchProfilePicture/${instancia}?number=${telefone}`, {
-                    headers: { apikey: evoKey },
-                  });
-                  if (r.ok) {
-                    const d: any = await r.json().catch(() => ({}));
-                    picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
+                  const controller2 = new AbortController();
+                  const timer2 = setTimeout(() => controller2.abort(), 5000);
+                  try {
+                    const r = await fetch(`${evoUrl}/fetchProfilePicture/${instancia}?number=${telefone}`, {
+                      headers: { apikey: evoKey },
+                      signal: controller2.signal,
+                    });
+                    if (r.ok) {
+                      const d: any = await r.json().catch(() => ({}));
+                      picUrl = d?.profilePictureUrl || d?.url || d?.picture || null;
+                    }
+                  } finally {
+                    clearTimeout(timer2);
                   }
                 } catch {}
               }
