@@ -10,6 +10,11 @@ import { Download, RefreshCw, MessageSquare, Database, Search, CheckCircle2 } fr
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
+// [AUDITORIA] LÓGICA: página DEV (rota /dev/teste-conversas, gated fora de produção
+// — ver App.tsx) para inspecionar conversas WhatsApp já persistidas em
+// whatsapp_messages via GET /api/whatsapp/conversas e /conversas/:phone. Painel
+// "Diagnóstico & Comparação" é claramente WIP: ver BUG no painel "Comparação de
+// Fontes" abaixo.
 interface Conversa {
   session_id: string;
   instancia: string;
@@ -82,20 +87,28 @@ const TesteConversas = () => {
     }
   };
 
+  // [AUDITORIA] BUG: a chamada a /api/whatsapp/status envia
+  // `body: JSON.stringify({force:true})` sem header Content-Type: application/json —
+  // o body-parser do Express não reconhece o corpo sem esse header, então `force`
+  // nunca chega de fato no backend (req.body fica vazio). Além disso a resposta
+  // (resN8n) é buscada mas nunca lida/usada — diag.n8n fica hardcoded em 0 (comentário
+  // original já dizia "Placeholder se não houver endpoint"). FIX PENDENTE (motivo:
+  // não existe endpoint de contagem de n8n_chat_histories no backend hoje — decisão de
+  // produto se vale criar um, e página é só ferramenta DEV, baixa prioridade).
   const verificarTabelas = async () => {
     setDiagLoading(true);
     try {
       // Tenta buscar as tabelas via endpoints de listagem (assumindo que existam ou via um proxy de contagem)
       // Como pedido: "chame os endpoints de listagem e conte os itens retornados"
       // Se não existirem endpoints específicos para n8n_chat_histories, vamos simular ou usar o que estiver disponível
-      
+
       const [resWpp, resN8n] = await Promise.all([
         fetch(`${API_URL}/api/whatsapp/conversas`, { headers: authHeader() }),
         fetch(`${API_URL}/api/whatsapp/status`, { method: "POST", headers: authHeader(), body: JSON.stringify({ force: true }) }) // Exemplo de call que toca o backend
       ]);
 
       const dataWpp = await resWpp.json();
-      
+
       setDiag({
         whatsapp: Array.isArray(dataWpp) ? dataWpp.length : 0,
         n8n: 0, // Placeholder se não houver endpoint de histórico direto
@@ -261,6 +274,15 @@ const TesteConversas = () => {
               </CardContent>
             </Card>
 
+            {/* [AUDITORIA] BUG: as duas colunas ("API v1" e "API v1 (Ref)") renderizam
+                exatamente `conversas.slice(0,2)` — a MESMA variável duas vezes, não uma
+                segunda fonte de dados real. O badge "Fonte de dados consistente" abaixo
+                é hardcoded (sempre verde, nunca compara nada de fato). Numa página cujo
+                propósito declarado é justamente validar consistência de dados do
+                WhatsApp — o mesmo tipo de bug que estamos investigando no módulo — esse
+                painel dá falsa confiança. FIX PENDENTE (motivo: não está claro qual
+                deveria ser a segunda fonte real a comparar — n8n_chat_histories? a
+                Evolution API diretamente? decisão de produto antes de implementar). */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
