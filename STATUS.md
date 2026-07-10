@@ -1,6 +1,6 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-10 19:45 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-10 20:05 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Núcleo CRM
 
@@ -37,9 +37,13 @@
 - **Tarefa A (teste ao vivo) — CONCLUÍDA, causa raiz confirmada:** mensagem real enviada de fora para `5511979579548` durante a sessão, monitorada ao vivo via `docker logs -f` em `evolution` e `crm-api` simultaneamente. Resultado: o Evolution processa a mensagem internamente e falha com `PrismaClientKnownRequestError` (P2010) dentro de `io.updateChatUnreadMessages`, repetidamente, antes de conseguir despachar o evento `messages.upsert` pro webhook. Só os eventos derivados `chats.update`/`contacts.update` (que não passam por esse código quebrado) chegam ao crm-api — nunca a mensagem em si. Isso bate exatamente com o achado já documentado na sessão de 07-08 em `AUDITORIA_LOG.md`, agora **reconfirmado ao vivo, ainda sem fix, 2 dias depois**. Não é ausência de tráfego — é um bug upstream ativo bloqueando 100% das mensagens recebidas.
 - **5 arquivos laterais do módulo WhatsApp auditados** (continuação da varredura de 07-08): `integracoes.ts`/`Integracoes.tsx` (bug real corrigido — `syncEvolution()` confiava em status não verificado, causa da divergência `agent_configs` já documentada), `resilientFetch.ts` (sem bug), `Agentes.tsx` (bug documentado, `FIX PENDENTE`), `TesteConversas.tsx` (bug documentado, `FIX PENDENTE`, baixa prioridade — ferramenta DEV). Ver `AUDITORIA_LOG.md` para detalhes.
 
-## Sessão 2026-07-10 (noite) — Revisão externa (Google AI Studio) sobre webhook.ts
+## Sessão 2026-07-10 (noite) — Revisão externa (Google AI Studio) sobre webhook.ts, 2 rodadas
 
-5 achados de uma revisão externa em `backend/src/routes/webhook.ts` foram aplicados nesta sessão: **corrigidos** (A) race condition no upsert de contato (`ON CONFLICT DO NOTHING` adicionado), (B) `fetch` sem timeout na busca de foto de perfil (`AbortController` 5s adicionado), (D) `fs.appendFileSync` bloqueando o event loop em `wlog()` (trocado por assíncrono). **Documentados como pendência** (não corrigidos): (C) `telefone ILIKE '%...'` em ~9 queries do arquivo impede uso de índice — exige migração de dado (normalizar pra E.164), decisão do usuário; (E) regex candidata de `isValidJid()` também estava incorreta pra JIDs de grupo — ressalva acrescentada ao comentário `FIX PENDENTE` já existente, função continua não ativada. Build do backend validado, commit único `bb177e0`.
+**Rodada 1** (5 achados): **corrigidos** (A) race condition no upsert de contato (`ON CONFLICT DO NOTHING` adicionado), (B) `fetch` sem timeout na busca de foto de perfil (`AbortController` 5s adicionado), (D) `fs.appendFileSync` bloqueando o event loop em `wlog()` (trocado por assíncrono). **Documentados como pendência** (não corrigidos): (C) `telefone ILIKE '%...'` em ~9 queries do arquivo impede uso de índice — exige migração de dado (normalizar pra E.164), decisão do usuário; (E) regex candidata de `isValidJid()` também estava incorreta pra JIDs de grupo — ressalva acrescentada ao comentário `FIX PENDENTE` já existente, função continua não ativada. Commit `bb177e0`.
+
+**Rodada 2** (3 achados): **corrigidos** (1) `fetch` fire-and-forget pro N8N sem timeout — `AbortController` 8s, mesmo padrão do achado B; (3) loop de `handleStatusUpdate` sem guarda contra item inválido no array — `TypeError` interromperia o resto do lote. **Verificado e descartado** (2) suspeita de que upsert de contato + foto de perfil rodariam sem `userId` — confirmado no código real que já está protegido por `if (userId)`, falso positivo da revisão externa (que só recebe o texto colado, sem ver o aninhamento), comentário `[AUDITORIA] LÓGICA` adicionado pra não reabrir a dúvida. Commit `0a8f82a`. Avaliação: achados isolados de leitura linha-a-linha em `webhook.ts` parecem esgotados — o que resta é `FIX PENDENTE` que exige decisão/dado externo (ILIKE, isValidJid, schema a confirmar, bug upstream Prisma).
+
+Build do backend validado em ambas as rodadas.
 
 ## Sessão 2026-07-10 (noite) — Sprint 3: contorno testado, 401 e instância órfã investigados
 
