@@ -51,6 +51,16 @@ Teste ao vivo (mensagem WhatsApp real enviada para instância conectada `crm_435
 
 Demais arquivos da busca lateral (`src/components/catalogo/*`, `src/components/marketing/*`, `src/components/campanhas/*`, `src/components/kanban/*`, `src/components/workflows/*`, `src/components/seguranca/*`, `src/pages/Disparos.tsx`, `src/pages/Campanhas.tsx`, `src/pages/CatalogoEnvios.tsx`, `App.tsx`, `AppSidebar.tsx`, `docs-content.ts`, `mockData.ts`, `tailwind.config.ts`, etc.) foram avaliados como menções incidentais (WhatsApp citado como um canal de envio entre outros, ou "evolution" usado como palavra comum) — não são núcleo do módulo WhatsApp, não adicionados à auditoria.
 
+### Revisão externa (Google AI Studio) sobre webhook.ts (2026-07-10, noite) — 5 achados
+
+| Achado | Descrição | Ação |
+|--------|-----------|------|
+| A | Race condition no upsert de contato: dois caminhos concorrentes escrevendo em `contatos`, o segundo (`INSERT` sem `ON CONFLICT`) podia colidir se duas mensagens do mesmo contato novo chegassem próximas | 🔧 corrigido — `ON CONFLICT (user_id, telefone) DO NOTHING` adicionado |
+| B | `fetch` sem timeout nas 2 chamadas de foto de perfil da Evolution API — conexão pendurada indefinidamente se a Evolution travar | 🔧 corrigido — `AbortController` com 5s de timeout em ambas |
+| C | `telefone ILIKE '%...'` em ~9 queries do arquivo impede uso de índice B-Tree, full table scan em toda mensagem recebida | ⚠️ pendente — exige migração de dados (normalizar `telefone` pra E.164), documentado no cabeçalho do arquivo |
+| D | `fs.appendFileSync` em `wlog()` bloqueava o event loop a cada chamada (todo webhook), degradando latência de toda a API sob tráfego alto | 🔧 corrigido — trocado por `fs.appendFile` assíncrono |
+| E | Regex candidata de `isValidJid()` (já `FIX PENDENTE`) também estava incorreta pra JIDs de grupo (aceitam hífen, não são só dígitos) | 📝 comentário existente atualizado com a ressalva, função continua não ativada |
+
 ### Sprint 3 (2026-07-10, tarde) — teste de contorno do P2010 + itens pendentes
 
 | Item | Resultado |
