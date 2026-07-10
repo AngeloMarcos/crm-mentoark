@@ -1,6 +1,6 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-10 19:15 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-10 19:45 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Núcleo CRM
 
@@ -36,6 +36,10 @@
 - **Sprint 1 nunca tinha sido executada de fato** (arquivo `SPRINT_1_COMENTAR_CHAT_WHATSAPP.md` existia só como prompt preparado, untracked, nunca rodado) — seu ground truth citado pela Sprint 2 ("payload já deve ter sido corrigido") estava **errado**: confirmado que o limite ainda era 1mb. Fix aplicado e deployado nesta sessão (ver tabela Núcleo CRM acima).
 - **Tarefa A (teste ao vivo) — CONCLUÍDA, causa raiz confirmada:** mensagem real enviada de fora para `5511979579548` durante a sessão, monitorada ao vivo via `docker logs -f` em `evolution` e `crm-api` simultaneamente. Resultado: o Evolution processa a mensagem internamente e falha com `PrismaClientKnownRequestError` (P2010) dentro de `io.updateChatUnreadMessages`, repetidamente, antes de conseguir despachar o evento `messages.upsert` pro webhook. Só os eventos derivados `chats.update`/`contacts.update` (que não passam por esse código quebrado) chegam ao crm-api — nunca a mensagem em si. Isso bate exatamente com o achado já documentado na sessão de 07-08 em `AUDITORIA_LOG.md`, agora **reconfirmado ao vivo, ainda sem fix, 2 dias depois**. Não é ausência de tráfego — é um bug upstream ativo bloqueando 100% das mensagens recebidas.
 - **5 arquivos laterais do módulo WhatsApp auditados** (continuação da varredura de 07-08): `integracoes.ts`/`Integracoes.tsx` (bug real corrigido — `syncEvolution()` confiava em status não verificado, causa da divergência `agent_configs` já documentada), `resilientFetch.ts` (sem bug), `Agentes.tsx` (bug documentado, `FIX PENDENTE`), `TesteConversas.tsx` (bug documentado, `FIX PENDENTE`, baixa prioridade — ferramenta DEV). Ver `AUDITORIA_LOG.md` para detalhes.
+
+## Sessão 2026-07-10 (noite) — Revisão externa (Google AI Studio) sobre webhook.ts
+
+5 achados de uma revisão externa em `backend/src/routes/webhook.ts` foram aplicados nesta sessão: **corrigidos** (A) race condition no upsert de contato (`ON CONFLICT DO NOTHING` adicionado), (B) `fetch` sem timeout na busca de foto de perfil (`AbortController` 5s adicionado), (D) `fs.appendFileSync` bloqueando o event loop em `wlog()` (trocado por assíncrono). **Documentados como pendência** (não corrigidos): (C) `telefone ILIKE '%...'` em ~9 queries do arquivo impede uso de índice — exige migração de dado (normalizar pra E.164), decisão do usuário; (E) regex candidata de `isValidJid()` também estava incorreta pra JIDs de grupo — ressalva acrescentada ao comentário `FIX PENDENTE` já existente, função continua não ativada. Build do backend validado, commit único `bb177e0`.
 
 ## Sessão 2026-07-10 (noite) — Sprint 3: contorno testado, 401 e instância órfã investigados
 
