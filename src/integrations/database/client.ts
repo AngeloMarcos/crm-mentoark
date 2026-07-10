@@ -52,6 +52,35 @@ function _isExpired(token: string): boolean {
   catch { return true; }
 }
 
+// [AUDITORIA] FIX APLICADO (2026-07-10): api.get/post/patch/delete (e qualquer chamador direto,
+// como WhatsAppInterface.tsx) liam o token cru do localStorage sem checar expiração — diferente
+// de QueryBuilder._exec(), que já verificava e chamava _refreshSilent() antes de cada request.
+// Isso causava 401 visível ao usuário (ex: "erro de token" no envio de WhatsApp) sempre que o
+// clique acontecia durante a janela entre o access_token expirar e algum outro fluxo (via
+// .from()) refrescar o token em background — sem esse .from() concorrente, a requisição nunca
+// se recuperava, pois não havia refresh nem retry. getFreshToken() centraliza esse check+refresh
+// para qualquer chamador que precise montar headers de auth manualmente.
+export async function getFreshToken(): Promise<string | null> {
+  const t = _getToken();
+  if (!t) return null;
+  if (_isExpired(t)) {
+    const ok = await auth._refreshSilent();
+    if (!ok) return null;
+    return _getToken();
+  }
+  return t;
+}
+
+async function _authHeadersFresh(): Promise<Record<string, string>> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  const t = await getFreshToken();
+  if (t) {
+    h['Authorization'] = `Bearer ${t}`;
+    h['x-auth-token'] = t;
+  }
+  return h;
+}
+
 let _currentUser: any = null;
 let _authCallbacks: Array<(event: string, session: any) => void> = [];
 function _notify(ev: string, s: any) { _authCallbacks.forEach(cb => cb(ev, s)); }
@@ -411,28 +440,28 @@ export const api = {
   removeAllChannels: () => {},
   get: async (path: string) => {
     try {
-      const res = await fetch(`${API_BASE}${path}`, { headers: _authHeaders() });
+      const res = await fetch(`${API_BASE}${path}`, { headers: await _authHeadersFresh() });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
       return { data: await res.json() };
     } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
   },
   post: async (path: string, body: any) => {
     try {
-      const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: _authHeaders(), body: JSON.stringify(body) });
+      const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: await _authHeadersFresh(), body: JSON.stringify(body) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
       return { data: await res.json() };
     } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
   },
   patch: async (path: string, body: any) => {
     try {
-      const res = await fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: _authHeaders(), body: JSON.stringify(body) });
+      const res = await fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: await _authHeadersFresh(), body: JSON.stringify(body) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
       return { data: await res.json() };
     } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
   },
   delete: async (path: string) => {
     try {
-      const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: _authHeaders() });
+      const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: await _authHeadersFresh() });
       if (!res.ok && res.status !== 204) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
       return { data: null };
     } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }

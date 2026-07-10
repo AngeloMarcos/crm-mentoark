@@ -53,12 +53,19 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { getAuthToken } from "@/lib/api-token";
+import { getFreshToken } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
-function apiHeaders(): Record<string, string> {
+// [AUDITORIA] FIX APLICADO (2026-07-10): apiHeaders() lia o token cru do localStorage sem checar
+// expiração nem tentar refresh — toda chamada desta tela (send, conversas, etc.) usa fetch direto
+// com este header, sem passar pelo QueryBuilder de client.ts (que já tinha essa lógica). Isso
+// causava 401 visível ao usuário sempre que o clique acontecia com o access_token expirado, sem
+// nenhuma tentativa de recuperação. Agora usa getFreshToken() (client.ts), que verifica exp e
+// chama o refresh silencioso antes de montar os headers.
+async function apiHeaders(): Promise<Record<string, string>> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
-  const t = getAuthToken();
+  const t = await getFreshToken();
   if (t) h['Authorization'] = `Bearer ${t}`;
   return h;
 }
@@ -307,7 +314,7 @@ export function WhatsAppInterface() {
 
   const fetchRespostasRapidas = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/respostas_rapidas`, { headers: apiHeaders() });
+      const res = await fetch(`${API_BASE}/api/respostas_rapidas`, { headers: await apiHeaders() });
       if (res.ok) setRespostasRapidas(await res.json());
     } catch {}
   }, []);
@@ -334,7 +341,7 @@ export function WhatsAppInterface() {
   // Busca status IA ao abrir uma conversa
   const fetchIaStatus = useCallback(async (phone: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/ia-status/${encodeURIComponent(phone)}`, { headers: apiHeaders() });
+      const res = await fetch(`${API_BASE}/api/whatsapp/ia-status/${encodeURIComponent(phone)}`, { headers: await apiHeaders() });
       if (res.ok) {
         const d = await res.json();
         setIaPausada(d.pausada === true);
@@ -349,7 +356,7 @@ export function WhatsAppInterface() {
       const novoEstado = !iaPausada;
       const res = await fetch(`${API_BASE}/api/whatsapp/ia-toggle`, {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
         body: JSON.stringify({ phone: activeChatId, pausar: novoEstado }),
       });
       if (res.ok) {
@@ -370,7 +377,7 @@ export function WhatsAppInterface() {
     if (!q.trim() || q.length < 2) { setContatoResults([]); return; }
     setSearchingContatos(true);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/contatos-search?q=${encodeURIComponent(q)}`, { headers: apiHeaders() });
+      const res = await fetch(`${API_BASE}/api/whatsapp/contatos-search?q=${encodeURIComponent(q)}`, { headers: await apiHeaders() });
       if (res.ok) setContatoResults(await res.json());
     } catch {}
     finally { setSearchingContatos(false); }
@@ -382,7 +389,7 @@ export function WhatsAppInterface() {
     picCacheRef.current.set(phone, null); // marca como "em busca"
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/profile-pic/${encodeURIComponent(phone)}`, {
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
       });
       if (!res.ok) return;
       const data = await res.json();
@@ -404,7 +411,7 @@ export function WhatsAppInterface() {
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/sync-profiles`, {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
       });
       if (!res.ok) { toast.error('Erro ao sincronizar'); return; }
       const { sincronizados, total } = await res.json();
@@ -424,7 +431,7 @@ export function WhatsAppInterface() {
     try {
       const res = await fetch(`${API_BASE}/api/whatsapp/contato/${encodeURIComponent(activeChatId)}`, {
         method: 'PATCH',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
         body: JSON.stringify({ nome: nameInput.trim() }),
       });
       if (res.ok) {
@@ -504,7 +511,7 @@ export function WhatsAppInterface() {
   const fetchConversas = async (isArchived = false) => {
     try {
       console.log(`[WA] fetchConversas iniciando (archived=${isArchived})...`);
-      const res = await fetch(`${API_BASE}/api/whatsapp/conversas?archived=${isArchived}`, { headers: apiHeaders() });
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas?archived=${isArchived}`, { headers: await apiHeaders() });
       if (!res.ok) {
         console.error('[WA] fetchConversas falhou', res.status);
         return;
@@ -593,7 +600,7 @@ export function WhatsAppInterface() {
     console.log(`[WA] fetchMensagens para ${phone} iniciando...`);
     if (showLoading) setLoadingMessages(true);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}?limit=100`, { headers: apiHeaders() });
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}?limit=100`, { headers: await apiHeaders() });
       if (!res.ok) {
         console.warn('[WA] fetchMensagens falhou', phone, res.status, await res.text().catch(() => ''));
         return;
@@ -799,7 +806,7 @@ export function WhatsAppInterface() {
         // Tenta a rota do backend primeiro
         const res = await fetch(`${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(activeChatId)}/read`, {
           method: 'PATCH',
-          headers: apiHeaders()
+          headers: await apiHeaders()
         });
         
         if (res.status === 404) {
@@ -977,7 +984,7 @@ export function WhatsAppInterface() {
 
       const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
         body: JSON.stringify(payload),
       });
 
@@ -1015,7 +1022,7 @@ export function WhatsAppInterface() {
     try {
       const res = await fetch(`${API_BASE}/api/kanban/tarefas/da-conversa`, {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
         body: JSON.stringify({ conversa_id: conversaId })
       });
       if (!res.ok) throw new Error();
@@ -1182,14 +1189,15 @@ export function WhatsAppInterface() {
           : c
       ));
 
-      const responses = await Promise.all(idsToDelete.map(id => 
+      const deleteHeaders = await apiHeaders();
+      const responses = await Promise.all(idsToDelete.map(id =>
         fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(id)}`, {
           method: 'DELETE',
-          headers: apiHeaders(),
-          body: JSON.stringify({ 
+          headers: deleteHeaders,
+          body: JSON.stringify({
             forEveryone: false,
-            instancia: currentChat.source, 
-            remoteJid: `${currentChat.phone}@s.whatsapp.net` 
+            instancia: currentChat.source,
+            remoteJid: `${currentChat.phone}@s.whatsapp.net`
           })
         })
       ));
@@ -1225,7 +1233,7 @@ export function WhatsAppInterface() {
         // Encaminha enviando o conteúdo novamente para o novo destinatário
         await fetch(`${API_BASE}/api/whatsapp/send`, {
           method: 'POST',
-          headers: apiHeaders(),
+          headers: await apiHeaders(),
           body: JSON.stringify({ 
             phone: targetPhone, 
             text: msg.content, 
@@ -1293,17 +1301,18 @@ export function WhatsAppInterface() {
           : c
       ));
 
+      const deleteHeaders = await apiHeaders();
       const responses = await Promise.all(idsToDelete.map(id => {
         const msg = currentChat.messages.find(m => m.id === id);
         const mId = msg?.message_id || id; // Fallback para UUID se não tiver message_id
-        
+
         return fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(mId)}`, {
           method: 'DELETE',
-          headers: apiHeaders(),
-          body: JSON.stringify({ 
-            forEveryone: true, 
-            instancia: currentChat.source, 
-            remoteJid: `${currentChat.phone}@s.whatsapp.net` 
+          headers: deleteHeaders,
+          body: JSON.stringify({
+            forEveryone: true,
+            instancia: currentChat.source,
+            remoteJid: `${currentChat.phone}@s.whatsapp.net`
           })
         });
       }));
@@ -1369,7 +1378,7 @@ export function WhatsAppInterface() {
     setIsGlobalSearching(true);
     setShowGlobalSearchResults(true);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/search?q=${encodeURIComponent(term)}`, { headers: apiHeaders() });
+      const res = await fetch(`${API_BASE}/api/whatsapp/search?q=${encodeURIComponent(term)}`, { headers: await apiHeaders() });
       if (res.ok) {
         setGlobalSearchResults(await res.json());
       }
@@ -1397,7 +1406,7 @@ export function WhatsAppInterface() {
     try {
       await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
         body: JSON.stringify({ pinned: nextVal })
       });
     } catch {
@@ -1416,7 +1425,7 @@ export function WhatsAppInterface() {
     try {
       await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
         body: JSON.stringify({ muted_until: nextVal ? new Date(Date.now() + 365*24*60*60*1000).toISOString() : null })
       });
     } catch {}
@@ -1434,7 +1443,7 @@ export function WhatsAppInterface() {
     try {
       await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
         body: JSON.stringify({ muted_until: until })
       });
     } catch {}
@@ -1455,7 +1464,7 @@ export function WhatsAppInterface() {
     try {
       await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: await apiHeaders(),
         body: JSON.stringify({ archived: nextVal })
       });
     } catch {}
