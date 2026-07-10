@@ -1,15 +1,15 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-10 18:45 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-10 19:15 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Núcleo CRM
 
 | Serviço    | Status | Detalhe                                      | Diagnóstico/Fix relacionado |
 |------------|--------|-----------------------------------------------|------------------------------|
-| crm-api    | 🟢 | **Corrigido e deployado (2026-07-10):** limite de payload do Express elevado de 1mb para 5mb (era `PayloadTooLargeError` com payloads do Evolution >1MB — mídia em base64 passa fácil disso). Confirmado subindo saudável em produção. | `backend/src/index.ts`, commit `edc921f` |
-| crm        | 🟡 | **Achado novo (2026-07-10), não investigado ainda:** durante teste ao vivo, todas as chamadas de `/api/whatsapp/*` vindas do IP do usuário (177.143.119.69) retornaram **401** (`conversas`, `conversas/:phone`, `send`) — sessão do navegador pode ter expirado no meio do teste. Recomendação imediata: dar logout/login de novo no CRM. Se persistir, investigar em sessão futura. | — |
+| crm-api    | 🟡 | Payload fix (1mb→5mb) deployado e saudável. **Achado confirmado (Sprint 3):** todas as chamadas autenticadas do IP do usuário (177.143.119.69) retornam 401 há 25+ minutos, em **qualquer** rota (`/api/whatsapp/*` e `/api/dados_cliente`, não é bug específico) — é sessão/token inválido no navegador, não bug de código. Ação: logout/login. | `backend/src/index.ts`, commit `edc921f` |
+| crm        | 🟢 | Sem problema conhecido                        | — |
 | postgres   | 🟢     | 14MB, saudável                                | — |
-| evolution  | 🟡 | **RECONFIRMADO AO VIVO (2026-07-10):** erro Prisma `P2010` em `io.updateChatUnreadMessages` dispara a cada mensagem/atualização de status recebida, **antes** do Evolution despachar `messages.upsert` pro webhook — só `chats.update`/`contacts.update` (que não passam por esse código) chegam ao crm-api. **Esta é a causa raiz confirmada de "zero mensagens recebidas".** Documentado com comentário `[AUDITORIA]` em `backend/src/routes/webhook.ts`. Bug upstream do Evolution v2.3.7 — nenhuma correção possível no código do CRM. | `backend/src/routes/webhook.ts` (comentário `[AUDITORIA]`), `diagnosticos/PROMPT_CLAUDE_CODE_FIX_EVOLUTION_BUG.md` |
+| evolution  | 🟡 | **RECONFIRMADO AO VIVO 2x (2026-07-08, 07-10):** erro Prisma `P2010` em `io.updateChatUnreadMessages` dispara a cada mensagem/atualização de status recebida, **antes** do Evolution despachar `messages.upsert` pro webhook — só `chats.update`/`contacts.update` chegam ao crm-api. **Causa raiz confirmada de "zero mensagens recebidas".** `DATABASE_SAVE_DATA_CHATS=false` testado ao vivo na Sprint 3 — **não resolveu**, revertido. Pesquisa: bug também ocorre em outras versões do Evolution rodando em PostgreSQL, não é exclusivo do MySQL/v2.3.7. Bug 100% upstream, nenhuma correção possível no código do CRM. | `backend/src/routes/webhook.ts` (comentário `[AUDITORIA]`) |
 
 ## Observabilidade — ✅ 4 dashboards, logs/métricas saudáveis, chat WhatsApp isolado (2026-07-10)
 
@@ -37,6 +37,13 @@
 - **Tarefa A (teste ao vivo) — CONCLUÍDA, causa raiz confirmada:** mensagem real enviada de fora para `5511979579548` durante a sessão, monitorada ao vivo via `docker logs -f` em `evolution` e `crm-api` simultaneamente. Resultado: o Evolution processa a mensagem internamente e falha com `PrismaClientKnownRequestError` (P2010) dentro de `io.updateChatUnreadMessages`, repetidamente, antes de conseguir despachar o evento `messages.upsert` pro webhook. Só os eventos derivados `chats.update`/`contacts.update` (que não passam por esse código quebrado) chegam ao crm-api — nunca a mensagem em si. Isso bate exatamente com o achado já documentado na sessão de 07-08 em `AUDITORIA_LOG.md`, agora **reconfirmado ao vivo, ainda sem fix, 2 dias depois**. Não é ausência de tráfego — é um bug upstream ativo bloqueando 100% das mensagens recebidas.
 - **5 arquivos laterais do módulo WhatsApp auditados** (continuação da varredura de 07-08): `integracoes.ts`/`Integracoes.tsx` (bug real corrigido — `syncEvolution()` confiava em status não verificado, causa da divergência `agent_configs` já documentada), `resilientFetch.ts` (sem bug), `Agentes.tsx` (bug documentado, `FIX PENDENTE`), `TesteConversas.tsx` (bug documentado, `FIX PENDENTE`, baixa prioridade — ferramenta DEV). Ver `AUDITORIA_LOG.md` para detalhes.
 
+## Sessão 2026-07-10 (noite) — Sprint 3: contorno testado, 401 e instância órfã investigados
+
+- **Tarefa A — hipótese `DATABASE_SAVE_DATA_CHATS=false` testada e descartada.** Backup do `docker-compose.yml` do Evolution feito na VPS (`docker-compose.yml.bak-sprint3-20260710`), variável aplicada, container reiniciado, instância reconectou normal ("open"). Mensagem de teste real enviada de fora durante monitoramento ao vivo: **mesmo crash P2010, mesma frequência** — a variável não afeta esse code path. Revertido imediatamente, confirmado reconectado. Pesquisa adicional nesta sessão: esse bug em `Chat.unreadMessages` já foi reportado em outras versões do Evolution (2.1.0, 2.2.0) rodando em **PostgreSQL** também — não é exclusivo do MySQL nem da v2.3.7, então trocar `DATABASE_PROVIDER` ou fixar versão antiga têm garantia baixa de resolver. Reportar/rastrear issue upstream no GitHub do Evolution passa a ser a opção mais indicada.
+- **Tarefa B — 401 em `/api/whatsapp/*` investigado e explicado.** Confirmado que **não é bug do WhatsApp**: o mesmo IP recebe 401 consistente também em `/api/dados_cliente` (rota não relacionada), por 25+ minutos seguidos, sem nenhuma request bem-sucedida no meio. É sessão/token inválido no navegador do usuário — ação recomendada é logout/login, não há código a corrigir.
+- **Tarefa C — instância órfã `crm_5319f0ed61b3` investigada.** `connectionState: "connecting"` confirmado (nunca pareia). Query direta no Postgres: **não está referenciada em nenhuma das 3 tabelas de config** (`agent_configs`, `agentes`, `integracoes_config`) para nenhum usuário. A usuária "Cris" (citada no ground truth do prompt como tendo "N8N routing ativo" nessa instância) tem uma linha em `agent_configs`, mas com `evolution_instancia` vazio e `ativo=false` — contradiz a premissa do prompt. Instância genuinamente órfã. `DEL_INSTANCE=true` já habilitado no Evolution (deletar é tecnicamente simples), mas é ação destrutiva em serviço externo de produção — `FIX PENDENTE`, decisão do usuário (deletar vs. deixar disponível pra pareamento manual futuro).
+- Tarefa D (absorver documentos antigos da Sprint 1) não executada — não sobrou tempo, e não era prioridade da sprint.
+
 ## Concluído em 2026-07-08
 
 - **OpenClaw Admin removido por completo** do sistema (backend, frontend, rotas, menu) — confirmado que a coluna `motor_ia` não existe em produção, então nenhum agente real dependia dele. Deploy validado: JS bundle sem referência a "OpenClaw", endpoint antigo agora se comporta como qualquer rota inexistente (401 genérico do middleware de auth).
@@ -50,14 +57,14 @@
 
 ## Pendências abertas (ordem de prioridade)
 
-1. **CRÍTICO — corrigir o bug upstream do Evolution (Prisma P2010) que bloqueia 100% das mensagens recebidas.** Causa raiz confirmada e reconfirmada ao vivo (ver Sprint 2 acima e comentário `[AUDITORIA]` em `backend/src/routes/webhook.ts`). Opções ainda não tentadas, decisão do usuário: (a) trocar `DATABASE_PROVIDER` de mysql pra postgresql no compose do Evolution; (b) fixar uma tag de imagem mais antiga/estável do `evoapicloud/evolution-api`; (c) reportar bug upstream no repositório do Evolution API.
-2. **Achado novo — 401 em todas as chamadas `/api/whatsapp/*` do frontend durante o teste ao vivo de hoje.** Não investigado ainda. Testar se é sessão expirada (relogar) ou algo mais sério.
-3. Instância Evolution `crm_5319f0ed61b3` presa em loop de reconexão há dias (nunca pareia, gera ruído constante de `qrcode.updated`) — mesmo problema aberto desde 07-03 (ver [[project_evolution_whatsapp_infra]]), aparentemente nunca resolvido. Decidir: tentar corrigir (forçar versão do Baileys) ou remover a instância órfã.
+1. **CRÍTICO — corrigir o bug upstream do Evolution (Prisma P2010) que bloqueia 100% das mensagens recebidas.** Causa raiz confirmada 2x ao vivo. Uma opção já testada e descartada (`DATABASE_SAVE_DATA_CHATS=false`). Restam: (a) trocar `DATABASE_PROVIDER` de mysql pra postgresql — garantia baixa, mesmo bug já visto em Postgres noutras versões; (b) fixar tag de imagem mais antiga/estável; (c) **reportar/rastrear issue upstream no GitHub do Evolution API — opção mais indicada agora**, decisão do usuário sobre qual tentar.
+2. Sessão do navegador expirada/inválida (401 persistente) — ação do usuário: logout/login. Confirmado não ser bug de código (Sprint 3 Tarefa B).
+3. Instância Evolution `crm_5319f0ed61b3` — confirmada genuinamente órfã (sem vínculo em nenhuma tabela de config). Decisão do usuário: deletar (via `DEL_INSTANCE=true`, já habilitado) ou manter disponível pra pareamento manual futuro.
 4. `backend/src/routes/integracoes.ts` — validar `status='conectado'` contra a Evolution API de verdade antes de sincronizar com `agent_configs` (mitigação parcial já aplicada no frontend, ver `AUDITORIA_LOG.md`).
 5. `src/pages/Agentes.tsx` — `testarEvolution()` não testa a instância específica do agente (ver `AUDITORIA_LOG.md`).
 6. Alerta WhatsApp via n8n — aguardando número de destino do usuário (`diagnosticos/PROMPT_CLAUDE_CODE_ALERTA_WHATSAPP.md`)
 7. n8n `DB_TYPE` inválido — investigar quando sair do standby
-8. Documentos de diagnóstico ainda não absorvidos/apagados: `diagnosticos/SPRINT_1_COMENTAR_CHAT_WHATSAPP.md` propunha uma lista grande (Tarefa B) de `PROMPT_CLAUDE_CODE_*.md`/`DIAGNOSTICO_*.md` para absorver e apagar — não executado ainda, decisão de escopo em aberto (ver relatório da sessão).
+8. Documentos de diagnóstico ainda não absorvidos/apagados: `diagnosticos/SPRINT_1_COMENTAR_CHAT_WHATSAPP.md` propunha uma lista grande de `PROMPT_CLAUDE_CODE_*.md`/`DIAGNOSTICO_*.md` para absorver e apagar — não executado ainda (Sprint 3 Tarefa D, sem tempo).
 
 ## Regra para sessões futuras
 
