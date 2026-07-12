@@ -1,12 +1,12 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-10 20:15 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-12 00:15 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Núcleo CRM
 
 | Serviço    | Status | Detalhe                                      | Diagnóstico/Fix relacionado |
 |------------|--------|-----------------------------------------------|------------------------------|
-| crm-api    | 🟡 | Payload fix (1mb→5mb) deployado e saudável. **Achado confirmado (Sprint 3):** todas as chamadas autenticadas do IP do usuário (177.143.119.69) retornam 401 há 25+ minutos, em **qualquer** rota (`/api/whatsapp/*` e `/api/dados_cliente`, não é bug específico) — é sessão/token inválido no navegador, não bug de código. Ação: logout/login. | `backend/src/index.ts`, commit `edc921f` |
+| crm-api    | 🟢 | Payload fix (1mb→5mb) deployado e saudável. **Sprint 3** encontrou 401 persistente em qualquer rota (sessão/token inválido no navegador) — investigação posterior (2026-07-10, não a mesma sessão) achou a causa real: `apiHeaders()`/`api.get/post/patch/delete` nunca checavam expiração nem tentavam refresh antes de disparar a request (só `QueryBuilder._exec()` fazia isso), deixando qualquer ação única do usuário (ex: enviar mensagem) sem chance de recuperação quando o clique caía na janela de token expirado. **Corrigido e deployado** (`getFreshToken()` em `client.ts`, usado em `WhatsAppInterface.tsx` e nos 4 helpers `api.*`). | `backend/src/index.ts` (commit `edc921f`), `src/integrations/database/client.ts` + `src/components/WhatsAppInterface.tsx` (commit `eeb8076`) |
 | crm        | 🟢 | Sem problema conhecido                        | — |
 | postgres   | 🟢     | 14MB, saudável                                | — |
 | evolution  | 🟡 | **RECONFIRMADO AO VIVO 2x (2026-07-08, 07-10):** erro Prisma `P2010` em `io.updateChatUnreadMessages` dispara a cada mensagem/atualização de status recebida, **antes** do Evolution despachar `messages.upsert` pro webhook — só `chats.update`/`contacts.update` chegam ao crm-api. **Causa raiz confirmada de "zero mensagens recebidas".** `DATABASE_SAVE_DATA_CHATS=false` testado ao vivo na Sprint 3 — **não resolveu**, revertido. Pesquisa: bug também ocorre em outras versões do Evolution rodando em PostgreSQL, não é exclusivo do MySQL/v2.3.7. Bug 100% upstream, nenhuma correção possível no código do CRM. | `backend/src/routes/webhook.ts` (comentário `[AUDITORIA]`) |
@@ -20,7 +20,7 @@
 | alloy         | 🟢 | Coletando logs via docker.sock; `discovery.docker` reconecta sozinho após recriação de containers (viu gaps de ~2-10min durante os redeploys de 07-08, autolimitados, não é bug) |
 | prometheus    | 🟢 | v3.13.0, scrape de node-exporter + cadvisor confirmado (`targets` up) |
 | node-exporter | 🟢 | v1.11.1, métricas de host confirmadas |
-| cadvisor      | 🟢 | v0.60.3, métricas por container confirmadas |
+| cadvisor      | 🟢 (corrigido 2026-07-12) | v0.60.3. **CAUSA RAIZ CONFIRMADA da VPS travando/ficando inacessível repetidamente (SSH e HTTPS parando de responder por completo, várias vezes em 2026-07-11/12):** cAdvisor consumindo **81% de CPU e 759MB de RAM** num host de **1 vCPU só** — logs mostravam `fsHandler` fazendo varredura de uso de disco/inodes por container levando de 11s a **11 minutos** cada, continuamente, para os 19 containers do host. Fix: `--housekeeping_interval=30s` + `--disable_metrics=...,disk,diskIO,percpu` (desliga o coletor caro de disco por container, mantém cpu/memory/network que os dashboards usam). Resultado imediato: CPU do cadvisor 81%→0.47%, RAM 759MB→74MB, load average (1min) de 7-13+ para 0.43. Confirmado que métricas continuam chegando no Prometheus após o fix. |
 
 ## Sessão 2026-07-10 — varredura observabilidade + isolamento do painel de chat
 
@@ -59,6 +59,12 @@ Build do backend validado em ambas as rodadas.
 - **OpenClaw Admin removido por completo** do sistema (backend, frontend, rotas, menu) — confirmado que a coluna `motor_ia` não existe em produção, então nenhum agente real dependia dele. Deploy validado: JS bundle sem referência a "OpenClaw", endpoint antigo agora se comporta como qualquer rota inexistente (401 genérico do middleware de auth).
 - **Limpeza de disco**: `docker builder prune -a` liberou ~9.1GB de build cache (disco 81%→62% antes de subir os 3 containers novos).
 
+## Sessão 2026-07-11/12 — deploy do fix de token + incidente de sobrecarga da VPS (cadvisor)
+
+- **Deploy em produção:** commits de auth fix (`getFreshToken()` em `client.ts`/`WhatsAppInterface.tsx`) e achados menores de `webhook.ts` (rodada 2) — `crm` e `crm-api` rebuildados `--no-cache` e reiniciados, validados no ar (`crm=200`, `crm-api=404` esperado).
+- **Incidente:** VPS ficou repetidamente inacessível (SSH e HTTPS travando por completo, minutos seguidos, em pelo menos 2 episódios) durante esta sessão. Diagnosticado com precisão: handshake TCP na porta 22/443 completava normalmente, mas nenhum processo de userspace respondia (nem sshd mandava banner) — sintoma de CPU 100% saturada num host de 1 vCPU, não problema de rede/firewall. **Causa raiz confirmada e corrigida:** `cadvisor` (adicionado nesta mesma sessão, ver "Sessão 2026-07-10") rodando com a configuração padrão de coleta de métricas de disco por container — logs mostravam `fsHandler` escaneando uso de disco/inodes de cada um dos 19 containers do host, cada varredura levando de 11s a **11 minutos**, continuamente. Fix aplicado em `/opt/observability/docker-compose.yml`: `--housekeeping_interval=30s` + `--disable_metrics=...,disk,diskIO,percpu`. Resultado imediato e confirmado: CPU do cadvisor 81%→0.47%, RAM 759MB→74MB, load average (1min) de 7-13+ para 0.43. Dashboards de CPU/memória/rede continuam funcionando (não dependiam da métrica de disco desligada).
+- Também observado durante o incidente: todos os containers com `StartedAt` idêntico (~23:47 UTC) e `dockerd` com uptime baixo — indício de que a VPS precisou de reboot completo pra sair do travamento (não uma auto-recuperação).
+
 ## Em standby (não mexer sem pedido explícito)
 
 | Serviço | Status | Nota |
@@ -68,13 +74,13 @@ Build do backend validado em ambas as rodadas.
 ## Pendências abertas (ordem de prioridade)
 
 1. **CRÍTICO — corrigir o bug upstream do Evolution (Prisma P2010) que bloqueia 100% das mensagens recebidas.** Causa raiz confirmada 2x ao vivo. Uma opção já testada e descartada (`DATABASE_SAVE_DATA_CHATS=false`). Restam: (a) trocar `DATABASE_PROVIDER` de mysql pra postgresql — garantia baixa, mesmo bug já visto em Postgres noutras versões; (b) fixar tag de imagem mais antiga/estável; (c) **reportar/rastrear issue upstream no GitHub do Evolution API — opção mais indicada agora**, decisão do usuário sobre qual tentar.
-2. Sessão do navegador expirada/inválida (401 persistente) — ação do usuário: logout/login. Confirmado não ser bug de código (Sprint 3 Tarefa B).
-3. Instância Evolution `crm_5319f0ed61b3` — confirmada genuinamente órfã (sem vínculo em nenhuma tabela de config). Decisão do usuário: deletar (via `DEL_INSTANCE=true`, já habilitado) ou manter disponível pra pareamento manual futuro.
-4. `backend/src/routes/integracoes.ts` — validar `status='conectado'` contra a Evolution API de verdade antes de sincronizar com `agent_configs` (mitigação parcial já aplicada no frontend, ver `AUDITORIA_LOG.md`).
-5. `src/pages/Agentes.tsx` — `testarEvolution()` não testa a instância específica do agente (ver `AUDITORIA_LOG.md`).
-6. Alerta WhatsApp via n8n — aguardando número de destino do usuário (`diagnosticos/PROMPT_CLAUDE_CODE_ALERTA_WHATSAPP.md`)
-7. n8n `DB_TYPE` inválido — investigar quando sair do standby
-8. Documentos de diagnóstico ainda não absorvidos/apagados: `diagnosticos/SPRINT_1_COMENTAR_CHAT_WHATSAPP.md` propunha uma lista grande de `PROMPT_CLAUDE_CODE_*.md`/`DIAGNOSTICO_*.md` para absorver e apagar — não executado ainda (Sprint 3 Tarefa D, sem tempo).
+2. Instância Evolution `crm_5319f0ed61b3` — confirmada genuinamente órfã (sem vínculo em nenhuma tabela de config). Decisão do usuário: deletar (via `DEL_INSTANCE=true`, já habilitado) ou manter disponível pra pareamento manual futuro.
+3. `backend/src/routes/integracoes.ts` — validar `status='conectado'` contra a Evolution API de verdade antes de sincronizar com `agent_configs` (mitigação parcial já aplicada no frontend, ver `AUDITORIA_LOG.md`).
+4. `src/pages/Agentes.tsx` — `testarEvolution()` não testa a instância específica do agente (ver `AUDITORIA_LOG.md`).
+5. Alerta WhatsApp via n8n — aguardando número de destino do usuário (`diagnosticos/PROMPT_CLAUDE_CODE_ALERTA_WHATSAPP.md`)
+6. n8n `DB_TYPE` inválido — investigar quando sair do standby
+7. Documentos de diagnóstico ainda não absorvidos/apagados: `diagnosticos/SPRINT_1_COMENTAR_CHAT_WHATSAPP.md` propunha uma lista grande de `PROMPT_CLAUDE_CODE_*.md`/`DIAGNOSTICO_*.md` para absorver e apagar — não executado ainda (Sprint 3 Tarefa D, sem tempo).
+8. `webhook.ts` — migração de `telefone` para E.164 (permitiria trocar `ILIKE '%...'` por `=`, usando índice) e `isValidJid()` (regex de grupo incorreta, função nunca ativada) — ambos aguardando decisão do usuário, ver comentários `[AUDITORIA]` no arquivo.
 
 ## Regra para sessões futuras
 
