@@ -12,6 +12,7 @@ import { log } from '../logger';
 export default function integracoesRouter(pool: Pool): Router {
   const router = Router();
 
+  // [AUDITORIA] LÓGICA: Wrapper utilitário para capturar exceções assíncronas e retornar erro 500 estruturado, evitando crashes globais do Express.
   const wrap = (fn: Function) => async (req: AuthRequest, res: Response) => {
     try {
       await fn(req, res);
@@ -21,13 +22,14 @@ export default function integracoesRouter(pool: Pool): Router {
     }
   };
 
-  // Máscara a api_key — expõe apenas os últimos 4 chars
+  // [AUDITORIA] LÓGICA: Mascara credenciais sensíveis (API Keys/Tokens) para evitar vazamento de dados no frontend do CRM.
   function maskKey(key: string | null): string | null {
     if (!key) return null;
     if (key.length <= 4) return '****';
     return '****' + key.slice(-4);
   }
 
+  // [AUDITORIA] LÓGICA: Clona a linha de retorno do banco aplicando a máscara de segurança na chave de API.
   function maskRow(row: any) {
     return { ...row, api_key: maskKey(row.api_key) };
   }
@@ -52,6 +54,7 @@ export default function integracoesRouter(pool: Pool): Router {
   async function syncEvolution(
     userId: string, instancia: string, url: string, apiKey: string
   ) {
+    // [AUDITORIA] LÓGICA: UPSERT em `agent_configs` para registrar/atualizar os dados de conexão de saída da Evolution API.
     await pool.query(
       `INSERT INTO agent_configs
          (user_id, evolution_instancia, evolution_server_url, evolution_api_key, ativo)
@@ -66,6 +69,7 @@ export default function integracoesRouter(pool: Pool): Router {
   }
 
   // ── GET /api/integracoes_config ─────────────────────────────────────────────
+  // [AUDITORIA] LÓGICA: Retorna todas as conexões ativas e mascaradas configuradas para o usuário autenticado.
   router.get('/', wrap(async (req: AuthRequest, res: Response) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
@@ -112,6 +116,7 @@ export default function integracoesRouter(pool: Pool): Router {
     }
 
     try {
+      // [AUDITORIA] LÓGICA: Insere a nova integração na tabela integracoes_config com fallback automático para metadados legados.
       const r = await pool.query(
         `INSERT INTO integracoes_config
            (user_id, tipo, nome, url, api_key, instancia, token, status, config, updated_at)
@@ -142,7 +147,7 @@ export default function integracoesRouter(pool: Pool): Router {
       return res.status(201).json(maskRow(row));
 
     } catch (err: any) {
-      // Violação de UNIQUE (código 23505) — trata conflito explicitamente
+      // Violação de UNIQUE (código 23505) — trata conflito de duplicidade do banco explicitamente para o cliente.
       if (err.code === '23505') {
         return res.status(409).json({
           message: 'Já existe um registro com esses dados. Use o botão Editar para atualizar.',
@@ -153,6 +158,7 @@ export default function integracoesRouter(pool: Pool): Router {
   }));
 
   // ── PUT /api/integracoes_config/:id ─────────────────────────────────────────
+  // [AUDITORIA] LÓGICA: Atualiza uma integração existente tratando a segurança das chaves mascaradas para evitar sobregravações.
   router.put('/:id', wrap(async (req: AuthRequest, res: Response) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
@@ -177,6 +183,7 @@ export default function integracoesRouter(pool: Pool): Router {
                             : undefined;
 
     try {
+      // [AUDITORIA] BUG: O uso de COALESCE($N, campo) com passagem de null impede que as credenciais sejam limpadas (definidas como vazias) em produção.
       const r = await pool.query(
         `UPDATE integracoes_config SET
            nome       = COALESCE($1, nome),
@@ -208,6 +215,7 @@ export default function integracoesRouter(pool: Pool): Router {
 
       const row = r.rows[0];
 
+      // [AUDITORIA] LÓGICA: Força sincronização com a tabela do motor IA caso a integração atualizada seja do WhatsApp (Evolution API).
       if (row.tipo === 'evolution' && row.instancia && row.url && row.api_key && row.status === 'conectado') {
         await syncEvolution(userId, row.instancia, row.url, row.api_key);
       }
@@ -223,6 +231,7 @@ export default function integracoesRouter(pool: Pool): Router {
   }));
 
   // ── DELETE /api/integracoes_config/:id ──────────────────────────────────────
+  // [AUDITORIA] BUG: Deleta o conector mas não limpa as referências obsoletas em `agent_configs`, deixando o motor de IA em estado órfão.
   router.delete('/:id', wrap(async (req: AuthRequest, res: Response) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });

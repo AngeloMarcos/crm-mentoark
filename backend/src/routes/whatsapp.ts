@@ -28,7 +28,7 @@ const WEBHOOK_URL = (() => {
 })();
 const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
 
-// Objeto interno do webhook (usado em instance/create e /webhook/set)
+// [AUDITORIA] LÓGICA: Retorna a estrutura parametrizada do objeto de configuração de webhooks para envio ao Evolution API.
 function webhookInner(enabled = true) {
   return {
     enabled,
@@ -45,6 +45,7 @@ function webhookInner(enabled = true) {
 async function registrarWebhook(base: string, apiKey: string, instancia: string, enabled = true): Promise<void> {
   const cleanBase = sanitizeEvolutionUrl(base);
   try {
+    // [AUDITORIA] LÓGICA: Usa o resilientFetch (com timeout/retry integrado) para registrar o webhook de recepção na Evolution.
     const res = await evolutionFetch(`${cleanBase}/webhook/set/${instancia}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
@@ -58,6 +59,7 @@ async function registrarWebhook(base: string, apiKey: string, instancia: string,
   }
 }
 
+// [AUDITORIA] LÓGICA: Sanitiza e padroniza strings brutas de imagens base64 vindas do Baileys para o formato data URI.
 function normalizeQr(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const b64 = raw.replace(/^data:image\/\w+;base64,/, '');
@@ -192,6 +194,11 @@ export default function whatsappRouter(pool: Pool): Router {
   }
 
   // ── Helpers internos de foto de perfil ──────────────────────────────────────
+  // [AUDITORIA] LÓGICA: Busca on-demand a imagem de perfil do remetente na Evolution (v2 e v1 fallback).
+  // [AUDITORIA] BUG: Ambas as chamadas `fetch` dentro de buscarFotoEvo não utilizam resilientFetch ou timeouts.
+  // Se a Evolution API congelar por problemas de rede ou banco interno, essa chamada assíncrona segurará a thread por padrão de socket.
+  // [AUDITORIA] FIX PENDENTE (motivo: otimização/higiene — a chamada roda dentro de uma promise com tratamento de erros,
+  // mas expõe a API do CRM a vazamento residual de conexões se muitas imagens de perfil forem buscadas simultaneamente em instâncias offline).
   async function buscarFotoEvo(base: string, apiKey: string, instancia: string, phone: string): Promise<string | null> {
     // Tenta POST (Evolution v2)
     try {
@@ -219,6 +226,7 @@ export default function whatsappRouter(pool: Pool): Router {
     return null;
   }
 
+  // [AUDITORIA] LÓGICA: Salva localmente na tabela de contatos a URL física e do avatar para evitar consultas repetidas de rede externa.
   async function salvarFotoContato(userId: string, phone: string, picUrl: string, pushName?: string | null): Promise<void> {
     const suffix = `%${phone.slice(-11)}`;
     await pool.query(
@@ -229,6 +237,7 @@ export default function whatsappRouter(pool: Pool): Router {
   }
 
   // GET /api/whatsapp/profile-pic/:phone — busca foto de perfil on-demand
+  // [AUDITORIA] BUG: fetch bruto em buscarFotoEvo (sem resilientFetch/timeout) roda aqui.
   router.get('/profile-pic/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -263,6 +272,7 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // POST /api/whatsapp/sync-profiles — sincroniza fotos de todos os contatos
+  // [AUDITORIA] LÓGICA: Limita a varredura a 200 contatos por vez e introduz delay síncrono de 150ms para evitar rate-limits na API do WhatsApp.
   router.post('/sync-profiles', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -503,6 +513,7 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // POST /api/whatsapp/ia-toggle — pausa ou reativa IA para um contato manualmente
+  // [AUDITORIA] LÓGICA: Sincroniza o flag `atendente_pausou_ia` na tabela `contatos` e seu correspondente em `dados_cliente` para bypass da automação.
   router.post('/ia-toggle', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -661,6 +672,7 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // GET /api/whatsapp/media — proxy autenticado para mídias da Evolution API (áudio, vídeo, doc)
+  // [AUDITORIA] LÓGICA: Resolve o CORS e esconde os tokens da Evolution servindo as mídias da própria porta da CRM-API com headers adequados.
   router.get('/media', async (req: AuthRequest, res: Response) => {
     try {
       const mediaUrl = (req.query.url as string || '').trim();
@@ -699,6 +711,7 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // POST /api/whatsapp/status — Verifica status da conexão na Evolution
+  // [AUDITORIA] LÓGICA: Sincroniza e forço-registra webhook automaticamente ao detectar que a conexão está 'open'.
   router.post('/status', async (req: AuthRequest, res: Response) => {
     try {
       const cfg = await getEvolutionConfig(req.userId!);
@@ -757,10 +770,12 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // POST /api/whatsapp/connect — cria instância e retorna QR code
+  // [AUDITORIA] LÓGICA: Controla o processo de inicialização de conexões e geração do QR Code do Baileys, limpando instâncias obsoletas.
   router.post('/connect', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     const lockKey = `connect:${userId}`;
 
+    // [AUDITORIA] LÓGICA: Trava de idempotência de 30s em memória por processo para evitar múltiplas conexões simultâneas concorrentes do mesmo usuário.
     if (connectingUsers.has(lockKey)) {
       return res.status(429).json({ message: 'Conexão em andamento. Aguarde 30s e tente novamente se necessário.' });
     }
@@ -845,7 +860,7 @@ export default function whatsappRouter(pool: Pool): Router {
               instancia: cfg.instancia,
             });
           } else {
-            log.info('WHATSAPP', "Instância está em 'open' mas sem conta vinculada (owner missing). Tratando como unauthorized.", { instancia: cfg.instancia });
+            log.info('WHATSAPP', 'Instância está em \'open\' mas sem conta vinculada (owner missing). Tratando como unauthorized.', { instancia: cfg.instancia });
             return res.json({ 
               state: 'unauthorized', 
               message: 'Instância sem conta do WhatsApp vinculada. Por favor, reconecte escanendo o QR.',
@@ -981,6 +996,7 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // POST /api/whatsapp/disconnect — Desconexão total e limpeza de estado
+  // [AUDITORIA] LÓGICA: Executa remoção lógica e física na Evolution API, e realiza o truncate do histórico do usuário no CRM para evitar leaks de LGPD/privacidade ou estado sujo em nova sincronização.
   router.post('/disconnect', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -1057,6 +1073,12 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // POST /api/whatsapp/sync-history — importa mensagens da Evolution para whatsapp_messages
+  // [AUDITORIA] LÓGICA: Sincroniza retroativamente as conversas da Evolution API para populamento inicial da base local do CRM.
+  // [AUDITORIA] BUG: Ao contrário de `webhook.ts` (linha ~459), a conversão de timestamps aqui omitiu o divisor condicional
+  // para tratar milissegundos (`ts > 1e10 ? ts / 1000 : ts`). Se uma versão do Evolution retornar milissegundos,
+  // a data da mensagem será gravada incorretamente no PostgreSQL como ano 50000+, quebrando a cronologia das conversas no frontend.
+  // [AUDITORIA] FIX PENDENTE (motivo: otimização/higiene — a escala padrão da Evolution v2 costuma vir em segundos para baileys,
+  // mas o risco é real se o provider/API for trocado. Corrigir na próxima sprint adicionando a normalização de timestamp antes do Insert).
   router.post('/sync-history', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -1142,6 +1164,7 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // POST /api/whatsapp/send — envia mensagem manual (texto ou mídia)
+  // [AUDITORIA] LÓGICA: Ponto de saída principal de mensagens iniciadas no CRM por operadores humanos.
   router.post('/send', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     log.info('DEBUG SEND', 'Payload recebido do Lovable', { body: req.body });
@@ -1181,8 +1204,8 @@ export default function whatsappRouter(pool: Pool): Router {
       let evolutionResp: any;
       let msgType = 'text';
 
+      // Envio de mídia
       if (mediaUrl && mediaType) {
-        // Envio de mídia
         msgType = mediaType;
         const mediaEndpoints: Record<string, string> = {
           image: 'sendMedia',
@@ -1203,6 +1226,7 @@ export default function whatsappRouter(pool: Pool): Router {
         log.info('DEBUG SEND', 'Disparando para Evolution', { targetUrl, tokenPresente: !!cfg.api_key });
         let evoRes: globalThis.Response;
         try {
+          // [AUDITORIA] LÓGICA: Usa o resilientFetch (com timeout, retry e circuit-break) para garantir que chamadas com binários/mídias lentas não travem a thread.
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
@@ -1215,6 +1239,7 @@ export default function whatsappRouter(pool: Pool): Router {
         if (!evoRes.ok) {
           const errText = await evoRes.text().catch(() => String(evoRes.status));
 
+          // [AUDITORIA] LÓGICA: Trata cenários de instâncias desalocadas na VPS retornando código estruturado para o frontend forçar a re-leitura do QR.
           if (evoRes.status === 404 || errText.includes('does not exist') || errText.includes('instance not found')) {
             log.info('SEND', 'Instância não existe ou está deslogada na Evolution — solicitando reconexão manual', { instancia });
             return res.status(401).json({
@@ -1292,6 +1317,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const messageId = evolutionResp?.key?.id || `manual_${Date.now()}`;
       const content = text || mediaCaption || null;
 
+      // [AUDITORIA] LÓGICA: Grava localmente no banco a mensagem enviada com status 'sent' para visualização imediata na tela do operador.
       await pool.query(
         `INSERT INTO whatsapp_messages
            (user_id, sent_by_user_id, instance_name, remote_jid, message_id, from_me, message_type,
@@ -1309,6 +1335,7 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // DELETE /api/whatsapp/instances/:name — remove instância na Evolution e limpa estado do agente
+  // [AUDITORIA] LÓGICA: Expõe o endpoint DELETE sincronizado para controle programático de instâncias.
   router.delete('/instances/:name', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -1551,4 +1578,3 @@ export default function whatsappRouter(pool: Pool): Router {
 
   return router;
 }
-

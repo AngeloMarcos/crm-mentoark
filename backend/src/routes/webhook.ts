@@ -40,23 +40,28 @@ import { log } from '../logger';
 // conteúdo em dois destinos) — não removido porque pode haver script/monitoramento externo
 // lendo log_geral.txt especificamente; confirmar com o usuário antes de remover essa escrita.
 function wlog(tag: string, msg: string) {
+  // [AUDITORIA] LÓGICA: Formata a linha de log no padrão clássico com timestamp ISO e tag.
   const line = `[${new Date().toISOString()}] [${tag}] ${msg}`;
   log.info(tag, msg);
+  // [AUDITORIA] LÓGICA: Realiza a gravação assíncrona no disco, sem reter a execução da thread principal.
   fs.appendFile('/opt/crm/backend/log_geral.txt', line + '\n', () => {});
 }
 
+// [AUDITORIA] LÓGICA: Valida a assinatura de segurança HMAC SHA-256 enviada no cabeçalho x-evolution-hmac.
 function verificarAssinaturaEvolution(req: Request, secret: string): boolean {
   const assinaturaRecebida = req.headers['x-evolution-hmac'] as string;
   if (!assinaturaRecebida) return false;
   const body = JSON.stringify(req.body);
   const hmac = crypto.createHmac('sha256', secret).update(body).digest('hex');
   try {
+    // [AUDITORIA] LÓGICA:timingSafeEqual evita ataques de temporização (Timing Attacks) ao comparar hashes de tamanho igual.
     return crypto.timingSafeEqual(Buffer.from(assinaturaRecebida, 'hex'), Buffer.from(hmac, 'hex'));
   } catch {
     return false;
   }
 }
 
+// [AUDITORIA] LÓGICA: Validação de segurança via Query Parameter (?key=) na URL do Webhook.
 // Evolution API (community) não calcula HMAC do corpo — o único jeito real de
 // autenticar o webhook global é um segredo estático embutido na própria URL
 // configurada em WEBHOOK_GLOBAL_URL (?key=...). O HMAC acima fica como opção
@@ -70,6 +75,7 @@ function verificarChaveQuery(req: Request, secret: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
+// [AUDITORIA] LÓGICA: Tipagem estrutural do payload esperado da Evolution API para garantir a consistência de leitura das propriedades.
 interface EvolutionPayload {
   event: string;
   instance: string;
@@ -99,10 +105,12 @@ interface EvolutionPayload {
   };
 }
 
+// [AUDITORIA] LÓGICA: Dicionário em Set para busca O(1) de palavras-chave que disparam a desativação da automação (opt-out).
 const OPT_OUT_KEYWORDS = new Set([
   'sair', 'stop', 'parar', 'cancelar', 'remover', 'não quero', 'nao quero',
 ]);
 
+// [AUDITORIA] LÓGICA: Dicionário em Set para busca rápida de comandos que reativam o bot de inteligência artificial.
 const REATIVAR_COMANDOS = new Set([
   'reativar ia', 'ativar ia', 'reativar', 'atendimento finalizado',
 ]);
@@ -128,6 +136,7 @@ function isValidJid(jid: string): boolean {
   return /^\d+@(s\.whatsapp\.net|g\.us|lid)$/.test(jid);
 }
 
+// [AUDITORIA] LÓGICA: Extrai texto legível de múltiplos formatos de mensagens de mídia e respostas interativas do WhatsApp.
 function extrairTexto(data: EvolutionPayload['data']): string | null {
   const m = data.message;
   if (!m) return null;
@@ -144,6 +153,7 @@ function extrairTexto(data: EvolutionPayload['data']): string | null {
   );
 }
 
+// [AUDITORIA] LÓGICA: Mapeia a assinatura da mensagem recebida para uma taxonomia simplificada do banco (text, image, audio, etc.).
 function extrairTipo(data: EvolutionPayload['data']): string {
   const m = data.message;
   if (!m) return 'text';
@@ -155,6 +165,7 @@ function extrairTipo(data: EvolutionPayload['data']): string {
   return 'text';
 }
 
+// [AUDITORIA] LÓGICA: Extrai metadados de arquivos binários associados às mensagens recebidas da Evolution API.
 function extrairMidia(data: EvolutionPayload['data']): { url?: string; mime?: string; nome?: string } {
   const m = data.message;
   if (!m) return {};
@@ -166,7 +177,7 @@ function extrairMidia(data: EvolutionPayload['data']): { url?: string; mime?: st
 export default function webhookRouter(pool: Pool): Router {
   const router = Router();
 
-  // Garantir que a tabela de deduplicação existe mesmo antes do primeiro webhook
+  // [AUDITORIA] LÓGICA: Criação preventiva da tabela de dedup no banco de dados para evitar rejections no primeiro webhook.
   pool.query(`
     CREATE TABLE IF NOT EXISTS webhook_mensagens_processadas (
       id SERIAL PRIMARY KEY,
@@ -178,6 +189,7 @@ export default function webhookRouter(pool: Pool): Router {
 
   const processados = new Set<string>();
 
+  // [AUDITORIA] LÓGICA: Manipula eventos `messages.update` para refletir recibos de entrega (DELIVERY_ACK) e leitura (READ).
   async function handleStatusUpdate(payload: EvolutionPayload): Promise<void> {
     // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
     // as queries abaixo usam payload.instance sem checar presença — payload malformado sem esse
@@ -199,6 +211,7 @@ export default function webhookRouter(pool: Pool): Router {
       const status = (upd as any).status || upd.status;
       if (!messageId || !status) continue;
 
+      // [AUDITORIA] LÓGICA: Registra a atualização bruta de status (sent, delivery, read, etc) com UPSERT por instância.
       await pool.query(
         `INSERT INTO whatsapp_message_status (message_id, instance_name, status, updated_at)
          VALUES ($1, $2, $3, NOW())
@@ -207,6 +220,7 @@ export default function webhookRouter(pool: Pool): Router {
         [messageId, payload.instance, status]
       ).catch(() => {});
 
+      // [AUDITORIA] LÓGICA: Se o status for READ ou PLAYED (áudio ouvido), atualiza a tabela principal de mensagens.
       if (status === 'READ' || status === 'PLAYED') {
         await pool.query(
           `UPDATE whatsapp_messages SET is_read = true
@@ -217,6 +231,7 @@ export default function webhookRouter(pool: Pool): Router {
     }
   }
 
+  // [AUDITORIA] LÓGICA: Deleta mensagens locais do CRM que foram revogadas/excluídas pelo usuário no aplicativo móvel.
   async function handleMessageDelete(payload: EvolutionPayload): Promise<void> {
     // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
     // mesmo caso de handleStatusUpdate acima — payload.instance sem checagem de presença.
@@ -292,11 +307,13 @@ export default function webhookRouter(pool: Pool): Router {
       bodyKeys: Object.keys(req.body || {}),
     });
 
+    // [AUDITORIA] LÓGICA: Garante que o segredo de autenticação está devidamente populado nas variáveis de ambiente.
     const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
     if (!webhookSecret) {
       log.error('WEBHOOK', 'EVOLUTION_WEBHOOK_SECRET não configurado — rejeitando requisição', { traceId });
       return res.status(401).json({ error: 'Webhook secret não configurado no servidor' });
     }
+    // [AUDITORIA] LÓGICA: Aceita autenticação via assinatura HMAC no header ou token estático de segurança via query URL.
     const ok = verificarAssinaturaEvolution(req, webhookSecret) || verificarChaveQuery(req, webhookSecret);
     log.info('WEBHOOK', 'Autenticação verificada', { traceId, valida: ok });
     if (!ok) {
@@ -304,6 +321,7 @@ export default function webhookRouter(pool: Pool): Router {
       return res.status(401).json({ error: 'Autenticação inválida' });
     }
 
+    // [AUDITORIA] LÓGICA: Retorna status 200 OK imediatamente para a Evolution API liberar a conexão e evitar retries.
     res.status(200).json({ ok: true });
 
     try {
@@ -328,12 +346,14 @@ export default function webhookRouter(pool: Pool): Router {
         texto: String(payload.data?.message?.conversation || payload.data?.message?.extendedTextMessage?.text || '').slice(0, 80),
       });
 
+      // [AUDITORIA] LÓGICA: Desvia o payload para processamento especializado se for atualização de metadados.
       if (eventClean === 'messagesupdate') {
         log.info('WEBHOOK', '→ handleStatusUpdate', { traceId });
         await handleStatusUpdate(payload);
         return;
       }
 
+      // [AUDITORIA] LÓGICA: Desvia para deleção física no banco de dados.
       if (eventClean === 'messagesdelete') {
         log.info('WEBHOOK', '→ handleMessageDelete', { traceId });
         await handleMessageDelete(payload);
@@ -344,12 +364,14 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
+      // [AUDITORIA] LÓGICA: Ignora webhooks de eventos puramente de status redundantes na rota de inserção direta.
       const dataStatus = payload.data?.status;
       if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
         wlog('WEBHOOK_DROP', `status-only (${dataStatus}) instance=${payload.instance}`);
         return;
       }
 
+      // [AUDITORIA] LÓGICA: Valida e sanitiza o remetente JID (remoteJid).
       const remoteJid = payload.data?.key?.remoteJid || '';
       log.info('WEBHOOK', 'remoteJid resolvido', { traceId, remoteJid });
       if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio instance=${payload.instance}`); return; }
@@ -477,6 +499,7 @@ export default function webhookRouter(pool: Pool): Router {
       log.info('WEBHOOK', 'Resolução final', { traceId, userId, fromMe, isGroup });
 
       // ── UPSERT antecipado de contato — garante que contatos novos existam antes de qualquer branch ──
+      // [AUDITORIA] LÓGICA: Garante a criação de registros mínimos na tabela de contatos de forma não-bloqueante (sem await).
       if (userId && !isGroup && remoteJid) {
         const suffixEarly = `%${telefone.slice(-11)}`;
         const nomeEarly = pushName || telefone;
@@ -492,6 +515,7 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // ── Mensagens do atendente (fromMe=true) → pausar IA ou reativar ─────────
+      // [AUDITORIA] LÓGICA: Lida com ecossistema de anti-loop de mensagens disparadas por automações ou bots internos.
       if (fromMe) {
         if (messageId.startsWith('resp_') || messageId.startsWith('manual_')) {
           wlog('WEBHOOK_ANTILOOP', `Prefixo de bot detectado — ignorando: ${messageId}`);
@@ -530,6 +554,7 @@ export default function webhookRouter(pool: Pool): Router {
           const tsVal = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
           // palavraReativar já foi obtida no lookup principal (acima)
+          // [AUDITORIA] LÓGICA: Se o atendente enviou a palavra-chave configurada para reativação, libera o bot de IA novamente.
           if (textoNormFromMe === palavraReativar) {
             await pool.query(
               `UPDATE dados_cliente SET atendimento_ia = 'ativo'
@@ -543,6 +568,7 @@ export default function webhookRouter(pool: Pool): Router {
             ).catch(() => {});
             log.info('WEBHOOK', 'IA reativada (palavra_reativar)', { traceId, telefone });
           } else {
+            // [AUDITORIA] LÓGICA: Intervenção Humana detectada. Pausa a automação de IA para permitir atendimento manual.
             pool.query(
               `UPDATE contatos SET atendente_pausou_ia = true WHERE user_id = $1 AND telefone ILIKE $2`,
               [userId, `%${telefone.slice(-11)}`]
@@ -578,6 +604,7 @@ export default function webhookRouter(pool: Pool): Router {
             });
           }
 
+          // [AUDITORIA] LÓGICA: Persiste a mensagem enviada pelo atendente na tabela principal para controle de histórico do chat.
           await pool.query(
             `INSERT INTO whatsapp_messages
                (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
@@ -647,6 +674,7 @@ export default function webhookRouter(pool: Pool): Router {
       ).catch(() => ({ rows: [] as any[] }));
       if (jaExiste.rows.length) return;
 
+      // [AUDITORIA] LÓGICA: Insere o ID único do webhook no banco de dados para evitar reprocessamento por retries da rede.
       await pool.query(
         'INSERT INTO webhook_mensagens_processadas (message_id, instancia) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [messageId, instancia]
@@ -682,6 +710,7 @@ export default function webhookRouter(pool: Pool): Router {
           texto: (texto || '').slice(0, 60),
         });
 
+        // [AUDITORIA] LÓGICA: Registra a mensagem recebida de cliente final na tabela do histórico do chat no CRM.
         const insertResult = await pool.query(
           `INSERT INTO whatsapp_messages
              (user_id, instance_name, remote_jid, message_id, from_me, message_type,
@@ -701,11 +730,13 @@ export default function webhookRouter(pool: Pool): Router {
 
         // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────
         if (!isGroup) {
+          // [AUDITORIA] LÓGICA: Processa metadados do contato e imagem de perfil de forma paralela assíncrona (IIFE não-bloqueante).
           void (async () => {
             try {
               const suffix = `%${telefone.slice(-11)}`;
               const nomeFinal = pushName || telefone;
 
+              // [AUDITORIA] LÓGICA: Atualiza o contato existente caso já esteja presente na base do CRM.
               const upd = await pool.query(
                 `UPDATE contatos
                  SET push_name          = COALESCE($1, push_name),
@@ -716,6 +747,7 @@ export default function webhookRouter(pool: Pool): Router {
                 [pushName || null, userId, suffix]
               );
 
+              // [AUDITORIA] LÓGICA: Se o contato não existia na base do CRM, insere um registro inicial.
               if (!upd.rowCount) {
                 // [AUDITORIA] BUG (achado A da revisão externa/Google AI Studio): condição de
                 // corrida com o upsert antecipado logo no início do handler. Se duas mensagens
@@ -769,6 +801,7 @@ export default function webhookRouter(pool: Pool): Router {
                 }
               } catch {}
 
+              // [AUDITORIA] LÓGICA: Fallback caso o endpoint principal de URL de imagem de perfil falhe ou não seja suportado.
               if (!picUrl) {
                 try {
                   const controller2 = new AbortController();
@@ -788,6 +821,7 @@ export default function webhookRouter(pool: Pool): Router {
                 } catch {}
               }
 
+              // [AUDITORIA] LÓGICA: Se conseguiu obter a URL da imagem de perfil, persiste em ambas as colunas mapeadas no banco.
               if (picUrl) {
                 await pool.query(
                   `UPDATE contatos SET profile_pic_url = $1, foto_perfil = $1 WHERE user_id = $2 AND telefone ILIKE $3`,
@@ -805,6 +839,7 @@ export default function webhookRouter(pool: Pool): Router {
       // ── Opt-out e reativação (apenas para contatos individuais) ──────────────
       const textoNorm = (texto || '').trim().toLowerCase();
       if (!isGroup && userId) {
+        // [AUDITORIA] LÓGICA: Se o cliente enviar palavras de parada, adiciona-o à lista negra e envia a confirmação do desligamento.
         if (OPT_OUT_KEYWORDS.has(textoNorm)) {
           await pool.query(
             `UPDATE contatos SET opt_out = true, updated_at = NOW()
@@ -856,6 +891,7 @@ export default function webhookRouter(pool: Pool): Router {
           return;
         }
 
+        // [AUDITORIA] LÓGICA: Se o cliente mandar reativar por texto, desbloqueia o contato e o bot de IA para novas interações automáticas.
         if (REATIVAR_COMANDOS.has(textoNorm)) {
           await pool.query(
             `UPDATE dados_cliente SET atendimento_ia = 'ativo'
@@ -920,6 +956,7 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
+      // [AUDITORIA] LÓGICA: Direciona a mensagem processada para a fila de debounce e engine de IA (processarComDebounce).
       processarComDebounce(pool, {
         instancia,
         messageId,
