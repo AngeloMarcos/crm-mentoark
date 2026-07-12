@@ -133,6 +133,8 @@ export function InstanceManagementPanel() {
   const [qrData, setQrData] = useState<CreateInstanceResult | null>(null);
   const [pollingConnect, setPollingConnect] = useState(false);
   const [waitingQr, setWaitingQr] = useState(false); // Baileys ainda gerando QR
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  const [showForceBtn, setShowForceBtn] = useState(false);
   // [AUDITORIA] BUG: pollQrLoop() e pollUntilConnected() (abaixo) usavam a variável de estado
   // (waitingQr / pollingConnect / showQrModal) diretamente na condição do `while`. Como essas
   // funções chamam `setWaitingQr(true)`/`setPollingConnect(true)` na própria primeira linha, a
@@ -155,8 +157,10 @@ export function InstanceManagementPanel() {
     
     try {
       setConnecting(true);
+      setErrorDetail(null);
+      setShowForceBtn(false);
       const phoneDigits = newInstancePhone.replace(/\D/g, "");
-      
+
       // Backend agora lida com a idempotência e limpeza de duplicatas
       const res = await createInstance(name, phoneDigits || undefined);
       
@@ -185,21 +189,31 @@ export function InstanceManagementPanel() {
       } else {
         toast.error(`Falha ao conectar: ${msg}`);
       }
+      setErrorDetail(msg || "Falha ao conectar.");
+      setShowForceBtn(true);
     } finally {
       setConnecting(false);
     }
   };
 
   // Polling do QR enquanto Baileys inicializa (Evolution v2.2.3)
+  // [AUDITORIA] FIX APLICADO: o `catch {}` engolia qualquer erro de pollQr() silenciosamente —
+  // agora que o backend propaga erros reais (502/500/offline da Evolution, ver whatsapp.ts
+  // /poll-qr), 2 falhas consecutivas encerram o loop e expõem o erro + botão de reconexão
+  // forçada, em vez de deixar o spinner girando até o timeout de 90s sem explicação.
   const pollQrLoop = async () => {
     setWaitingQr(true);
     waitingQrRef.current = true;
+    setErrorDetail(null);
+    setShowForceBtn(false);
     const start = Date.now();
     const TIMEOUT = 90 * 1000; // 90 segundos
+    let consecutiveErrors = 0;
     while (Date.now() - start < TIMEOUT && waitingQrRef.current) {
       await new Promise(r => setTimeout(r, 3000));
       try {
         const data = await pollQr();
+        consecutiveErrors = 0;
         if (data.state === "open") {
           setWaitingQr(false);
           waitingQrRef.current = false;
@@ -228,11 +242,58 @@ export function InstanceManagementPanel() {
           pollUntilConnected(data.instanceName || data.instancia);
           return;
         }
-      } catch {}
+      } catch (err: any) {
+        consecutiveErrors++;
+        if (consecutiveErrors >= 2) {
+          setWaitingQr(false);
+          waitingQrRef.current = false;
+          setErrorDetail(err?.message || "Erro de conectividade com a Evolution API.");
+          setShowForceBtn(true);
+          toast.error(err?.message || "Erro ao gerar QR Code.");
+          return;
+        }
+      }
     }
     setWaitingQr(false);
     waitingQrRef.current = false;
-    toast.error("Tempo esgotado para gerar QR. Clique em 'Atualizar QR' para tentar novamente.");
+    setErrorDetail("A geração do QR Code está demorando mais do que o esperado. A instância pode estar travada internamente na API.");
+    setShowForceBtn(true);
+    toast.error("Tempo esgotado para gerar QR. Clique em 'Forçar Reinicialização' para tentar novamente.");
+  };
+
+  // Deleta fisicamente a instância na Evolution e recria do zero — destrava casos em que o
+  // Baileys mantém a instância presa em memória com o socket quebrado (loop de QR sem fim).
+  const handleForceReconnect = async () => {
+    setConnecting(true);
+    setErrorDetail(null);
+    setShowForceBtn(false);
+    waitingQrRef.current = false;
+    pollingConnectRef.current = false;
+    setWaitingQr(false);
+    setPollingConnect(false);
+    try {
+      const name = qrData?.instanceName || newInstanceName.trim() || `WhatsApp ${user?.display_name || 'Agente'}`;
+      const res = await createInstance(name, undefined, true);
+      setQrData(res);
+      if (res.state === "open") {
+        toast.success("✅ WhatsApp conectado com sucesso!");
+        setShowQrModal(false);
+        setQrData(null);
+        carregar();
+      } else if (res.qrCode || res.pairingCode) {
+        toast.info("Nova instância criada. Escaneie o QR Code.");
+        pollUntilConnected(res.instanceName || res.instancia);
+      } else if (res.qrPending) {
+        toast.info("Aguardando inicialização do Baileys...");
+        pollQrLoop();
+      }
+    } catch (err: any) {
+      setErrorDetail(`Falha na reinicialização forçada: ${err.message}`);
+      setShowForceBtn(true);
+      toast.error(`Falha na reinicialização forçada: ${err.message}`);
+    } finally {
+      setConnecting(false);
+    }
   };
 
   const pollUntilConnected = async (instanciaNome?: string) => {
@@ -268,14 +329,66 @@ export function InstanceManagementPanel() {
           toast.error("Erro na conexão: API Key ou Sessão inválida.");
           return;
         }
+        // [AUDITORIA] FIX APLICADO: antes, um erro de conectividade aqui (Evolution offline/502)
+        // era engolido pelo catch {} e o usuário ficava vendo "Aguardando você escanear..." até
+        // o timeout de 2min estourar em silêncio, sem nunca saber que a Evolution caiu no meio
+        // da espera pós-scan do QR.
+        if (st.error) {
+          setPollingConnect(false);
+          pollingConnectRef.current = false;
+          setErrorDetail(st.message || "Erro de conectividade com a Evolution API.");
+          setShowForceBtn(true);
+          toast.error(st.message || "Erro ao confirmar conexão.");
+          return;
+        }
       } catch {}
     }
     setPollingConnect(false);
   };
 
+  // Gera um QR novo para uma instância já existente (ex: card em "unauthorized"/"close"/
+  // "connecting" travado), sem passar pelo formulário "Conectar nova instância" — o backend
+  // resolve a instância do usuário sozinho (cfg.stableInstancia), então basta chamar createInstance().
+  const handleReconnectExisting = async (a: Agente) => {
+    setQrData(null);
+    setErrorDetail(null);
+    setShowForceBtn(false);
+    setNewInstanceName(a.nome);
+    setNewInstancePhone("");
+    setShowQrModal(true);
+    try {
+      setConnecting(true);
+      const res = await createInstance(a.nome);
+      setQrData(res);
+      if (res.state === "open") {
+        toast.success("✅ WhatsApp conectado com sucesso!");
+        setShowQrModal(false);
+        setQrData(null);
+        carregar();
+      } else if (res.qrCode || res.pairingCode) {
+        toast.info("Escaneie o QR Code ou use o código de pareamento");
+        pollUntilConnected(res.instanceName || res.instancia);
+      } else if (res.qrPending) {
+        toast.info("Aguardando inicialização do Baileys. O QR aparecerá em instantes...");
+        pollQrLoop();
+      } else {
+        toast.error("Evolution não retornou QR Code. Verifique o servidor.");
+      }
+    } catch (err: any) {
+      const msg = err.message || "";
+      toast.error(`Falha ao reconectar: ${msg}`);
+      setErrorDetail(msg || "Falha ao reconectar.");
+      setShowForceBtn(true);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
   const refreshQr = async () => {
     try {
       setConnecting(true);
+      setErrorDetail(null);
+      setShowForceBtn(false);
       const data = await pollQr();
       if (data.qrCode) {
         setQrData(prev => ({ ...prev, ...data }));
@@ -292,6 +405,8 @@ export function InstanceManagementPanel() {
         pollQrLoop();
       }
     } catch (e: any) {
+      setErrorDetail(e.message);
+      setShowForceBtn(true);
       toast.error(`Erro: ${e.message}`);
     } finally {
       setConnecting(false);
@@ -619,15 +734,27 @@ export function InstanceManagementPanel() {
 
                 <div className="flex flex-col gap-2">
                   <StatusChip state={state} />
-                  
+
                   {state === "unauthorized" && (
-                    <Button 
-                      size="sm" 
-                      onClick={() => setShowConnectModal(true)} 
+                    <Button
+                      size="sm"
+                      onClick={() => handleReconnectExisting(a)}
                       className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold gap-2 animate-bounce"
                     >
                       <QrCode className="h-4 w-4" />
                       Reconectar Agora
+                    </Button>
+                  )}
+
+                  {(state === "close" || state === "connecting") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleReconnectExisting(a)}
+                      className="w-full gap-2"
+                    >
+                      <QrCode className="h-4 w-4" />
+                      Gerar novo QR Code
                     </Button>
                   )}
                 </div>
@@ -892,6 +1019,8 @@ export function InstanceManagementPanel() {
               pollingConnectRef.current = false;
               setWaitingQr(false);
               waitingQrRef.current = false;
+              setErrorDetail(null);
+              setShowForceBtn(false);
               carregar();
             }
           }}
@@ -960,6 +1089,29 @@ export function InstanceManagementPanel() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Aguardando WhatsApp inicializar... (pode levar até 30s)
                 </div>
+              )}
+
+              {errorDetail && (
+                <div
+                  role="alert"
+                  className="p-3 text-sm rounded-lg bg-red-50 border border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-900 dark:text-red-400"
+                >
+                  <p className="font-semibold flex items-center gap-1.5">
+                    <AlertOctagon className="h-3.5 w-3.5" /> Erro de conectividade
+                  </p>
+                  <p className="mt-1 text-xs opacity-90">{errorDetail}</p>
+                </div>
+              )}
+
+              {showForceBtn && (
+                <Button
+                  onClick={handleForceReconnect}
+                  disabled={connecting}
+                  className="w-full bg-amber-600 hover:bg-amber-700 text-white gap-2"
+                >
+                  {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  Forçar Reinicialização do QR Code
+                </Button>
               )}
             </div>
 

@@ -27,6 +27,8 @@ export interface CreateInstanceResult {
 export interface StatusResult {
   state: 'open' | 'close' | 'connecting' | 'unauthorized';
   phoneNumber?: string;
+  error?: boolean;
+  message?: string;
 }
 
 // [AUDITORIA] BUG: o parâmetro `instancia` era aceito mas nunca usado — a URL chamada abaixo
@@ -44,20 +46,23 @@ export async function fetchConnectionStatus(instancia?: string): Promise<StatusR
     const res = await fetch(`${API_BASE}/api/whatsapp/evo/status${qs}`, {
       headers: authHeaders(),
     });
-    if (!res.ok) return { state: 'close' };
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    // [AUDITORIA] FIX APLICADO: antes, qualquer !res.ok virava um `{ state: 'close' }` genérico,
+    // indistinguível de uma instância realmente desconectada — agora repassamos error/message
+    // vindos do backend (ver GET /evo/status em whatsapp.ts) para quem chama decidir o que fazer.
+    if (!res.ok) return { state: 'close', error: true, message: data?.message };
     const state = data?.state === 'open' ? 'open' : data?.state === 'connecting' ? 'connecting' : data?.state === 'unauthorized' ? 'unauthorized' : 'close';
     return { state: state as StatusResult['state'], phoneNumber: data?.phoneNumber };
-  } catch {
-    return { state: 'close' };
+  } catch (err: any) {
+    return { state: 'close', error: true, message: err?.message };
   }
 }
 
-export async function createInstance(instanceName?: string, phoneNumber?: string): Promise<CreateInstanceResult> {
+export async function createInstance(instanceName?: string, phoneNumber?: string, forceReconnect?: boolean): Promise<CreateInstanceResult> {
   const res = await fetch(`${API_BASE}/api/whatsapp/connect`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ instanceName, phoneNumber }),
+    body: JSON.stringify({ instanceName, phoneNumber, force_reconnect: forceReconnect === true }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -74,8 +79,12 @@ export async function pollQr(): Promise<CreateInstanceResult> {
   const res = await fetch(`${API_BASE}/api/whatsapp/poll-qr`, {
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error('Erro ao buscar QR');
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  // [AUDITORIA] FIX APLICADO: antes, qualquer erro HTTP virava sempre a mesma mensagem genérica
+  // 'Erro ao buscar QR', mascarando o erro real que o backend passou a expor (ver whatsapp.ts
+  // /poll-qr). Agora a mensagem do backend é propagada para quem chama pollQr().
+  if (!res.ok) throw new Error(data?.message || 'Erro ao buscar QR');
+  return data;
 }
 
 export async function disconnectInstance(): Promise<void> {
