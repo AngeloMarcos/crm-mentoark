@@ -1,6 +1,6 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-12 00:15 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-12 01:40 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Núcleo CRM
 
@@ -10,6 +10,8 @@
 | crm        | 🟢 | Sem problema conhecido                        | — |
 | postgres   | 🟢     | 14MB, saudável                                | — |
 | evolution  | 🔴 | **RECONFIRMADO AO VIVO 2x (2026-07-08, 07-10):** erro Prisma `P2010` em `io.updateChatUnreadMessages` dispara a cada mensagem/atualização de status recebida, **antes** do Evolution despachar `messages.upsert` pro webhook — só `chats.update`/`contacts.update` chegam ao crm-api. **Causa raiz confirmada de "zero mensagens recebidas".** `DATABASE_SAVE_DATA_CHATS=false` testado ao vivo na Sprint 3 — **não resolveu**, revertido. Pesquisa: bug também ocorre em outras versões do Evolution rodando em PostgreSQL, não é exclusivo do MySQL/v2.3.7. Bug 100% upstream, nenhuma correção possível no código do CRM. **NOVO (2026-07-12): envio também está quebrado agora.** `POST /message/sendText/crm_435ee4720fc3` retorna 500 `"Connection Closed"` — confirmado via log `Checking 1 numbers via Baileys (not found in cache)` disparando bem antes do erro. `GET /instance/connectionState` diz `"state":"open"`, ou seja o Evolution acha que está conectado mas o WebSocket real com o WhatsApp está morto (estado dessincronizado, provavelmente por causa do reboot da VPS documentado na sessão de 07-11/12). Não é bug de código do CRM — crm-api resolve a instância certa e monta a chamada corretamente (confirmado via log `DEBUG SEND`). **Ação recomendada (aguardando confirmação do usuário): reiniciar o container `evolution`** pra forçar reconexão do WebSocket (não deveria exigir novo QR, só reconecta com a sessão já salva). | `backend/src/routes/webhook.ts` (comentário `[AUDITORIA]`) — problema é 100% infra/Evolution, nenhum arquivo do CRM a tocar |
+
+**RECONFIRMADO 2026-07-12 (01:40 UTC):** a instância `crm_435ee4720fc3` passou por uma reconexão sozinha entre as duas checagens de hoje (novo QR pareado — `profileName` mudou de "Aesir Suporte" pra "Mentoark", novo `id` interno `84b23caa-...`, `_count` preservado: 1253 msgs/452 contatos). Testei envio de novo direto na Evolution API (`curl` fora do CRM) e **o erro persiste idêntico**: `connectionStatus:"open"` porém `POST /message/sendText` retorna 500 `"Connection Closed"`. Ou seja, a reconexão resolveu o pareamento mas não o problema de envio — é o mesmo bug "open mas WebSocket morto" se repetindo. Código do CRM revisado de novo (`resilientFetch.ts`, `whatsapp.ts` handler de envio) — continua sem bug, 100% infra/Evolution. Relatório completo (config + repro + histórico) preparado para revisão externa em `diagnosticos/RELATORIO_GOOGLE_AI_EVOLUTION_CONNECTION_CLOSED.md`.
 
 ## Observabilidade — ✅ 4 dashboards, logs/métricas saudáveis, chat WhatsApp isolado (2026-07-10)
 
