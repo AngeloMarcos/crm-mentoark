@@ -13,6 +13,8 @@
 
 **RECONFIRMADO 2026-07-12 (01:40 UTC):** a instância `crm_435ee4720fc3` passou por uma reconexão sozinha entre as duas checagens de hoje (novo QR pareado — `profileName` mudou de "Aesir Suporte" pra "Mentoark", novo `id` interno `84b23caa-...`, `_count` preservado: 1253 msgs/452 contatos). Testei envio de novo direto na Evolution API (`curl` fora do CRM) e **o erro persiste idêntico**: `connectionStatus:"open"` porém `POST /message/sendText` retorna 500 `"Connection Closed"`. Ou seja, a reconexão resolveu o pareamento mas não o problema de envio — é o mesmo bug "open mas WebSocket morto" se repetindo. Código do CRM revisado de novo (`resilientFetch.ts`, `whatsapp.ts` handler de envio) — continua sem bug, 100% infra/Evolution. Relatório completo (config + repro + histórico) preparado para revisão externa em `diagnosticos/RELATORIO_GOOGLE_AI_EVOLUTION_CONNECTION_CLOSED.md`.
 
+**RESOLVIDO 2026-07-12 (13:47 UTC):** usuário confirmou o restart do container `evolution` (`docker compose restart evolution`). Após ~30s, `connectionState` voltou a `"open"` e o container começou a ressincronizar contatos/chats normalmente (visto nos logs). Teste de envio real (`POST /message/sendText/crm_435ee4720fc3`) **funcionou** — retornou `key`/`messageId` válidos, sem erro. O restart era mesmo a correção: força o Baileys a reabrir o WebSocket usando a sessão já salva (não pediu novo QR). Envio está operacional agora. Recebimento (bug Prisma P2010, item separado) continua não confirmado — precisa de nova mensagem real de teste chegando de fora pra validar.
+
 ## Observabilidade — ✅ 4 dashboards, logs/métricas saudáveis, chat WhatsApp isolado (2026-07-10)
 
 | Serviço       | Status | Detalhe |
@@ -75,7 +77,7 @@ Build do backend validado em ambas as rodadas.
 
 ## Pendências abertas (ordem de prioridade)
 
-1. **CRÍTICO/URGENTE — Evolution não está enviando mensagens agora (500 "Connection Closed").** WebSocket real com o WhatsApp caiu apesar do Evolution reportar `state:"open"`. Ação proposta: reiniciar o container `evolution` (aguardando confirmação do usuário — recusada por ora, "só avise"). Não é bug de código do CRM.
+1. ~~CRÍTICO/URGENTE — Evolution não está enviando mensagens (500 "Connection Closed")~~ — **RESOLVIDO 2026-07-12 13:47 UTC**, restart do container `evolution` confirmado pelo usuário e testado com envio real funcionando.
 2. **CRÍTICO — corrigir o bug upstream do Evolution (Prisma P2010) que bloqueia 100% das mensagens recebidas.** Causa raiz confirmada 2x ao vivo. Uma opção já testada e descartada (`DATABASE_SAVE_DATA_CHATS=false`). Restam: (a) trocar `DATABASE_PROVIDER` de mysql pra postgresql — garantia baixa, mesmo bug já visto em Postgres noutras versões; (b) fixar tag de imagem mais antiga/estável; (c) **reportar/rastrear issue upstream no GitHub do Evolution API — opção mais indicada agora**, decisão do usuário sobre qual tentar.
 3. Instância Evolution `crm_5319f0ed61b3` — confirmada genuinamente órfã (sem vínculo em nenhuma tabela de config). Decisão do usuário: deletar (via `DEL_INSTANCE=true`, já habilitado) ou manter disponível pra pareamento manual futuro.
 4. `backend/src/routes/integracoes.ts` — validar `status='conectado'` contra a Evolution API de verdade antes de sincronizar com `agent_configs` (mitigação parcial já aplicada no frontend, ver `AUDITORIA_LOG.md`).
