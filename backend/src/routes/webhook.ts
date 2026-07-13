@@ -364,9 +364,20 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
-      // [AUDITORIA] LÓGICA: Ignora webhooks de eventos puramente de status redundantes na rota de inserção direta.
+      // [AUDITORIA] BUG: esta checagem descartava QUALQUER messages.upsert com data.status
+      // em READ/PLAYED/DELIVERY_ACK, mesmo quando o payload trazia uma mensagem recebida de
+      // verdade (fromMe:false, com texto real em data.message) — confirmado ao vivo em
+      // 2026-07-13: duas mensagens reais de teste ("Oi" e outra) chegaram com texto extraído
+      // corretamente no log ("Texto extraído") mas foram descartadas por este early-return
+      // logo em seguida, nunca persistidas em whatsapp_messages. data.status aparentemente é
+      // populado pela Evolution v2.3.7 mesmo em mensagens recebidas (não só nas enviadas pela
+      // própria conta, onde a checagem faz sentido — status de entrega só existe pra mensagem
+      // que a conta enviou).
+      // [AUDITORIA] FIX APLICADO: restringido a fromMe:true, único caso em que "status-only,
+      // sem conteúdo" é uma suposição válida.
       const dataStatus = payload.data?.status;
-      if (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK') {
+      const fromMeStatusCheck = payload.data?.key?.fromMe === true;
+      if (fromMeStatusCheck && (dataStatus === 'READ' || dataStatus === 'PLAYED' || dataStatus === 'DELIVERY_ACK')) {
         wlog('WEBHOOK_DROP', `status-only (${dataStatus}) instance=${payload.instance}`);
         return;
       }
