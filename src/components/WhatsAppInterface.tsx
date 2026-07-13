@@ -228,6 +228,7 @@ export function WhatsAppInterface() {
   const { user } = useAuth();
   const currentUserName = user?.display_name || user?.email?.split('@')[0] || 'Agente';
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [showContactPanel, setShowContactPanel] = useState(true);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   
@@ -797,6 +798,10 @@ export function WhatsAppInterface() {
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
   }, [isSelectMode]);
+
+  useEffect(() => {
+    setShowContactPanel(true);
+  }, [activeChatId]);
 
   useEffect(() => {
     if (!activeChatId) return;
@@ -1756,7 +1761,7 @@ export function WhatsAppInterface() {
       </div>
 
       {/* ── CENTER: Chat Area ── */}
-      <div className="flex-1 flex flex-col min-w-0 bg-background/40">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-background/40">
         
         {/* Modal Nova Mensagem */}
         <Dialog open={showNewMessageModal} onOpenChange={(o) => {
@@ -2169,7 +2174,13 @@ export function WhatsAppInterface() {
                 >
                   <Activity className="h-4.5 w-4.5" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={`h-9 w-9 rounded-xl transition-colors ${showContactPanel ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
+                  onClick={() => setShowContactPanel(v => !v)}
+                  title={showContactPanel ? 'Ocultar detalhes do contato' : 'Mostrar detalhes do contato'}
+                >
                   <Info className="h-4.5 w-4.5" />
                 </Button>
               </div>
@@ -2755,14 +2766,14 @@ export function WhatsAppInterface() {
       )}
 
       {/* ── RIGHT: Contact Profile Panel ── */}
-      {activeChat && (
+      {activeChat && showContactPanel && (
         <div className="w-[300px] shrink-0 border-l bg-card/20 backdrop-blur-md flex flex-col animate-in slide-in-from-right duration-500">
           {/* Panel header */}
           <div className="flex items-center justify-between px-5 py-4 border-b bg-background/40">
             <h3 className="text-sm font-bold tracking-tight">Detalhes do Contato</h3>
             <Button
               variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-muted"
-              onClick={() => setActiveChatId(null)}
+              onClick={() => setShowContactPanel(false)}
             >
               <X className="h-4 w-4" />
             </Button>
