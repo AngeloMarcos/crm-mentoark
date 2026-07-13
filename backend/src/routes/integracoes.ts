@@ -183,32 +183,59 @@ export default function integracoesRouter(pool: Pool): Router {
                             : undefined;
 
     try {
-      // [AUDITORIA] BUG: O uso de COALESCE($N, campo) com passagem de null impede que as credenciais sejam limpadas (definidas como vazias) em produção.
+      // [AUDITORIA] FIX APLICADO: query dinâmica em vez de COALESCE($N, campo) — COALESCE com null
+      // sempre mantinha o valor antigo, então não havia forma de limpar uma URL/chave já salva.
+      // Só entram no SET os campos explicitamente enviados (!== undefined), permitindo null real.
+      const setParts: string[] = [];
+      const vals: any[] = [];
+      let placeholderIdx = 1;
+
+      if (nome !== undefined) {
+        setParts.push(`nome = $${placeholderIdx++}`);
+        vals.push(nome);
+      }
+      if (url !== undefined) {
+        setParts.push(`url = $${placeholderIdx++}`);
+        vals.push(url);
+      }
+      if (resolvedKey !== undefined) {
+        setParts.push(`api_key = $${placeholderIdx++}`);
+        vals.push(resolvedKey);
+      }
+      if (resolvedInstancia !== undefined) {
+        setParts.push(`instancia = $${placeholderIdx++}`);
+        vals.push(resolvedInstancia);
+      }
+      if (token !== undefined) {
+        setParts.push(`token = $${placeholderIdx++}`);
+        vals.push(token);
+      }
+      if (status !== undefined) {
+        setParts.push(`status = $${placeholderIdx++}`);
+        vals.push(status);
+      }
+      if (config !== undefined) {
+        setParts.push(`config = $${placeholderIdx++}`);
+        vals.push(config ? (typeof config === 'string' ? config : JSON.stringify(config)) : null);
+      }
+
+      if (setParts.length === 0) {
+        const current = await pool.query(
+          `SELECT * FROM integracoes_config WHERE id = $1 AND user_id = $2`,
+          [req.params.id, userId]
+        );
+        if (!current.rows.length) return res.status(404).json({ message: 'Não encontrado' });
+        return res.json(maskRow(current.rows[0]));
+      }
+
+      setParts.push(`updated_at = NOW()`);
+      vals.push(req.params.id, userId);
+
       const r = await pool.query(
-        `UPDATE integracoes_config SET
-           nome       = COALESCE($1, nome),
-           url        = COALESCE($2, url),
-           api_key    = COALESCE($3, api_key),
-           instancia  = COALESCE($4, instancia),
-           token      = COALESCE($5, token),
-           status     = COALESCE($6, status),
-           config     = COALESCE($7, config),
-           updated_at = NOW()
-         WHERE id = $8 AND user_id = $9
+        `UPDATE integracoes_config SET ${setParts.join(', ')}
+         WHERE id = $${placeholderIdx++} AND user_id = $${placeholderIdx++}
          RETURNING *`,
-        [
-          nome              ?? null,
-          url               ?? null,
-          resolvedKey       ?? null,
-          resolvedInstancia ?? null,
-          token             ?? null,
-          status            ?? null,
-          config
-            ? (typeof config === 'string' ? config : JSON.stringify(config))
-            : null,
-          req.params.id,
-          userId,
-        ]
+        vals
       );
 
       if (!r.rows.length) return res.status(404).json({ message: 'Não encontrado' });
@@ -231,10 +258,33 @@ export default function integracoesRouter(pool: Pool): Router {
   }));
 
   // ── DELETE /api/integracoes_config/:id ──────────────────────────────────────
-  // [AUDITORIA] BUG: Deleta o conector mas não limpa as referências obsoletas em `agent_configs`, deixando o motor de IA em estado órfão.
+  // [AUDITORIA] FIX APLICADO: antes de deletar, se o conector for do tipo 'evolution', limpa a
+  // referência espelhada em agent_configs (única por user_id, ver syncEvolution acima) — sem isso
+  // o motor de IA/webhook ficava com credenciais órfãs de uma instância já excluída. IMPORTANTE:
+  // um mesmo usuário pode ter MAIS DE UM conector 'evolution' (instâncias diferentes, sem UNIQUE
+  // no banco para tipo+instancia), mas agent_configs só guarda UMA (unique_user_config). Por isso
+  // o UPDATE só limpa se `evolution_instancia` atual for exatamente a instância deletada — deletar
+  // uma instância inativa/extra não deve derrubar a instância realmente ativa de outro conector.
   router.delete('/:id', wrap(async (req: AuthRequest, res: Response) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+
+    const intRes = await pool.query(
+      `SELECT tipo, instancia FROM integracoes_config WHERE id = $1 AND user_id = $2`,
+      [req.params.id, userId]
+    );
+
+    if (intRes.rows.length && intRes.rows[0].tipo === 'evolution') {
+      await pool.query(
+        `UPDATE agent_configs
+         SET evolution_instancia = NULL,
+             evolution_server_url = NULL,
+             evolution_api_key = NULL,
+             updated_at = NOW()
+         WHERE user_id = $1 AND evolution_instancia IS NOT DISTINCT FROM $2`,
+        [userId, intRes.rows[0].instancia]
+      ).catch(err => log.warn('INTEGRACOES', 'limpar agent_configs orfao', { err: err?.message, stack: err?.stack }));
+    }
 
     await pool.query(
       `DELETE FROM integracoes_config WHERE id = $1 AND user_id = $2`,

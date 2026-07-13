@@ -2,6 +2,15 @@
 
 Ver protocolo completo em `AUDITORIA_PROTOCOLO.md`. Status possíveis: `✅ revisado sem bug` · `🔧 corrigido` · `⚠️ pendente (precisa decisão)` · `🗑️ candidato a remoção` · `🔄 em progresso`.
 
+### Sprint 2 (2026-07-13) — backend/src/routes/integracoes.ts, 2 correções de persistência
+
+| Achado | Descrição | Ação |
+|--------|-----------|------|
+| 1 — PUT /:id | `UPDATE ... SET campo = COALESCE($N, campo)` com `null` no lugar de `$N` sempre mantinha o valor antigo — não havia como o atendente realmente limpar URL/API key/instância pela tela do CRM | 🔧 corrigido — query dinâmica: só entram no `SET` os campos com `!== undefined` (enviados de propósito), permitindo `null` real passar e limpar a coluna. Caso nenhum campo seja enviado, retorna a linha atual sem tentar um `UPDATE` vazio (inválido em SQL) |
+| 2 — DELETE /:id | Deletava o conector mas nunca limpava o espelho em `agent_configs` (ver `syncEvolution()`), deixando o webhook/motor de IA com `evolution_instancia`/`evolution_server_url`/`evolution_api_key` de uma instância já excluída | 🔧 corrigido, com ajuste sobre o patch original proposto: `agent_configs` tem `UNIQUE(user_id)` (uma linha só por usuário), mas `integracoes_config` **não** tem UNIQUE em `(user_id, tipo, instancia)` — um usuário pode ter mais de um conector `evolution` (múltiplas instâncias). Limpar `agent_configs` só pelo `user_id` a cada delete de qualquer conector evolution apagaria a instância **realmente ativa** se o usuário excluísse uma instância antiga/extra. Corrigido para só limpar quando `agent_configs.evolution_instancia` bate exatamente com a instância do conector deletado (`IS NOT DISTINCT FROM`, null-safe) |
+
+Build do backend (`npm run build`, swc) ok, sem erros de sintaxe. `tsc --noEmit` completo estourou memória no ambiente local (não relacionado à mudança — projeto já usa swc no build oficial por esse motivo); tipos revisados manualmente, consistentes com o padrão non-tipado de `pool.query` já usado no resto do arquivo.
+
 ## Módulo: WhatsApp
 
 | Módulo   | Arquivo                                              | Status         | Resumo |
