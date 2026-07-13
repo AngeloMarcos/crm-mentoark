@@ -2,6 +2,15 @@
 
 Ver protocolo completo em `AUDITORIA_PROTOCOLO.md`. Status possíveis: `✅ revisado sem bug` · `🔧 corrigido` · `⚠️ pendente (precisa decisão)` · `🗑️ candidato a remoção` · `🔄 em progresso`.
 
+### Sprint 3 (2026-07-13) — backend/src/routes/webhook.ts, blindagem de status numérico e sanitização LIKE
+
+| Achado | Descrição | Ação |
+|--------|-----------|------|
+| 1 — handleStatusUpdate | Condicional só reconhecia `status === 'READ' \|\| status === 'PLAYED'` (strings). Se a Evolution repassar o status bruto do Baileys como número, a mensagem nunca era marcada como lida no CRM | 🔧 corrigido, com correção sobre o patch original proposto: o patch sugeria `3=READ, 4=PLAYED`, mas verifiquei o enum oficial `WebMessageInfo.Status` direto na fonte do Baileys (`WAProto/index.js`, `WhiskeySockets/Baileys`) e os valores reais são `ERROR=0, PENDING=1, SERVER_ACK=2, DELIVERY_ACK=3, READ=4, PLAYED=5`. Aplicar `3=READ` teria marcado mensagens **apenas entregues** (não lidas de verdade) como lidas — um bug pior que o silêncio original. Corrigido para aceitar `4`/`'4'` (READ) e `5`/`'5'` (PLAYED), além das strings literais |
+| 2 — fallback prefixo UUID | `prefixo` (derivado de `payload.instance`, campo controlado pelo emissor do webhook) ia direto para um `LIKE $1` sem sanitizar `%`/`_` — um valor malicioso poderia alargar o casamento do LIKE e resolver para o `userId` errado | 🔧 corrigido — `prefixo = instancia.slice(4).replace(/[%_]/g, '')` antes de montar o padrão do LIKE. Aplicado exatamente como proposto |
+
+Build do backend (`npm run build`, swc) ok, sem erros de sintaxe.
+
 ### Sprint 2 (2026-07-13) — backend/src/routes/integracoes.ts, 2 correções de persistência
 
 | Achado | Descrição | Ação |

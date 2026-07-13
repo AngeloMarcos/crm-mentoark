@@ -220,8 +220,16 @@ export default function webhookRouter(pool: Pool): Router {
         [messageId, payload.instance, status]
       ).catch(() => {});
 
-      // [AUDITORIA] LÓGICA: Se o status for READ ou PLAYED (áudio ouvido), atualiza a tabela principal de mensagens.
-      if (status === 'READ' || status === 'PLAYED') {
+      // [AUDITORIA] FIX APLICADO: além das strings literais 'READ'/'PLAYED', normaliza os códigos
+      // numéricos do enum oficial WebMessageInfo.Status do Baileys/WhatsApp (verificado no proto
+      // fonte: ERROR=0, PENDING=1, SERVER_ACK=2, DELIVERY_ACK=3, READ=4, PLAYED=5). Importante:
+      // é 4=READ e 5=PLAYED, NÃO 3 — 3 é só DELIVERY_ACK (entregue, não necessariamente lido);
+      // tratar 3 como leitura marcaria mensagens apenas entregues como lidas incorretamente.
+      const isReadStatus = status === 'READ' || status === 'PLAYED'
+        || status === 4 || status === '4'
+        || status === 5 || status === '5';
+
+      if (isReadStatus) {
         await pool.query(
           `UPDATE whatsapp_messages SET is_read = true
            WHERE message_id = $1 AND instance_name = $2`,
@@ -465,7 +473,11 @@ export default function webhookRouter(pool: Pool): Router {
 
       // 3. Fallback: prefixo UUID na instância (ex: crm_435ee4720fc3)
       if (!userId && instancia.startsWith('crm_')) {
-        const prefixo = instancia.slice(4);
+        // [AUDITORIA] FIX APLICADO: remove curingas do operador LIKE (% e _) do prefixo antes de
+        // usá-lo na query. Sem isso, um `instancia` malicioso/malformado com esses caracteres
+        // poderia alargar o casamento do LIKE e resolver o userId errado (payload já autenticado
+        // pelo segredo do webhook, mas isso reduz ainda mais a superfície de erro/abuso).
+        const prefixo = instancia.slice(4).replace(/[%_]/g, '');
         const uRes = await pool.query(
           `SELECT id FROM users WHERE replace(id::text, '-', '') LIKE $1 LIMIT 1`,
           [`${prefixo}%`]
