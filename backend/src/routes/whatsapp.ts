@@ -57,59 +57,65 @@ function normalizeQr(raw: string | null | undefined): string | null {
   return `data:image/png;base64,${b64}`;
 }
 
+// [AUDITORIA] FIX APLICADO: erros da Evolution API vêm no formato
+// {"status":403,"error":"Forbidden","response":{"message":["This name \"x\" is already in use."]}}
+// (message é um ARRAY dentro de "response", não uma string em body.message). O código de
+// /connect checava `created?.message?.includes(...)`, que é sempre undefined nesse formato —
+// a detecção de "instância já existe" nunca disparava, e um simples reconectar de uma
+// instância já criada retornava 403 cru em vez de cair no fluxo de reconexão/QR code.
+function extractEvolutionErrorMessage(body: any): string {
+  const raw = body?.response?.message ?? body?.message ?? '';
+  return Array.isArray(raw) ? raw.join(' ') : String(raw || '');
+}
+
 export default function whatsappRouter(pool: Pool): Router {
   const connectingUsers = new Set<string>();
   const router = Router();
 
+  // [AUDITORIA] LÓGICA: Resolve o ID do administrador da conta (Tenant ID) a partir do ID do
+  // usuário logado. Utiliza a coluna users.owner_id como fonte canônica de verdade para
+  // isolamento/compartilhamento de dados de equipe (admin é dono de si mesmo).
+  async function resolveOwnerId(userId: string): Promise<string> {
+    try {
+      const r = await pool.query(
+        `SELECT COALESCE(owner_id, id)::text AS tenant_id FROM users WHERE id = $1 LIMIT 1`,
+        [userId]
+      );
+      return r.rows[0]?.tenant_id || userId;
+    } catch {
+      return userId;
+    }
+  }
+
+  // [AUDITORIA] FIX APLICADO: getEvolutionConfig lia url/api_key de integracoes_config
+  // (editável por qualquer usuário via tela "Conectores") — isso já causou o mesmo servidor
+  // de teste externo (fierceparrot-evolution.cloudfy.live) voltar a ser gravado por engano
+  // mais de uma vez, quebrando a criação de instância. URL/API Key da Evolution agora vêm
+  // sempre do .env do servidor (única instância própria, compartilhada por todos os
+  // usuários) — só o nome da instância (o "número"/chip) continua por usuário.
   async function getEvolutionConfig(userId: string): Promise<{
     url: string; api_key: string; instancia: string; agenteId: string | null; isGlobal: boolean; stableInstancia: string;
   }> {
-    const stableInstancia = `crm_${userId.replace(/-/g, '').slice(0, 12)}`;
-    const intRes = await pool.query(
-      `SELECT url, api_key, instancia FROM integracoes_config 
-       WHERE user_id = $1 AND tipo = 'evolution' LIMIT 1`,
-      [userId]
-    );
-
-    if (intRes.rows.length) {
-      const row = intRes.rows[0];
-      return {
-        url: row.url || DEFAULT_EVO_URL,
-        api_key: row.api_key || DEFAULT_EVO_KEY,
-        instancia: row.instancia || stableInstancia,
-        agenteId: null,
-        isGlobal: !row.url,
-        stableInstancia
-      };
-    }
-
-    const r = await pool.query(
-      `SELECT id, evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
-       FROM agentes
-       WHERE user_id = $1 AND ativo = true
-       ORDER BY updated_at DESC LIMIT 1`,
-      [userId]
-    );
-
-    if (r.rows.length) {
-      const row = r.rows[0];
-      const url = row.url || DEFAULT_EVO_URL;
-      const api_key = row.api_key || DEFAULT_EVO_KEY;
-      const instancia = row.instancia || stableInstancia;
-      return { url, api_key, instancia, agenteId: row.id, isGlobal: !row.url, stableInstancia };
-    }
-
-    return { url: DEFAULT_EVO_URL, api_key: DEFAULT_EVO_KEY, instancia: stableInstancia, agenteId: null, isGlobal: true, stableInstancia };
+    // Sprint 1: instância resolvida pelo Tenant (dono da conta), não pelo usuário logado —
+    // agentes de uma equipe passam a apontar para a mesma instância criada pelo Administrador.
+    const tenantId = await resolveOwnerId(userId);
+    const stableInstancia = `crm_${tenantId.replace(/-/g, '').slice(0, 12)}`;
+    return {
+      url: DEFAULT_EVO_URL,
+      api_key: DEFAULT_EVO_KEY,
+      instancia: stableInstancia,
+      agenteId: null,
+      isGlobal: true,
+      stableInstancia,
+    };
   }
 
   async function saveEvolutionConfig(
     userId: string, agenteId: string | null,
     url: string, api_key: string, instancia: string
   ) {
-    await pool.query(
-      `DELETE FROM integracoes_config WHERE user_id=$1 AND tipo='evolution' AND instancia!=$2`,
-      [userId, instancia]
-    );
+    // Multi-instância: não apaga outras linhas tipo='evolution' do usuário — um usuário pode
+    // ter mais de um número conectado simultaneamente, cada um com sua própria linha/instancia.
     const upd = await pool.query(
       `UPDATE integracoes_config SET url=$2, api_key=$3, status='conectado', updated_at=NOW()
        WHERE user_id=$1 AND tipo='evolution' AND instancia=$4`,
@@ -130,11 +136,25 @@ export default function whatsappRouter(pool: Pool): Router {
         [url, api_key, instancia, agenteId, userId]
       );
     } else {
-      await pool.query(
+      const updAg = await pool.query(
         `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2, evolution_instancia=$3, updated_at=NOW()
          WHERE user_id=$4 AND ativo=true`,
         [url, api_key, instancia, userId]
       );
+      // [AUDITORIA] FIX APLICADO: um usuário sem nenhum "agente" (nem ativo) conseguia conectar o
+      // WhatsApp normalmente (funciona de ponta a ponta, mensagens chegam via webhook), mas o
+      // painel "Instâncias" (InstanceManagementPanel.tsx) só lista linhas de `agentes` com
+      // evolution_instancia preenchida — sem nenhuma linha pra atualizar, a conexão ficava
+      // invisível pro usuário/admin, mesmo funcionando de verdade. Agente de IA deve ser
+      // opcional: cria uma linha mínima só pra segurar a instância (ativo_motor=false, sem IA
+      // respondendo) se não existir nenhuma pra sincronizar.
+      if (!updAg.rowCount) {
+        await pool.query(
+          `INSERT INTO agentes (user_id, nome, evolution_server_url, evolution_api_key, evolution_instancia, ativo_motor)
+           VALUES ($1, 'Conexão WhatsApp', $2, $3, $4, false)`,
+          [userId, url, api_key, instancia]
+        );
+      }
     }
   }
 
@@ -241,6 +261,7 @@ export default function whatsappRouter(pool: Pool): Router {
     try {
       const userId = req.userId!;
       const showArchived = req.query.archived === 'true';
+      const tenantId = await resolveOwnerId(userId); // Carrega o ID do dono da conta
 
       const r = await pool.query(
         `WITH ranked AS (
@@ -295,7 +316,7 @@ export default function whatsappRouter(pool: Pool): Router {
            AND COALESCE(cu.is_archived, false) = $2
          ORDER BY cu.is_pinned DESC NULLS LAST, r.created_at DESC
          LIMIT 300`,
-        [userId, showArchived]
+        [tenantId, showArchived]
       );
 
       const conversas = r.rows.map(row => {
@@ -337,6 +358,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Number(req.query.offset) || 0;
+      const tenantId = await resolveOwnerId(userId);
 
       const r = await pool.query(
         `SELECT
@@ -353,7 +375,7 @@ export default function whatsappRouter(pool: Pool): Router {
            AND m.user_id = $2
          ORDER BY COALESCE(m.timestamp_wa, m.created_at) ASC
          LIMIT $3 OFFSET $4`,
-        [phone, userId, limit, offset]
+        [phone, tenantId, limit, offset]
       );
 
       const mensagens = r.rows.map(row => ({
@@ -383,6 +405,7 @@ export default function whatsappRouter(pool: Pool): Router {
     try {
       const userId = req.userId!;
       const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const tenantId = await resolveOwnerId(userId);
       const r = await pool.query(
         `SELECT m.message_id, COALESCE(s.status, m.status) AS status, m.created_at
          FROM whatsapp_messages m
@@ -390,7 +413,7 @@ export default function whatsappRouter(pool: Pool): Router {
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
          WHERE split_part(m.remote_jid, '@', 1) = $1 AND m.user_id = $2 AND m.from_me = true
          ORDER BY m.created_at DESC LIMIT 50`,
-        [phone, userId]
+        [phone, tenantId]
       );
       return res.json(r.rows);
     } catch (err: any) {
@@ -402,12 +425,13 @@ export default function whatsappRouter(pool: Pool): Router {
     try {
       const userId = req.userId!;
       const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const tenantId = await resolveOwnerId(userId);
       const r = await pool.query(
         `SELECT atendente_pausou_ia, nome, push_name
          FROM contatos
          WHERE user_id = $1 AND telefone ILIKE $2
          LIMIT 1`,
-        [userId, `%${phone.slice(-11)}`]
+        [tenantId, `%${phone.slice(-11)}`]
       );
       const pausada = r.rows.length > 0 ? (r.rows[0].atendente_pausou_ia === true) : false;
       return res.json({ pausada, contato: r.rows[0] || null });
@@ -423,25 +447,26 @@ export default function whatsappRouter(pool: Pool): Router {
       if (!phone) return res.status(400).json({ message: 'phone obrigatório' });
       const phoneClean = phone.replace(/\D/g, '');
       const suffix = `%${phoneClean.slice(-11)}`;
+      const tenantId = await resolveOwnerId(userId);
 
       const upd = await pool.query(
         `UPDATE contatos SET atendente_pausou_ia = $1
          WHERE user_id = $2 AND telefone ILIKE $3`,
-        [pausar, userId, suffix]
+        [pausar, tenantId, suffix]
       );
 
       if (!upd.rowCount) {
         await pool.query(
           `INSERT INTO contatos (user_id, nome, telefone, origem, status, atendente_pausou_ia)
            VALUES ($1, $2, $3, 'WhatsApp', 'novo', $4)`,
-          [userId, phoneClean, phoneClean, pausar]
+          [tenantId, phoneClean, phoneClean, pausar]
         ).catch(() => {});
       }
 
       await pool.query(
         `UPDATE dados_cliente SET atendimento_ia = $1
          WHERE user_id = $2 AND telefone ILIKE $3`,
-        [pausar ? 'pause' : 'ativo', userId, suffix]
+        [pausar ? 'pause' : 'ativo', tenantId, suffix]
       ).catch(() => {});
 
       return res.json({ ok: true, pausada: pausar });
@@ -457,12 +482,13 @@ export default function whatsappRouter(pool: Pool): Router {
       const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
       const { nome } = req.body as { nome: string };
       if (!nome?.trim()) return res.status(400).json({ message: 'nome é obrigatório' });
+      const tenantId = await resolveOwnerId(userId);
 
       const r = await pool.query(
         `UPDATE contatos SET nome = $1
          WHERE user_id = $2 AND telefone ILIKE $3
          RETURNING id, nome, telefone, push_name, profile_pic_url`,
-        [nome.trim(), userId, `%${phone.slice(-11)}`]
+        [nome.trim(), tenantId, `%${phone.slice(-11)}`]
       );
 
       if (!r.rowCount) {
@@ -470,7 +496,7 @@ export default function whatsappRouter(pool: Pool): Router {
           `INSERT INTO contatos (user_id, nome, telefone, origem, status, atendente_pausou_ia)
            VALUES ($1, $2, $3, 'WhatsApp', 'novo', false)
            RETURNING id, nome, telefone, push_name, profile_pic_url`,
-          [userId, nome.trim(), phone]
+          [tenantId, nome.trim(), phone]
         );
         return res.json(ins.rows[0]);
       }
@@ -794,36 +820,52 @@ export default function whatsappRouter(pool: Pool): Router {
         });
       }
 
-      if (!createRes.ok && (created?.message?.includes('already') || created?.message?.includes('exist') || created?.message?.includes('conflict'))) {
-        const connectRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}`, {
-          headers: { apikey: cfg.api_key },
-        }).catch(() => null);
-
-        if (connectRes?.ok) {
-          const rcData: any = await connectRes.json().catch(() => ({}));
-          const qrRaw = rcData?.base64 || rcData?.qrcode?.base64 || rcData?.code || null;
-          await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.stableInstancia);
-          await registrarWebhook(base, cfg.api_key, cfg.stableInstancia);
-          return res.json({
-            state: 'connecting',
-            qrCode: normalizeQr(qrRaw),
-            pairingCode: rcData?.pairingCode || rcData?.code || null,
-            instanceName: cfg.stableInstancia,
-            instancia: cfg.stableInstancia,
-          });
+      const createErrorMsg = extractEvolutionErrorMessage(created);
+      if (!createRes.ok && /already|exist|conflict|in use/i.test(createErrorMsg)) {
+        // [AUDITORIA] FIX APLICADO: `rcData.code` é a referência interna do Baileys usada pra
+        // montar o QR (formato "ref@chave1,chave2,..."), não uma imagem nem um código de
+        // pareamento — usá-la direto como qrCode/pairingCode produzia uma imagem quebrada
+        // (data:image/png;base64,2@... não é base64 válido) e um "código de pareamento" ilegível.
+        // Só base64/qrcode.base64 (imagem real) e pairingCode (código curto real) valem; se a
+        // Evolution ainda não gerou nenhum dos dois, tenta de novo por alguns segundos — igual ao
+        // fluxo de criação nova logo abaixo.
+        let qrCode: string | null = null;
+        let pairingCode: string | null = null;
+        for (let attempt = 0; attempt < 5 && !qrCode; attempt++) {
+          const connectRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}`, {
+            headers: { apikey: cfg.api_key },
+          }).catch(() => null);
+          if (connectRes?.ok) {
+            const rcData: any = await connectRes.json().catch(() => ({}));
+            const qrRaw = rcData?.base64 || rcData?.qrcode?.base64 || null;
+            if (qrRaw) qrCode = normalizeQr(qrRaw);
+            pairingCode = pairingCode || rcData?.pairingCode || null;
+          }
+          if (!qrCode) await new Promise(r => setTimeout(r, 2000));
         }
+
+        await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.stableInstancia);
+        await registrarWebhook(base, cfg.api_key, cfg.stableInstancia);
+        return res.json({
+          state: 'connecting',
+          qrCode,
+          qrPending: !qrCode,
+          pairingCode,
+          instanceName: cfg.stableInstancia,
+          instancia: cfg.stableInstancia,
+        });
       }
 
       // [AUDITORIA] FIX APLICADO: restaurado (havia sido perdido em uma reescrita anterior) —
       // se /instance/create falhar e não for o caso de "já existe" (tratado acima), o fluxo
       // seguia adiante e devolvia qrPending:true com status 200, escondendo o erro real.
       if (!createRes.ok) {
-        log.warn('WHATSAPP', 'Falha ao criar instância na Evolution', { status: createRes.status, message: created?.message });
+        log.warn('WHATSAPP', 'Falha ao criar instância na Evolution', { status: createRes.status, message: createErrorMsg });
         return res.status(createRes.status || 502).json({
           state: 'close',
           error: true,
           code: createRes.status,
-          message: created?.message || `Evolution API erro (${createRes.status}) ao criar instância.`,
+          message: createErrorMsg || `Evolution API erro (${createRes.status}) ao criar instância.`,
         });
       }
 
@@ -1072,10 +1114,10 @@ export default function whatsappRouter(pool: Pool): Router {
     log.info('DEBUG SEND', 'userId', { userId });
     try {
       const {
-        phone, text,
+        phone, text, instancia: instanciaSolicitada,
         mediaUrl, mediaType, mediaCaption, mediaFilename,
       } = req.body as {
-        phone: string; text?: string;
+        phone: string; text?: string; instancia?: string;
         mediaUrl?: string; mediaType?: 'image' | 'audio' | 'video' | 'document';
         mediaCaption?: string; mediaFilename?: string;
       };
@@ -1090,6 +1132,24 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       const cfg = await getEvolutionConfig(userId);
+
+      // Multi-instância: se o frontend indicar de qual chip a conversa veio, valida que o
+      // usuário é dono dessa instância e usa esse nome de instância, em vez do padrão. URL/API
+      // Key continuam sempre as fixas do .env (servidor Evolution único) — só a instancia
+      // (o "número"/chip) varia por linha; não confiamos mais em url/api_key vindos do banco.
+      if (instanciaSolicitada) {
+        const instRes = await pool.query(
+          `SELECT instancia FROM integracoes_config
+           WHERE user_id = $1 AND instancia = $2 AND tipo = 'evolution' LIMIT 1`,
+          [userId, instanciaSolicitada]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (instRes.rows.length) {
+          cfg.instancia = instanciaSolicitada;
+        } else {
+          log.warn('DEBUG SEND', 'instancia solicitada não pertence ao usuário — usando instância padrão', { userId, instanciaSolicitada });
+        }
+      }
+
       log.info('DEBUG SEND', 'Instância encontrada para o usuário', {
         instancia: cfg.instancia,
         url: cfg.url,
@@ -1210,14 +1270,17 @@ export default function whatsappRouter(pool: Pool): Router {
 
       const messageId = evolutionResp?.key?.id || `manual_${Date.now()}`;
       const content = text || mediaCaption || null;
+      const tenantId = await resolveOwnerId(userId);
 
+      // [AUDITORIA] LÓGICA: Salva a mensagem associando ao tenantId (dono da instância), mas
+      // registrando quem de fato disparou o envio (sent_by_user_id = userId do agente humano logado).
       await pool.query(
         `INSERT INTO whatsapp_messages
            (user_id, sent_by_user_id, instance_name, remote_jid, message_id, from_me, message_type,
             content, media_url, status, timestamp_wa)
          VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW())
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
-        [userId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
+        [tenantId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
          messageId, msgType, content, mediaUrl || null]
       ).catch(err => log.warn('SEND', 'Falha ao salvar', { err: err.message }));
 
@@ -1394,6 +1457,7 @@ export default function whatsappRouter(pool: Pool): Router {
     const userId = req.userId!;
     const q = ((req.query.q as string) || '').trim();
     if (!q || q.length < 2) return res.json([]);
+    const tenantId = await resolveOwnerId(userId);
     const r = await pool.query(
       `SELECT m.id, m.content, m.timestamp_wa, m.created_at, m.from_me,
                split_part(m.remote_jid,'@',1) AS phone,
@@ -1405,7 +1469,7 @@ export default function whatsappRouter(pool: Pool): Router {
         WHERE m.user_id = $1 AND m.content ILIKE $2
           AND m.remote_jid NOT LIKE '%@g.us'
         ORDER BY m.created_at DESC LIMIT 50`,
-      [userId, `%${q}%`]
+      [tenantId, `%${q}%`]
     );
     return res.json(r.rows);
   });
@@ -1414,9 +1478,10 @@ export default function whatsappRouter(pool: Pool): Router {
     const userId = req.userId!;
     const id = req.params.id;
     const { forEveryone, instancia, remoteJid } = req.body as any;
+    const tenantId = await resolveOwnerId(userId);
     await pool.query(
       `DELETE FROM whatsapp_messages WHERE (id::text = $1 OR message_id = $1) AND user_id = $2`,
-      [id, userId]
+      [id, tenantId]
     ).catch(() => {});
     if (forEveryone && instancia && remoteJid) {
       const cfg = await getEvolutionConfig(userId);
@@ -1433,10 +1498,11 @@ export default function whatsappRouter(pool: Pool): Router {
   router.patch('/conversas/:phone/read', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+    const tenantId = await resolveOwnerId(userId);
     await pool.query(
       `UPDATE whatsapp_messages SET is_read = true
        WHERE user_id = $1 AND split_part(remote_jid,'@',1) = $2 AND from_me = false`,
-      [userId, phone]
+      [tenantId, phone]
     ).catch(() => {});
     return res.json({ ok: true });
   });
@@ -1445,8 +1511,9 @@ export default function whatsappRouter(pool: Pool): Router {
     const userId = req.userId!;
     const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
     const { pinned, archived, muted_until } = req.body as any;
+    const tenantId = await resolveOwnerId(userId);
     const setParts: string[] = [];
-    const vals: any[] = [userId, `%${phone.slice(-11)}`];
+    const vals: any[] = [tenantId, `%${phone.slice(-11)}`];
     if (pinned !== undefined)      { setParts.push(`is_pinned = $${vals.length + 1}`);    vals.push(pinned); }
     if (archived !== undefined)    { setParts.push(`is_archived = $${vals.length + 1}`);  vals.push(archived); }
     if (muted_until !== undefined) { setParts.push(`muted_until = $${vals.length + 1}`);  vals.push(muted_until); }
