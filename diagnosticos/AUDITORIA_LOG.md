@@ -2,6 +2,36 @@
 
 Ver protocolo completo em `AUDITORIA_PROTOCOLO.md`. Status possíveis: `✅ revisado sem bug` · `🔧 corrigido` · `⚠️ pendente (precisa decisão)` · `🗑️ candidato a remoção` · `🔄 em progresso`.
 
+### Sprint 4/5 (2026-07-21) — backend/src/services/disparoProcessor.ts + backend/src/routes/disparos.ts, blindagem do motor de disparo em lote
+
+| Achado | Descrição | Ação |
+|--------|-----------|------|
+| 1 — timeout na rota manual | `POST /disparos/enviar` usava `fetch()` bruto contra a Evolution API, sem `AbortController`/timeout — se a Evolution travasse, a requisição ficava pendurada indefinidamente | 🔧 corrigido — trocado por `evolutionFetch()` (mesmo padrão já usado no motor em lote) |
+| 2 — delay fixo entre mensagens | Motor em lote (`disparoProcessor.ts`) usava `sleep(1500)` fixo, ignorando o campo `perfil_velocidade` da campanha | 🔧 corrigido — delay dinâmico aleatorizado por perfil (`safe` 15-30s, `normal` 5-12s, `fast` 1.5-4s) |
+| 3 — sem pausa por falhas consecutivas | Colunas `pausa_erros_consecutivos`/`limite_erros_consecutivos` existiam no schema mas nunca eram lidas — campanha continuava tentando enviar mesmo com canal desconectado/banido | 🔧 corrigido — contador de erros consecutivos por campanha; ao atingir o limite (respeitando a flag `pausa_erros_consecutivos`), campanha vai para `status='pausado'` e o lote é abortado |
+| 4 — sem respeito à janela de horário/fim de semana no lote | `horario_inicio`/`horario_fim`/`pausa_fins_semana` só eram validados na rota manual, não no motor em lote (fuso America/Sao_Paulo) | 🔧 corrigido — mesma validação adicionada ao motor em lote, antes de cada mensagem |
+| 5 — mensagens órfãs em `'sending'` (achado durante a correção dos itens 3/4) | `get_next_disparo_batch` marca até 5 linhas como `'sending'` atomicamente ao buscar o lote; se o motor abortasse o lote (itens 3/4) sem processar todas as linhas já dequeueadas, elas ficariam presas em `'sending'` para sempre (a função só busca `'pending'`) | 🔧 corrigido — `requeuePendentes()` devolve as linhas não processadas para `'pending'` antes de cada `break` |
+
+Verificação de tipos: `tsc --noEmit` do projeto completo estoura memória mesmo com 4GB de heap (problema pré-existente, não relacionado a esta mudança — build oficial usa `swc`, que não é afetado). Check escopado (`disparoProcessor.ts`/`disparos.ts` + grafo de imports direto, mesmas flags do `tsconfig.json`) rodou limpo, sem erros.
+
+Deploy: commit `eb81f0f`, testado em homolog (`/opt/crm-homolog`, banco `crm_hml` isolado) antes de ir para produção (`/opt/crm/backend`).
+
+### Infra — Evolution API (2026-07-21) — bug P2010 (mensagens recebidas não chegam ao CRM): investigado, fix tentado e revertido, causa raiz refinada
+
+**Contexto:** bug conhecido desde 2026-07-08/10 (ver seção "Rastreio mensagens novas não atualizam" mais abaixo neste arquivo) — Evolution API v2.3.7 quebra internamente em `updateChatUnreadMessages()` (chamado a partir de `messages.upsert`) antes de conseguir despachar o webhook, então o CRM nunca recebe mensagens genuínas de WhatsApp. Confirmado ainda ativo em produção em 2026-07-21 (teste ao vivo, número real, 0 eventos `messages.upsert` em 72h de log).
+
+**Nova informação encontrada nesta sessão:** o erro real alterna entre duas variantes, ambas dentro do código `P2010` do Prisma:
+1. `Code: 1064` — `You have an error in your SQL syntax ... near '"Message"'` — erro de sintaxe MySQL genuíno: a query usa aspas duplas para identificador (`"Message"`), válido em PostgreSQL, **inválido em MySQL** (que usa crase por padrão). Forte indício de que a raw query foi escrita para Postgres e nunca adaptada corretamente para MySQL.
+2. `Error querying the database: Named and positional parameters mixed in one statement` — incompatibilidade de binding de parâmetros do Prisma especificamente contra MySQL.
+
+Encontrado no upstream (`github.com/evolution-foundation/evolution-api`) o PR #2333 ("fix(mysql): compatibilidade da coluna lid e queries RAW", merged 2026-02-24 em `develop`) que reescreve exatamente `updateChatUnreadMessages()` com versões MySQL dedicadas — mas **não há release estável desde v2.3.7** (2025-12-05); só existem prereleases `2.4.0-rc1` (2026-05-06) e `2.4.0-rc2` (2026-05-17), lançadas depois desse PR.
+
+**Tentativa de fix, revertida:** atualizamos `evolution` (VPS) de `evoapicloud/evolution-api:latest` (= v2.3.7, imagem local cacheada há 2 meses, não recebia atualização automática) para `2.4.0-rc2`. Resultado: **P2010 resolvido** (mensagem real recebida e salva em `whatsapp_messages` com sucesso, confirmado no banco) — mas **toda a API REST da Evolution passou a exigir licença paga** (`{"code":"LICENSE_REQUIRED"}` em qualquer chamada, inclusive `fetchInstances` e `sendText`), quebrando o **envio** de mensagens (motor de disparo e chat manual) em produção. Testado também `2.4.0-rc1` — mesmo bloqueio de licença. **Ambos revertidos**, confirmado envio e recebimento restaurados ao comportamento anterior (send OK / receive com P2010).
+
+**Ação de blindagem aplicada:** `image:` em `/opt/evolution/docker-compose.yml` fixado explicitamente em `evoapicloud/evolution-api:v2.3.7` (era `:latest`, uma tag flutuante) com comentário `[AUDITORIA]` documentando o bloqueio de licença do 2.4.x — evita upgrade acidental para uma versão paga sem essa informação, e evita que o `:latest` "ande sozinho" se o publisher atualizar o ponteiro no futuro.
+
+**Estado atual:** recebimento de mensagens **continua quebrado** (P2010, mesma causa raiz de sempre); envio funcionando normalmente. `FIX PENDENTE`, próxima linha de investigação levantada nesta sessão (não testada ainda): migrar `DATABASE_PROVIDER` do Evolution de `mysql` para `postgresql` na v2.3.7 atual — a hipótese do erro 1064 (aspas duplas de identificador, sintaxe válida em Postgres) tornou essa opção mais promissora do que constava no registro anterior de 2026-07-10 (que a descartava com "garantia baixa"/relatos genéricos). Requer provisionar schema Postgres novo para o Evolution e rodar as migrations internas dele — ação de infra maior, não tentada nesta sessão por já ter havido um incidente de produção (quebra de envio) na tentativa anterior.
+
 ### Sprint 3 (2026-07-13) — backend/src/routes/webhook.ts, blindagem de status numérico e sanitização LIKE
 
 | Achado | Descrição | Ação |
