@@ -995,23 +995,27 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       log.info('WHATSAPP', 'Limpando registros do BD', { userId });
-      
+
+      // [AUDITORIA] FIX APLICADO: filtro por instance_name adicionado nas queries que antes
+      // usavam so `WHERE user_id = $1` — apagavam o historico/config de TODAS as instancias
+      // do usuario ao desconectar uma unica instancia. Causou perda real de mensagens em
+      // producao (ver diagnosticos/AUDITORIA_LOG.md). Mesma correcao aplicada em /instances/:name.
       const queries = [
-        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1`, [userId]),
+        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1 AND instance_name = $2`, [userId, instancia]),
         pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [instancia]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [instancia]),
         pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1`, [userId]),
-        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`, [userId]),
+        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia = $2`, [userId, instancia]),
         pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
         pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
         pool.query(
-          `UPDATE agentes 
-           SET evolution_instancia = NULL, 
-               evolution_server_url = NULL, 
-               evolution_api_key = NULL, 
-               updated_at = NOW() 
-           WHERE user_id = $1`,
-          [userId]
+          `UPDATE agentes
+           SET evolution_instancia = NULL,
+               evolution_server_url = NULL,
+               evolution_api_key = NULL,
+               updated_at = NOW()
+           WHERE user_id = $1 AND evolution_instancia = $2`,
+          [userId, instancia]
         )
       ];
 
@@ -1310,21 +1314,25 @@ export default function whatsappRouter(pool: Pool): Router {
       }).catch(() => null);
 
       await Promise.allSettled([
-        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1`, [userId]),
+        // [AUDITORIA] FIX APLICADO: filtro por instance_name adicionado. A query original
+        // (`WHERE user_id = $1`, sem filtrar por instância) apagava o historico de TODAS as
+        // instancias do usuario ao deletar uma unica instancia — causou perda real de mensagens
+        // em producao (ver diagnosticos/AUDITORIA_LOG.md).
+        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1 AND instance_name = $2`, [userId, name]),
         pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [name]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [name]),
         pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1`, [userId]),
-        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`, [userId]),
+        pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia = $2`, [userId, name]),
         pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
         pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
         pool.query(
-          `UPDATE agentes 
-           SET evolution_instancia = NULL, 
-               evolution_server_url = NULL, 
-               evolution_api_key = NULL, 
-               updated_at = NOW() 
-           WHERE user_id = $1`,
-          [userId]
+          `UPDATE agentes
+           SET evolution_instancia = NULL,
+               evolution_server_url = NULL,
+               evolution_api_key = NULL,
+               updated_at = NOW()
+           WHERE user_id = $1 AND evolution_instancia = $2`,
+          [userId, name]
         )
       ]);
 
