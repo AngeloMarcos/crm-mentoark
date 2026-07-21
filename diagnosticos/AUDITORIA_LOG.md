@@ -1,5 +1,20 @@
 # Auditoria de Código — Log
 
+### 🔴 INCIDENTE DE SEGURANÇA (2026-07-21) — vazamento de dados entre tenants no webhook, backend/src/routes/webhook.ts
+
+**Reportado pelo usuário:** conta de uma cliente real (`crisacorretoradeimoveis@gmail.com`, `d7b74de0-...`) mostrava conversas que não eram dela.
+
+**Causa raiz:** a resolução de `userId` em `webhook.ts` tinha um 5º nível de fallback — `SELECT id FROM users WHERE role='admin' ORDER BY created_at ASC LIMIT 1` — que atribuía **qualquer** mensagem de instância não resolvida (falha nos 4 fallbacks anteriores: `agent_configs`/`agentes`/prefixo UUID/`integracoes_config`) ao admin mais antigo cadastrado no sistema. Esse admin mais antigo é, por acaso, a conta dessa cliente real (criada em 2026-05-12, antes de todas as outras contas admin). Qualquer instância órfã ou mal configurada — presente ou futura — despejaria mensagens na conta dela.
+
+**Investigação:** as mensagens vazadas eram 3, todas antigas (30/mai e 04/jun — `"teste sync"`, números fake `5511999999999`/`5511900000099`) — dados de teste de sessões anteriores, não conversas reais de outro cliente. **Não é um vazamento ativo de dados sensíveis de terceiros**, mas o mecanismo que causou isso é grave e continuava ativo.
+
+**🔧 Corrigido:**
+1. Fallback #5 removido de `webhook.ts` — instância não resolvida agora só loga (`[WEBHOOK] FATAL: nenhum userId encontrado`) e descarta a mensagem, nunca atribui a um usuário arbitrário.
+2. As 3 mensagens vazadas soft-deletadas (`deleted_at`) da conta da cliente (não apagadas fisicamente, preservadas pra auditoria se necessário).
+3. Deploy imediato em homolog e produção, confirmado (conta da cliente voltou a mostrar só as 2 mensagens legítimas dela).
+
+**Pendência:** vale revisar se `disparoProcessor.ts`/outros pontos têm fallback parecido pro envio (não pra recebimento) — não investigado nesta rodada, escopo era especificamente o vazamento reportado no webhook de recebimento.
+
 Ver protocolo completo em `AUDITORIA_PROTOCOLO.md`. Status possíveis: `✅ revisado sem bug` · `🔧 corrigido` · `⚠️ pendente (precisa decisão)` · `🗑️ candidato a remoção` · `🔄 em progresso`.
 
 ### Blindagem definitiva pós-incidentes (2026-07-21) — 3 sprints, gerenciamento de instâncias + soft-delete + alertas
