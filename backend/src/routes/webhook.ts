@@ -3,9 +3,14 @@
  *
  * Recebe POST /webhook/evolution (autenticado por EVOLUTION_WEBHOOK_SECRET via
  * header HMAC opcional ou ?key= na URL — ver verificarAssinaturaEvolution/verificarChaveQuery).
- * Resolve o dono (userId) da instância que disparou o evento em 5 níveis de fallback,
- * nesta ordem: agent_configs → agentes → prefixo UUID (crm_<12-hex>) → integracoes_config
- * → primeiro admin cadastrado. Sem userId, a mensagem é descartada (log [WEBHOOK_REJECT]).
+ * Resolve o dono (userId) da instância que disparou o evento em 4 níveis de fallback,
+ * nesta ordem: agent_configs → agentes → prefixo UUID (crm_<12-hex>) → integracoes_config.
+ * Sem userId, a mensagem é descartada (log [WEBHOOK_REJECT]).
+ * [AUDITORIA] FIX APLICADO (2026-07-21): havia um 5º fallback ("primeiro admin cadastrado")
+ * que atribuía QUALQUER instância não resolvida a uma conta de cliente real — vazamento de
+ * dados entre tenants confirmado em produção (3 mensagens de teste antigas atribuídas à
+ * conta de uma cliente real). Removido; instância não resolvida agora só descarta a
+ * mensagem, nunca atribui a um usuário arbitrário. Ver diagnosticos/AUDITORIA_LOG.md.
  * Também trata MESSAGES_UPDATE (status de entrega/leitura) e MESSAGES_DELETE.
  *
  * [AUDITORIA] LÓGICA: cabeçalho reescrito em 2026-07 — a versão anterior citava uma
@@ -509,17 +514,12 @@ export default function webhookRouter(pool: Pool): Router {
         }
       }
 
-      // 5. Fallback: admin do sistema
+      // [AUDITORIA] FIX APLICADO (2026-07-21): fallback #5 (atribuir ao primeiro admin
+      // cadastrado) removido — causava vazamento de dados entre tenants (mensagens de uma
+      // instância não resolvida apareciam na conta de um cliente real qualquer, só por ele
+      // ser o admin mais antigo). Instância não resolvida agora só loga e descarta.
       if (!userId) {
-        const adminRes = await pool.query(
-          `SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`
-        ).catch(() => ({ rows: [] as any[] }));
-        if (adminRes.rows.length) {
-          userId = adminRes.rows[0].id;
-          log.info('WEBHOOK', 'USERID via admin-fallback', { traceId, userId });
-        } else {
-          log.error('WEBHOOK', 'FATAL: nenhum userId encontrado para instância', { traceId, instancia });
-        }
+        log.error('WEBHOOK', 'FATAL: nenhum userId encontrado para instância — mensagem descartada', { traceId, instancia });
       }
 
       log.info('WEBHOOK', 'Resolução final', { traceId, userId, fromMe, isGroup });
