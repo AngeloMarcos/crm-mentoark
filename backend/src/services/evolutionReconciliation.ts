@@ -61,7 +61,10 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
 
     const encontrada = instancias.find(i => i.name === conector.instancia);
     const aberta = encontrada?.connectionStatus === 'open';
-    const statusReal = aberta ? 'conectado' : 'desconectado';
+    // [AUDITORIA] LÓGICA: 'inativo' é o valor usado pelo resto do arquivo (default do
+    // POST /) e o único do CHECK constraint (integracoes_config_status_check) que
+    // representa "não conectado" — não existe 'desconectado' no enum permitido.
+    const statusReal = aberta ? 'conectado' : 'inativo';
 
     if (conector.status !== statusReal) {
       await pool.query(
