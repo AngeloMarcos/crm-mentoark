@@ -2,6 +2,33 @@
 
 Ver protocolo completo em `AUDITORIA_PROTOCOLO.md`. Status possíveis: `✅ revisado sem bug` · `🔧 corrigido` · `⚠️ pendente (precisa decisão)` · `🗑️ candidato a remoção` · `🔄 em progresso`.
 
+### Blindagem definitiva pós-incidentes (2026-07-21) — 3 sprints, gerenciamento de instâncias + soft-delete + alertas
+
+Plano completo em `~/.claude/plans/distributed-hugging-trinket.md` (sessão local). Motivado pelos dois incidentes documentados nas seções abaixo (perda de mensagens ao deletar instância; P2010).
+
+**Sprint 1 — Gerenciamento inteligente de instâncias Evolution (🔧 corrigido):**
+- Novo `backend/src/services/evolutionReconciliation.ts`: `reconciliarInstanciasEvolution()` consulta `fetchInstances` de cada servidor Evolution distinto usado pelos conectores do usuário e corrige `integracoes_config.status` / `agent_configs.evolution_instancia` quando divergem da realidade — nunca deleta linhas, só corrige. Roda a cada 15min via `cron.ts` e sob demanda via `POST /api/integracoes_config/reconciliar` (admin).
+- `syncEvolution()` em `integracoes.ts` corrigido: antes confiava cegamente no `status='conectado'` enviado pelo frontend (bug documentado há semanas, ver seção "Sprint 3 (2026-07-13)" mais abaixo); agora chama `verificarInstanciaAberta()` e só sincroniza se a instância estiver genuinamente `connectionStatus:'open'`.
+- Bug encontrado ao rodar a reconciliação pela primeira vez: `integracoes_config_status_check` (CHECK constraint) não permite o valor `'desconectado'` — só `conectado/sincronizando/atencao/erro/inativo`. Corrigido para usar `'inativo'`.
+- Rodado manualmente contra produção: corrigiu 2 linhas fantasmas de `integracoes_config` (`crm_037bbc10a1c9`, `crm_a5d1255fce86` — ambas apontavam para instâncias que não existiam mais na Evolution, ainda marcadas `'conectado'`) e o `agent_configs.evolution_instancia='teste'` divergente do usuário 435ee472 (corrigido para `crm_435ee4720fc3`, a instância real).
+- Instância órfã `crm_5319f0ed61b3` (presa em loop de QR há semanas) deletada da Evolution (`DELETE /instance/logout` + `/instance/delete`), confirmada removida com `fetchInstances`. **Nota:** reapareceu horas depois gerando QR de novo — não investigado a fundo (não é código do CRM; possivelmente o próprio usuário tentando reconectar essa conta via UI). Como não há vínculo em `integracoes_config` para ela, a reconciliação automática não interfere.
+
+**Sprint 2 — Soft-delete em `whatsapp_messages` (🔧 corrigido):**
+- Migration: coluna `deleted_at TIMESTAMPTZ` + índice parcial (`migrations.ts`).
+- `DELETE FROM whatsapp_messages` físico convertido para `UPDATE ... SET deleted_at = NOW()` em 4 pontos: `webhook.ts` (`handleMessageDelete`), `whatsapp.ts` (`DELETE /messages/:id`, `POST /disconnect`, `DELETE /instances/:name` — os dois últimos já haviam sido corrigidos hoje cedo para escopar por instância, ver seção "Incidente real" abaixo).
+- Leituras normais (`/conversas`, `/search`, `/sync-profiles`, `/status/:phone`, paineis de suporte em `suporte.ts`/`suporte_copiloto.ts`/`services/suporte.ts`) passam a filtrar `deleted_at IS NULL`. Exceções deliberadas: `index.ts` `/api/admin/webhook-trace` (ferramenta de auditoria, precisa ver tudo) e `webhook.ts` linha ~566 (checagem antiloop de eco do bot, precisa detectar o `message_id` mesmo se a mensagem foi soft-deletada depois).
+- Expurgo físico definitivo após 90 dias adicionado ao cron semanal de retenção LGPD já existente (`cron.ts`, domingo 02h).
+
+**Sprint 3 — Alertas no Grafana (🔧 corrigido):**
+- Novo `/opt/observability/grafana/provisioning/alerting/whatsapp-alerts.yaml` (pasta "Chat WhatsApp", datasource Loki `P8E80F9AEF21F6940`):
+  - `whatsapp-zero-recebidas`: dispara se `count_over_time({container="crm-api"} |= "INSERT whatsapp_messages" [6h])` for `0`, avaliado a cada 15min.
+  - `whatsapp-p2010-detectado`: dispara imediatamente se a string `P2010` aparecer nos logs do container `evolution` nos últimos 15min — assinatura exata do bug que já mordeu duas vezes.
+- Sem canal de notificação externo configurado (decisão do usuário) — os alertas ficam visíveis só no painel de Alerting do próprio Grafana por enquanto. Confirmado provisionado e avaliando (`state: inactive`, `health: ok`) via API do Grafana.
+
+**Sprint 4 — Auditoria do padrão "delete sem escopo" no resto do backend:** varredura (`grep -rn "DELETE FROM \w+ WHERE user_id"` em todo `backend/src`) não achou mais nada além do que já foi corrigido — `marketing.ts` (`facebook_contas`, `oauth_state`) e `usuarios.ts` (exclusão de conta inteira) estão corretos como estão, sem conceito de instância.
+
+**Sprint 5 — Deploy:** todos os itens acima testados em homolog antes de produção. **Achado lateral:** `/opt/crm-homolog` também deixou de ser um clone git limpo (mesmo problema já documentado para `/opt/crm` — `migrations.ts`/`modulos.ts`/`team.ts`/`docker-compose.yml` modificados localmente sem commit). A partir de agora, deploys em homolog também devem usar `scp` direto dos arquivos alterados em vez de `git pull` — **não tentar `git pull`/`git reset` em `/opt/crm-homolog`** (mesma regra que já valia para produção).
+
 ### 🔴 INCIDENTE REAL (2026-07-21) — perda de mensagens ao deletar uma instância WhatsApp, backend/src/routes/whatsapp.ts
 
 **O que aconteceu:** durante a investigação do bug P2010 (ver seção "Infra — Evolution API" abaixo), o usuário deletou pela tela do CRM uma instância órfã (`crm_a5d1255fce86`, diferente da instância real em uso). Logo depois, mensagens recentes de uma conversa de teste em **outra instância totalmente diferente** (`crm_435ee4720fc3`, mesma conta de usuário) desapareceram da tela de chat.
