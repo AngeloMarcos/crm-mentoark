@@ -239,7 +239,10 @@ export default function webhookRouter(pool: Pool): Router {
     }
   }
 
-  // [AUDITORIA] LÓGICA: Deleta mensagens locais do CRM que foram revogadas/excluídas pelo usuário no aplicativo móvel.
+  // [AUDITORIA] LÓGICA: Marca como excluídas (soft-delete) mensagens locais do CRM que foram
+  // revogadas/excluídas pelo usuário no aplicativo móvel.
+  // [AUDITORIA] FIX APLICADO (2026-07-21): DELETE físico trocado por soft-delete
+  // (deleted_at) — evita perda irreversível de dados, ver AUDITORIA_LOG.md.
   async function handleMessageDelete(payload: EvolutionPayload): Promise<void> {
     // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
     // mesmo caso de handleStatusUpdate acima — payload.instance sem checagem de presença.
@@ -248,7 +251,7 @@ export default function webhookRouter(pool: Pool): Router {
     if (!key?.id) return;
 
     await pool.query(
-      `DELETE FROM whatsapp_messages WHERE message_id = $1 AND instance_name = $2`,
+      `UPDATE whatsapp_messages SET deleted_at = NOW() WHERE message_id = $1 AND instance_name = $2`,
       [key.id, payload.instance]
     ).catch(() => {});
   }

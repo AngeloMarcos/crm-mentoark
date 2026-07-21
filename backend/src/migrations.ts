@@ -1202,6 +1202,13 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS sent_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_sent_by ON whatsapp_messages(sent_by_user_id) WHERE sent_by_user_id IS NOT NULL`).catch(() => {});
 
+  // [AUDITORIA] LÓGICA: soft-delete em whatsapp_messages — evita perda física e irreversível
+  // de mensagens (incidente documentado em AUDITORIA_LOG.md). DELETEs viram
+  // UPDATE ... SET deleted_at = NOW(); leituras normais filtram deleted_at IS NULL;
+  // expurgo físico definitivo só depois de 90 dias, via cron semanal de retenção LGPD.
+  await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_deleted_at ON whatsapp_messages(deleted_at) WHERE deleted_at IS NOT NULL`).catch(() => {});
+
   log.info('MIGRATIONS', 'whatsapp_message_status + patches OK');
 
   // ── Colunas de configuração avançada de agentes (modo de operação, distribuição, etc.) ──
@@ -1398,6 +1405,26 @@ export async function runMigrations(pool: Pool): Promise<void> {
   `).catch(err => log.warn('MIGRATIONS', 'backfill chat_messages', { err: err.message }));
 
   log.info('MIGRATIONS', 'Auditoria IA: colunas papel/conteudo/tokens OK');
+
+  // ── team_members: colunas que routes/team.ts já esperava mas nunca existiram ──
+  await pool.query(`ALTER TABLE team_members ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`).catch(() => {});
+  await pool.query(`ALTER TABLE team_members ADD COLUMN IF NOT EXISTS bio TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE team_members ADD COLUMN IF NOT EXISTS avatar_url TEXT`).catch(() => {});
+
+  // ── team_role_permissions: schema real tinha (role_id, permission), mas o
+  // router sempre leu/gravou (role_id, modulo, acao) — nunca funcionou (tabela
+  // sempre vazia). Recriar com o shape correto; sem dado a perder.
+  await pool.query(`DROP TABLE IF EXISTS team_role_permissions`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_role_permissions (
+      role_id UUID NOT NULL REFERENCES team_roles(id) ON DELETE CASCADE,
+      modulo  TEXT NOT NULL,
+      acao    TEXT NOT NULL DEFAULT 'acesso',
+      PRIMARY KEY (role_id, modulo, acao)
+    )
+  `).catch(() => {});
+
+  log.info('MIGRATIONS', 'team_members/team_role_permissions schema fix OK');
 
   log.info('MIGRATIONS', 'OK');
 }

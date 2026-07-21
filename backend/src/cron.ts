@@ -65,10 +65,18 @@ export function initCronJobs() {
         "DELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '2 years'"
       ).catch(() => ({ rowCount: 0 }));
 
+      // 5. whatsapp_messages: expurgo físico definitivo de mensagens soft-deletadas há
+      // mais de 90 dias (ver [AUDITORIA] em migrations.ts — deleted_at adicionado após
+      // incidente de perda de dados documentado em AUDITORIA_LOG.md)
+      const waMessages = await pool.query(
+        "DELETE FROM whatsapp_messages WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '90 days'"
+      ).catch(() => ({ rowCount: 0 }));
+
       log.info('CRON', 'Limpeza semanal concluída', {
         disparos: logs.rowCount,
         catalogos: catLogs.rowCount,
         chats: chats.rowCount,
+        waMessagesExpurgadas: waMessages.rowCount,
       });
     } catch (err: any) {
       log.error('CRON', 'Erro na limpeza semanal', { err: err.message });

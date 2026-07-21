@@ -206,7 +206,7 @@ async function executarFerramenta(
             `SELECT content, from_me, instance_name,
                     created_at, message_type
              FROM whatsapp_messages
-             WHERE user_id = $1
+             WHERE user_id = $1 AND deleted_at IS NULL
              ORDER BY created_at DESC LIMIT 5`,
             [userId],
           ),

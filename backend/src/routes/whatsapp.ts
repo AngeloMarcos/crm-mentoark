@@ -229,7 +229,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const phonesRes = await pool.query(
         `SELECT DISTINCT split_part(remote_jid, '@', 1) AS phone
          FROM whatsapp_messages
-         WHERE user_id = $1 AND remote_jid NOT LIKE '%@g.us'
+         WHERE user_id = $1 AND remote_jid NOT LIKE '%@g.us' AND deleted_at IS NULL
          LIMIT 200`,
         [userId]
       );
@@ -280,7 +280,7 @@ export default function whatsappRouter(pool: Pool): Router {
                ORDER BY m.created_at DESC
              ) AS rn
            FROM whatsapp_messages m
-           WHERE m.user_id = $1
+           WHERE m.user_id = $1 AND m.deleted_at IS NULL
          ),
          contato_unico AS (
            SELECT DISTINCT ON (RIGHT(telefone, 11))
@@ -373,6 +373,7 @@ export default function whatsappRouter(pool: Pool): Router {
          LEFT JOIN users u ON u.id = m.sent_by_user_id
          WHERE split_part(m.remote_jid, '@', 1) = $1
            AND m.user_id = $2
+           AND m.deleted_at IS NULL
          ORDER BY COALESCE(m.timestamp_wa, m.created_at) ASC
          LIMIT $3 OFFSET $4`,
         [phone, tenantId, limit, offset]
@@ -411,7 +412,7 @@ export default function whatsappRouter(pool: Pool): Router {
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
-         WHERE split_part(m.remote_jid, '@', 1) = $1 AND m.user_id = $2 AND m.from_me = true
+         WHERE split_part(m.remote_jid, '@', 1) = $1 AND m.user_id = $2 AND m.from_me = true AND m.deleted_at IS NULL
          ORDER BY m.created_at DESC LIMIT 50`,
         [phone, tenantId]
       );
@@ -545,7 +546,7 @@ export default function whatsappRouter(pool: Pool): Router {
       );
       const ultimaMensagem = await pool.query(
         `SELECT created_at, instance_name FROM whatsapp_messages
-         WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+         WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`,
         [req.userId]
       );
       const provider = await pool.query(
@@ -1001,7 +1002,7 @@ export default function whatsappRouter(pool: Pool): Router {
       // do usuario ao desconectar uma unica instancia. Causou perda real de mensagens em
       // producao (ver diagnosticos/AUDITORIA_LOG.md). Mesma correcao aplicada em /instances/:name.
       const queries = [
-        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1 AND instance_name = $2`, [userId, instancia]),
+        pool.query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, instancia]),
         pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [instancia]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [instancia]),
         pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1 AND instancia = $2`, [userId, instancia]),
@@ -1318,7 +1319,7 @@ export default function whatsappRouter(pool: Pool): Router {
         // (`WHERE user_id = $1`, sem filtrar por instância) apagava o historico de TODAS as
         // instancias do usuario ao deletar uma unica instancia — causou perda real de mensagens
         // em producao (ver diagnosticos/AUDITORIA_LOG.md).
-        pool.query(`DELETE FROM whatsapp_messages WHERE user_id = $1 AND instance_name = $2`, [userId, name]),
+        pool.query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, name]),
         pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [name]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [name]),
         pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1 AND instancia = $2`, [userId, name]),
@@ -1476,6 +1477,7 @@ export default function whatsappRouter(pool: Pool): Router {
           AND c.telefone ILIKE '%' || RIGHT(split_part(m.remote_jid,'@',1), 11)
         WHERE m.user_id = $1 AND m.content ILIKE $2
           AND m.remote_jid NOT LIKE '%@g.us'
+          AND m.deleted_at IS NULL
         ORDER BY m.created_at DESC LIMIT 50`,
       [tenantId, `%${q}%`]
     );
@@ -1487,8 +1489,10 @@ export default function whatsappRouter(pool: Pool): Router {
     const id = req.params.id;
     const { forEveryone, instancia, remoteJid } = req.body as any;
     const tenantId = await resolveOwnerId(userId);
+    // [AUDITORIA] FIX APLICADO (2026-07-21): soft-delete em vez de DELETE físico —
+    // evita perda irreversível de dados, ver AUDITORIA_LOG.md.
     await pool.query(
-      `DELETE FROM whatsapp_messages WHERE (id::text = $1 OR message_id = $1) AND user_id = $2`,
+      `UPDATE whatsapp_messages SET deleted_at = NOW() WHERE (id::text = $1 OR message_id = $1) AND user_id = $2`,
       [id, tenantId]
     ).catch(() => {});
     if (forEveryone && instancia && remoteJid) {
