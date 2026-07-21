@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
+import { evolutionFetch } from '../utils/resilientFetch';
 
 // ── Rate limiting persistente via banco ──────────────────────────────────────
 async function checkRateLimit(pool: Pool, userId: string): Promise<boolean> {
@@ -206,7 +207,7 @@ export default function disparos(pool: Pool): Router {
       // O rate limit já foi registrado no checkRateLimit acima
 
 
-      const resp = await fetch(`${baseUrl}/message/sendText/${instancia}`, {
+      const resp = await evolutionFetch(`${baseUrl}/message/sendText/${instancia}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: api_key },
         body: JSON.stringify({ number: telefoneNorm, text: textoFinal, delay: typingDelay }),
