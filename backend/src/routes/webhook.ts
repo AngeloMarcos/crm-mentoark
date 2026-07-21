@@ -520,6 +520,11 @@ export default function webhookRouter(pool: Pool): Router {
       // ser o admin mais antigo). Instância não resolvida agora só loga e descarta.
       if (!userId) {
         log.error('WEBHOOK', 'FATAL: nenhum userId encontrado para instância — mensagem descartada', { traceId, instancia });
+        // [AUDITORIA] FIX APLICADO (2026-07-21): faltava o `return` — o log já dizia "mensagem
+        // descartada" mas a execução continuava e chamava processarComDebounce()/agentEngine.ts
+        // com userId vazio, reabrindo por outro caminho o mesmo risco de cross-tenant que o
+        // fallback #5 (removido acima) causava. Ver diagnosticos/AUDITORIA_LOG.md.
+        return;
       }
 
       log.info('WEBHOOK', 'Resolução final', { traceId, userId, fromMe, isGroup });

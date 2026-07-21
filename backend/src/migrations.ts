@@ -1271,12 +1271,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
   // Admins são donos deles mesmos
   await pool.query(`UPDATE users SET owner_id = id WHERE role = 'admin' AND owner_id IS NULL`).catch(() => {});
-  // Usuários sem owner ficam vinculados ao admin mais antigo do sistema
-  await pool.query(`
-    UPDATE users u
-    SET owner_id = (SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1)
-    WHERE u.role = 'user' AND u.owner_id IS NULL
-  `).catch(() => {});
+  // [AUDITORIA] FIX APLICADO (2026-07-21): REMOVIDO o fallback que vinculava todo usuário
+  // sem owner_id ao "admin mais antigo do sistema" (rodava em TODO boot do servidor).
+  // Causou vazamento/mistura de dados entre tenants em produção: 10 contas de clientes
+  // reais tiveram seu owner_id sobrescrito para apontar pra uma conta admin que, por
+  // coincidência, também era de um cliente real — misturando conversas/contatos/configs
+  // dos dois lados via resolveOwnerId() (backend/src/routes/whatsapp.ts). Correção
+  // emergencial de dados já aplicada diretamente no banco (owner_id = NULL pras 10 contas,
+  // ver diagnosticos/AUDITORIA_LOG.md). owner_id agora SÓ é setado por ação explícita (ex:
+  // admin convidando um membro pra equipe) — nunca mais por uma migration automática.
+  // Usuário sem owner_id fica dono de si mesmo via COALESCE(owner_id, id) em
+  // resolveOwnerId(), que já trata NULL corretamente (nenhuma mudança necessária lá).
 
   log.info('MIGRATIONS', 'users.owner_id OK');
 

@@ -237,15 +237,36 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     userId: entrada.userId || 'N/A',
   });
 
-  // 1. Buscar agente — prioriza o agente do usuário correto, depois qualquer um da instância
-  const r1 = await pool.query(
-    `SELECT * FROM agentes
-     WHERE LOWER(evolution_instancia) = LOWER($1) AND ativo = true
-     ORDER BY CASE WHEN user_id = $2 THEN 0 ELSE 1 END, updated_at DESC
-     LIMIT 1`,
-    [entrada.instancia, entrada.userId || '']
-  );
-  let agenteRows = r1.rows;
+  // [AUDITORIA] FIX APLICADO (2026-07-21): a query original buscava por `evolution_instancia`
+  // sozinho, usando `user_id` só como critério de ORDER BY (desempate) — se o usuário correto
+  // não tivesse um agente com esse nome de instância, ela silenciosamente retornava o agente
+  // de OUTRO usuário que por acaso usou o mesmo nome (evolution_instancia só é único por
+  // usuário, não globalmente). Isso permitia a IA responder um cliente usando a persona/chave
+  // de API de outra empresa. Corrigido: com userId conhecido (sempre o caso agora que
+  // webhook.ts nunca mais chama processarComDebounce sem userId resolvido — ver
+  // diagnosticos/AUDITORIA_LOG.md), a busca exige user_id exato. Só cai para "qualquer
+  // agente com esse nome de instância" no caso residual de userId não vir preenchido.
+  let agenteRows: any[];
+  if (entrada.userId) {
+    const r1 = await pool.query(
+      `SELECT * FROM agentes
+       WHERE LOWER(evolution_instancia) = LOWER($1) AND user_id = $2 AND ativo = true
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+      [entrada.instancia, entrada.userId]
+    );
+    agenteRows = r1.rows;
+  } else {
+    log.warn('ENGINE', 'userId ausente ao buscar agente — usando fallback global por instancia (risco de colisão entre tenants)', { instancia: entrada.instancia });
+    const r1 = await pool.query(
+      `SELECT * FROM agentes
+       WHERE LOWER(evolution_instancia) = LOWER($1) AND ativo = true
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+      [entrada.instancia]
+    );
+    agenteRows = r1.rows;
+  }
 
   if (!agenteRows.length && entrada.userId) {
     const r2 = await pool.query(
