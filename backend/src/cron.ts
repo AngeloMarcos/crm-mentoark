@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { pool } from './db';
 import { log } from './logger';
+import { reconciliarInstanciasEvolution } from './services/evolutionReconciliation';
 
 export function initCronJobs() {
   // Todo dia às 03:00 (horário de Brasília) — Limpeza diária de tabelas de crescimento
@@ -86,6 +87,20 @@ export function initCronJobs() {
       log.error('CRON', 'Erro ao reativar pausas', { err: err.message });
     }
   });
+
+  // A cada 15 minutos — reconciliar integracoes_config/agent_configs contra o estado
+  // real das instâncias na Evolution (ver services/evolutionReconciliation.ts — corrige
+  // o drift que ficava acumulando silenciosamente, causa raiz documentada em AUDITORIA_LOG.md)
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { corrigidos } = await reconciliarInstanciasEvolution(pool);
+      if (corrigidos > 0) {
+        log.info('CRON', 'Reconciliação de instâncias Evolution aplicou correções', { corrigidos });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro na reconciliação de instâncias Evolution', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
 
   log.info('CRON', 'Jobs de limpeza e retenção LGPD registrados');
 }

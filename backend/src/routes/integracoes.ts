@@ -1,7 +1,8 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
-import { AuthRequest } from '../middleware';
+import { AuthRequest, adminMiddleware } from '../middleware';
 import { log } from '../logger';
+import { verificarInstanciaAberta, reconciliarInstanciasEvolution } from '../services/evolutionReconciliation';
 
 // [AUDITORIA] LÓGICA: CRUD de `integracoes_config` (Evolution, N8N, OpenAI, etc.),
 // consumido por src/pages/Integracoes.tsx ("Conectores"). Quando uma integração do
@@ -34,26 +35,21 @@ export default function integracoesRouter(pool: Pool): Router {
     return { ...row, api_key: maskKey(row.api_key) };
   }
 
-  // [AUDITORIA] BUG: syncEvolution() é chamada sempre que o registro salvo em
-  // integracoes_config tem status==='conectado' — mas esse status vem direto do
-  // corpo da requisição (POST/PUT), escrito pelo frontend em Integracoes.tsx.
-  // O frontend, por sua vez, seta status='conectado' apenas com base em
-  // `/instance/fetchInstances` responder HTTP 200 (API key válida), SEM checar se a
-  // instância específica está de fato pareada (connectionStatus==='open'). Resultado:
-  // uma instância presa em loop de QR (nunca pareada) pode ser marcada 'conectado' e
-  // sobrescrever agent_configs com uma instancia errada/obsoleta — bate exatamente
-  // com a divergência já documentada em AUDITORIA_LOG.md (agent_configs.evolution_instancia
-  // ='teste' enquanto agentes/integracoes_config tinham a instância correta).
-  // FIX PENDENTE (motivo: validar de verdade exigiria o backend chamar a Evolution API
-  // (serviço externo) antes de confiar no status enviado pelo cliente — mudança de
-  // modelo de confiança em rota de produção, precisa decisão do usuário sobre se vale
-  // a latência extra numa chamada síncrona). Mitigação parcial aplicada no frontend:
-  // ver [AUDITORIA] FIX APLICADO em Integracoes.tsx (testar() agora só marca
-  // 'conectado' se a instância aparecer com connectionStatus:'open' na resposta).
+  // [AUDITORIA] FIX APLICADO (2026-07-21): syncEvolution() antes confiava cegamente no
+  // status='conectado' enviado pelo frontend, sem checar a Evolution de verdade — causava
+  // drift entre agent_configs/integracoes_config e a Evolution real (documentado em
+  // AUDITORIA_LOG.md: agent_configs.evolution_instancia='teste' divergente da instância
+  // real). Agora chama verificarInstanciaAberta() (services/evolutionReconciliation.ts)
+  // e só grava em agent_configs se a instância estiver genuinamente connectionStatus:'open'.
   // Sincroniza instância Evolution conectada com agent_configs
   async function syncEvolution(
     userId: string, instancia: string, url: string, apiKey: string
   ) {
+    const aberta = await verificarInstanciaAberta(url, apiKey, instancia);
+    if (!aberta) {
+      log.warn('INTEGRACOES', 'syncEvolution abortado: instância não está open na Evolution', { userId, instancia });
+      return;
+    }
     // [AUDITORIA] LÓGICA: UPSERT em `agent_configs` para registrar/atualizar os dados de conexão de saída da Evolution API.
     await pool.query(
       `INSERT INTO agent_configs
@@ -291,6 +287,14 @@ export default function integracoesRouter(pool: Pool): Router {
       [req.params.id, userId]
     );
     return res.status(204).send();
+  }));
+
+  // ── POST /api/integracoes_config/reconciliar (admin) ─────────────────────────
+  // [AUDITORIA] LÓGICA: Dispara sob demanda a mesma reconciliação que roda automaticamente
+  // a cada 15min via cron (ver backend/src/cron.ts) — útil para depuração/correção imediata.
+  router.post('/reconciliar', adminMiddleware, wrap(async (_req: AuthRequest, res: Response) => {
+    const { corrigidos } = await reconciliarInstanciasEvolution(pool);
+    return res.json({ ok: true, corrigidos });
   }));
 
   return router;
