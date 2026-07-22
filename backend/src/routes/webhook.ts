@@ -35,6 +35,7 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
+import { withTenantContext } from '../db';
 import { log } from '../logger';
 
 // [AUDITORIA] FIX APLICADO (achado D da revisão externa/Google AI Studio): fs.appendFileSync
@@ -235,11 +236,15 @@ export default function webhookRouter(pool: Pool): Router {
         || status === 5 || status === '5';
 
       if (isReadStatus) {
-        await pool.query(
+        // [AUDITORIA] FIX APLICADO (2026-07-21): bypass admin via withTenantContext — esta
+        // função só tem message_id/instance_name, sem userId resolvido; usar bypass em vez de
+        // uma query extra pra descobrir o dono. Necessário pro piloto de RLS em
+        // whatsapp_messages (só homologação, ver diagnosticos/AUDITORIA_LOG.md).
+        await withTenantContext({ isAdmin: true }, client => client.query(
           `UPDATE whatsapp_messages SET is_read = true
            WHERE message_id = $1 AND instance_name = $2`,
           [messageId, payload.instance]
-        ).catch(() => {});
+        )).catch(() => {});
       }
     }
   }
@@ -255,10 +260,125 @@ export default function webhookRouter(pool: Pool): Router {
     const key = payload.data?.key;
     if (!key?.id) return;
 
-    await pool.query(
+    // [AUDITORIA] FIX APLICADO (2026-07-21): bypass admin, mesmo motivo do handleStatusUpdate
+    // acima — sem userId resolvido nesta função. Ver diagnosticos/AUDITORIA_LOG.md.
+    await withTenantContext({ isAdmin: true }, client => client.query(
       `UPDATE whatsapp_messages SET deleted_at = NOW() WHERE message_id = $1 AND instance_name = $2`,
       [key.id, payload.instance]
-    ).catch(() => {});
+    )).catch(() => {});
+  }
+
+  // [AUDITORIA] LÓGICA: Sincronização automática de histórico ao conectar/reconectar (piloto,
+  // 2026-07-22, só homologação — ver diagnosticos/AUDITORIA_LOG.md, caso real
+  // stefanocatedral@hotmail.com). Resolve o userId a partir da instância pelos mesmos 4 níveis
+  // de fallback já usados no fluxo de messages.upsert (agent_configs → agentes → prefixo UUID →
+  // integracoes_config). Duplicado deliberadamente em vez de refatorar o bloco original (~linha
+  // 555 abaixo) — aquele trecho é código já auditado por um incidente real de vazamento de dados
+  // entre tenants (ver cabeçalho do arquivo); evitar risco de regressão nele.
+  async function resolverUserIdPorInstancia(instancia: string): Promise<string | null> {
+    const cfgRes = await pool.query(
+      `SELECT user_id FROM agent_configs
+       WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome_agente) = LOWER($1))
+         AND ativo = true
+       LIMIT 1`,
+      [instancia]
+    ).catch(() => ({ rows: [] as any[] }));
+    if (cfgRes.rows.length) return cfgRes.rows[0].user_id;
+
+    const agtRes = await pool.query(
+      `SELECT user_id FROM agentes
+       WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
+         AND ativo = true AND user_id IS NOT NULL
+       ORDER BY updated_at DESC LIMIT 1`,
+      [instancia]
+    ).catch(() => ({ rows: [] as any[] }));
+    if (agtRes.rows.length) return agtRes.rows[0].user_id;
+
+    if (instancia.startsWith('crm_')) {
+      const prefixo = instancia.slice(4).replace(/[%_]/g, '');
+      const uRes = await pool.query(
+        `SELECT id FROM users WHERE replace(id::text, '-', '') LIKE $1 LIMIT 1`,
+        [`${prefixo}%`]
+      ).catch(() => ({ rows: [] as any[] }));
+      if (uRes.rows.length) return uRes.rows[0].id;
+    }
+
+    const icRes = await pool.query(
+      `SELECT user_id FROM integracoes_config
+       WHERE LOWER(instancia) = LOWER($1) AND tipo = 'evolution'
+       LIMIT 1`,
+      [instancia]
+    ).catch(() => ({ rows: [] as any[] }));
+    if (icRes.rows.length) return icRes.rows[0].user_id;
+
+    return null;
+  }
+
+  // [AUDITORIA] LÓGICA: Backfill ativo de histórico (piloto, 2026-07-22, só homologação) —
+  // chamado quando a instância confirma connection.update === 'open' (pareamento novo ou
+  // reconexão). Busca as últimas mensagens direto da Evolution (mesmo endpoint
+  // /chat/findMessages já usado pela rota autenticada POST /api/whatsapp/sync-history em
+  // routes/whatsapp.ts) e grava com ON CONFLICT DO NOTHING (idempotente). withTenantContext
+  // usado com UM client reaproveitado pro loop inteiro — nunca por linha — necessário pro
+  // piloto de RLS em whatsapp_messages e evita esgotar o pool de conexões num lote de até 100
+  // mensagens.
+  async function sincronizarHistoricoDireto(
+    userId: string, instancia: string, apiKey: string, url: string
+  ): Promise<void> {
+    try {
+      const base = url.replace(/\/$/, '');
+      const PAGE_SIZE = 100;
+      const msgsRes = await fetch(`${base}/chat/findMessages/${instancia}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: apiKey },
+        body: JSON.stringify({ where: {}, limit: PAGE_SIZE, page: 1 }),
+      });
+      if (!msgsRes.ok) {
+        log.warn('WEBHOOK', 'sincronizarHistoricoDireto: findMessages falhou', { instancia, status: msgsRes.status });
+        return;
+      }
+      const msgsJson: any = await msgsRes.json().catch(() => ({}));
+      const records: any[] = msgsJson?.messages?.records || msgsJson?.records || (Array.isArray(msgsJson) ? msgsJson : []);
+
+      let inseridos = 0;
+      await withTenantContext({ userId, isAdmin: false }, async (client) => {
+        for (const m of records) {
+          try {
+            const key = m.key || {};
+            const remoteJid: string = key.remoteJid || m.remoteJid || '';
+            if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
+            const messageId = key.id || m.id;
+            if (!messageId) continue;
+            const fromMe = !!key.fromMe;
+            const tsRaw = Number(m.messageTimestamp || Math.floor(Date.now() / 1000));
+            const ts = tsRaw > 1e10 ? Math.floor(tsRaw / 1000) : tsRaw;
+            const msgContent = m.message || {};
+            const msgType = m.messageType || (
+              msgContent.imageMessage ? 'image'
+              : msgContent.audioMessage ? 'audio'
+              : msgContent.videoMessage ? 'video'
+              : msgContent.documentMessage ? 'document'
+              : 'text'
+            );
+            const content = msgContent.conversation || msgContent.extendedTextMessage?.text || null;
+
+            const result = await client.query(
+              `INSERT INTO whatsapp_messages
+                 (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))
+               ON CONFLICT (message_id, instance_name) DO NOTHING`,
+              [userId, instancia, remoteJid, messageId, fromMe, msgType, content, fromMe ? 'sent' : 'received', ts]
+            );
+            if (result.rowCount && result.rowCount > 0) inseridos++;
+          } catch (err: any) {
+            log.warn('WEBHOOK', 'sincronizarHistoricoDireto: falha ao inserir linha', { err: err?.message });
+          }
+        }
+      });
+      log.info('WEBHOOK', 'sincronizarHistoricoDireto concluída', { instancia, userId, encontradas: records.length, inseridos });
+    } catch (err: any) {
+      log.warn('WEBHOOK', 'sincronizarHistoricoDireto: erro geral', { instancia, userId, err: err?.message });
+    }
   }
 
   // [AUDITORIA] LÓGICA — RASTREIO "mensagens não atualizam na tela" (2026-07-08):
@@ -361,6 +481,91 @@ export default function webhookRouter(pool: Pool): Router {
         traceId,
         texto: String(payload.data?.message?.conversation || payload.data?.message?.extendedTextMessage?.text || '').slice(0, 80),
       });
+
+      // [AUDITORIA] LÓGICA: Sincronização Ativa Automática ao Parear/Reconectar (piloto,
+      // 2026-07-22, só homologação). Quando a Evolution confirma que a sessão abriu
+      // (connection.update === 'open'), dispara em segundo plano (void, não bloqueia o retorno
+      // deste handler) o backfill das últimas mensagens via sincronizarHistoricoDireto — resolve
+      // o caso real já diagnosticado (stefanocatedral@hotmail.com, ver AUDITORIA_LOG.md) sem
+      // depender de um script manual.
+      if (eventClean === 'connectionupdate' && (payload.data as any)?.connection === 'open') {
+        log.info('WEBHOOK', 'Instância conectada — disparando sincronização automática de histórico', { traceId, instance: payload.instance });
+        const instanciaConectada = payload.instance;
+        if (instanciaConectada) {
+          const userIdSync = await resolverUserIdPorInstancia(instanciaConectada);
+          if (userIdSync) {
+            const cfgEvo = await pool.query(
+              `SELECT url, api_key FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' LIMIT 1`,
+              [userIdSync]
+            ).catch(() => ({ rows: [] as any[] }));
+            const evoUrl = cfgEvo.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
+            const evoKey = cfgEvo.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+            if (evoKey) {
+              void sincronizarHistoricoDireto(userIdSync, instanciaConectada, evoKey, evoUrl);
+            }
+          } else {
+            log.info('WEBHOOK', 'connection.update: userId não resolvido para a instância, sincronização não disparada', { traceId, instancia: instanciaConectada });
+          }
+        }
+        return;
+      }
+
+      // [AUDITORIA] LÓGICA: Sincronização Passiva Instantânea (piloto, 2026-07-22, só
+      // homologação) — captura best-effort do array de mensagens que a Evolution eventualmente
+      // inclui no próprio evento messages.set (sync em massa que o Baileys dispara após parear).
+      // Formato de payload.data para este evento NÃO foi confirmado ao vivo nesta sessão — fica
+      // com fallback vazio e try/catch total; se o formato não bater, simplesmente não sincroniza
+      // nada por este caminho (o backfill principal é sincronizarHistoricoDireto, acima, já
+      // comprovado via /chat/findMessages).
+      if (eventClean === 'messagesset') {
+        const instanciaSet = payload.instance;
+        const rawMessages: any[] = Array.isArray(payload.data)
+          ? (payload.data as any)
+          : (payload.data as any)?.messages || [];
+        if (instanciaSet && rawMessages.length) {
+          log.info('WEBHOOK', 'messages.set recebido — sincronização passiva em segundo plano', { traceId, instancia: instanciaSet, total: rawMessages.length });
+          void (async () => {
+            const userIdSync = await resolverUserIdPorInstancia(instanciaSet);
+            if (!userIdSync) return;
+            const messagesToSync = rawMessages.slice(-150);
+            let syncedCount = 0;
+            await withTenantContext({ userId: userIdSync, isAdmin: false }, async (client) => {
+              for (const m of messagesToSync) {
+                try {
+                  const key = m.key || {};
+                  const remoteJid: string = key.remoteJid || m.remoteJid || '';
+                  if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
+                  const messageId = key.id || m.id;
+                  if (!messageId) continue;
+                  const fromMe = !!key.fromMe;
+                  const tsRaw = Number(m.messageTimestamp || Math.floor(Date.now() / 1000));
+                  const ts = tsRaw > 1e10 ? Math.floor(tsRaw / 1000) : tsRaw;
+                  const msgContent = m.message || {};
+                  const msgType = m.messageType || (
+                    msgContent.imageMessage ? 'image'
+                    : msgContent.audioMessage ? 'audio'
+                    : msgContent.videoMessage ? 'video'
+                    : msgContent.documentMessage ? 'document'
+                    : 'text'
+                  );
+                  const content = msgContent.conversation || msgContent.extendedTextMessage?.text || null;
+
+                  const result = await client.query(
+                    `INSERT INTO whatsapp_messages
+                       (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))
+                     ON CONFLICT (message_id, instance_name) DO NOTHING`,
+                    [userIdSync, instanciaSet, remoteJid, messageId, fromMe, msgType, content, fromMe ? 'sent' : 'received', ts]
+                  );
+                  if (result.rowCount && result.rowCount > 0) syncedCount++;
+                } catch { /* linha ignorada, best-effort */ }
+              }
+            }).catch((err: any) => log.warn('WEBHOOK', 'messages.set sync: erro geral', { instancia: instanciaSet, err: err?.message }));
+            log.info('WEBHOOK', 'Sincronização passiva concluída', { traceId, instancia: instanciaSet, syncedCount });
+          })();
+        }
+        return;
+      }
 
       // [AUDITORIA] LÓGICA: Desvia o payload para processamento especializado se for atualização de metadados.
       if (eventClean === 'messagesupdate') {
@@ -567,10 +772,13 @@ export default function webhookRouter(pool: Pool): Router {
         }
         // Proteção extra: mensagens muito recentes (< 5s) com ID no padrão WA real (3EB...) e timestamp recente
         // são provavelmente ecos do bot; verificar no banco se já temos esse messageId como from_me=true
-        const jaExisteBot = await pool.query(
+        // [AUDITORIA] FIX APLICADO (2026-07-21): roda com o userId já resolvido (ver
+        // "Resolução final" acima) via withTenantContext — necessário pro piloto de RLS
+        // em whatsapp_messages (só homologação, ver diagnosticos/AUDITORIA_LOG.md).
+        const jaExisteBot = await withTenantContext({ userId, isAdmin: false }, client => client.query(
           `SELECT 1 FROM whatsapp_messages WHERE message_id = $1 AND from_me = true LIMIT 1`,
           [messageId]
-        ).catch(() => ({ rows: [] }));
+        )).catch(() => ({ rows: [] as any[] }));
         if (jaExisteBot.rows.length) {
           wlog('WEBHOOK_ANTILOOP', `Mensagem de bot já salva no banco — ignorando: ${messageId}`);
           return;
@@ -636,13 +844,15 @@ export default function webhookRouter(pool: Pool): Router {
           }
 
           // [AUDITORIA] LÓGICA: Persiste a mensagem enviada pelo atendente na tabela principal para controle de histórico do chat.
-          await pool.query(
+          // [AUDITORIA] FIX APLICADO (2026-07-21): withTenantContext — piloto de RLS em
+          // whatsapp_messages (só homologação, ver diagnosticos/AUDITORIA_LOG.md).
+          await withTenantContext({ userId, isAdmin: false }, client => client.query(
             `INSERT INTO whatsapp_messages
                (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
              VALUES ($1, $2, $3, $4, true, $5, $6, 'sent', to_timestamp($7))
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
             [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
-          ).catch(err => log.error('WEBHOOK', 'Erro ao inserir mensagem fromMe', { traceId, err: err.message }));
+          )).catch(err => log.error('WEBHOOK', 'Erro ao inserir mensagem fromMe', { traceId, err: err.message }));
         } else {
           // [AUDITORIA] BUG: mensagens fromMe=true de uma instância sem userId resolvido eram
           // descartadas em silêncio (sem log), diferente do fluxo de mensagens recebidas (que loga
@@ -742,7 +952,11 @@ export default function webhookRouter(pool: Pool): Router {
         });
 
         // [AUDITORIA] LÓGICA: Registra a mensagem recebida de cliente final na tabela do histórico do chat no CRM.
-        const insertResult = await pool.query(
+        // [AUDITORIA] FIX APLICADO (2026-07-21): withTenantContext — piloto de RLS em
+        // whatsapp_messages (só homologação, ver diagnosticos/AUDITORIA_LOG.md). Esse é o
+        // INSERT central do vazamento de tenants corrigido hoje mais cedo (fallback #5
+        // removido) — RLS agora é a segunda camada de proteção pra esse mesmo caminho.
+        const insertResult = await withTenantContext({ userId, isAdmin: false }, client => client.query(
           `INSERT INTO whatsapp_messages
              (user_id, instance_name, remote_jid, message_id, from_me, message_type,
               content, media_url, media_mimetype, push_name, status, timestamp_wa)
@@ -751,7 +965,7 @@ export default function webhookRouter(pool: Pool): Router {
           [userId, instancia, remoteJid, messageId, tipo,
            texto || null, midia.url || null, midia.mime || null,
            pushNameFinal, tsVal]
-        ).catch(err => {
+        )).catch(err => {
           log.error('WEBHOOK', 'ERRO INSERT whatsapp_messages', { traceId, err: err.message });
           return { rowCount: -1 };
         });

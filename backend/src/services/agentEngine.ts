@@ -14,6 +14,7 @@ import { Pool } from 'pg';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
+import { withTenantContext } from '../db';
 import { log } from '../logger';
 
 // Cliente global — usado como fallback; substituído pela chave do banco sempre que possível
@@ -550,8 +551,12 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
 
   // 11. Persistir em whatsapp_messages para o painel de chat
+  // [AUDITORIA] FIX APLICADO (2026-07-21): INSERT agora roda dentro de withTenantContext
+  // (db.ts) — propaga app.user_id pro Postgres via SET LOCAL, necessário pro piloto de RLS
+  // em whatsapp_messages (só homologação por enquanto, ver diagnosticos/AUDITORIA_LOG.md).
+  // Sem isso, esse INSERT falharia o WITH CHECK da policy em qualquer ambiente com RLS ativo.
   if (respostaFinal) {
-    await pool.query(
+    await withTenantContext({ userId: userIdFinal, isAdmin: false }, client => client.query(
       `INSERT INTO whatsapp_messages
          (user_id, instance_name, remote_jid, message_id, from_me,
           message_type, content, status, timestamp_wa, push_name)
@@ -567,7 +572,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
        respostaFinal,
        Math.floor(Date.now() / 1000),
        nomeAgente]
-    ).catch(err => log.error('ENGINE INSERT whatsapp_messages', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
+    )).catch(err => log.error('ENGINE INSERT whatsapp_messages', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
   }
 
   // 12. Registrar uso de tokens

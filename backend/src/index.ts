@@ -34,8 +34,8 @@ import cors from 'cors';
 import path from 'path';
 import { randomUUID } from 'crypto';
 
-import { pool } from './db';
-import { authMiddleware, adminMiddleware } from './middleware';
+import { pool, migrationsPool } from './db';
+import { authMiddleware, adminMiddleware, tenantContextMiddleware, AuthRequest } from './middleware';
 import { makeCrud } from './crud';
 
 import authRouter from './auth';
@@ -250,6 +250,7 @@ app.get('/api/catalogo/n8n/:userId', async (req, res) => {
 
 // ── Protected routes (JWT required) ─────────────────────────
 app.use('/api', authMiddleware);
+app.use('/api', tenantContextMiddleware);
 
 // Standard CRUD tables (generic factory)
 const SIMPLE_TABLES = [
@@ -373,15 +374,19 @@ app.get('/api/seguranca/status-chaves', authMiddleware, adminMiddleware, (_req, 
 // ── Diagnóstico WhatsApp (admin) ─────────────────────────────
 // GET /api/admin/webhook-trace?phone=11999190910
 // Retorna: estado do número no banco + linhas do log_geral.txt filtradas.
-app.get('/api/admin/webhook-trace', authMiddleware, adminMiddleware, async (req, res) => {
+app.get('/api/admin/webhook-trace', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
   try {
     const phoneRaw = String(req.query.phone || '').replace(/\D/g, '');
     if (!phoneRaw) return res.status(400).json({ message: 'phone obrigatório' });
     const suffix = phoneRaw.slice(-11);
     const like = `%${suffix}%`;
+    // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
+    // homologação — rota admin (adminMiddleware já garantiu req.userRole='admin'), getDb()
+    // seta app.is_admin=true e a policy libera a busca cross-tenant por telefone.
+    const tenantDb = await req.getDb!();
 
     const [msgs, dedup, contato, optout] = await Promise.all([
-      pool.query(
+      tenantDb.query(
         `SELECT instance_name, remote_jid, message_id, from_me, message_type,
                 LEFT(content,200) AS content, status, timestamp_wa, created_at
          FROM whatsapp_messages
@@ -400,7 +405,7 @@ app.get('/api/admin/webhook-trace', authMiddleware, adminMiddleware, async (req,
       // [AUDITORIA-WHATSAPP] FIX APLICADO: filtro trocado para um JOIN por message_id contra
       // whatsapp_messages.remote_jid — mesma tabela e mesmo padrão LIKE já usados na query de
       // `msgs` logo acima nesta função. Mudança isolada a esta única query, somente leitura.
-      pool.query(
+      tenantDb.query(
         `SELECT d.message_id, d.instancia, d.criado_em FROM webhook_mensagens_processadas d
          WHERE d.message_id IN (SELECT message_id FROM whatsapp_messages WHERE remote_jid LIKE $1)
          ORDER BY d.criado_em DESC LIMIT 20`,
@@ -469,7 +474,11 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
-runMigrations(pool).catch(err => log.error('MIGRATIONS', 'Erro ao rodar migrations', { err: err?.message, stack: err?.stack }));
+// [AUDITORIA] FIX APLICADO: migrations rodam num pool separado (migrationsPool), que usa
+// DATABASE_URL_MIGRATIONS se definida ou cai para DATABASE_URL (== pool). Necessário porque
+// o piloto de RLS troca a role de `pool` para uma sem privilégio de DDL em homologação — ver
+// diagnosticos/AUDITORIA_LOG.md.
+runMigrations(migrationsPool).catch(err => log.error('MIGRATIONS', 'Erro ao rodar migrations', { err: err?.message, stack: err?.stack }));
 app.listen(PORT, '0.0.0.0', () => {
   log.info('STARTUP', `API running on port ${PORT}`);
   initCronJobs();

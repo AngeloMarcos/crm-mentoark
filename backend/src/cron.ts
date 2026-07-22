@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { pool } from './db';
+import { pool, withTenantContext } from './db';
 import { log } from './logger';
 import { reconciliarInstanciasEvolution } from './services/evolutionReconciliation';
 
@@ -68,9 +68,11 @@ export function initCronJobs() {
       // 5. whatsapp_messages: expurgo físico definitivo de mensagens soft-deletadas há
       // mais de 90 dias (ver [AUDITORIA] em migrations.ts — deleted_at adicionado após
       // incidente de perda de dados documentado em AUDITORIA_LOG.md)
-      const waMessages = await pool.query(
+      // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
+      // homologação — expurgo é cross-tenant por design (job de sistema), precisa de bypass.
+      const waMessages = await withTenantContext({ isAdmin: true }, (client) => client.query(
         "DELETE FROM whatsapp_messages WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '90 days'"
-      ).catch(() => ({ rowCount: 0 }));
+      )).catch(() => ({ rowCount: 0 }));
 
       log.info('CRON', 'Limpeza semanal concluída', {
         disparos: logs.rowCount,

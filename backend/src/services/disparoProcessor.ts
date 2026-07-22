@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
 import { botSentTexts, botMessageIds } from './agentEngine';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
+import { withTenantContext } from '../db';
 import { log } from '../logger';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -218,7 +219,10 @@ export async function processarDisparos(pool: Pool) {
         const msgType = tipo_midia === 'texto' || !tipo_midia ? 'text' : tipo_midia === 'imagem' ? 'image' : tipo_midia === 'audio' ? 'audio' : 'document';
         const msgContent = tipo_midia === 'texto' || !tipo_midia ? textoFinal : (legendaFinal || null);
 
-        await pool.query(
+        // [AUDITORIA] FIX APLICADO (2026-07-21): INSERT roda dentro de withTenantContext
+        // (db.ts) — propaga app.user_id pro Postgres, necessário pro piloto de RLS em
+        // whatsapp_messages (só homologação, ver diagnosticos/AUDITORIA_LOG.md).
+        await withTenantContext({ userId: user_id, isAdmin: false }, client => client.query(
           `INSERT INTO whatsapp_messages
              (user_id, instance_name, remote_jid, message_id, from_me, message_type,
               content, media_url, media_mimetype, status, timestamp_wa)
@@ -234,7 +238,7 @@ export async function processarDisparos(pool: Pool) {
             tipo_midia !== 'texto' && url_midia ? url_midia : null,
             tipo_midia === 'imagem' ? 'image/jpeg' : tipo_midia === 'audio' ? 'audio/ogg' : tipo_midia === 'documento' ? 'application/pdf' : null
           ]
-        ).catch(err => log.error('DISPARO INSERT whatsapp_messages ERROR', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
+        )).catch(err => log.error('DISPARO INSERT whatsapp_messages ERROR', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
 
         // Sucesso no envio: reseta o contador de falhas consecutivas
         errosConsecutivos = 0;

@@ -1,5 +1,32 @@
 # Auditoria de Código — Log
 
+### 🔧 Piloto de RLS (Row-Level Security) em `whatsapp_messages` — só homologação (2026-07-22)
+
+**Contexto:** item pendente listado na sessão anterior ("RLS como rede de segurança contra futuros bugs de escopo"). Escolhido pelo usuário como próximo passo, com instrução explícita: fazer tudo em homologação, garantir zero impacto em produção, subir todos os commits pendentes antes de começar (verificado: 0 pendentes).
+
+**Achado crítico que redesenhou o plano:** a role `mentoark`, usada por toda a aplicação hoje (produção e homolog), é **superuser do Postgres** (`rolsuper=t, rolbypassrls=t`). Superusers ignoram RLS incondicionalmente, mesmo com `FORCE ROW LEVEL SECURITY`. Simplesmente habilitar RLS nas tabelas não teria efeito nenhum enquanto a app conectasse como `mentoark` — seria uma falsa sensação de segurança. Também descoberto: já existiam 2 políticas RLS órfãs no banco (`chat_messages_user_policy`, `agent_configs_user_policy`, usando `auth.uid()` do Supabase — função que não existe neste backend Express+JWT), criadas manualmente no banco em algum momento, nunca commitadas, e sem efeito real justamente por causa do superuser.
+
+**🔧 Implementado (só em `crm_hml`, banco e ambiente de homologação):**
+1. Nova role `crm_app_hml` (não superuser, não bypassrls, não dona das tabelas) — é o que torna o RLS real em vez de teatro.
+2. `backend/src/db.ts`: `migrationsPool` separado do pool da aplicação — migrations (DDL) continuam rodando com a role administrativa via `DATABASE_URL_MIGRATIONS`; a app passa a conectar via `DATABASE_URL` com a role restrita. Se `DATABASE_URL_MIGRATIONS` não estiver definida (caso de produção, hoje e sempre), cai para `DATABASE_URL` — comportamento idêntico ao de antes, zero mudança em produção.
+3. `backend/src/middleware.ts`: novo `tenantContextMiddleware` — adquire um client dedicado do pool por requisição (lazy, só quando a rota chama `req.getDb()`), `SET LOCAL app.user_id`/`app.is_admin`, commit/rollback automático no fim da resposta. `req.setDbUserId()` para rotas que filtram por `tenantId` (dono de equipe) em vez do `userId` bruto do JWT.
+4. `backend/src/db.ts`: `withTenantContext()` — mesma lógica para código fora do ciclo HTTP (webhook.ts, agentEngine.ts, disparoProcessor.ts, cron.ts).
+5. RLS habilitado só em `whatsapp_messages` (piloto, a tabela do incidente de vazamento já documentado nesta sessão): policy `USING/WITH CHECK (app.is_admin = 'true' OR user_id = app.user_id)`.
+6. Migrados todos os pontos de acesso a `whatsapp_messages` nos arquivos que a tocam: `routes/whatsapp.ts` (12 pontos), `routes/webhook.ts` (5 pontos, com bypass admin nos handlers sem userId resolvido), `routes/suporte_copiloto.ts` (1 leitura), `services/agentEngine.ts` e `services/disparoProcessor.ts` (INSERTs), `index.ts` (`/api/admin/webhook-trace`, bypass admin), `cron.ts` (expurgo de 90 dias, bypass admin — é cross-tenant por design). `routes/suporte.ts` e `services/suporte.ts` verificados como código morto (não importados em `index.ts`) — não fazem parte da aplicação em execução, pulados.
+7. `.env`/`docker-compose.yml` de `crm-api-homolog`: `DATABASE_URL` trocado pra `crm_app_hml`, `DATABASE_URL_MIGRATIONS` adicionado com a connection string antiga (`mentoark`). Backups salvos (`.bak_pre_rls_2026-07-22`). Rebuild + restart só do `crm-api-homolog` — `crm-api` (produção) não foi tocado (confirmado: uptime contínuo de 12h antes/depois, sem restart).
+
+**✅ Verificação (suite completa, com 2 usuários descartáveis criados via `/auth/register` — nenhum dado de cliente real usado, tudo apagado ao final):**
+- Positivo: usuário de teste A viu só a própria conversa/mensagem; usuário B idem; busca (`GET /search`) de B por um termo presente na mensagem de A não retornou nada de A.
+- Bloqueio via `psql` direto como `crm_app_hml` (não `mentoark`): sem `app.user_id` setado → 0 linhas. Com `app.user_id` de um tenant aleatório → 0 linhas.
+- **Teste decisivo (prova que a rede de segurança funciona mesmo com bug de código):** `SET app.user_id` do tenant B e rodar `SELECT * FROM whatsapp_messages` **sem nenhum `WHERE user_id`** (simulando um bug de escopo esquecido, a mesma classe dos incidentes reais já documentados nesta sessão) → RLS filtrou sozinho, só devolveu a linha do próprio tenant B. `UPDATE` tentando alterar a mensagem do tenant A autenticado como tenant B, também sem `WHERE user_id` → `UPDATE 0`, bloqueado pelo `WITH CHECK`.
+- Produção confirmada intacta: `crm-api` sem restart, `.env` de produção sem `DATABASE_URL_MIGRATIONS`, role `crm_app_hml` sem nenhuma permissão usada em produção, `whatsapp_messages.relrowsecurity = false` no banco `crm`.
+
+**Escopo do que ficou de fora (deliberado, não é esquecimento):**
+- RLS só em `whatsapp_messages` — as outras ~30 rotas que usam `pool.query()` direto continuam sem essa rede de segurança extra (mas seguem com o `WHERE user_id` de sempre, sem regressão).
+- Rollout pra produção — não solicitado ainda, pendente de decisão do usuário depois de rodar em homolog por um tempo.
+- `n8n.ts` `/agente-config/:instancia` (credencial sem máscara, ver entrada de 2026-07-21 abaixo) — segue pendente, não coberto por este piloto.
+- Separação de instância Evolution entre produção/homolog — segue bloqueada por falta de número dedicado.
+
 ### Continuação da blindagem de tenants (2026-07-21, noite) — kanban.ts corrigido, n8n.ts pendente de decisão
 
 **🔧 Corrigido — `backend/src/routes/kanban.ts` (webhook público do n8n):** `POST /api/kanban/webhook/n8n` aceitava `user_id` direto do corpo da requisição, autenticado só por um segredo estático global (`N8N_WEBHOOK_SECRET`) — mesma classe do vazamento de tenants corrigido mais cedo hoje. Corrigido: se `instance_name` vier no payload, agora exige que ela pertença de fato a esse `user_id` (`agentes`/`integracoes_config`) antes de criar a tarefa no Kanban.

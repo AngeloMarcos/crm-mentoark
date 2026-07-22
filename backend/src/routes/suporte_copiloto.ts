@@ -28,6 +28,7 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import OpenAI from 'openai';
 import type { AuthRequest } from '../middleware';
+import { withTenantContext } from '../db';
 import { log } from '../logger';
 
 // ── Constantes ────────────────────────────────────────────────────────────────
@@ -127,12 +128,14 @@ async function executar(
             'SELECT tipo, url, instancia, status, updated_at FROM integracoes_config WHERE user_id = $1',
             [userId],
           ),
-          pool.query(
+          // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
+          // homologação (ver diagnosticos/AUDITORIA_LOG.md).
+          withTenantContext({ userId }, (client) => client.query(
             `SELECT content, from_me, instance_name, created_at
              FROM whatsapp_messages WHERE user_id = $1 AND deleted_at IS NULL
              ORDER BY created_at DESC LIMIT 5`,
             [userId],
-          ),
+          )),
           pool.query(
             `SELECT nome_agente, modelo_llm, ativo, evolution_instancia, evolution_server_url,
                     (prompt_sistema IS NOT NULL AND prompt_sistema <> '') AS tem_prompt

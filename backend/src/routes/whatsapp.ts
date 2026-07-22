@@ -226,7 +226,10 @@ export default function whatsappRouter(pool: Pool): Router {
   router.post('/sync-profiles', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
-      const phonesRes = await pool.query(
+      // [AUDITORIA] FIX APLICADO (2026-07-21): req.getDb() -- piloto de RLS em
+      // whatsapp_messages (só homologação, ver diagnosticos/AUDITORIA_LOG.md).
+      const db = await req.getDb!();
+      const phonesRes = await db.query(
         `SELECT DISTINCT split_part(remote_jid, '@', 1) AS phone
          FROM whatsapp_messages
          WHERE user_id = $1 AND remote_jid NOT LIKE '%@g.us' AND deleted_at IS NULL
@@ -262,8 +265,13 @@ export default function whatsappRouter(pool: Pool): Router {
       const userId = req.userId!;
       const showArchived = req.query.archived === 'true';
       const tenantId = await resolveOwnerId(userId); // Carrega o ID do dono da conta
+      // [AUDITORIA] FIX APLICADO (2026-07-21): setDbUserId(tenantId) -- a query abaixo filtra
+      // por tenantId (dono da equipe), não pelo userId bruto; RLS precisa ver o mesmo id.
+      // Piloto em whatsapp_messages, só homologação (ver diagnosticos/AUDITORIA_LOG.md).
+      await req.setDbUserId!(tenantId);
+      const db = await req.getDb!();
 
-      const r = await pool.query(
+      const r = await db.query(
         `WITH ranked AS (
            SELECT
              split_part(m.remote_jid,'@',1) AS phone,
@@ -359,8 +367,12 @@ export default function whatsappRouter(pool: Pool): Router {
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Number(req.query.offset) || 0;
       const tenantId = await resolveOwnerId(userId);
+      // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
+      // homologação (ver diagnosticos/AUDITORIA_LOG.md).
+      await req.setDbUserId!(tenantId);
+      const db = await req.getDb!();
 
-      const r = await pool.query(
+      const r = await db.query(
         `SELECT
            m.id, m.message_id, m.from_me, m.message_type, m.content,
            m.media_url, m.media_mimetype, m.status, m.push_name,
@@ -407,7 +419,11 @@ export default function whatsappRouter(pool: Pool): Router {
       const userId = req.userId!;
       const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
       const tenantId = await resolveOwnerId(userId);
-      const r = await pool.query(
+      // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
+      // homologação (ver diagnosticos/AUDITORIA_LOG.md).
+      await req.setDbUserId!(tenantId);
+      const db = await req.getDb!();
+      const r = await db.query(
         `SELECT m.message_id, COALESCE(s.status, m.status) AS status, m.created_at
          FROM whatsapp_messages m
          LEFT JOIN whatsapp_message_status s
@@ -544,7 +560,9 @@ export default function whatsappRouter(pool: Pool): Router {
          FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution'`,
         [req.userId]
       );
-      const ultimaMensagem = await pool.query(
+      // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
+      // homologação (ver diagnosticos/AUDITORIA_LOG.md).
+      const ultimaMensagem = await (await req.getDb!()).query(
         `SELECT created_at, instance_name FROM whatsapp_messages
          WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`,
         [req.userId]
@@ -1001,11 +1019,16 @@ export default function whatsappRouter(pool: Pool): Router {
       // usavam so `WHERE user_id = $1` — apagavam o historico/config de TODAS as instancias
       // do usuario ao desconectar uma unica instancia. Causou perda real de mensagens em
       // producao (ver diagnosticos/AUDITORIA_LOG.md). Mesma correcao aplicada em /instances/:name.
+      // [AUDITORIA] FIX APLICADO (2026-07-21): a linha de whatsapp_messages usa req.getDb()
+      // -- piloto de RLS, só homologação (ver diagnosticos/AUDITORIA_LOG.md). As demais
+      // tabelas não têm RLS habilitado ainda, seguem em pool.query() normalmente.
+      // [AUDITORIA] FIX APLICADO (2026-07-22): removidas as DELETEs de whatsapp_message_status
+      // e n8n_chat_histories deste array — a segunda apagava a memória de conversa da IA a
+      // cada desconexão/reconexão da mesma instância, decisão explícita do usuário de manter
+      // esse contexto vivo entre reconexões (ver AUDITORIA_LOG.md).
       const queries = [
-        pool.query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, instancia]),
-        pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [instancia]),
+        (await req.getDb!()).query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, instancia]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [instancia]),
-        pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1 AND instancia = $2`, [userId, instancia]),
         pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia = $2`, [userId, instancia]),
         pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
         pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
@@ -1092,7 +1115,10 @@ export default function whatsappRouter(pool: Pool): Router {
             msgContent.documentMessage?.caption ||
             null;
 
-          const result = await pool.query(
+          // [AUDITORIA] FIX APLICADO (2026-07-21): req.getDb() -- piloto de RLS, só
+          // homologação (ver diagnosticos/AUDITORIA_LOG.md). Memoizado: só adquire o client
+          // uma vez, mesmo chamado dentro deste loop.
+          const result = await (await req.getDb!()).query(
             `INSERT INTO whatsapp_messages
                (user_id, instance_name, remote_jid, message_id, from_me, message_type,
                 content, status, timestamp_wa)
@@ -1279,7 +1305,11 @@ export default function whatsappRouter(pool: Pool): Router {
 
       // [AUDITORIA] LÓGICA: Salva a mensagem associando ao tenantId (dono da instância), mas
       // registrando quem de fato disparou o envio (sent_by_user_id = userId do agente humano logado).
-      await pool.query(
+      // [AUDITORIA] FIX APLICADO (2026-07-21): setDbUserId(tenantId) -- o INSERT grava
+      // user_id=tenantId, RLS precisa ver o mesmo id. Piloto só em homologação (ver
+      // diagnosticos/AUDITORIA_LOG.md).
+      await req.setDbUserId!(tenantId);
+      await (await req.getDb!()).query(
         `INSERT INTO whatsapp_messages
            (user_id, sent_by_user_id, instance_name, remote_jid, message_id, from_me, message_type,
             content, media_url, status, timestamp_wa)
@@ -1319,10 +1349,14 @@ export default function whatsappRouter(pool: Pool): Router {
         // (`WHERE user_id = $1`, sem filtrar por instância) apagava o historico de TODAS as
         // instancias do usuario ao deletar uma unica instancia — causou perda real de mensagens
         // em producao (ver diagnosticos/AUDITORIA_LOG.md).
-        pool.query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, name]),
-        pool.query(`DELETE FROM whatsapp_message_status WHERE instance_name = $1`, [name]),
+        // [AUDITORIA] FIX APLICADO (2026-07-21): req.getDb() -- piloto de RLS, só
+        // homologação (ver diagnosticos/AUDITORIA_LOG.md).
+        // [AUDITORIA] FIX APLICADO (2026-07-22): removidas as DELETEs de whatsapp_message_status
+        // e n8n_chat_histories deste array — a segunda apagava a memória de conversa da IA a
+        // cada desconexão/reconexão da mesma instância, decisão explícita do usuário de manter
+        // esse contexto vivo entre reconexões (ver AUDITORIA_LOG.md).
+        (await req.getDb!()).query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, name]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [name]),
-        pool.query(`DELETE FROM n8n_chat_histories WHERE user_id = $1 AND instancia = $2`, [userId, name]),
         pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia = $2`, [userId, name]),
         pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
         pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
@@ -1467,7 +1501,10 @@ export default function whatsappRouter(pool: Pool): Router {
     const q = ((req.query.q as string) || '').trim();
     if (!q || q.length < 2) return res.json([]);
     const tenantId = await resolveOwnerId(userId);
-    const r = await pool.query(
+    // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
+    // homologação (ver diagnosticos/AUDITORIA_LOG.md).
+    await req.setDbUserId!(tenantId);
+    const r = await (await req.getDb!()).query(
       `SELECT m.id, m.content, m.timestamp_wa, m.created_at, m.from_me,
                split_part(m.remote_jid,'@',1) AS phone,
                COALESCE(c.nome, c.push_name, split_part(m.remote_jid,'@',1)) AS contact_name,
@@ -1490,8 +1527,10 @@ export default function whatsappRouter(pool: Pool): Router {
     const { forEveryone, instancia, remoteJid } = req.body as any;
     const tenantId = await resolveOwnerId(userId);
     // [AUDITORIA] FIX APLICADO (2026-07-21): soft-delete em vez de DELETE físico —
-    // evita perda irreversível de dados, ver AUDITORIA_LOG.md.
-    await pool.query(
+    // evita perda irreversível de dados, ver AUDITORIA_LOG.md. Piloto de RLS em
+    // whatsapp_messages, só homologação.
+    await req.setDbUserId!(tenantId);
+    await (await req.getDb!()).query(
       `UPDATE whatsapp_messages SET deleted_at = NOW() WHERE (id::text = $1 OR message_id = $1) AND user_id = $2`,
       [id, tenantId]
     ).catch(() => {});
@@ -1511,7 +1550,10 @@ export default function whatsappRouter(pool: Pool): Router {
     const userId = req.userId!;
     const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
     const tenantId = await resolveOwnerId(userId);
-    await pool.query(
+    // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
+    // homologação (ver diagnosticos/AUDITORIA_LOG.md).
+    await req.setDbUserId!(tenantId);
+    await (await req.getDb!()).query(
       `UPDATE whatsapp_messages SET is_read = true
        WHERE user_id = $1 AND split_part(remote_jid,'@',1) = $2 AND from_me = false`,
       [tenantId, phone]
