@@ -455,6 +455,27 @@ export function kanbanWebhookN8n(pool: Pool) {
         return res.status(400).json({ message: 'user_id e titulo são obrigatórios' });
       }
 
+      // [AUDITORIA] FIX APLICADO (2026-07-21): esse webhook só era autenticado por um
+      // segredo estático global (N8N_WEBHOOK_SECRET), sem checar se o `user_id` do payload
+      // realmente é dono da `instance_name` informada — mesma classe de risco do vazamento
+      // de tenants já corrigido em webhook.ts/agentEngine.ts (ver AUDITORIA_LOG.md). Um
+      // workflow n8n mal configurado (não precisa ser malicioso) podia criar tarefas no
+      // quadro Kanban de outro cliente. Se `instance_name` vier no payload, exige que ela
+      // pertença de fato a esse user_id antes de prosseguir.
+      if (instance_name) {
+        const ownershipCheck = await pool.query(
+          `SELECT 1 FROM agentes WHERE user_id = $1 AND LOWER(evolution_instancia) = LOWER($2)
+           UNION
+           SELECT 1 FROM integracoes_config WHERE user_id = $1 AND LOWER(instancia) = LOWER($2)
+           LIMIT 1`,
+          [user_id, instance_name]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (!ownershipCheck.rows.length) {
+          log.warn('KANBAN_N8N', 'instance_name não pertence ao user_id informado — requisição rejeitada', { user_id, instance_name });
+          return res.status(403).json({ message: 'instance_name não pertence ao user_id informado' });
+        }
+      }
+
       // Buscar coluna Backlog do usuário — ou criar as 4 colunas padrão
       let backlogRes = await pool.query(
         `SELECT id FROM kanban_colunas WHERE user_id = $1 AND nome = 'Backlog' LIMIT 1`,
