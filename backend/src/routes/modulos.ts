@@ -16,11 +16,12 @@ export const TODOS_MODULOS = [
   { key: 'catalogo',     label: 'Catálogo',             padrao: false, adminOnly: false },
   { key: 'galeria',      label: 'Galeria',              padrao: false, adminOnly: false },
   { key: 'docs',         label: 'Documentação',         padrao: false, adminOnly: false },
-  // ── Módulos exclusivos de admin/gerente ───────────────────
-  { key: 'agentes',      label: 'Agentes de IA',        padrao: false, adminOnly: true  },
-  { key: 'cerebro',      label: 'Configuração da IA',   padrao: false, adminOnly: true  },
-  { key: 'workflows',    label: 'Workflows',            padrao: false, adminOnly: true  },
-  { key: 'integracoes',  label: 'Conectores',           padrao: false, adminOnly: true  },
+  // ── Módulos delegáveis a não-admins via cargo/módulo ou papel de equipe ────
+  { key: 'agentes',      label: 'Agentes de IA',        padrao: false, adminOnly: false },
+  { key: 'cerebro',      label: 'Configuração da IA',   padrao: false, adminOnly: false },
+  { key: 'workflows',    label: 'Workflows',            padrao: false, adminOnly: false },
+  { key: 'integracoes',  label: 'Conectores',           padrao: false, adminOnly: false },
+  // ── Exclusivo de admin real: gestão de contas/roles de terceiros ───────────
   { key: 'usuarios',     label: 'Usuários & Acessos',   padrao: false, adminOnly: true  },
 ];
 
@@ -51,12 +52,27 @@ export default function modulosRouter(pool: Pool): Router {
         [req.userId]
       );
 
-      // Se não tiver registro, retorna os módulos padrão (segurança)
-      if (r.rows.length === 0) {
+      // Módulos vindos de papéis de equipe (team_roles) de que o usuário seja membro ativo
+      const teamR = await pool.query(
+        `SELECT DISTINCT p.modulo
+           FROM team_members tm
+           JOIN team_member_roles tmr ON tmr.member_id = tm.id
+           JOIN team_role_permissions p ON p.role_id = tmr.role_id
+          WHERE tm.user_id = $1 AND tm.status = 'ativo'`,
+        [req.userId]
+      );
+
+      const uniao = new Set<string>([
+        ...r.rows.map(row => row.modulo),
+        ...teamR.rows.map(row => row.modulo),
+      ]);
+
+      // Se não tiver nenhum registro, retorna os módulos padrão (segurança)
+      if (uniao.size === 0) {
         return res.json(TODOS_MODULOS.filter(m => m.padrao).map(m => m.key));
       }
 
-      return res.json(r.rows.map(row => row.modulo));
+      return res.json([...uniao]);
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

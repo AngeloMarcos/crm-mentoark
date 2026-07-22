@@ -45,8 +45,9 @@ export function UsuariosAcessos() {
   const [todosModulos, setTodosModulos] = useState<ModuloInfo[]>([]);
   const [expandedUser, setExpandedUser] = useState<string | null>(null);
   const [userModulos, setUserModulos]   = useState<Record<string, boolean>>({});
+  const [savedModulos, setSavedModulos] = useState<Record<string, boolean>>({});
   const [modulosLoading, setModulosLoading] = useState(false);
-  const [salvandoModulo, setSalvandoModulo] = useState<string | null>(null);
+  const [salvandoUsuario, setSalvandoUsuario] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -119,34 +120,43 @@ export function UsuariosAcessos() {
         todosModulos.forEach(m => { map[m.key] = false; });
         rows.forEach(row => { map[row.modulo] = row.ativo; });
         setUserModulos(map);
+        setSavedModulos(map);
       }
     } finally {
       setModulosLoading(false);
     }
   };
 
-  const toggleModulo = async (userId: string, key: string, novoValor: boolean) => {
-    setSalvandoModulo(key);
+  const toggleModulo = (key: string, novoValor: boolean) => {
     setUserModulos(prev => ({ ...prev, [key]: novoValor }));
+  };
 
+  const isDirty = (userId: string) => {
+    if (expandedUser !== userId) return false;
+    return todosModulos.some(m => (userModulos[m.key] ?? false) !== (savedModulos[m.key] ?? false));
+  };
+
+  const salvarModulos = async (userId: string) => {
+    setSalvandoUsuario(userId);
     try {
-      const r = await fetch(`${API_BASE}/api/modulos/usuario/${userId}/toggle`, {
-        method: "POST",
+      const ativos = todosModulos.filter(m => userModulos[m.key]).map(m => m.key);
+      const r = await fetch(`${API_BASE}/api/modulos/usuario/${userId}`, {
+        method: "PUT",
         headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ modulo: key, ativo: novoValor }),
+        body: JSON.stringify({ modulos: ativos }),
       });
       if (!r.ok) throw new Error();
-      
-      // Update count in local state
-      setUsers(prev => prev.map(u => u.user_id === userId 
-        ? { ...u, modulos_count: u.modulos_count + (novoValor ? 1 : -1) } 
+
+      setSavedModulos(userModulos);
+      setUsers(prev => prev.map(u => u.user_id === userId
+        ? { ...u, modulos_count: ativos.length }
         : u
       ));
+      toast.success("Permissões salvas");
     } catch {
-      setUserModulos(prev => ({ ...prev, [key]: !novoValor }));
-      toast.error("Erro ao salvar permissão");
+      toast.error("Erro ao salvar permissões");
     } finally {
-      setSalvandoModulo(null);
+      setSalvandoUsuario(null);
     }
   };
 
@@ -309,29 +319,44 @@ export function UsuariosAcessos() {
                           exit={{ height: 0, opacity: 0 }}
                           className="overflow-hidden"
                         >
-                          <div className="p-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                            {modulosLoading ? (
-                              <div className="col-span-full py-8 text-center">
-                                <Loader2 className="h-6 w-6 animate-spin mx-auto text-primary" />
-                              </div>
-                            ) : (
-                              todosModulos.map(m => (
-                                <div key={m.key} className="flex items-center justify-between p-2 rounded border border-white/5 bg-black/20">
-                                  <Label htmlFor={`mod-${u.user_id}-${m.key}`} className="text-xs cursor-pointer flex-1 truncate pr-2 text-white/70">
-                                    {m.label}
-                                  </Label>
-                                  {salvandoModulo === m.key ? (
-                                    <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                                  ) : (
+                          <div className="p-6">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                              {modulosLoading ? (
+                                <div className="col-span-full py-8 text-center">
+                                  <Loader2 className="h-6 w-6 animate-spin mx-auto text-primary" />
+                                </div>
+                              ) : (
+                                todosModulos.map(m => (
+                                  <div key={m.key} className="flex items-center justify-between p-2 rounded border border-white/5 bg-black/20">
+                                    <Label htmlFor={`mod-${u.user_id}-${m.key}`} className="text-xs cursor-pointer flex-1 truncate pr-2 text-white/70">
+                                      {m.label}
+                                    </Label>
                                     <Switch
                                       id={`mod-${u.user_id}-${m.key}`}
                                       checked={userModulos[m.key] ?? false}
-                                      onCheckedChange={v => toggleModulo(u.user_id, m.key, v)}
+                                      onCheckedChange={v => toggleModulo(m.key, v)}
                                       className="scale-75 origin-right"
                                     />
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                            {!modulosLoading && (
+                              <div className="flex justify-end pt-4 mt-4 border-t border-white/5">
+                                <Button
+                                  size="sm"
+                                  onClick={() => salvarModulos(u.user_id)}
+                                  disabled={!isDirty(u.user_id) || salvandoUsuario === u.user_id}
+                                  className="gap-2"
+                                >
+                                  {salvandoUsuario === u.user_id ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
                                   )}
-                                </div>
-                              ))
+                                  Salvar permissões
+                                </Button>
+                              </div>
                             )}
                           </div>
                         </motion.div>

@@ -23,48 +23,21 @@ interface Cargo {
   permissoes: string[];
 }
 
-const GRUPOS_PERMISSOES = [
-  {
-    nome: "Atendimento",
-    permissoes: ["whatsapp", "respostas_rapidas"]
-  },
-  {
-    nome: "Vendas",
-    permissoes: ["leads", "contatos", "funil", "kanban"]
-  },
-  {
-    nome: "Comunicação",
-    permissoes: ["campanhas", "disparos"]
-  },
-  {
-    nome: "Catálogo",
-    permissoes: ["catalogo"]
-  },
-  {
-    nome: "Galeria",
-    permissoes: ["galeria"]
-  },
-  {
-    nome: "Equipe",
-    permissoes: ["equipe"]
-  },
-  {
-    nome: "IA & Automação",
-    permissoes: ["cerebro", "agentes", "workflows", "integracoes"]
-  },
-  {
-    nome: "Administração",
-    permissoes: ["usuarios", "seguranca"]
-  }
-];
+interface ModuloInfo {
+  key: string;
+  label: string;
+  padrao: boolean;
+  adminOnly: boolean;
+}
 
 export default function CargosPage() {
   const navigate = useNavigate();
   const [cargos, setCargos] = useState<Cargo[]>([]);
+  const [todosModulos, setTodosModulos] = useState<ModuloInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [cargoEdit, setCargoEdit] = useState<Cargo | null>(null);
-  
+
   const [nome, setNome] = useState("");
   const [permissoes, setPermissoes] = useState<string[]>([]);
   const [salvando, setSalvando] = useState(false);
@@ -81,7 +54,14 @@ export default function CargosPage() {
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, []);
+  const loadModulos = async () => {
+    const r = await fetch(`${API_BASE}/api/modulos/lista`, {
+      headers: { Authorization: `Bearer ${token()}` },
+    });
+    if (r.ok) setTodosModulos(await r.json());
+  };
+
+  useEffect(() => { load(); loadModulos(); }, []);
 
   const resetForm = () => {
     setNome("");
@@ -196,21 +176,24 @@ export default function CargosPage() {
             <div className="space-y-4">
               <Label className="text-lg font-semibold">Permissões de Acesso</Label>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {GRUPOS_PERMISSOES.map(grupo => (
+                {[
+                  { nome: "Módulos", itens: todosModulos.filter(m => !m.adminOnly) },
+                  { nome: "Administração", itens: todosModulos.filter(m => m.adminOnly) },
+                ].map(grupo => (
                   <div key={grupo.nome} className="space-y-3 p-4 rounded-lg bg-muted/30">
                     <h3 className="font-bold border-b pb-2">{grupo.nome}</h3>
                     <div className="space-y-2">
-                      {grupo.permissoes.map(perm => (
-                        <div key={perm} className="flex items-center space-x-2">
-                          <Checkbox 
-                            id={perm} 
-                            checked={permissoes.includes(perm)}
+                      {grupo.itens.map(m => (
+                        <div key={m.key} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={m.key}
+                            checked={permissoes.includes(m.key)}
                             onCheckedChange={(checked) => {
-                              if (checked) setPermissoes([...permissoes, perm]);
-                              else setPermissoes(permissoes.filter(p => p !== perm));
+                              if (checked) setPermissoes([...permissoes, m.key]);
+                              else setPermissoes(permissoes.filter(p => p !== m.key));
                             }}
                           />
-                          <Label htmlFor={perm} className="capitalize">{perm.replace('_', ' ')}</Label>
+                          <Label htmlFor={m.key}>{m.label}</Label>
                         </div>
                       ))}
                     </div>

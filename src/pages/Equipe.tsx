@@ -12,10 +12,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { 
-  Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare, 
-  Settings2, Copy, RefreshCw, Shield, LayoutGrid, MessageCircle, 
-  UserPlus2, Users2, BarChart3, Send, Loader2, Search
+import {
+  Users, UserPlus, Trash2, Pencil, Check, X, MessageSquare,
+  Settings2, Copy, RefreshCw, Shield, LayoutGrid, MessageCircle,
+  UserPlus2, Users2, BarChart3, Send, Loader2, Search, Plus, Mail, KeyRound
 } from "lucide-react";
 import { useEquipe, type Membro } from "@/hooks/useEquipe";
 import { useAuth } from "@/hooks/useAuth";
@@ -61,6 +61,11 @@ export default function EquipePage() {
                     <UserPlus2 className="w-4 h-4" /> Membros
                   </TabsTrigger>
                 )}
+                {(user?.role === 'admin' || user?.role === 'gerente') && (
+                  <TabsTrigger value="permissoes" className="gap-2">
+                    <KeyRound className="w-4 h-4" /> Permissões
+                  </TabsTrigger>
+                )}
               </TabsList>
             </div>
 
@@ -75,6 +80,10 @@ export default function EquipePage() {
 
             <TabsContent value="membros">
               <GestaoMembros />
+            </TabsContent>
+
+            <TabsContent value="permissoes">
+              <PainelPermissoesEquipe />
             </TabsContent>
           </Tabs>
         )}
@@ -869,6 +878,515 @@ function ModalPermissoes({
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancelar</Button>
           <Button onClick={handleSave} disabled={saving}>
             {saving ? "Salvando..." : "Salvar Alterações"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// PERMISSÕES DA EQUIPE (papéis customizados por dono + convites por e-mail)
+// ─────────────────────────────────────────────────────────────
+interface ModuloInfo {
+  key: string;
+  label: string;
+  padrao: boolean;
+  adminOnly: boolean;
+}
+
+interface TeamRole {
+  id: string;
+  nome: string;
+  cor: string;
+  descricao: string | null;
+  is_system: boolean;
+  permissions: { modulo: string; acao: string }[];
+}
+
+interface TeamMember {
+  id: string;
+  user_id: string | null;
+  email: string;
+  nome: string | null;
+  cargo: string | null;
+  status: string;
+  convite_expira_at: string | null;
+  roles: { id: string; nome: string; cor: string }[];
+}
+
+function PainelPermissoesEquipe() {
+  const { session } = useAuth();
+  const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
+  const headers = () => ({ Authorization: `Bearer ${session?.access_token}`, "Content-Type": "application/json" });
+
+  const [modulos, setModulos] = useState<ModuloInfo[]>([]);
+  const [roles, setRoles] = useState<TeamRole[]>([]);
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [roleDialog, setRoleDialog] = useState<TeamRole | "new" | null>(null);
+  const [inviteDialog, setInviteDialog] = useState(false);
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [memberRolesDialog, setMemberRolesDialog] = useState<TeamMember | null>(null);
+
+  const carregar = async () => {
+    setLoading(true);
+    try {
+      const [rModulos, rRoles, rMembers] = await Promise.all([
+        fetch(`${API_BASE}/api/modulos/lista`, { headers: headers() }),
+        fetch(`${API_BASE}/api/team/roles`, { headers: headers() }),
+        fetch(`${API_BASE}/api/team/members`, { headers: headers() }),
+      ]);
+      if (rModulos.ok) setModulos((await rModulos.json()).filter((m: ModuloInfo) => !m.adminOnly));
+      if (rRoles.ok) setRoles(await rRoles.json());
+      if (rMembers.ok) setMembers(await rMembers.json());
+    } catch {
+      toast.error("Erro ao carregar permissões da equipe");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { carregar(); }, []);
+
+  const excluirRole = async (role: TeamRole) => {
+    if (!confirm(`Excluir o papel "${role.nome}"?`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/team/roles/${role.id}`, { method: "DELETE", headers: headers() });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || "Erro ao excluir papel");
+      toast.success("Papel excluído");
+      carregar();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
+  const removerMembro = async (m: TeamMember) => {
+    if (!confirm(`Remover ${m.nome || m.email} da equipe?`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/team/members/${m.id}`, { method: "DELETE", headers: headers() });
+      if (!r.ok) throw new Error("Erro ao remover membro");
+      toast.success("Membro removido");
+      carregar();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      <header className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold">Permissões da Equipe</h2>
+          <p className="text-sm text-muted-foreground">
+            Crie papéis com módulos específicos e convide pessoas para sua equipe por e-mail
+          </p>
+        </div>
+      </header>
+
+      {loading ? (
+        <div className="py-16 text-center text-muted-foreground">
+          <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" /> Carregando...
+        </div>
+      ) : (
+        <>
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Papéis</h3>
+              <Button size="sm" onClick={() => setRoleDialog("new")} className="gap-2">
+                <Plus className="w-4 h-4" /> Novo Papel
+              </Button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {roles.length === 0 && (
+                <div className="col-span-full py-10 text-center text-sm text-muted-foreground border-2 border-dashed rounded-lg">
+                  Nenhum papel criado ainda. Crie um papel para poder convidar pessoas.
+                </div>
+              )}
+              {roles.map(role => (
+                <Card key={role.id} className="p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: role.cor }} />
+                      <span className="font-semibold truncate">{role.nome}</span>
+                    </div>
+                    {!role.is_system && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setRoleDialog(role)}>
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => excluirRole(role)}>
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  {role.descricao && <p className="text-xs text-muted-foreground">{role.descricao}</p>}
+                  <div className="flex flex-wrap gap-1">
+                    {role.permissions.length === 0 ? (
+                      <span className="text-[10px] text-muted-foreground italic">Sem módulos</span>
+                    ) : (
+                      [...new Set(role.permissions.map(p => p.modulo))].map(mod => (
+                        <Badge key={mod} variant="secondary" className="text-[10px] px-1.5 py-0 h-5">
+                          {modulos.find(m => m.key === mod)?.label || mod}
+                        </Badge>
+                      ))
+                    )}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Membros convidados</h3>
+              <Button size="sm" onClick={() => setInviteDialog(true)} disabled={roles.length === 0} className="gap-2">
+                <Mail className="w-4 h-4" /> Convidar por e-mail
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {members.length === 0 && (
+                <div className="py-10 text-center text-sm text-muted-foreground border-2 border-dashed rounded-lg">
+                  Nenhum convite enviado ainda.
+                </div>
+              )}
+              {members.map(m => (
+                <div key={m.id} className="flex items-center gap-3 p-3 rounded-lg border">
+                  <Avatar className="h-9 w-9">
+                    <AvatarFallback>{iniciais(m.nome || undefined, m.email)}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{m.nome || m.email}</div>
+                    <div className="text-xs text-muted-foreground truncate">{m.email}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-w-[240px] justify-end">
+                    {m.roles.map(r => (
+                      <Badge key={r.id} variant="secondary" className="text-[10px] px-1.5 py-0 h-5" style={{ backgroundColor: `${r.cor}22`, color: r.cor }}>
+                        {r.nome}
+                      </Badge>
+                    ))}
+                  </div>
+                  <Badge variant={m.status === "ativo" ? "default" : m.status === "convidado" ? "outline" : "secondary"} className="shrink-0">
+                    {m.status === "ativo" ? "Ativo" : m.status === "convidado" ? "Convidado" : "Inativo"}
+                  </Badge>
+                  <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setMemberRolesDialog(m)} title="Alterar papéis">
+                    <Settings2 className="w-4 h-4" />
+                  </Button>
+                  <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => removerMembro(m)} title="Remover">
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+
+      {roleDialog && (
+        <RoleDialog
+          role={roleDialog === "new" ? null : roleDialog}
+          modulos={modulos}
+          onClose={() => setRoleDialog(null)}
+          onSaved={carregar}
+          apiBase={API_BASE}
+          authHeaders={headers}
+        />
+      )}
+
+      {inviteDialog && (
+        <InviteDialog
+          roles={roles}
+          onClose={() => setInviteDialog(false)}
+          onInvited={(url) => { setInviteDialog(false); setInviteUrl(url); carregar(); }}
+          apiBase={API_BASE}
+          authHeaders={headers}
+        />
+      )}
+
+      {inviteUrl && (
+        <Dialog open onOpenChange={() => setInviteUrl(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Convite criado</DialogTitle>
+              <DialogDescription>
+                Não enviamos e-mail automaticamente — copie o link e envie por WhatsApp, e-mail ou como preferir.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center gap-2">
+              <Input readOnly value={inviteUrl} onFocus={e => e.currentTarget.select()} />
+              <Button
+                size="icon"
+                variant="outline"
+                onClick={() => { navigator.clipboard.writeText(inviteUrl); toast.success("Link copiado"); }}
+              >
+                <Copy className="w-4 h-4" />
+              </Button>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setInviteUrl(null)}>Fechar</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {memberRolesDialog && (
+        <MemberRolesDialog
+          member={memberRolesDialog}
+          roles={roles}
+          onClose={() => setMemberRolesDialog(null)}
+          onSaved={carregar}
+          apiBase={API_BASE}
+          authHeaders={headers}
+        />
+      )}
+    </div>
+  );
+}
+
+function RoleDialog({
+  role, modulos, onClose, onSaved, apiBase, authHeaders,
+}: {
+  role: TeamRole | null;
+  modulos: ModuloInfo[];
+  onClose: () => void;
+  onSaved: () => void;
+  apiBase: string;
+  authHeaders: () => Record<string, string>;
+}) {
+  const [nome, setNome] = useState(role?.nome || "");
+  const [cor, setCor] = useState(role?.cor || "#3b82f6");
+  const [descricao, setDescricao] = useState(role?.descricao || "");
+  const [selecionados, setSelecionados] = useState<string[]>(
+    role ? [...new Set(role.permissions.map(p => p.modulo))] : []
+  );
+  const [saving, setSaving] = useState(false);
+
+  const toggle = (key: string) => {
+    setSelecionados(prev => prev.includes(key) ? prev.filter(m => m !== key) : [...prev, key]);
+  };
+
+  const salvar = async () => {
+    if (!nome.trim()) return toast.error("Nome do papel é obrigatório");
+    setSaving(true);
+    try {
+      const method = role ? "PATCH" : "POST";
+      const url = role ? `${apiBase}/api/team/roles/${role.id}` : `${apiBase}/api/team/roles`;
+      const r = await fetch(url, {
+        method,
+        headers: authHeaders(),
+        body: JSON.stringify({ nome, cor, descricao: descricao || null }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || "Erro ao salvar papel");
+      const saved = await r.json();
+      const roleId = saved.id || role?.id;
+
+      const rPerms = await fetch(`${apiBase}/api/team/roles/${roleId}/permissions`, {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify({ permissions: selecionados.map(modulo => ({ modulo, acao: "acesso" })) }),
+      });
+      if (!rPerms.ok) throw new Error("Papel salvo, mas houve erro ao salvar as permissões");
+
+      toast.success("Papel salvo");
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{role ? "Editar Papel" : "Novo Papel"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="grid grid-cols-[1fr_auto] gap-3">
+            <div className="space-y-2">
+              <Label>Nome</Label>
+              <Input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex: Vendedor" />
+            </div>
+            <div className="space-y-2">
+              <Label>Cor</Label>
+              <Input type="color" value={cor} onChange={e => setCor(e.target.value)} className="w-14 h-10 p-1" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Descrição (opcional)</Label>
+            <Input value={descricao} onChange={e => setDescricao(e.target.value)} placeholder="Ex: Acesso ao funil de vendas" />
+          </div>
+          <div className="space-y-2">
+            <Label>Módulos liberados</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {modulos.map(m => (
+                <div
+                  key={m.key}
+                  onClick={() => toggle(m.key)}
+                  className={cn(
+                    "flex items-center gap-2 p-2 rounded-md border cursor-pointer text-sm transition-colors",
+                    selecionados.includes(m.key) ? "border-primary bg-primary/5" : "border-transparent bg-muted/40 hover:bg-muted"
+                  )}
+                >
+                  <Checkbox checked={selecionados.includes(m.key)} onCheckedChange={() => toggle(m.key)} />
+                  {m.label}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancelar</Button>
+          <Button onClick={salvar} disabled={saving}>
+            {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Salvar Papel
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function InviteDialog({
+  roles, onClose, onInvited, apiBase, authHeaders,
+}: {
+  roles: TeamRole[];
+  onClose: () => void;
+  onInvited: (url: string) => void;
+  apiBase: string;
+  authHeaders: () => Record<string, string>;
+}) {
+  const [email, setEmail] = useState("");
+  const [nome, setNome] = useState("");
+  const [cargo, setCargo] = useState("");
+  const [roleIds, setRoleIds] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const toggleRole = (id: string) => {
+    setRoleIds(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
+  };
+
+  const convidar = async () => {
+    if (!email.trim() || !nome.trim()) return toast.error("Nome e e-mail são obrigatórios");
+    setSaving(true);
+    try {
+      const r = await fetch(`${apiBase}/api/team/members`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ email: email.trim(), nome: nome.trim(), cargo: cargo || null, role_ids: roleIds }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || "Erro ao criar convite");
+      const data = await r.json();
+      onInvited(data.invite_url);
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Convidar por e-mail</DialogTitle>
+          <DialogDescription>A pessoa recebe um link para criar a própria senha e entrar na sua equipe.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-2">
+            <Label>Nome</Label>
+            <Input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex: Maria Souza" />
+          </div>
+          <div className="space-y-2">
+            <Label>E-mail</Label>
+            <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="maria@exemplo.com" />
+          </div>
+          <div className="space-y-2">
+            <Label>Cargo (rótulo, opcional)</Label>
+            <Input value={cargo} onChange={e => setCargo(e.target.value)} placeholder="Ex: Vendedora" />
+          </div>
+          <div className="space-y-2">
+            <Label>Papéis</Label>
+            <div className="space-y-1.5">
+              {roles.map(role => (
+                <div key={role.id} className="flex items-center gap-2 text-sm">
+                  <Checkbox checked={roleIds.includes(role.id)} onCheckedChange={() => toggleRole(role.id)} />
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: role.cor }} />
+                  {role.nome}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancelar</Button>
+          <Button onClick={convidar} disabled={saving}>
+            {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Criar Convite
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MemberRolesDialog({
+  member, roles, onClose, onSaved, apiBase, authHeaders,
+}: {
+  member: TeamMember;
+  roles: TeamRole[];
+  onClose: () => void;
+  onSaved: () => void;
+  apiBase: string;
+  authHeaders: () => Record<string, string>;
+}) {
+  const [roleIds, setRoleIds] = useState<string[]>(member.roles.map(r => r.id));
+  const [saving, setSaving] = useState(false);
+
+  const toggleRole = (id: string) => {
+    setRoleIds(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
+  };
+
+  const salvar = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch(`${apiBase}/api/team/members/${member.id}`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ role_ids: roleIds }),
+      });
+      if (!r.ok) throw new Error("Erro ao salvar papéis");
+      toast.success("Papéis atualizados");
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Papéis de {member.nome || member.email}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-1.5 py-2">
+          {roles.map(role => (
+            <div key={role.id} className="flex items-center gap-2 text-sm">
+              <Checkbox checked={roleIds.includes(role.id)} onCheckedChange={() => toggleRole(role.id)} />
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: role.cor }} />
+              {role.nome}
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancelar</Button>
+          <Button onClick={salvar} disabled={saving}>
+            {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Salvar
           </Button>
         </DialogFooter>
       </DialogContent>

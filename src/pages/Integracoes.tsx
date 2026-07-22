@@ -31,20 +31,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Bot, Workflow, MessageCircle, Zap, Sparkles,
+  Bot, Workflow, Zap, Sparkles,
   Eye, EyeOff, Plus, Pencil, Trash2, Loader2,
   CheckCircle2, XCircle, Power, AlertTriangle, Plug,
 } from "lucide-react";
 import { toast } from "sonner";
 
-// [AUDITORIA] LÓGICA: página "Conectores" — CRUD de integracoes_config (Evolution,
-// N8N, OpenAI, etc.) via backend/src/routes/integracoes.ts, e CRUD separado de
-// ai_providers. Para tipo 'evolution', é a fonte "oficial" de configuração de URL/API
-// Key/instância — mas backend/src/routes/webhook.ts resolve o userId de mensagens
-// recebidas primeiro por agent_configs (sincronizada por syncEvolution() no backend
-// quando esta página salva com status='conectado'), depois cai em fallbacks
-// (agentes, integracoes_config, prefixo UUID). Ver Agentes.tsx para o outro lugar
-// que também guarda um evolution_instancia por agente (acoplamento documentado).
+// [AUDITORIA] LÓGICA: página "Conectores" — CRUD de integracoes_config (N8N, webhooks
+// etc.) via backend/src/routes/integracoes.ts, e CRUD separado de ai_providers (chave de
+// IA por usuário, mantido intencionalmente). O tipo 'evolution' foi removido daqui: a
+// URL/API Key da Evolution agora são fixas no .env do servidor (getEvolutionConfig em
+// backend/src/routes/whatsapp.ts) — essa tela permitia sobrescrever por engano com um
+// servidor de teste externo, o que já quebrou a criação de instância mais de uma vez.
 const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
 
 type Status = "conectado" | "inativo" | "erro" | "atencao" | "sincronizando";
@@ -69,8 +67,12 @@ interface AiProvider {
   ativo: boolean;
 }
 
+// [AUDITORIA] FIX APLICADO: tipo 'evolution' removido das opções — URL/API Key da
+// Evolution agora são fixas no .env do servidor (ver getEvolutionConfig em
+// backend/src/routes/whatsapp.ts), não editáveis por aqui. Evita a mesma instância
+// própria ser sobrescrita por engano com um servidor de teste externo, como já
+// aconteceu mais de uma vez.
 const TIPO_LABELS: Record<string, string> = {
-  evolution: "Evolution API",
   n8n: "N8N",
   openai: "OpenAI",
   elevenlabs: "ElevenLabs",
@@ -99,9 +101,9 @@ const AI_PROVIDERS = [
 ] as const;
 
 const EMPTY_FORM = {
-  tipo: "evolution",
+  tipo: "n8n",
   nome: "",
-  url: "https://disparo.mentoark.com.br",
+  url: "",
   api_key: "",
   instancia: "",
   status: "inativo" as Status
@@ -211,45 +213,7 @@ export default function IntegracoesPage() {
     if (!form.url && !form.api_key) { toast.error("Preencha URL e/ou API Key"); return; }
     setTesting(true);
     try {
-      if (form.tipo === "evolution") {
-        // [AUDITORIA] LÓGICA: /instance/fetchInstances só valida que a URL+API Key são
-        // válidas — retorna 200 mesmo se a instância nunca pareou com o WhatsApp
-        // (ex: presa em loop de QR code, connectionStatus:"connecting" para sempre).
-        const base = form.url.trim().replace(/\/$/, "");
-        const res = await fetch(`${base}/instance/fetchInstances`, {
-          headers: { apikey: form.api_key.trim() },
-        });
-        if (res.ok) {
-          const data = await res.json().catch(() => []);
-          const list: any[] = Array.isArray(data) ? data : [];
-          // [AUDITORIA] FIX APLICADO: antes, HTTP 200 sozinho já marcava status
-          // 'conectado' — mesmo para uma instância nunca pareada. Isso permitia que
-          // syncEvolution() (backend/src/routes/integracoes.ts) sobrescrevesse
-          // agent_configs com uma instância "conectada" só na aparência, causando a
-          // divergência já documentada em AUDITORIA_LOG.md. Agora só marca
-          // 'conectado' se a instância informada aparecer com connectionStatus:'open'
-          // na resposta real da Evolution — reversível via git checkout, não toca em
-          // produção/banco, só corrige a interpretação da resposta no cliente.
-          const nomeInstancia = form.instancia.trim();
-          const match = nomeInstancia ? list.find(i => i?.name === nomeInstancia) : undefined;
-          if (!nomeInstancia) {
-            setForm(f => ({ ...f, status: "atencao" }));
-            toast.error(`API respondeu (${list.length} instância(s) no servidor), mas informe o "Nome da Instância" para confirmar o pareamento.`);
-          } else if (match?.connectionStatus === "open") {
-            setForm(f => ({ ...f, status: "conectado" }));
-            toast.success(`Evolution conectada — instância "${nomeInstancia}" pareada com o WhatsApp`);
-          } else if (match) {
-            setForm(f => ({ ...f, status: "atencao" }));
-            toast.error(`Instância "${nomeInstancia}" existe mas não está pareada (status: ${match.connectionStatus}). Escaneie o QR Code no servidor Evolution.`);
-          } else {
-            setForm(f => ({ ...f, status: "atencao" }));
-            toast.error(`API respondeu, mas nenhuma instância chamada "${nomeInstancia}" foi encontrada no servidor.`);
-          }
-        } else {
-          setForm(f => ({ ...f, status: "erro" }));
-          toast.error(`Falha HTTP ${res.status}`);
-        }
-      } else if (form.url) {
+      if (form.url) {
         const res = await fetch(form.url).catch(() => null);
         setForm(f => ({ ...f, status: res?.ok ? "conectado" : "erro" }));
         toast[res?.ok ? "success" : "error"](res?.ok ? "Conexão OK" : "Sem resposta");
@@ -264,16 +228,6 @@ export default function IntegracoesPage() {
 
   const salvar = async () => {
     if (!form.nome.trim()) { toast.error("Nome é obrigatório"); return; }
-    if (form.tipo === "evolution") {
-      if (!form.url || !form.api_key || !form.instancia) {
-        toast.error("URL, API Key e Nome da Instância são obrigatórios para Evolution");
-        return;
-      }
-      if (/[^a-zA-Z0-9-._~:/?#[\]@!$&'()*+,;=%]/.test(form.url) || /\s/.test(form.url)) {
-        toast.error("A URL do servidor contém caracteres inválidos ou espaços");
-        return;
-      }
-    }
 
     setSaving(true);
     try {
@@ -371,7 +325,9 @@ export default function IntegracoesPage() {
     }
   };
 
-  const evolutionRows = useMemo(() => rows.filter(r => r?.tipo === "evolution"), [rows]);
+  // [AUDITORIA] FIX APLICADO: linhas tipo='evolution' são legado (a config real agora vem
+  // do .env, ver getEvolutionConfig em backend/src/routes/whatsapp.ts) — filtradas daqui
+  // para não exibir/editar um servidor que o backend não usa mais para nada.
   const otherRows = useMemo(() => rows.filter(r => r?.tipo !== "evolution"), [rows]);
 
   return (
@@ -387,64 +343,6 @@ export default function IntegracoesPage() {
             <Plus className="h-4 w-4 mr-1.5" /> Nova Integração
           </Button>
         </div>
-
-        {/* ── Instâncias Evolution ─────────────────────────────────────────── */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <MessageCircle className="h-4 w-4 text-green-600" />
-              WhatsApp / Evolution API
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            {loading ? (
-              <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-            ) : evolutionRows.length === 0 ? (
-              <div className="text-center py-8 text-sm text-muted-foreground">
-                Nenhuma instância configurada.{" "}
-                <button className="text-primary underline underline-offset-2" onClick={openAdd}>Adicionar</button>
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Nome</TableHead>
-                    <TableHead>Instância</TableHead>
-                    <TableHead>Servidor</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-20" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {evolutionRows.map(row => (
-                    <TableRow key={row.id}>
-                      <TableCell className="font-medium">{row.nome}</TableCell>
-                      <TableCell className="font-mono text-xs">{row.instancia ?? "—"}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground truncate max-w-[200px]">
-                        {row.url?.replace("https://", "") ?? "—"}
-                      </TableCell>
-                      <TableCell><StatusBadge status={row.status} /></TableCell>
-                      <TableCell>
-                        <div className="flex gap-1 justify-end">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(row)}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive"
-                            onClick={() => remover(row.id)}
-                            disabled={deleting === row.id}
-                          >
-                            {deleting === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
 
         {/* ── Provedores de IA ─────────────────────────────────────────────── */}
         <Card>
@@ -607,39 +505,24 @@ export default function IntegracoesPage() {
               />
             </div>
 
-            {["evolution", "n8n", "webhook_in", "webhook_out", "database_vector"].includes(form.tipo) && (
+            {["n8n", "webhook_in", "webhook_out", "database_vector"].includes(form.tipo) && (
               <div className="space-y-1.5">
-                <Label>URL{form.tipo === "evolution" && " (Servidor Evolution)"}</Label>
+                <Label>URL</Label>
                 <Input
                   value={form.url}
                   onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
-                  placeholder={form.tipo === "evolution" ? "https://disparo.mentoark.com.br" : "https://..."}
+                  placeholder="https://..."
                 />
               </div>
             )}
 
-
-            {["evolution", "openai", "gemini", "elevenlabs", "meta_ads", "telegram", "instagram", "database_vector", "google_places"].includes(form.tipo) && (
+            {["openai", "gemini", "elevenlabs", "meta_ads", "telegram", "instagram", "database_vector", "google_places"].includes(form.tipo) && (
               <div className="space-y-1.5">
                 <Label>API Key</Label>
                 <SecretInput
                   value={form.api_key}
                   onChange={v => setForm(f => ({ ...f, api_key: v }))}
                 />
-              </div>
-            )}
-
-            {form.tipo === "evolution" && (
-              <div className="space-y-1.5">
-                <Label>Nome da Instância</Label>
-                <Input
-                  value={form.instancia}
-                  onChange={e => setForm(f => ({ ...f, instancia: e.target.value }))}
-                  placeholder="Ex: crm_empresa"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Deve ser idêntico ao nome da instância no servidor Evolution.
-                </p>
               </div>
             )}
 

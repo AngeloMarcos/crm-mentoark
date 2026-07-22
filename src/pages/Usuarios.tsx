@@ -102,18 +102,24 @@ export default function UsuariosPage() {
     setModal(true);
   };
 
-  const syncModulesWithRole = async (userId: string, cId: string) => {
+  const syncModulesWithRole = async (userId: string, cId: string): Promise<boolean> => {
     const selectedCargo = cargos.find(c => c.id === cId);
-    if (!selectedCargo) return;
+    if (!selectedCargo) return true;
 
-    await fetch(`${API_BASE}/api/modulos/usuario/${userId}`, {
+    const r = await fetch(`${API_BASE}/api/modulos/usuario/${userId}`, {
       method: "PUT",
-      headers: { 
+      headers: {
         Authorization: `Bearer ${token()}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ modulos: selectedCargo.permissoes })
     });
+    if (!r.ok) {
+      const err = await r.json().catch(() => null);
+      toast.error(err?.message || "Erro ao sincronizar módulos do cargo");
+      return false;
+    }
+    return true;
   };
 
   const save = async () => {
@@ -137,8 +143,8 @@ export default function UsuariosPage() {
           body: JSON.stringify({ display_name: nome, cargo_id: cargoId || null })
         });
         if (r.ok) {
-          if (cargoId) await syncModulesWithRole(userEdit.user_id, cargoId);
-          toast.success("Usuário atualizado");
+          const modulosOk = cargoId ? await syncModulesWithRole(userEdit.user_id, cargoId) : true;
+          if (modulosOk) toast.success("Usuário atualizado");
           setModal(false);
           load();
         }
@@ -154,8 +160,8 @@ export default function UsuariosPage() {
         });
         if (r.ok) {
           const newUser = await r.json();
-          if (cargoId) await syncModulesWithRole(newUser.user_id, cargoId);
-          toast.success("Usuário criado");
+          const modulosOk = cargoId ? await syncModulesWithRole(newUser.user_id, cargoId) : true;
+          if (modulosOk) toast.success("Usuário criado");
           setModal(false);
           load();
         } else {

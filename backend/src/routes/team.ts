@@ -3,6 +3,9 @@ import { Pool } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
+import { TODOS_MODULOS } from './modulos';
+
+const MODULOS_DELEGAVEIS = new Set(TODOS_MODULOS.filter(m => !m.adminOnly).map(m => m.key));
 
 /**
  * /api/team/*  — pessoas, perfis (roles), permissões e convites.
@@ -250,6 +253,7 @@ export default function teamRouter(pool: Pool): Router {
     await pool.query(`DELETE FROM team_role_permissions WHERE role_id = $1`, [req.params.id]);
     for (const p of perms) {
       if (!p?.modulo || !p?.acao) continue;
+      if (!MODULOS_DELEGAVEIS.has(p.modulo)) continue; // módulos admin-only nunca são delegáveis via papel de equipe
       await pool.query(
         `INSERT INTO team_role_permissions (role_id, modulo, acao)
          VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,

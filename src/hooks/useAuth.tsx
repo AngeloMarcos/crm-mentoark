@@ -125,6 +125,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Módulos só são buscados no login/carregamento inicial — se um admin alterar as
+  // permissões com o usuário já logado, a lista em memória fica desatualizada até
+  // a aba ganhar foco novamente (SPA não remonta o AuthProvider ao trocar de página).
+  useEffect(() => {
+    if (!session?.access_token) return;
+    const refetch = () => carregarModulos(session.access_token);
+    const onVisibility = () => { if (document.visibilityState === "visible") refetch(); };
+    window.addEventListener("focus", refetch);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", refetch);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [session?.access_token]);
+
   const hasModulo = (key: string): boolean => {
     if (isAdmin) return true;
     return modulos.includes(key);

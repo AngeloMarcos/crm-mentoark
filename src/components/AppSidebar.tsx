@@ -148,7 +148,6 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "🤖 IA & AUTOMAÇÃO",
-    adminOnly: true,
     subgroups: [
       {
         label: "Agentes & Prompts",
@@ -165,15 +164,14 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "⚙️ ADMINISTRAÇÃO",
-    adminOnly: true,
     subgroups: [
       {
         label: "Acessos & Conexões",
         icon: SettingsIcon,
         color: "text-teal-600",
         items: [
-          { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600" },
-          { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400" },
+          { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
+          { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400", adminOnly: true },
           { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
         ],
       },

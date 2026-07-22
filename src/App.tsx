@@ -87,16 +87,16 @@ const App = () => (
               <Route path="/disparos"     element={<ProtectedRoute requireModulo="disparos">    <DisparosPage /></ProtectedRoute>} />
               <Route path="/campanhas"    element={<ProtectedRoute requireModulo="campanhas">   <CampanhasPage /></ProtectedRoute>} />
               <Route path="/marketing-digital" element={<ProtectedRoute requireModulo="campanhas"> <MarketingDigitalPage /></ProtectedRoute>} />
-              <Route path="/integracoes"  element={<ProtectedRoute requireAdmin> <IntegracoesPage /></ProtectedRoute>} />
-              <Route path="/cerebro"      element={<ProtectedRoute requireAdmin>     <CerebroPage /></ProtectedRoute>} />
-              <Route path="/agentes"      element={<ProtectedRoute requireAdmin>     <AgentesPage /></ProtectedRoute>} />
-              <Route path="/uso-ia"       element={<ProtectedRoute requireAdmin>     <UsoIAPage /></ProtectedRoute>} />
+              <Route path="/integracoes"  element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />
+              <Route path="/cerebro"      element={<ProtectedRoute requireModulo="cerebro">     <CerebroPage /></ProtectedRoute>} />
+              <Route path="/agentes"      element={<ProtectedRoute requireModulo="agentes">     <AgentesPage /></ProtectedRoute>} />
+              <Route path="/uso-ia"       element={<ProtectedRoute requireModulo="agentes">     <UsoIAPage /></ProtectedRoute>} />
               <Route path="/kanban"       element={<ProtectedRoute requireModulo="leads">       <KanbanPage /></ProtectedRoute>} />
               <Route path="/catalogo"     element={<ProtectedRoute requireModulo="catalogo">    <CatalogoPage /></ProtectedRoute>} />
               <Route path="/catalogo/:id" element={<ProtectedRoute requireModulo="catalogo">    <CatalogoDetalhePage /></ProtectedRoute>} />
               <Route path="/catalogo/envios" element={<ProtectedRoute requireModulo="catalogo"> <CatalogoEnviosPage /></ProtectedRoute>} />
               <Route path="/galeria"      element={<ProtectedRoute requireModulo="galeria">     <GaleriaPage /></ProtectedRoute>} />
-              <Route path="/workflows"    element={<ProtectedRoute requireAdmin>   <WorkflowsPage /></ProtectedRoute>} />
+              <Route path="/workflows"    element={<ProtectedRoute requireModulo="workflows">   <WorkflowsPage /></ProtectedRoute>} />
               <Route path="/docs"         element={<ProtectedRoute requireModulo="docs">        <DocsPage /></ProtectedRoute>} />
               <Route path="/usuarios"     element={<ProtectedRoute requireAdmin>               <UsuariosPage /></ProtectedRoute>} />
               <Route path="/usuarios/cargos" element={<ProtectedRoute requireAdmin>            <CargosPage /></ProtectedRoute>} />
