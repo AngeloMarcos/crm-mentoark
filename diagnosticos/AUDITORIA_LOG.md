@@ -1,5 +1,15 @@
 # Auditoria de Código — Log
 
+### Continuação da blindagem de tenants (2026-07-21, noite) — kanban.ts corrigido, n8n.ts pendente de decisão
+
+**🔧 Corrigido — `backend/src/routes/kanban.ts` (webhook público do n8n):** `POST /api/kanban/webhook/n8n` aceitava `user_id` direto do corpo da requisição, autenticado só por um segredo estático global (`N8N_WEBHOOK_SECRET`) — mesma classe do vazamento de tenants corrigido mais cedo hoje. Corrigido: se `instance_name` vier no payload, agora exige que ela pertença de fato a esse `user_id` (`agentes`/`integracoes_config`) antes de criar a tarefa no Kanban.
+
+**⚠️ PENDENTE (precisa decisão) — `backend/src/routes/n8n.ts`, `GET /agente-config/:instancia`:** achado mais grave, não corrigido ainda. Esse endpoint devolve `evolution_api_key` **sem máscara** de qualquer instância, protegido só pelo `N8N_SECRET` — um segredo único, compartilhado por todos os tenants. Isso significa: o segredo de automação de UM cliente dá acesso à API key de WhatsApp de QUALQUER outro cliente, bastando saber (ou adivinhar, dado o padrão previsível `crm_<prefixo-do-uuid>`) o nome da instância dele. Corrigir de verdade exige segredo por tenant — projeto do tamanho da adoção de RLS, não uma correção pontual. Não aplicado ainda por decisão de não arriscar quebrar automações reais de cliente sem planejamento.
+
+**Outras pendências levantadas na sessão de hoje, ainda em aberto:**
+- Separar de vez o Evolution de produção e homolog (hoje compartilham a mesma instância/número — testar em um ambiente derruba o outro). Bloqueado por falta de um número de WhatsApp dedicado disponível pra homolog.
+- RLS (Row-Level Security) como rede de segurança contra futuros bugs de escopo — exige propagar o usuário autenticado pra dentro de cada transação Postgres (`SET LOCAL app.user_id`), mudança de arquitetura.
+
 ### 🔴 INCIDENTE DE SEGURANÇA (2026-07-21) — vazamento de dados entre tenants no webhook, backend/src/routes/webhook.ts
 
 **Reportado pelo usuário:** conta de uma cliente real (`crisacorretoradeimoveis@gmail.com`, `d7b74de0-...`) mostrava conversas que não eram dela.
