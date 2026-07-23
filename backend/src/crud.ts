@@ -4,23 +4,34 @@ import { AuthRequest } from './middleware';
 import { log } from './logger';
 
 export interface CrudOptions {
-  userIdCol?: string | null; // null = no user scoping (e.g. n8n_chat_histories)
+  userIdCol?: string | null; // null = no user scoping (tabela realmente global)
   idCol?: string;
   stripFields?: string[]; // fields to silently ignore on writes (don't exist in table)
   transformRow?: (row: any) => any;
+  // [AUDITORIA] FIX APLICADO (2026-07-22): antes, TODA tabela montada com makeCrud()
+  // liberava admin pra ver/editar/apagar linhas de qualquer usuário, sem opt-in — GET lista,
+  // PUT/DELETE por id e até updates/deletes em lote com filtro parcial (ex: só `ativo=true`,
+  // sem user_id, porque o client HTTP descarta esse filtro antes de montar a requisição — ver
+  // src/integrations/database/client.ts). Isso já causou vazamento de leitura em pelo menos 10
+  // telas "pessoais" (Agentes, Campanhas, Cerebro, etc.) e dois incidentes de escrita cruzada
+  // real: um admin sobrescrevendo/desconectando a instância WhatsApp de outro cliente
+  // (InstanceManagementPanel.tsx) e o mesmo padrão batendo em agentes/agent_prompts/conhecimento
+  // (ver diagnosticos/AUDITORIA_LOG.md). Bypass agora é opt-in explícito por tabela — nenhuma
+  // tabela hoje precisa dele (auditado todo makeCrud() em index.ts + routes/*.ts).
+  adminBypass?: boolean; // default false
 }
 
 const RESERVED_PARAMS = new Set(['order', 'asc', 'limit', 'page', 'head', 'select', 'count']);
 
 /**
  * Resolve o userId efetivo para o scoping da query.
- * Admin recebe null → buildWhere não adiciona cláusula user_id,
- * dando acesso a todas as linhas da tabela.
- * Usuário comum recebe req.userId (comportamento original).
+ * Por padrão, TODO usuário (inclusive admin) só vê/edita as próprias linhas — o único jeito
+ * de uma tabela liberar admin pra ver tudo é passar `adminBypass: true` explicitamente nas
+ * options do makeCrud() (nenhuma tabela usa isso hoje).
  */
-function resolveUserId(req: AuthRequest, userIdCol: string | null | undefined): string | null {
+function resolveUserId(req: AuthRequest, userIdCol: string | null | undefined, adminBypass?: boolean): string | null {
   if (!userIdCol) return null;
-  if (req.userRole === 'admin') return null;   // bypass: admin vê/edita tudo
+  if (adminBypass && req.userRole === 'admin') return null;
   return req.userId ?? null;
 }
 
@@ -122,7 +133,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // GET all (with optional count=only)
   router.get('/', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = resolveUserId(req, userIdCol);
+    const userId = resolveUserId(req, userIdCol, options.adminBypass);
     if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
     const { conditions, params, nextIdx } = buildWhere(req.query as any, userIdCol, userId);
 
@@ -165,7 +176,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // GET by id
   router.get('/:id', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = resolveUserId(req, userIdCol);
+    const userId = resolveUserId(req, userIdCol, options.adminBypass);
     if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
     const params: any[] = [req.params.id];
     let sql = `SELECT * FROM ${tableName} WHERE ${idCol} = $1`;
@@ -180,7 +191,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // POST (create single or bulk)
   router.post('/', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = resolveUserId(req, userIdCol);
+    const userId = resolveUserId(req, userIdCol, options.adminBypass);
     const items: any[] = Array.isArray(req.body) ? req.body : [req.body];
     if (!items.length) return res.status(201).json([]);
 
@@ -231,7 +242,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // PUT /:id (update by primary key)
   router.put('/:id', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = resolveUserId(req, userIdCol);
+    const userId = resolveUserId(req, userIdCol, options.adminBypass);
     const data: any = sanitize({ ...req.body });
     delete data[idCol];
     delete data[userIdCol ?? ''];
@@ -258,7 +269,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // PUT / (bulk update with query filters)
   router.put('/', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = resolveUserId(req, userIdCol);
+    const userId = resolveUserId(req, userIdCol, options.adminBypass);
     if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
     const { conditions, params: whereParams, nextIdx } = buildWhere(req.query as any, userIdCol, userId);
 
@@ -285,7 +296,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // DELETE /:id
   router.delete('/:id', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = resolveUserId(req, userIdCol);
+    const userId = resolveUserId(req, userIdCol, options.adminBypass);
     if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
     const params: any[] = [req.params.id];
     let sql = `DELETE FROM ${tableName} WHERE ${idCol} = $1`;
@@ -299,7 +310,7 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
 
   // DELETE / (bulk delete por filtros de query string)
   router.delete('/', wrap(async (req: AuthRequest, res: Response) => {
-    const userId = resolveUserId(req, userIdCol);
+    const userId = resolveUserId(req, userIdCol, options.adminBypass);
     if (!hasAccess(req, userIdCol, userId)) return res.status(401).json({ message: 'userId ausente' });
 
     const { conditions, params } = buildWhere(req.query as any, userIdCol, userId);

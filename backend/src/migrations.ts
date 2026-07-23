@@ -503,6 +503,45 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // Coluna humanizar_ia para disparos (humanização via Claude Haiku)
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS humanizar_ia BOOLEAN DEFAULT false`).catch(() => {});
 
+  // [AUDITORIA] LÓGICA (Sprint 5 — salvaguarda antiban de teto diário, 2026-07-23): colunas de
+  // suporte à pausa automática quando uma campanha ultrapassa o volume diário seguro de envio.
+  // `limite_diario_mensagens` é configurável POR CAMPANHA (mesmo padrão já usado por
+  // `limite_erros_consecutivos`), default 500 — sem exigir uma env var global nem uma tela nova
+  // pra funcionar (frontend pode expor esse campo depois; hoje só o backend já respeita o
+  // default). `pausado_motivo` distingue a causa da pausa automática ('limite_diario' vs.
+  // 'erros_consecutivos', que já existia antes desta sessão) — importante para o cron de
+  // reativação automática abaixo só mexer em campanhas pausadas por este motivo específico,
+  // nunca reabrindo uma pausa por erros consecutivos (que pode ser sinal de bloqueio real e
+  // precisa de revisão humana) nem uma pausa manual do usuário.
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS limite_diario_mensagens INTEGER DEFAULT 500`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS aviso TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausado_em TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausado_motivo TEXT`).catch(() => {});
+
+  // [AUDITORIA] LÓGICA: reativação automática de campanhas pausadas especificamente pelo teto
+  // diário (Sprint 5) — o aviso mostrado ao usuário promete "retomando automaticamente amanhã";
+  // sem este mecanismo essa frase seria uma promessa falsa na UI. Só reativa depois de 24h
+  // corridas desde a pausa (mesma janela usada pra CONTAR o volume diário em
+  // disparoProcessor.ts), e só quando `pausado_motivo = 'limite_diario'` — nunca mexe em
+  // pausa manual nem em pausa por erros consecutivos (não relacionadas a este mecanismo).
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION reativar_disparos_por_limite_diario()
+    RETURNS INTEGER AS $$
+    DECLARE
+      reativados INTEGER := 0;
+    BEGIN
+      UPDATE disparos
+      SET status = 'em_andamento', aviso = NULL, pausado_em = NULL, pausado_motivo = NULL, updated_at = NOW()
+      WHERE status = 'pausado'
+        AND pausado_motivo = 'limite_diario'
+        AND pausado_em IS NOT NULL
+        AND pausado_em <= NOW() - INTERVAL '24 hours';
+      GET DIAGNOSTICS reativados = ROW_COUNT;
+      RETURN reativados;
+    END;
+    $$ LANGUAGE plpgsql;
+  `).catch(err => log.warn('MIGRATIONS', 'reativar_disparos_por_limite_diario', { err: err.message }));
+
   // Tabela de permissões de módulos por usuário
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_modulos (
@@ -519,6 +558,16 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ON user_modulos (user_id, ativo)
   `).catch(() => {});
 
+  // [AUDITORIA] LÓGICA (Sprint 5 — blindagem contra disparo em duplicidade sob múltiplas
+  // réplicas, 2026-07-23): verificado que esta função JÁ usa `FOR UPDATE SKIP LOCKED` na CTE
+  // `next_msgs` (ver cláusula logo antes do fechamento da CTE, abaixo) combinada com um
+  // `UPDATE ... FROM next_msgs` no mesmo statement — o idioma padrão do Postgres pra fila de
+  // trabalho concorrente: o SELECT+lock e o UPDATE que marca 'sending' rodam atomicamente numa
+  // única chamada de função (uma única transação implícita), então duas réplicas do backend
+  // chamando `get_next_disparo_batch()` ao mesmo tempo nunca recebem a mesma linha — a segunda
+  // pula (SKIP) qualquer linha já travada pela primeira em vez de esperar ou reprocessar.
+  // Nenhuma mudança de código necessária aqui; item já estava corretamente implementado antes
+  // desta auditoria.
   // ── Função get_next_disparo_batch para o processador ───────────────────────
   await pool.query(`
     CREATE OR REPLACE FUNCTION get_next_disparo_batch(batch_size INTEGER)
@@ -542,6 +591,19 @@ export async function runMigrations(pool: Pool): Promise<void> {
         WHERE l.status = 'pending'
           AND d.status = 'em_andamento'
           AND (d.agendado_para IS NULL OR d.agendado_para <= NOW())
+          -- [AUDITORIA] FIX APLICADO (2026-07-23): motor de disparo dequeueava mensagem pendente
+          -- sem checar se o contato já pediu opt-out — contato que mandou "sair" continuava
+          -- recebendo campanha (ver diagnosticos/AUDITORIA_LOG.md). Comparação por RIGHT(...,11)
+          -- em vez de igualdade exata porque telefone não é normalizado pro mesmo formato em
+          -- todo lugar do sistema (mesmo padrão já usado em webhook.ts pra essa mesma razão) —
+          -- melhor sobre-filtrar (pular um contato válido por engano) do que deixar passar
+          -- alguém que pediu remoção por causa de um formato de telefone levemente diferente.
+          AND NOT EXISTS (
+            SELECT 1 FROM contatos c
+            WHERE c.user_id = l.user_id
+              AND RIGHT(c.telefone, 11) = RIGHT(l.telefone, 11)
+              AND c.opt_out IS TRUE
+          )
         ORDER BY l.created_at ASC
         LIMIT batch_size
         FOR UPDATE SKIP LOCKED
@@ -1290,6 +1352,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_integracoes_user_tipo ON integracoes_config(user_id, tipo)`).catch(() => {});
 
   log.info('MIGRATIONS', 'integracoes_config multi-instancia OK');
+
+  // ── integracoes_config: colunas de progresso da sincronização de histórico ────
+  // [AUDITORIA] LÓGICA: sync_status/sync_progress alimentam a barra de progresso do
+  // frontend (lida via polling já existente, sem WebSocket novo) enquanto
+  // sincronizarHistoricoDireto (webhook.ts) baixa o histórico em lotes após conectar.
+  await pool.query(`ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS sync_status TEXT DEFAULT 'idle'`).catch(() => {});
+  await pool.query(`ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS sync_progress INTEGER DEFAULT 0`).catch(() => {});
+  await pool.query(`ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS sync_total INTEGER DEFAULT 0`).catch(() => {});
+  await pool.query(`ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS sync_updated_at TIMESTAMPTZ`).catch(() => {});
+
+  log.info('MIGRATIONS', 'integracoes_config sync_status OK');
 
   // ── Super Admin: Firewall — tabelas de configuração e IPs ────────────────
   //

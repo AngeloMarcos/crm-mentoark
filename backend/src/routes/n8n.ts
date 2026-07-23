@@ -20,10 +20,14 @@ export default function n8nRouter(pool: Pool): Router {
   // Alias: GET /api/agentes/by-instancia/:instancia (montado em index.ts)
   router.get('/agente-config/:instancia', async (req: Request, res: Response) => {
     try {
+      // evolution_api_key/evolution_server_url não são retornados: o n8n usa credencial
+      // fixa própria pra chamar o Evolution, não depende do que vem daqui — e como o
+      // Evolution é um servidor único com uma chave admin global (não por tenant),
+      // devolver essa chave aqui só ampliava à toa quem consegue extraí-la via N8N_SECRET.
       const r = await pool.query(
         `SELECT id, user_id, nome, modelo, temperatura, max_tokens,
                 rag_ativo, rag_threshold, rag_resultados,
-                n8n_webhook_url, evolution_api_key, evolution_server_url, ativo
+                n8n_webhook_url, ativo
          FROM agentes
          WHERE LOWER(evolution_instancia) = LOWER($1) AND ativo = true
          LIMIT 1`,

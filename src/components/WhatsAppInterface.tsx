@@ -149,12 +149,52 @@ function getAvatarColor(name: string): string {
   return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
 }
 
+// [AUDITORIA] LÓGICA (2026-07-23): fotos de perfil salvas localmente (ver
+// backend/utils/whatsappMediaStorage.ts, mesmo motivo do fix de mídia de mensagem — URL crua
+// do WhatsApp expira, ver diagnosticos/AUDITORIA_LOG.md) vêm como `local-pic://userId/arquivo`,
+// não uma URL de verdade. <img>/<video> nativos não conseguem mandar header de Authorization,
+// então precisa buscar via fetch autenticado e converter pra blob URL — mesmo padrão já usado
+// no AudioPlayer logo abaixo. URLs http(s) antigas (ainda não migradas) continuam funcionando
+// direto, sem passar pelo proxy.
+function useAuthedImageUrl(rawUrl: string | null | undefined): string | null {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!rawUrl) { setBlobUrl(null); return; }
+    if (!rawUrl.startsWith('local-pic://')) { setBlobUrl(rawUrl); return; }
+
+    let revoke: string | null = null;
+    let cancelled = false;
+    const proxyUrl = `${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(rawUrl)}`;
+    const t = getAuthToken();
+    const headers: Record<string, string> = {};
+    if (t) headers['Authorization'] = `Bearer ${t}`;
+
+    fetch(proxyUrl, { headers })
+      .then(r => { if (!r.ok) throw new Error('Falha'); return r.blob(); })
+      .then(blob => {
+        if (cancelled) return;
+        revoke = URL.createObjectURL(blob);
+        setBlobUrl(revoke);
+      })
+      .catch(() => { if (!cancelled) setBlobUrl(null); });
+
+    return () => {
+      cancelled = true;
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [rawUrl]);
+
+  return blobUrl;
+}
+
 function ChatAvatar({
   name, url, size = 'md', rounded = '2xl', className = '',
 }: {
   name: string; url?: string | null; size?: 'sm' | 'md' | 'lg'; rounded?: string; className?: string;
 }) {
   const [failed, setFailed] = useState(false);
+  const resolvedUrl = useAuthedImageUrl(url);
   const color = getAvatarColor(name);
   const initial = (name[0] || '?').toUpperCase();
   const sizeClass = size === 'sm' ? 'w-8 h-8 text-xs' : size === 'lg' ? 'w-24 h-24 text-3xl' : 'w-12 h-12 text-sm';
@@ -165,9 +205,9 @@ function ChatAvatar({
       style={{ backgroundColor: color }}
     >
       <span className="select-none">{initial}</span>
-      {url && !failed && (
+      {resolvedUrl && !failed && (
         <img
-          src={url}
+          src={resolvedUrl}
           alt={name}
           className="absolute inset-0 w-full h-full object-cover"
           onError={() => setFailed(true)}
@@ -262,6 +302,10 @@ export function WhatsAppInterface() {
   const [searchingContatos, setSearchingContatos] = useState(false);
   // Foto de perfil — ampliar
   const [photoModal, setPhotoModal] = useState<string | null>(null);
+  // [AUDITORIA] LÓGICA: photoModal pode guardar um marcador `local-pic://...` (foto salva
+  // localmente, ver ChatAvatar/useAuthedImageUrl acima) — resolve pra blob URL autenticada
+  // antes de renderizar no <img> do modal ampliado.
+  const photoModalResolvedUrl = useAuthedImageUrl(photoModal);
   // Edição de nome do contato
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
@@ -710,7 +754,11 @@ export function WhatsAppInterface() {
       
       // Chamada unificada ao backend. O backend agora gerencia a idempotência,
       // limpeza de instâncias antigas e reuso da instância atual.
-      const res = await createInstance(name, phoneDigits || undefined);
+      // [AUDITORIA] LÓGICA (Sprint 2 — multi-instância): esta tela continua resolvendo a
+      // instância PADRÃO do tenant (sem novaConexao/instancia) — conectar um segundo número
+      // fica no painel de Instâncias (InstanceManagementPanel.tsx), que já foi atualizado pra
+      // isso (ver diagnosticos/AUDITORIA_LOG.md).
+      const res = await createInstance({ instanceName: name, phoneNumber: phoneDigits || undefined });
       
       setQrData(res);
       setShowConnectModal(false);
@@ -785,6 +833,20 @@ export function WhatsAppInterface() {
     const tStatus = setInterval(() => { if (!document.hidden) checkStatus(); }, 30000);
     return () => clearInterval(tStatus);
   }, []);
+
+  // [AUDITORIA] LÓGICA: enquanto sync_status === 'syncing', faz polling mais rápido (3s) de
+  // status + conversas — só nesse período, sem adicionar carga fora dele. Backend tipicamente
+  // conclui em menos de 1 minuto (ver sincronizarHistoricoDireto em webhook.ts), então o
+  // polling de 30s do effect acima sozinho deixaria a barra "presa" em 0% por boa parte disso.
+  useEffect(() => {
+    if (connectionStatus?.sync_status !== "syncing") return;
+    const tSync = setInterval(() => {
+      if (document.hidden) return;
+      checkStatus();
+      fetchConversas(activeTab === "arquivadas");
+    }, 3000);
+    return () => clearInterval(tSync);
+  }, [connectionStatus?.sync_status, activeTab]);
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -1541,6 +1603,25 @@ export function WhatsAppInterface() {
             </div>
           </div>
 
+          {/* [AUDITORIA] LÓGICA: barra de progresso de sincronização de histórico (2026-07-22) —
+              aparece enquanto o backend baixa mensagens antigas em segundo plano após conectar/
+              reconectar (sync_status vem junto do polling de status já existente, sem WebSocket
+              novo, ver diagnosticos/AUDITORIA_LOG.md). */}
+          {connectionStatus?.sync_status === "syncing" && (
+            <div className="bg-blue-50 dark:bg-blue-950/30 -mx-5 px-5 py-2 border-y border-blue-100 dark:border-blue-900">
+              <div className="flex justify-between text-[11px] text-blue-700 dark:text-blue-300 mb-1">
+                <span>Carregando histórico de mensagens...</span>
+                <span>{connectionStatus.sync_progress ?? 0}%</span>
+              </div>
+              <div className="w-full bg-blue-200 dark:bg-blue-900 h-1.5 rounded-full overflow-hidden">
+                <div
+                  className="bg-blue-500 h-1.5 transition-all duration-300"
+                  style={{ width: `${connectionStatus.sync_progress ?? 0}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Filter chip */}
           <div className="flex gap-2">
             <div className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95">
@@ -2077,7 +2158,7 @@ export function WhatsAppInterface() {
                   try {
                     setConnecting(true);
                     const phoneDigits = instancePhone.replace(/\D/g, '');
-                    const res = await createInstance(instanceName, phoneDigits || undefined);
+                    const res = await createInstance({ instanceName, phoneNumber: phoneDigits || undefined });
                     setQrData(res);
                     toast.success('Códigos atualizados!');
                   } catch (e: any) {
@@ -2754,7 +2835,7 @@ export function WhatsAppInterface() {
           onClick={() => setPhotoModal(null)}
         >
           <div className="relative max-w-[90vw] max-h-[90vh]" onClick={e => e.stopPropagation()}>
-            <img src={photoModal} alt="Foto do contato" className="max-w-[80vw] max-h-[80vh] rounded-2xl shadow-2xl object-contain" />
+            <img src={photoModalResolvedUrl ?? undefined} alt="Foto do contato" className="max-w-[80vw] max-h-[80vh] rounded-2xl shadow-2xl object-contain" />
             <button
               className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white text-black flex items-center justify-center shadow-lg hover:bg-gray-100"
               onClick={() => setPhotoModal(null)}

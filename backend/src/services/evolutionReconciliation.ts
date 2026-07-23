@@ -51,6 +51,19 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
   const cacheServidor = new Map<string, Promise<EvolutionInstanceInfo[] | null>>();
   const chaveServidor = (url: string, apiKey: string) => `${url}::${apiKey}`;
 
+  // [AUDITORIA] FIX APLICADO (2026-07-23, multi-instância): antes, o loop só sabia AVANÇAR
+  // agent_configs.evolution_instancia pra uma instância que acabou de abrir — não tinha
+  // nenhum caminho pra REVERTER quando a instância que agent_configs aponta hoje deixa de
+  // existir/abrir (achado real em homolog: uma instância `_2` criada e nunca finalizada de
+  // conexão chegou a reportar `open` uma vez, agent_configs foi atualizado pra ela, depois ela
+  // sumiu da Evolution e agent_configs ficou travado apontando pra uma instância morta —
+  // webhook.ts ainda resolvia certo via fallback nível 2 (agentes), mas a config de IA ficava
+  // baseada numa instância inexistente). Agora agrupa por tenant e decide DEPOIS de saber o
+  // estado de TODAS as instâncias do tenant: se a que agent_configs aponta não está aberta e
+  // existe outra do mesmo tenant que está, redireciona pra ela; sem nenhuma aberta, deixa como
+  // está (não tem pra onde reverter com segurança).
+  const porTenant = new Map<string, { instancia: string; aberta: boolean; url: string; api_key: string }[]>();
+
   for (const conector of conectores) {
     const chave = chaveServidor(conector.url, conector.api_key);
     if (!cacheServidor.has(chave)) {
@@ -80,31 +93,40 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
       corrigidos++;
     }
 
-    if (aberta) {
-      const { rows: agentConfigRows } = await pool.query(
-        `SELECT evolution_instancia FROM agent_configs WHERE user_id = $1`,
-        [conector.user_id]
-      );
-      const atual = agentConfigRows[0]?.evolution_instancia;
-      if (atual !== conector.instancia) {
-        await pool.query(
-          `INSERT INTO agent_configs (user_id, evolution_instancia, evolution_server_url, evolution_api_key, ativo)
-           VALUES ($1, $2, $3, $4, true)
-           ON CONFLICT (user_id) DO UPDATE SET
-             evolution_instancia  = EXCLUDED.evolution_instancia,
-             evolution_server_url = EXCLUDED.evolution_server_url,
-             evolution_api_key    = EXCLUDED.evolution_api_key,
-             updated_at           = NOW()`,
-          [conector.user_id, conector.instancia, conector.url, conector.api_key]
-        );
-        log.info('EVOLUTION_SYNC', 'agent_configs.evolution_instancia corrigido', {
-          userId: conector.user_id,
-          de: atual,
-          para: conector.instancia,
-        });
-        corrigidos++;
-      }
-    }
+    const lista = porTenant.get(conector.user_id) || [];
+    lista.push({ instancia: conector.instancia, aberta, url: conector.url, api_key: conector.api_key });
+    porTenant.set(conector.user_id, lista);
+  }
+
+  for (const [userId, lista] of porTenant) {
+    const abertas = lista.filter(l => l.aberta);
+    if (!abertas.length) continue; // nenhuma instância aberta pra esse tenant — nada pra redirecionar
+
+    const { rows: agentConfigRows } = await pool.query(
+      `SELECT evolution_instancia FROM agent_configs WHERE user_id = $1`,
+      [userId]
+    );
+    const atual = agentConfigRows[0]?.evolution_instancia;
+
+    // Se a instância atual do agent_configs já está entre as abertas, não mexe — evita
+    // trocar de instância à toa quando o tenant tem mais de uma aberta simultaneamente.
+    if (atual && abertas.some(a => a.instancia === atual)) continue;
+
+    const alvo = abertas[0];
+    await pool.query(
+      `INSERT INTO agent_configs (user_id, evolution_instancia, evolution_server_url, evolution_api_key, ativo)
+       VALUES ($1, $2, $3, $4, true)
+       ON CONFLICT (user_id) DO UPDATE SET
+         evolution_instancia  = EXCLUDED.evolution_instancia,
+         evolution_server_url = EXCLUDED.evolution_server_url,
+         evolution_api_key    = EXCLUDED.evolution_api_key,
+         updated_at           = NOW()`,
+      [userId, alvo.instancia, alvo.url, alvo.api_key]
+    );
+    log.info('EVOLUTION_SYNC', 'agent_configs.evolution_instancia corrigido', {
+      userId, de: atual, para: alvo.instancia,
+    });
+    corrigidos++;
   }
 
   return { corrigidos };

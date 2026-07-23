@@ -66,8 +66,11 @@ export default function DisparosPage() {
       }
       setLoadingCount(true);
       let list: any[] = [];
+      // [AUDITORIA] LÓGICA: `opt_out` incluído no select das 3 fontes de alvo (tag/estágio/lista)
+      // pra dar pro filtro final abaixo o que precisa — sem isso, contato que pediu remoção
+      // entrava na campanha do mesmo jeito (ver diagnosticos/AUDITORIA_LOG.md).
       if (form.tags_selecionadas.length > 0) {
-        const { data } = await api.from("contatos").select("id, nome, telefone, tags");
+        const { data } = await api.from("contatos").select("id, nome, telefone, tags, opt_out");
         if (data) {
           const filtered = data.filter((c: any) =>
             Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
@@ -78,23 +81,28 @@ export default function DisparosPage() {
       if (form.estagios_selecionados.length > 0) {
         const { data } = await api
           .from("contatos")
-          .select("id, nome, telefone")
+          .select("id, nome, telefone, opt_out")
           .in("funil_estagio_id", form.estagios_selecionados);
         if (data) list = [...list, ...data];
       }
       if (form.listas_selecionadas.length > 0) {
         if (form.listas_selecionadas.includes("__all__")) {
-          const { data } = await api.from("contatos").select("id, nome, telefone, lista_id");
+          const { data } = await api.from("contatos").select("id, nome, telefone, lista_id, opt_out");
           if (data) list = [...list, ...data];
         } else {
           const { data } = await api
             .from("contatos")
-            .select("id, nome, telefone, lista_id")
+            .select("id, nome, telefone, lista_id, opt_out")
             .in("lista_id", form.listas_selecionadas);
           if (data) list = [...list, ...data];
         }
       }
-      const unique = Array.from(new Map(list.map(c => [c.telefone, c])).values());
+      // [AUDITORIA] FIX APLICADO (2026-07-23): contato com opt_out=true nunca entra na lista de
+      // alvos de campanha, independente de por qual filtro (tag/estágio/lista) ele foi
+      // encontrado — mesma checagem reforçada no backend (get_next_disparo_batch, ver
+      // migrations.ts), essa aqui evita que ele nem apareça na prévia/contagem.
+      const semOptOut = list.filter((c: any) => c.opt_out !== true);
+      const unique = Array.from(new Map(semOptOut.map(c => [c.telefone, c])).values());
       setTargetContacts(unique);
       setLoadingCount(false);
     };

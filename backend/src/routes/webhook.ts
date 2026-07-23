@@ -17,17 +17,46 @@
  * tabela "whatsapp_instances" que não existe mais no código (a lógica real usa
  * agent_configs/agentes), ficara desatualizado de um refactor anterior.
  *
- * [AUDITORIA] BUG (achado C da revisão externa/Google AI Studio): toda busca por telefone
- * neste arquivo usa `telefone ILIKE $N` com parâmetro `%${telefone.slice(-11)}` — curinga no
- * início da string impede o Postgres de usar índice B-Tree em `telefone`, forçando full table
- * scan em toda mensagem recebida. Piora conforme a base de contatos cresce. Ocorrências atuais
- * (linhas aproximadas, conferir na íntegra pois deslocam com futuras edições): 509, 514, 520,
- * 542 (bloco de pausa/reativação de IA por mensagem fromMe), 670, 749 (upsert de contato/foto
- * de perfil), 767, 805, 810 (opt-out e reativação por comando de texto).
- * [AUDITORIA] FIX PENDENTE (motivo: exige migração de dados, não só código — normalizar a
- * coluna `telefone` para formato E.164 antes de trocar `ILIKE '%...'` por igualdade exata
- * `=`; decisão do usuário sobre quando rodar essa migração em produção, dado o volume de
- * linhas existentes em `contatos`/`dados_cliente`).
+ * [AUDITORIA] BUG (achado C da revisão externa/Google AI Studio; reconfirmado e ampliado no
+ * Cenário D desta auditoria, 2026-07-23): toda busca por telefone neste arquivo, em
+ * routes/whatsapp.ts e em services/agentEngine.ts usa `telefone ILIKE $N` com parâmetro
+ * `%${telefone.slice(-11)}` (sufixo) — curinga no INÍCIO da string impede o Postgres de usar
+ * qualquer índice B-Tree padrão em `telefone`, forçando sequential scan em `contatos`/
+ * `dados_cliente` a cada mensagem recebida, a cada troca de status de IA, a cada consulta de
+ * perfil/foto. Índice existente (`idx_contatos_user_telefone`, ver migrations.ts) não ajuda
+ * aqui — B-Tree comum não serve para padrão `LIKE '%sufixo'`. Ocorrências (não exaustivo, uma
+ * dúzia+ em cada arquivo): webhook.ts (pausa/reativação de IA por fromMe, upsert de contato/
+ * foto de perfil, opt-out e reativação por comando de texto — todas com `%${telefone.slice(-11)}`);
+ * whatsapp.ts (salvarFotoContato, GET /profile-pic, POST /ia-toggle, PATCH /contato,
+ * POST /chat-prefs); agentEngine.ts (upsertContato, checagem de pausa de atendimento,
+ * finalização/pausa da IA). Impacto de performance real: cada scan é O(n) sobre as linhas do
+ * tenant em `contatos`/`dados_cliente` — hoje (base pequena por tenant) o custo é
+ * imperceptível; sob tráfego "massivo" (a pergunta do Cenário D), o custo cresce linear com o
+ * tamanho da base de contatos do tenant E com o volume de mensagens simultâneas — cada
+ * mensagem recebida faz 3-5 desses scans em sequência (upsert antecipado, pausa/reativação,
+ * upsert de contato completo), multiplicando CPU e I/O de disco sob concorrência alta. Não é
+ * lock de tabela (são SELECTs/UPDATEs pontuais, não teria bloqueio exclusivo prolongado), é
+ * puramente custo de CPU/I-O por natureza não-indexável do padrão de busca.
+ * [AUDITORIA] FIX PENDENTE (motivo: exige migração de dados em produção — decisão do usuário
+ * sobre quando rodar, dado o volume de linhas já existentes em `contatos`/`dados_cliente`).
+ * Arquitetura proposta para Cenário D — higienização automatizada de telefone:
+ *   1. Nova coluna gerada/indexável em `contatos` e `dados_cliente`:
+ *      `telefone_suffix TEXT GENERATED ALWAYS AS (RIGHT(regexp_replace(telefone, '\D', '', 'g'), 11)) STORED`
+ *      (mantém compatibilidade com o padrão real de uso hoje — comparar pelos últimos 11
+ *      dígitos, que já é a intenção de todo `slice(-11)` espalhado pelo código, tolerando
+ *      variação de DDI/9º dígito).
+ *   2. Índice B-Tree comum em `(user_id, telefone_suffix)` — coluna GENERATED é populada
+ *      automaticamente pelo Postgres em INSERT/UPDATE, sem precisar de trigger.
+ *   3. Backfill: `UPDATE contatos SET telefone = telefone` (força recomputar a coluna gerada
+ *      em todas as linhas existentes) rodado em lote/fora de horário de pico, uma vez.
+ *   4. Trocar cada `telefone ILIKE $N` com parâmetro `%${x.slice(-11)}` por
+ *      `telefone_suffix = $N` com parâmetro `x.slice(-11)` (sem `%`) — busca exata, usa o
+ *      índice novo, elimina o scan.
+ *   5. Rollout incremental: pode ser feito arquivo por arquivo/rota por rota (a coluna
+ *      convive com `telefone` sem quebrar nada enquanto a migração dos call sites não estiver
+ *      completa), sem precisar de uma janela de manutenção única.
+ * Nenhuma dessas mudanças foi aplicada nesta auditoria — é uma migração de schema com
+ * backfill em produção, fora do escopo de "auditoria só lê/comenta/corrige localmente".
  */
 
 import { Router, Request, Response } from 'express';
@@ -36,7 +65,10 @@ import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
 import { withTenantContext } from '../db';
+import { salvarMidiaWhatsapp, salvarFotoPerfilLocal } from '../utils/whatsappMediaStorage';
 import { log } from '../logger';
+
+const MIDIA_TIPOS = new Set(['image', 'audio', 'video', 'document', 'sticker']);
 
 // [AUDITORIA] FIX APLICADO (achado D da revisão externa/Google AI Studio): fs.appendFileSync
 // bloqueava o event loop a cada chamada (todo webhook recebido, update de status, descarte)
@@ -142,9 +174,35 @@ function isValidJid(jid: string): boolean {
   return /^\d+@(s\.whatsapp\.net|g\.us|lid)$/.test(jid);
 }
 
+// [AUDITORIA] BUG: extrairTexto/extrairTipo/extrairMidia só liam data.message.* no primeiro
+// nível — mensagens "ver uma vez" (viewOnceMessage/viewOnceMessageV2/...Extension) e
+// mensagens efêmeras (ephemeralMessage, que fica ligado por padrão em muitas conversas
+// depois que o cliente configura "mensagens temporárias") embrulham o conteúdo real um
+// nível abaixo (ex: data.message.ephemeralMessage.message.imageMessage). Documentos
+// enviados com legenda (documentWithCaptionMessage) têm o mesmo formato de wrapper. Sem
+// desembrulhar, extrairTipo() caía no default 'text' e extrairTexto() retornava null — a
+// mensagem batia no early-return "sem texto e sem mídia" (linha ~1253) e era descartada
+// silenciosamente, nunca persistida em whatsapp_messages nem chegando a aparecer no log de
+// diagnóstico "shape desconhecido" (que só dispara quando ao menos a checagem de tipo==text
+// bate, o que também é o caso aqui — mas o efeito prático pro usuário final é a mesma perda
+// de mensagem real).
+// [AUDITORIA] FIX APLICADO: desembrulharMensagem() resolve o payload real (recursivo, cobre
+// wrapper aninhado) antes de extrair tipo/texto/mídia. Mudança estritamente aditiva — payloads
+// que já funcionavam não têm nenhum desses campos wrapper, então o resultado da função pra eles
+// é idêntico a antes (retorna o mesmo objeto de entrada).
+function desembrulharMensagem(m: any): any {
+  if (!m || typeof m !== 'object') return m;
+  const wrapper = m.ephemeralMessage?.message
+    || m.viewOnceMessage?.message
+    || m.viewOnceMessageV2?.message
+    || m.viewOnceMessageV2Extension?.message
+    || m.documentWithCaptionMessage?.message;
+  return wrapper ? desembrulharMensagem(wrapper) : m;
+}
+
 // [AUDITORIA] LÓGICA: Extrai texto legível de múltiplos formatos de mensagens de mídia e respostas interativas do WhatsApp.
 function extrairTexto(data: EvolutionPayload['data']): string | null {
-  const m = data.message;
+  const m = desembrulharMensagem(data.message);
   if (!m) return null;
   return (
     m.conversation ||
@@ -161,7 +219,7 @@ function extrairTexto(data: EvolutionPayload['data']): string | null {
 
 // [AUDITORIA] LÓGICA: Mapeia a assinatura da mensagem recebida para uma taxonomia simplificada do banco (text, image, audio, etc.).
 function extrairTipo(data: EvolutionPayload['data']): string {
-  const m = data.message;
+  const m = desembrulharMensagem(data.message);
   if (!m) return 'text';
   if (m.imageMessage) return 'image';
   if (m.audioMessage) return 'audio';
@@ -173,7 +231,7 @@ function extrairTipo(data: EvolutionPayload['data']): string {
 
 // [AUDITORIA] LÓGICA: Extrai metadados de arquivos binários associados às mensagens recebidas da Evolution API.
 function extrairMidia(data: EvolutionPayload['data']): { url?: string; mime?: string; nome?: string } {
-  const m = data.message;
+  const m = desembrulharMensagem(data.message);
   if (!m) return {};
   const src = m.imageMessage || m.audioMessage || m.videoMessage || m.documentMessage || m.stickerMessage;
   if (!src) return {};
@@ -193,6 +251,22 @@ export default function webhookRouter(pool: Pool): Router {
     )
   `).catch(() => {});
 
+  // [AUDITORIA] LÓGICA (Cenário C desta auditoria — memória de dedup sob pico de tráfego,
+  // 2026-07-23): avaliado o cenário hipotético de 50.000 mensagens em poucos minutos.
+  // Memória: cada chave é uma string curta (`instancia:messageId`, ~40-60 bytes) com TTL de
+  // 60s (setTimeout individual, ver comentário abaixo). Mesmo a taxa de chegada inteira
+  // (50k/poucos minutos ≈ 150-300 msg/s) só mantém, em regime estacionário, ~150-300 × 60 ≈
+  // 9k-18k chaves vivas no Set a qualquer instante — poucos MB de heap, não é um vetor de
+  // estouro de memória em nenhuma escala realista para este produto (WhatsApp de negócio
+  // único por tenant, não uma plataforma de mensageria em massa). O ponto real de atenção não
+  // é a memória do Set, e sim o banco: cada mensagem recebida dispara vários round-trips
+  // (SELECT+INSERT de dedup, INSERT em whatsapp_messages, upsert de contato, fetch de foto de
+  // perfil) — sob 150-300 msg/s sustentado, o pool de conexões do Postgres (não dimensionado
+  // pensando nesse volume) seria o gargalo real antes da memória do processo Node, com risco
+  // de fila/timeout de query, não de crash. Não é uma correção de código pontual — é uma
+  // característica de capacidade que só se torna relevante se o produto crescer para volumes
+  // de disparo em massa via webhook (hoje o volume real de tráfego é o de conversas normais de
+  // atendimento, ordens de grandeza abaixo disso).
   const processados = new Set<string>();
 
   // [AUDITORIA] LÓGICA: Manipula eventos `messages.update` para refletir recibos de entrega (DELIVERY_ACK) e leitura (READ).
@@ -314,69 +388,103 @@ export default function webhookRouter(pool: Pool): Router {
     return null;
   }
 
-  // [AUDITORIA] LÓGICA: Backfill ativo de histórico (piloto, 2026-07-22, só homologação) —
-  // chamado quando a instância confirma connection.update === 'open' (pareamento novo ou
-  // reconexão). Busca as últimas mensagens direto da Evolution (mesmo endpoint
-  // /chat/findMessages já usado pela rota autenticada POST /api/whatsapp/sync-history em
-  // routes/whatsapp.ts) e grava com ON CONFLICT DO NOTHING (idempotente). withTenantContext
-  // usado com UM client reaproveitado pro loop inteiro — nunca por linha — necessário pro
-  // piloto de RLS em whatsapp_messages e evita esgotar o pool de conexões num lote de até 100
-  // mensagens.
+  // [AUDITORIA] LÓGICA: grava sync_status/sync_progress em integracoes_config — é o que
+  // alimenta a barra de progresso do frontend (lida via polling já existente, sem
+  // WebSocket novo, ver diagnosticos/AUDITORIA_LOG.md). integracoes_config não tem RLS
+  // habilitado em nenhum ambiente, então usa pool.query() normal (sem withTenantContext).
+  async function atualizarSyncStatus(
+    userId: string, instancia: string, status: 'idle' | 'syncing' | 'completed' | 'error',
+    progress: number, total: number
+  ): Promise<void> {
+    await pool.query(
+      `UPDATE integracoes_config
+       SET sync_status = $1, sync_progress = $2, sync_total = $3, sync_updated_at = NOW()
+       WHERE user_id = $4 AND instancia = $5 AND tipo = 'evolution'`,
+      [status, progress, total, userId, instancia]
+    ).catch(err => log.warn('WEBHOOK', 'atualizarSyncStatus falhou', { userId, instancia, err: err?.message }));
+  }
+
+  // [AUDITORIA] LÓGICA: Backfill ativo de histórico (2026-07-22) — chamado quando a
+  // instância confirma connection.update === 'open' (pareamento novo ou reconexão). Busca
+  // o histórico direto da Evolution em lotes paginados (mesmo endpoint /chat/findMessages
+  // já usado pela rota autenticada POST /api/whatsapp/sync-history em routes/whatsapp.ts,
+  // mesmo limite de páginas/mensagens) e grava com ON CONFLICT DO NOTHING (idempotente).
+  // Atualiza sync_status/sync_progress a cada página processada. withTenantContext usado
+  // com UM client reaproveitado pro loop inteiro — nunca por linha — necessário pro piloto
+  // de RLS em whatsapp_messages e evita esgotar o pool de conexões em lotes grandes.
   async function sincronizarHistoricoDireto(
     userId: string, instancia: string, apiKey: string, url: string
   ): Promise<void> {
+    const base = url.replace(/\/$/, '');
+    const PAGE_SIZE = 500;
+    let page = 1;
+    let totalPages = 1;
+    let totalInseridos = 0;
+    let totalProcessadas = 0;
+
+    await atualizarSyncStatus(userId, instancia, 'syncing', 0, 0);
+
     try {
-      const base = url.replace(/\/$/, '');
-      const PAGE_SIZE = 100;
-      const msgsRes = await fetch(`${base}/chat/findMessages/${instancia}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: apiKey },
-        body: JSON.stringify({ where: {}, limit: PAGE_SIZE, page: 1 }),
-      });
-      if (!msgsRes.ok) {
-        log.warn('WEBHOOK', 'sincronizarHistoricoDireto: findMessages falhou', { instancia, status: msgsRes.status });
-        return;
-      }
-      const msgsJson: any = await msgsRes.json().catch(() => ({}));
-      const records: any[] = msgsJson?.messages?.records || msgsJson?.records || (Array.isArray(msgsJson) ? msgsJson : []);
-
-      let inseridos = 0;
       await withTenantContext({ userId, isAdmin: false }, async (client) => {
-        for (const m of records) {
-          try {
-            const key = m.key || {};
-            const remoteJid: string = key.remoteJid || m.remoteJid || '';
-            if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
-            const messageId = key.id || m.id;
-            if (!messageId) continue;
-            const fromMe = !!key.fromMe;
-            const tsRaw = Number(m.messageTimestamp || Math.floor(Date.now() / 1000));
-            const ts = tsRaw > 1e10 ? Math.floor(tsRaw / 1000) : tsRaw;
-            const msgContent = m.message || {};
-            const msgType = m.messageType || (
-              msgContent.imageMessage ? 'image'
-              : msgContent.audioMessage ? 'audio'
-              : msgContent.videoMessage ? 'video'
-              : msgContent.documentMessage ? 'document'
-              : 'text'
-            );
-            const content = msgContent.conversation || msgContent.extendedTextMessage?.text || null;
-
-            const result = await client.query(
-              `INSERT INTO whatsapp_messages
-                 (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))
-               ON CONFLICT (message_id, instance_name) DO NOTHING`,
-              [userId, instancia, remoteJid, messageId, fromMe, msgType, content, fromMe ? 'sent' : 'received', ts]
-            );
-            if (result.rowCount && result.rowCount > 0) inseridos++;
-          } catch (err: any) {
-            log.warn('WEBHOOK', 'sincronizarHistoricoDireto: falha ao inserir linha', { err: err?.message });
+        do {
+          const msgsRes = await fetch(`${base}/chat/findMessages/${instancia}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: apiKey },
+            body: JSON.stringify({ where: {}, limit: PAGE_SIZE, page }),
+          });
+          if (!msgsRes.ok) {
+            log.warn('WEBHOOK', 'sincronizarHistoricoDireto: findMessages falhou', { instancia, page, status: msgsRes.status });
+            break;
           }
-        }
+          const msgsJson: any = await msgsRes.json().catch(() => ({}));
+          const records: any[] = msgsJson?.messages?.records || msgsJson?.records || (Array.isArray(msgsJson) ? msgsJson : []);
+          totalPages = msgsJson?.messages?.pages || totalPages;
+
+          for (const m of records) {
+            try {
+              const key = m.key || {};
+              const remoteJid: string = key.remoteJid || m.remoteJid || '';
+              if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
+              const messageId = key.id || m.id;
+              if (!messageId) continue;
+              const fromMe = !!key.fromMe;
+              const tsRaw = Number(m.messageTimestamp || Math.floor(Date.now() / 1000));
+              const ts = tsRaw > 1e10 ? Math.floor(tsRaw / 1000) : tsRaw;
+              const msgContent = m.message || {};
+              const msgType = m.messageType || (
+                msgContent.imageMessage ? 'image'
+                : msgContent.audioMessage ? 'audio'
+                : msgContent.videoMessage ? 'video'
+                : msgContent.documentMessage ? 'document'
+                : 'text'
+              );
+              const content = msgContent.conversation || msgContent.extendedTextMessage?.text || null;
+
+              const result = await client.query(
+                `INSERT INTO whatsapp_messages
+                   (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))
+                 ON CONFLICT (message_id, instance_name) DO NOTHING`,
+                [userId, instancia, remoteJid, messageId, fromMe, msgType, content, fromMe ? 'sent' : 'received', ts]
+              );
+              if (result.rowCount && result.rowCount > 0) totalInseridos++;
+            } catch (err: any) {
+              log.warn('WEBHOOK', 'sincronizarHistoricoDireto: falha ao inserir linha', { err: err?.message });
+            }
+          }
+
+          totalProcessadas += records.length;
+          const progress = totalPages > 0 ? Math.round((page / totalPages) * 100) : 100;
+          await atualizarSyncStatus(userId, instancia, 'syncing', Math.min(progress, 99), totalProcessadas);
+
+          page++;
+        } while (page <= totalPages && totalProcessadas < 10000);
       });
-      log.info('WEBHOOK', 'sincronizarHistoricoDireto concluída', { instancia, userId, encontradas: records.length, inseridos });
+
+      await atualizarSyncStatus(userId, instancia, 'completed', 100, totalProcessadas);
+      log.info('WEBHOOK', 'sincronizarHistoricoDireto concluída', { instancia, userId, processadas: totalProcessadas, inseridos: totalInseridos });
     } catch (err: any) {
+      await atualizarSyncStatus(userId, instancia, 'error', 0, totalProcessadas);
       log.warn('WEBHOOK', 'sincronizarHistoricoDireto: erro geral', { instancia, userId, err: err?.message });
     }
   }
@@ -736,13 +844,19 @@ export default function webhookRouter(pool: Pool): Router {
 
       // ── UPSERT antecipado de contato — garante que contatos novos existam antes de qualquer branch ──
       // [AUDITORIA] LÓGICA: Garante a criação de registros mínimos na tabela de contatos de forma não-bloqueante (sem await).
+      // [AUDITORIA] FIX APLICADO (2026-07-22): "there is no unique or exclusion constraint
+      // matching the ON CONFLICT specification" em toda mensagem recebida — o índice único real
+      // (idx_contatos_user_tel_unique) é PARCIAL (WHERE telefone IS NOT NULL), e o Postgres só
+      // aceita inferir um índice parcial como alvo de ON CONFLICT se a cláusula repetir
+      // exatamente o mesmo WHERE. `telefone` já é garantidamente não-nulo aqui (vem de
+      // remoteJid.split('@')[0], com remoteJid já validado acima), então o predicado é sempre
+      // verdadeiro na prática — só precisa estar escrito pra o Postgres casar com o índice.
       if (userId && !isGroup && remoteJid) {
-        const suffixEarly = `%${telefone.slice(-11)}`;
         const nomeEarly = pushName || telefone;
         pool.query(
           `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, ultima_mensagem_em, atendente_pausou_ia)
            VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)
-           ON CONFLICT (user_id, telefone) DO UPDATE
+           ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO UPDATE
              SET push_name = COALESCE(EXCLUDED.push_name, contatos.push_name),
                  nome = CASE WHEN contatos.nome = contatos.telefone THEN EXCLUDED.nome ELSE contatos.nome END,
                  ultima_mensagem_em = NOW()`,
@@ -904,11 +1018,23 @@ export default function webhookRouter(pool: Pool): Router {
       // específica. Também adicionei `.catch()` para não deixar esse SELECT (que é só uma
       // otimização de dedup — a proteção real é o `ON CONFLICT DO NOTHING` do INSERT logo abaixo)
       // derrubar o processamento inteiro da mensagem em caso de qualquer erro futuro de schema.
-      // [AUDITORIA] FIX PENDENTE (motivo: precisa confirmar em produção): rodar na VPS
-      // `docker exec -i postgres psql -U mentoark -d crm -c "\d webhook_mensagens_processadas"`
-      // para ver o schema real. Se a coluna for `criado_em` (sem `id`), o CREATE TABLE deste
-      // arquivo (linha ~145) está descrevendo um schema que nunca existiu de verdade e vale
-      // atualizá-lo ou removê-lo para não confundir; se for `created_at`+`id`, o oposto.
+      // [AUDITORIA] ATUALIZAÇÃO — RESOLVIDO (Cenário C desta auditoria, 2026-07-23): confirmado
+      // lendo backend/src/migrations.ts (linhas ~131-169) que a corrida de schema acima é
+      // autocurativa, independente de qual CREATE TABLE IF NOT EXISTS vence a corrida com este
+      // arquivo: migrations.ts sempre roda, depois do startup, um bloco que (1) adiciona a
+      // coluna `criado_em` se faltar, (2) remove a PRIMARY KEY antiga em `message_id` sozinho
+      // se existir (`DROP CONSTRAINT ... webhook_mensagens_processadas_pkey`), e (3) cria
+      // `idx_webhook_dedup_msgid_inst`, um UNIQUE INDEX composto em
+      // `(message_id, COALESCE(instancia, ''))`. Isso também responde à pergunta do Cenário C
+      // sobre colisão multi-instância: a constraint única JÁ é por (message_id, instancia), não
+      // só por message_id — dois chips diferentes do mesmo tenant (ou de tenants diferentes)
+      // podem, em tese, gerar o mesmo message_id sem se dedup-arem incorretamente um ao outro.
+      // Também confirmado: `cron.ts` roda diariamente às 03:00 um DELETE de linhas com
+      // `criado_em` > 24h, então a tabela não cresce sem limite sob volume alto — não há risco
+      // de esgotamento de disco por esse caminho. Único resíduo cosmético possível (não
+      // funcional): se o CREATE TABLE deste arquivo venceu a corrida na 1ª inicialização de um
+      // ambiente, a tabela pode ter uma coluna `id`/`created_at` órfã ao lado de `criado_em` —
+      // sem efeito prático, não vale migração só por estética.
       const jaExiste = await pool.query(
         'SELECT 1 FROM webhook_mensagens_processadas WHERE message_id = $1 AND instancia = $2',
         [messageId, instancia]
@@ -927,6 +1053,19 @@ export default function webhookRouter(pool: Pool): Router {
       const midia    = extrairMidia(payload.data);
       const ts       = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
       const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
+
+      // [AUDITORIA] DIAGNÓSTICO TEMPORÁRIO (2026-07-22, incidente Stefano/crm_a5d1255fce86):
+      // extrairTexto()/extrairTipo() não reconhecem o shape de mensagens vindas de contatos
+      // endereçados por @lid (Linked ID do WhatsApp) — texto sai null, bolha fica vazia e
+      // invisível no frontend (WhatsAppInterface.tsx só renderiza `m.content && (...)`).
+      // Log só das CHAVES do objeto message (não o conteúdo) pra descobrir o campo real sem
+      // logar conteúdo de cliente. Remover depois que o fix definitivo em extrairTexto() sair.
+      if (texto === null && tipo === 'text' && payload.data.message) {
+        log.warn('WEBHOOK', 'Mensagem não reconhecida por extrairTexto/extrairTipo — shape desconhecido', {
+          traceId, remoteJid: payload.data.key?.remoteJid,
+          messageKeys: Object.keys(payload.data.message),
+        });
+      }
 
       // [AUDITORIA] LÓGICA (achado 2 da revisão externa/Google AI Studio, sprint seguinte à
       // Sprint 4 — verificado, FALSO POSITIVO): a revisão apontou que o bloco de upsert de
@@ -972,6 +1111,39 @@ export default function webhookRouter(pool: Pool): Router {
         log.info('WEBHOOK', 'INSERT RESULT (0=duplicata, 1=novo, -1=erro)', {
           traceId, rowCount: (insertResult as any).rowCount,
         });
+
+        // ── Decriptografar e persistir mídia (áudio/imagem/vídeo/documento/figurinha) ─────
+        // [AUDITORIA] LÓGICA: media_url gravado acima é a URL crua da Evolution, sempre
+        // criptografada (ver whatsappMediaStorage.ts) — por isso áudio/imagem/figurinha nunca
+        // tocavam/abriam. Assíncrono e não-bloqueante (mesmo padrão IIFE já usado pra foto de
+        // perfil logo abaixo) — se falhar, a mensagem já foi salva com a URL crua como fallback,
+        // nada trava.
+        if (MIDIA_TIPOS.has(tipo) && midia.url) {
+          void (async () => {
+            try {
+              const cfgMidia = await pool.query(
+                `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+                 FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+                [userId]
+              ).catch(() => ({ rows: [] as any[] }));
+              const evoUrlMidia = (cfgMidia.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br');
+              const evoKeyMidia = cfgMidia.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+
+              const localUrl = await salvarMidiaWhatsapp({
+                evoUrl: evoUrlMidia, apiKey: evoKeyMidia, instancia, messageId, remoteJid, fromMe,
+                userId: userId as string, tipo, mimetypeHint: midia.mime, fileNameHint: midia.nome,
+              });
+              if (localUrl) {
+                await pool.query(
+                  `UPDATE whatsapp_messages SET media_url = $1 WHERE message_id = $2 AND instance_name = $3`,
+                  [localUrl, messageId, instancia]
+                ).catch(err => log.warn('WEBHOOK', 'Erro ao atualizar media_url local', { traceId, err: err.message }));
+              }
+            } catch (e: any) {
+              log.warn('WEBHOOK', 'Falha no fluxo de persistência de mídia', { traceId, err: e.message });
+            }
+          })();
+        }
 
         // ── UPSERT de contato (apenas para contatos individuais, não grupos) ─────
         if (!isGroup) {
@@ -1066,11 +1238,14 @@ export default function webhookRouter(pool: Pool): Router {
                 } catch {}
               }
 
-              // [AUDITORIA] LÓGICA: Se conseguiu obter a URL da imagem de perfil, persiste em ambas as colunas mapeadas no banco.
+              // [AUDITORIA] FIX APLICADO (2026-07-23): salva os bytes localmente em vez da URL
+              // crua da Evolution — ela expira (ver whatsappMediaStorage.ts), causa raiz de
+              // fotos "sumindo" silenciosamente semanas depois (diagnosticos/AUDITORIA_LOG.md).
               if (picUrl) {
+                const localUrl = await salvarFotoPerfilLocal(picUrl, userId as string, telefone);
                 await pool.query(
                   `UPDATE contatos SET profile_pic_url = $1, foto_perfil = $1 WHERE user_id = $2 AND telefone ILIKE $3`,
-                  [picUrl, userId, suffix]
+                  [localUrl || picUrl, userId, suffix]
                 ).catch(() => {});
                 log.info('WEBHOOK', 'Foto de perfil atualizada', { traceId, telefone });
               }
@@ -1161,6 +1336,24 @@ export default function webhookRouter(pool: Pool): Router {
       if (!texto && !['audio', 'image', 'video', 'document'].includes(tipo)) {
         wlog('WEBHOOK_DROP', `sem texto e sem mídia tipo=${tipo} mid=${messageId} jid=${remoteJid}`);
         return;
+      }
+
+      // [AUDITORIA] LÓGICA: Whitelist de segurança da IA — só em homologação (2026-07-22).
+      // DATABASE_URL_MIGRATIONS só existe no .env de homolog (piloto de RLS, ver
+      // diagnosticos/AUDITORIA_LOG.md) — produção nunca define essa variável, então este bloco
+      // nunca roda lá. Objetivo: se alguém mandar mensagem por engano pro número de teste em
+      // homolog, a mensagem ainda é salva normalmente (não retornamos antes disso), só a
+      // resposta automática (N8N ou motor de IA embutido) fica bloqueada pra remetentes fora da
+      // whitelist — evita que um cliente real receba resposta do robô de teste.
+      if (process.env.DATABASE_URL_MIGRATIONS) {
+        const HOMOLOG_IA_WHITELIST = ['5511979579548', '5511946650482'];
+        const remetenteNormalizado = (telefone || '').replace(/\D/g, '');
+        if (!HOMOLOG_IA_WHITELIST.includes(remetenteNormalizado)) {
+          log.warn('WEBHOOK', 'IA bloqueada em homologação — remetente fora da whitelist de teste', {
+            traceId, remetente: remetenteNormalizado,
+          });
+          return;
+        }
       }
 
       // Rota N8N: se agente tem n8n_webhook_url configurado, encaminha para lá.

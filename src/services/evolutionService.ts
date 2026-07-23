@@ -29,6 +29,11 @@ export interface StatusResult {
   phoneNumber?: string;
   error?: boolean;
   message?: string;
+  // [AUDITORIA] LÓGICA: barra de progresso de sincronização de histórico (2026-07-22) —
+  // vem junto do status de conexão, sem endpoint/polling novo (ver AUDITORIA_LOG.md).
+  sync_status?: 'idle' | 'syncing' | 'completed' | 'error';
+  sync_progress?: number;
+  sync_total?: number;
 }
 
 // [AUDITORIA] BUG: o parâmetro `instancia` era aceito mas nunca usado — a URL chamada abaixo
@@ -52,17 +57,43 @@ export async function fetchConnectionStatus(instancia?: string): Promise<StatusR
     // vindos do backend (ver GET /evo/status em whatsapp.ts) para quem chama decidir o que fazer.
     if (!res.ok) return { state: 'close', error: true, message: data?.message };
     const state = data?.state === 'open' ? 'open' : data?.state === 'connecting' ? 'connecting' : data?.state === 'unauthorized' ? 'unauthorized' : 'close';
-    return { state: state as StatusResult['state'], phoneNumber: data?.phoneNumber };
+    return {
+      state: state as StatusResult['state'],
+      phoneNumber: data?.phoneNumber,
+      sync_status: data?.sync_status,
+      sync_progress: data?.sync_progress,
+      sync_total: data?.sync_total,
+    };
   } catch (err: any) {
     return { state: 'close', error: true, message: err?.message };
   }
 }
 
-export async function createInstance(instanceName?: string, phoneNumber?: string, forceReconnect?: boolean): Promise<CreateInstanceResult> {
+// [AUDITORIA] LÓGICA (Sprint 2 — multi-instância, 2026-07-23): antes, createInstance() só sabia
+// resolver a instância "padrão" do tenant — não tinha como o painel pedir "conecta um número
+// NOVO" nem "reconecta ESTE card específico" (ver diagnosticos/AUDITORIA_LOG.md, Sprint 1/2 do
+// plano multi-instância). `novaConexao` e `instancia` são mutuamente exclusivos: o backend usa
+// `novaConexao` pra calcular o próximo nome livre; sem ele, `instancia` (se pertencer ao
+// tenant) direciona a ação pra aquela instância específica em vez da padrão.
+export interface CreateInstanceOpts {
+  instanceName?: string;
+  phoneNumber?: string;
+  forceReconnect?: boolean;
+  novaConexao?: boolean;
+  instancia?: string;
+}
+
+export async function createInstance(opts: CreateInstanceOpts = {}): Promise<CreateInstanceResult> {
+  const { instanceName, phoneNumber, forceReconnect, novaConexao, instancia } = opts;
   const res = await fetch(`${API_BASE}/api/whatsapp/connect`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ instanceName, phoneNumber, force_reconnect: forceReconnect === true }),
+    body: JSON.stringify({
+      instanceName, phoneNumber,
+      force_reconnect: forceReconnect === true,
+      nova_conexao: novaConexao === true,
+      instancia,
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -75,8 +106,9 @@ export async function reconnectInstance(): Promise<CreateInstanceResult> {
   return createInstance();
 }
 
-export async function pollQr(): Promise<CreateInstanceResult> {
-  const res = await fetch(`${API_BASE}/api/whatsapp/poll-qr`, {
+export async function pollQr(instancia?: string): Promise<CreateInstanceResult> {
+  const qs = instancia ? `?instancia=${encodeURIComponent(instancia)}` : '';
+  const res = await fetch(`${API_BASE}/api/whatsapp/poll-qr${qs}`, {
     headers: authHeaders(),
   });
   const data = await res.json().catch(() => ({}));
@@ -87,9 +119,10 @@ export async function pollQr(): Promise<CreateInstanceResult> {
   return data;
 }
 
-export async function disconnectInstance(): Promise<void> {
+export async function disconnectInstance(instancia?: string): Promise<void> {
   await fetch(`${API_BASE}/api/whatsapp/disconnect`, {
     method: 'POST',
     headers: authHeaders(),
+    body: JSON.stringify({ instancia }),
   });
 }

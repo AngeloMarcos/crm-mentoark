@@ -1,0 +1,166 @@
+/**
+ * whatsappMediaStorage.ts — decriptografa e persiste mídia recebida do WhatsApp.
+ *
+ * [AUDITORIA] LÓGICA: o `media_url` que a Evolution manda no webhook (imageMessage.url,
+ * audioMessage.url, etc.) é a URL crua do CDN do WhatsApp (mmg.whatsapp.net/.../*.enc) —
+ * sempre CRIPTOGRAFADA. Baixar direto (como o proxy /api/whatsapp/media fazia até agora)
+ * traz bytes cifrados, não o arquivo real — por isso áudio não tocava, imagem não abria,
+ * figurinha não renderizava (ver diagnosticos/AUDITORIA_LOG.md, achado do caso Stefano).
+ * A Evolution tem acesso às chaves da sessão e sabe decriptografar server-side via
+ * POST /chat/getBase64FromMediaMessage/:instance — testado manualmente com áudio real antes
+ * de implementar isto (base64 retornado começava com o header válido "OggS").
+ *
+ * Armazenamento: diretório PRIVADO, fora de UPLOADS_DIR (que é servido publicamente sem
+ * autenticação via express.static em index.ts — mídia de WhatsApp de cliente real não pode
+ * cair lá). Servido de volta só através da rota autenticada /api/whatsapp/media, que confere
+ * ownership antes de entregar o arquivo (ver whatsapp.ts).
+ */
+import fs from 'fs/promises';
+import path from 'path';
+import { log } from '../logger';
+
+const WHATSAPP_MEDIA_DIR = process.env.WHATSAPP_MEDIA_DIR || '/app/wa-media';
+const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50MB — mesmo teto já usado pra payload JSON (ver index.ts)
+const DECRYPT_TIMEOUT_MS = 20000; // base64 de vídeo pode ser grande, decrypt na Evolution não é instantâneo
+
+const EXT_POR_MIME: Record<string, string> = {
+  'audio/ogg': 'oga',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'video/mp4': 'mp4',
+  'application/pdf': 'pdf',
+};
+
+function extensaoParaArquivo(fileName: string | undefined, mimetype: string | undefined, tipo: string): string {
+  if (fileName && fileName.includes('.')) {
+    const ext = fileName.split('.').pop();
+    if (ext && /^[a-zA-Z0-9]{1,8}$/.test(ext)) return ext.toLowerCase();
+  }
+  const mimeBase = (mimetype || '').split(';')[0].trim().toLowerCase();
+  if (EXT_POR_MIME[mimeBase]) return EXT_POR_MIME[mimeBase];
+  const porTipo: Record<string, string> = { audio: 'oga', image: 'jpg', video: 'mp4', document: 'bin', sticker: 'webp' };
+  return porTipo[tipo] || 'bin';
+}
+
+export interface SalvarMidiaOpts {
+  evoUrl: string;
+  apiKey: string;
+  instancia: string;
+  messageId: string;
+  remoteJid: string;
+  fromMe: boolean;
+  userId: string;
+  tipo: string;
+  mimetypeHint?: string;
+  fileNameHint?: string;
+}
+
+/**
+ * Decriptografa a mídia da mensagem via Evolution e salva em disco local privado.
+ * Retorna a URL local (`local://...`, servida via /api/whatsapp/media) em caso de sucesso,
+ * ou `null` em qualquer falha — chamador deve manter a `media_url` original (Evolution crua)
+ * como fallback, nunca travar o fluxo de recebimento da mensagem por causa disso.
+ */
+export async function salvarMidiaWhatsapp(opts: SalvarMidiaOpts): Promise<string | null> {
+  const { evoUrl, apiKey, instancia, messageId, remoteJid, fromMe, userId, tipo, mimetypeHint, fileNameHint } = opts;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DECRYPT_TIMEOUT_MS);
+  try {
+    const base = evoUrl.replace(/\/$/, '');
+    const res = await fetch(`${base}/chat/getBase64FromMediaMessage/${instancia}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      body: JSON.stringify({
+        message: { key: { id: messageId, remoteJid, fromMe } },
+        convertToMp4: false,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      log.warn('WA_MEDIA', 'Evolution recusou decrypt', { messageId, status: res.status });
+      return null;
+    }
+    const data: any = await res.json().catch(() => null);
+    const base64: string | undefined = data?.base64;
+    if (!base64) {
+      log.warn('WA_MEDIA', 'Evolution não retornou base64', { messageId });
+      return null;
+    }
+    const buf = Buffer.from(base64, 'base64');
+    if (buf.byteLength === 0 || buf.byteLength > MAX_MEDIA_BYTES) {
+      log.warn('WA_MEDIA', 'Mídia vazia ou acima do limite — não salva', { messageId, bytes: buf.byteLength });
+      return null;
+    }
+
+    const ext = extensaoParaArquivo(data?.fileName || fileNameHint, data?.mimetype || mimetypeHint, tipo);
+    const dir = path.join(WHATSAPP_MEDIA_DIR, userId);
+    await fs.mkdir(dir, { recursive: true });
+    // messageId já é único por instância (constraint em whatsapp_messages) — nome de arquivo seguro,
+    // sem depender de nada vindo do payload externo (fileName da Evolution não vira parte do path).
+    const fileName = `${messageId}.${ext}`;
+    await fs.writeFile(path.join(dir, fileName), buf);
+
+    log.info('WA_MEDIA', 'Mídia decriptografada e salva', { messageId, bytes: buf.byteLength, ext });
+    return `local://${userId}/${fileName}`;
+  } catch (err: any) {
+    log.warn('WA_MEDIA', 'Falha ao decriptografar/salvar mídia', { messageId, err: err?.message });
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Resolve o caminho absoluto em disco a partir de uma `media_url` no formato `local://userId/arquivo`. */
+export function resolverCaminhoLocal(mediaUrl: string): { userId: string; caminho: string } | null {
+  if (!mediaUrl.startsWith('local://')) return null;
+  const resto = mediaUrl.slice('local://'.length);
+  const barra = resto.indexOf('/');
+  if (barra < 1) return null;
+  const userId = resto.slice(0, barra);
+  const fileName = resto.slice(barra + 1);
+  // fileName é sempre `${messageId}.${ext}` gerado por nós (nunca por dado externo) — mesmo assim,
+  // barra defensiva contra path traversal caso o valor armazenado seja adulterado por algum motivo.
+  if (!fileName || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) return null;
+  return { userId, caminho: path.join(WHATSAPP_MEDIA_DIR, userId, fileName) };
+}
+
+// ── Fotos de perfil ──────────────────────────────────────────────────────────
+// [AUDITORIA] LÓGICA (2026-07-23): mesma causa raiz da mídia de mensagem — a URL de foto de
+// perfil que a Evolution devolve (fetchProfilePictureUrl) é a URL crua do CDN do WhatsApp
+// (pps.whatsapp.net/...), com prazo de expiração (parâmetro `oe=` na própria URL). Guardar só
+// a URL fazia as fotos "sumirem" silenciosamente semanas depois, sem nada re-buscar ou
+// persistir os bytes de verdade (ver diagnosticos/AUDITORIA_LOG.md). Diferente da mídia de
+// mensagem, essa URL NÃO é criptografada (.jpg puro, não .enc) — não precisa do endpoint de
+// decrypt da Evolution, só um fetch HTTP direto.
+const PROFILE_PIC_MAX_BYTES = 5 * 1024 * 1024; // fotos de perfil são pequenas; teto bem folgado
+
+export async function salvarFotoPerfilLocal(picUrl: string, userId: string, telefoneDigits: string): Promise<string | null> {
+  try {
+    const res = await fetch(picUrl);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength === 0 || buf.byteLength > PROFILE_PIC_MAX_BYTES) return null;
+
+    const dir = path.join(WHATSAPP_MEDIA_DIR, 'profile-pics', userId);
+    await fs.mkdir(dir, { recursive: true });
+    const fileName = `${telefoneDigits}.jpg`;
+    await fs.writeFile(path.join(dir, fileName), buf);
+    return `local-pic://${userId}/${fileName}`;
+  } catch (err: any) {
+    log.warn('WA_MEDIA', 'Falha ao salvar foto de perfil', { telefoneDigits, err: err?.message });
+    return null;
+  }
+}
+
+/** Resolve o caminho absoluto em disco a partir de um marcador `local-pic://userId/arquivo`. */
+export function resolverCaminhoLocalFoto(url: string): { userId: string; caminho: string } | null {
+  if (!url.startsWith('local-pic://')) return null;
+  const resto = url.slice('local-pic://'.length);
+  const barra = resto.indexOf('/');
+  if (barra < 1) return null;
+  const userId = resto.slice(0, barra);
+  const fileName = resto.slice(barra + 1);
+  if (!fileName || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) return null;
+  return { userId, caminho: path.join(WHATSAPP_MEDIA_DIR, 'profile-pics', userId, fileName) };
+}

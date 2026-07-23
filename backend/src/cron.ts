@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { pool, withTenantContext } from './db';
 import { log } from './logger';
 import { reconciliarInstanciasEvolution } from './services/evolutionReconciliation';
+import { retentarMidiaPendente } from './services/mediaRetry';
 
 export function initCronJobs() {
   // Todo dia às 03:00 (horário de Brasília) — Limpeza diária de tabelas de crescimento
@@ -98,6 +99,23 @@ export function initCronJobs() {
     }
   });
 
+  // [AUDITORIA] LÓGICA (Sprint 5 — salvaguarda antiban de teto diário, 2026-07-23): reativa
+  // campanhas de disparo pausadas automaticamente por terem atingido o teto diário de
+  // segurança (ver disparoProcessor.ts) — só depois de 24h corridas desde a pausa. Mesma
+  // cadência de 5min do job de pausas de IA logo acima (não precisa ser mais frequente,
+  // a janela de reativação é de 24h).
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const r = await pool.query(`SELECT reativar_disparos_por_limite_diario() AS reativados`);
+      const count = Number(r.rows[0]?.reativados ?? 0);
+      if (count > 0) {
+        log.info('CRON', 'campanha(s) de disparo reativada(s) após teto diário expirar', { count });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro ao reativar campanhas por teto diário', { err: err.message });
+    }
+  });
+
   // A cada 15 minutos — reconciliar integracoes_config/agent_configs contra o estado
   // real das instâncias na Evolution (ver services/evolutionReconciliation.ts — corrige
   // o drift que ficava acumulando silenciosamente, causa raiz documentada em AUDITORIA_LOG.md)
@@ -109,6 +127,22 @@ export function initCronJobs() {
       }
     } catch (err: any) {
       log.error('CRON', 'Erro na reconciliação de instâncias Evolution', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Todo dia às 04:00 (horário de Brasília) — Sprint A do plano de mídia (ver
+  // diagnosticos/AUDITORIA_LOG.md): retenta decriptografar/salvar mídia cuja media_url ainda
+  // não migrou pra local:// (decrypt falhou na primeira tentativa, ex: Evolution fora do ar
+  // no momento do recebimento). Só re-processa falha conhecida, não é polling de mensagens
+  // novas nem varredura de contatos — não reabre o risco de banimento discutido nesta sessão.
+  cron.schedule('0 4 * * *', async () => {
+    try {
+      const { tentadas, recuperadas } = await retentarMidiaPendente(pool);
+      if (tentadas > 0) {
+        log.info('CRON', 'Retry diário de mídia concluído', { tentadas, recuperadas });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro no retry diário de mídia', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 

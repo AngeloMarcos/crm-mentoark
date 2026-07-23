@@ -48,10 +48,29 @@ function criarClienteOpenAI(apiKey?: string): OpenAI {
   return key ? new OpenAI({ apiKey: key }) : openai;
 }
 
-// ── Transcrição de áudio via Whisper ─────────────────────────────────────────
+// [AUDITORIA] BUG (Cenário E desta auditoria — timeouts em chamadas externas do motor de IA,
+// 2026-07-23): as duas chamadas fetch abaixo (download do áudio + Whisper) rodavam sem
+// AbortController/timeout — mesma classe de bug já corrigida em webhook.ts (achado B da
+// revisão externa: fetch nativo do Node não tem timeout padrão). Se o servidor de mídia
+// (Evolution/WhatsApp CDN) ou a API da OpenAI travarem/ficarem lentos, esta chamada síncrona
+// dentro de processarMensagem() ficava pendurada indefinidamente, seguravel o lock
+// `atendimentosAtivos` daquele telefone por tempo indeterminado (nenhuma outra mensagem do
+// mesmo contato seria processada enquanto isso). Não prende conexão de banco (nenhum client
+// do pool fica aberto durante estas chamadas — pool.query() de antes já liberou a conexão),
+// mas prende o processamento daquele chat e o worker do event loop.
+// [AUDITORIA] FIX APLICADO: AbortController com timeout em ambas — 15s pro download do áudio
+// (arquivo de voz costuma ser pequeno, mas a rede pode ser lenta), 30s pro Whisper (serviço
+// de transcrição, mais lento por natureza que uma chamada de API comum).
 async function transcreverAudio(url: string, apiKey?: string): Promise<string | null> {
   try {
-    const r = await fetch(url);
+    const downloadController = new AbortController();
+    const downloadTimer = setTimeout(() => downloadController.abort(), 15_000);
+    let r: globalThis.Response;
+    try {
+      r = await fetch(url, { signal: downloadController.signal });
+    } finally {
+      clearTimeout(downloadTimer);
+    }
     if (!r.ok) return null;
     const buf = await r.arrayBuffer();
     const blob = new Blob([buf], { type: 'audio/ogg' });
@@ -60,21 +79,37 @@ async function transcreverAudio(url: string, apiKey?: string): Promise<string | 
     form.append('model', 'whisper-1');
     form.append('language', 'pt');
     const key = apiKey || process.env.OPENAI_API_KEY || '';
-    const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-    });
+    const whisperController = new AbortController();
+    const whisperTimer = setTimeout(() => whisperController.abort(), 30_000);
+    let resp: globalThis.Response;
+    try {
+      resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}` },
+        body: form,
+        signal: whisperController.signal,
+      });
+    } finally {
+      clearTimeout(whisperTimer);
+    }
     if (!resp.ok) {
       log.warn('ENGINE', 'Whisper erro', { status: resp.status, body: await resp.text().catch(() => '') });
       return null;
     }
     return ((await resp.json()) as any).text || null;
-  } catch {
+  } catch (err: any) {
+    log.warn('ENGINE', 'transcreverAudio falhou (timeout ou erro de rede)', { err: err?.message });
     return null;
   }
 }
 
+// [AUDITORIA] LÓGICA (Cenário E): esta chamada usa o SDK oficial `openai`, não fetch cru — o
+// SDK já aplica um timeout padrão próprio (documentado como 10 minutos, configurável via
+// `timeout` no client) mesmo sem passarmos nada explícito aqui, diferente das duas chamadas
+// fetch cruas de transcreverAudio() (corrigidas acima). 10min ainda é bastante tempo para um
+// travamento acidental prender o lock `atendimentosAtivos` do contato — vale revisar se
+// compensa apertar esse timeout explicitamente numa próxima sessão, mas não é o mesmo tipo de
+// lacuna (ausência total de timeout) encontrado nas chamadas fetch cruas.
 // ── Análise de imagem via GPT-4o-mini Vision ─────────────────────────────────
 async function analisarImagem(url: string, caption?: string, apiKey?: string): Promise<string> {
   try {
@@ -682,6 +717,24 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
 }
 
+// [AUDITORIA] LÓGICA (Cenário E desta auditoria — race condition de completions sob rajada de
+// mensagens, 2026-07-23): verificado o caso concreto pedido — 5 mensagens do mesmo contato,
+// 1 em 1 segundo. Duas camadas independentes de proteção, ambas ativas:
+//   1. Debounce de verdade (não throttle): cada mensagem nova pro mesmo `chave`
+//      (instancia:telefone) cancela o timeout anterior (`clearTimeout`) e agenda um novo de
+//      3s — com gaps de 1s entre as 5 mensagens (bem abaixo dos 3s), o timer nunca dispara
+//      até a ÚLTIMA mensagem, e só então processarMensagem() roda UMA vez com o texto das 5
+//      mensagens concatenado. Nenhuma chamada à API da IA é feita por mensagem individual
+//      nesse cenário.
+//   2. Lock de concorrência (`atendimentosAtivos`, ver processarMensagem() acima) como
+//      segunda linha de defesa — se, por qualquer motivo (ex: gap > 3s fazendo dois disparos
+//      de debounce próximos, ou uma reentrada via o próprio reagendamento do lock), duas
+//      chamadas a processarMensagem() para o MESMO telefone coincidirem, a segunda encontra o
+//      lock ocupado e se REAGENDA (setTimeout 4s), nunca chama a IA em paralelo com a
+//      primeira. Lock liberado em `finally`, então mesmo erro/exceção na primeira chamada não
+//      deixa o lock preso pra sempre.
+// Veredito: sim, o mecanismo evita eficazmente chamadas paralelas à IA pro mesmo chat nesse
+// cenário e em cenários adjacentes (gaps maiores, erros durante o processamento).
 // ── Debounce — agrupa mensagens picotadas do mesmo contato ───────────────────
 export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada): Promise<void> {
   const chave = `${entrada.instancia}:${entrada.telefone}`;

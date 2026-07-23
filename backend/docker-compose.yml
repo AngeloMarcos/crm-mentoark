@@ -32,6 +32,8 @@ services:
       MASTER_EMAILS: ${MASTER_EMAILS:-angelobispofilho@gmail.com,mentoark@gmail.com}
       EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-Mentoark@2025}
+    volumes:
+      - ./wa-media:/app/wa-media
     expose:
       - "3000"
     networks:

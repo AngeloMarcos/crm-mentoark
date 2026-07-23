@@ -128,12 +128,22 @@ export async function resilientFetch(
       });
       clearTimeout(timer);
 
-      // [AUDITORIA] LÓGICA: o body da resposta descartada (503/504) não é consumido
-      // antes do retry — undici/Node libera a conexão de volta ao pool mesmo sem
-      // consumir o body quando não há mais referências pendentes ao Response, então
-      // não há vazamento de socket aqui; só vale lembrar se um dia adicionar streaming.
-      // Resposta recebida — verifica se é retentável por status HTTP
+      // [AUDITORIA] BUG (Cenário E desta auditoria — revisão do comentário anterior deste
+      // trecho, 2026-07-23): o comentário original aqui afirmava que não consumir o body de
+      // uma resposta 503/504 descartada não vazava socket. Isso não é preciso para o fetch
+      // nativo do Node (undici): a conexão TCP só volta pro pool de keep-alive quando o body
+      // é integralmente consumido OU explicitamente cancelado — enquanto o body fica
+      // pendurado sem leitor, o socket subjacente só é liberado quando o objeto Response é
+      // coletado pelo GC (via FinalizationRegistry do undici), o que é não-determinístico e
+      // pode demorar sob pressão de memória. Sob uma sequência de retries rápidos em 503/504
+      // (o cenário que esta função existe pra tratar), cada tentativa abre uma conexão NOVA
+      // em vez de reaproveitar uma do pool, e as antigas ficam penduradas até o GC alcançar —
+      // não é um vazamento permanente (undici acaba fechando), mas é desperdício real de
+      // handshakes/fds sob retry sustentado.
+      // [AUDITORIA] FIX APLICADO: cancela explicitamente o body antes de descartar a resposta
+      // retentável — libera o socket de volta ao pool imediatamente, sem esperar o GC.
       if (retrySet.has(response.status) && attempt < maxRetries) {
+        await response.body?.cancel().catch(() => {});
         lastErr = new Error(
           `[resilientFetch] HTTP ${response.status} — agendando retry`,
         );

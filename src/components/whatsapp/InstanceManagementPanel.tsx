@@ -75,6 +75,7 @@ interface ScoreFatores {
 
 interface Agente {
   id: string;
+  user_id: string;
   nome: string;
   evolution_instancia: string | null;
   whatsapp_score: number | null;
@@ -161,13 +162,17 @@ export function InstanceManagementPanel() {
       setShowForceBtn(false);
       const phoneDigits = newInstancePhone.replace(/\D/g, "");
 
-      // Backend agora lida com a idempotência e limpeza de duplicatas
-      const res = await createInstance(name, phoneDigits || undefined);
-      
+      // [AUDITORIA] LÓGICA (Sprint 2 — multi-instância): novaConexao:true sempre — se for a
+      // primeira instância do tenant, o backend resolve pro nome padrão do mesmo jeito de
+      // antes; se já existir uma, calcula a próxima livre (_2, _3...) em vez de reaproveitar a
+      // existente (era isso que causava "WhatsApp já conectado" ao tentar somar um segundo
+      // número — ver diagnosticos/AUDITORIA_LOG.md).
+      const res = await createInstance({ instanceName: name, phoneNumber: phoneDigits || undefined, novaConexao: true });
+
       setQrData(res);
       setShowConnectModal(false);
       setShowQrModal(true);
-      
+
       if (res.state === "open") {
         toast.success("✅ WhatsApp conectado com sucesso!");
         setShowQrModal(false);
@@ -178,7 +183,7 @@ export function InstanceManagementPanel() {
         pollUntilConnected(res.instanceName || res.instancia);
       } else if (res.qrPending) {
         toast.info("Aguardando inicialização do Baileys. O QR aparecerá em instantes...");
-        pollQrLoop();
+        pollQrLoop(res.instancia || res.instanceName);
       } else {
         toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
@@ -201,7 +206,7 @@ export function InstanceManagementPanel() {
   // agora que o backend propaga erros reais (502/500/offline da Evolution, ver whatsapp.ts
   // /poll-qr), 2 falhas consecutivas encerram o loop e expõem o erro + botão de reconexão
   // forçada, em vez de deixar o spinner girando até o timeout de 90s sem explicação.
-  const pollQrLoop = async () => {
+  const pollQrLoop = async (instancia?: string) => {
     setWaitingQr(true);
     waitingQrRef.current = true;
     setErrorDetail(null);
@@ -212,7 +217,7 @@ export function InstanceManagementPanel() {
     while (Date.now() - start < TIMEOUT && waitingQrRef.current) {
       await new Promise(r => setTimeout(r, 3000));
       try {
-        const data = await pollQr();
+        const data = await pollQr(instancia);
         consecutiveErrors = 0;
         if (data.state === "open") {
           setWaitingQr(false);
@@ -273,7 +278,10 @@ export function InstanceManagementPanel() {
     setPollingConnect(false);
     try {
       const name = qrData?.instanceName || newInstanceName.trim() || `WhatsApp ${user?.display_name || 'Agente'}`;
-      const res = await createInstance(name, undefined, true);
+      // [AUDITORIA] FIX APLICADO (Sprint 2 — multi-instância): sem `instancia` explícito, forçar
+      // reconexão sempre mexia na instância PADRÃO do tenant — se o card travado fosse uma
+      // instância adicional (_2, _3...), o force-reconnect recriava a instância errada.
+      const res = await createInstance({ instanceName: name, forceReconnect: true, instancia: qrData?.instancia || qrData?.instanceName });
       setQrData(res);
       if (res.state === "open") {
         toast.success("✅ WhatsApp conectado com sucesso!");
@@ -285,7 +293,7 @@ export function InstanceManagementPanel() {
         pollUntilConnected(res.instanceName || res.instancia);
       } else if (res.qrPending) {
         toast.info("Aguardando inicialização do Baileys...");
-        pollQrLoop();
+        pollQrLoop(res.instancia || res.instanceName);
       }
     } catch (err: any) {
       setErrorDetail(`Falha na reinicialização forçada: ${err.message}`);
@@ -347,8 +355,11 @@ export function InstanceManagementPanel() {
   };
 
   // Gera um QR novo para uma instância já existente (ex: card em "unauthorized"/"close"/
-  // "connecting" travado), sem passar pelo formulário "Conectar nova instância" — o backend
-  // resolve a instância do usuário sozinho (cfg.stableInstancia), então basta chamar createInstance().
+  // "connecting" travado), sem passar pelo formulário "Conectar nova instância".
+  // [AUDITORIA] FIX APLICADO (Sprint 2 — multi-instância): antes chamava createInstance(a.nome)
+  // sem instancia — com mais de um card na tela, "Reconectar" em qualquer um sempre mexia na
+  // instância PADRÃO do tenant, nunca na instância daquele card específico. Agora manda
+  // `a.evolution_instancia` explicitamente.
   const handleReconnectExisting = async (a: Agente) => {
     setQrData(null);
     setErrorDetail(null);
@@ -358,7 +369,7 @@ export function InstanceManagementPanel() {
     setShowQrModal(true);
     try {
       setConnecting(true);
-      const res = await createInstance(a.nome);
+      const res = await createInstance({ instanceName: a.nome, instancia: a.evolution_instancia || undefined });
       setQrData(res);
       if (res.state === "open") {
         toast.success("✅ WhatsApp conectado com sucesso!");
@@ -370,7 +381,7 @@ export function InstanceManagementPanel() {
         pollUntilConnected(res.instanceName || res.instancia);
       } else if (res.qrPending) {
         toast.info("Aguardando inicialização do Baileys. O QR aparecerá em instantes...");
-        pollQrLoop();
+        pollQrLoop(res.instancia || res.instanceName);
       } else {
         toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
@@ -389,7 +400,9 @@ export function InstanceManagementPanel() {
       setConnecting(true);
       setErrorDetail(null);
       setShowForceBtn(false);
-      const data = await pollQr();
+      // [AUDITORIA] FIX APLICADO (Sprint 2 — multi-instância): sem instancia, atualizava o QR
+      // da instância padrão em vez da que está de fato aberta no modal.
+      const data = await pollQr(qrData?.instancia || qrData?.instanceName);
       if (data.qrCode) {
         setQrData(prev => ({ ...prev, ...data }));
         toast.success("QR Code atualizado!");
@@ -402,7 +415,7 @@ export function InstanceManagementPanel() {
         toast.error("Erro na Evolution: API Key ou Sessão inválida.");
       } else {
         toast.info("QR ainda não disponível, aguarde...");
-        pollQrLoop();
+        pollQrLoop(qrData?.instancia || qrData?.instanceName);
       }
     } catch (e: any) {
       setErrorDetail(e.message);
@@ -416,7 +429,9 @@ export function InstanceManagementPanel() {
   const handleDisconnect = async (a: Agente) => {
     if (!confirm(`Desconectar a instância "${a.nome}"? Você precisará escanear o QR Code novamente para reconectar.`)) return;
     try {
-      await disconnectInstance();
+      // [AUDITORIA] FIX APLICADO (Sprint 2 — multi-instância): sem instancia, desconectava
+      // sempre a instância padrão do tenant, nunca o card em que o botão foi clicado.
+      await disconnectInstance(a.evolution_instancia || undefined);
       toast.success("Instância desconectada");
       carregar();
     } catch (e: any) {
@@ -473,13 +488,24 @@ export function InstanceManagementPanel() {
   const carregar = async () => {
     if (!user) return;
     setLoading(true);
+    // [AUDITORIA] FIX APLICADO (2026-07-22): o .eq("user_id", user.id) abaixo é um no-op --
+    // src/integrations/database/client.ts:316 descarta silenciosamente qualquer filtro de
+    // user_id antes de montar a requisição (o escopo normal vem do backend, por JWT). Isso é
+    // correto pra usuário comum, mas backend/src/crud.ts (makeCrud) tem um bypass explícito
+    // pra admin ("admin vê/edita tudo"), então uma conta admin via este painel recebia os
+    // `agentes` de TODOS os usuários misturados, sem indicação de dono -- painel de "minha
+    // conexão" virava um Frankenstein de instâncias de outros tenants. É plausível que essa
+    // mistura tenha sido a causa raiz do incidente real desta sessão (admin excluiu a
+    // instância de outro cliente sem perceber, ver diagnosticos/AUDITORIA_LOG.md). Filtro
+    // aplicado aqui no cliente, isolado a este painel -- não mexe no client.ts nem no crud.ts
+    // compartilhados, que outras telas administrativas legitimamente dependem do bypass.
     const { data, error } = await api
       .from("agentes")
       .select("*")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
     if (error) toast.error(`Erro ao carregar instâncias: ${error.message}`);
-    else setAgentes((data ?? []) as Agente[]);
+    else setAgentes(((data ?? []) as Agente[]).filter(a => a.user_id === user.id));
     setLoading(false);
 
     // profiles (pode falhar se não-admin) — silencioso
@@ -489,41 +515,22 @@ export function InstanceManagementPanel() {
     } catch {}
   };
 
-  // [AUDITORIA] BUG: esta função busca o status UMA VEZ (sem instancia — sempre a instância
-  // "oficial" do usuário, ver getEvolutionConfig em backend/src/routes/whatsapp.ts) e aplica o
-  // MESMO resultado para TODAS as instâncias da lista (`lista.forEach` só copia `state` pra cada
-  // `a.id`). Se um usuário tiver mais de um `agente` com `evolution_instancia` preenchida (o
-  // painel se chama "InstanceManagementPanel" e renderiza um card com Desconectar/Excluir por
-  // instância, sugerindo suporte a múltiplas), qualquer instância que não seja a "oficial" exibe
-  // um status que não é o dela de verdade — pode mostrar "Conectado" para uma instância desativada
-  // ou vice-versa.
-  // [AUDITORIA] FIX PENDENTE (motivo: mudança de comportamento com custo — trocar por N chamadas
-  // fetchConnectionStatus(a.evolution_instancia), uma por instância, aumenta chamadas à Evolution
-  // API e só faz diferença real se múltiplas instâncias por usuário for um cenário que ainda
-  // acontece de verdade hoje, dado que o backend inteiro converge pra "1 conta = 1 instância
-  // estável". Próxima sessão: confirmar com o usuário se multi-instância por conta ainda é
-  // suportado/esperado; se não for, o comportamento atual é aceitável e vale só um comentário
-  // explicando a limitação (já feito aqui); se for, trocar para status por instância.
+  // [AUDITORIA] FIX APLICADO (Sprint 2 — multi-instância, 2026-07-23): antes buscava o status
+  // UMA VEZ (sem instancia — sempre a instância "padrão" do tenant) e aplicava o MESMO
+  // resultado pra todos os cards, então qualquer instância adicional (_2, _3...) exibia um
+  // status que não era o dela de verdade. Agora com multi-instância implementada (ver
+  // diagnosticos/AUDITORIA_LOG.md, Sprint 1/2), cada card busca o próprio status, em paralelo.
   const carregarStatus = async (lista: Agente[]) => {
     const map: Record<string, ConnState> = {};
-
-    // Agora o backend resolve a instância oficial automaticamente.
-    // Fazemos uma única chamada para pegar o status da conta
-    try {
-      const st = await fetchConnectionStatus();
-      const state = (st.state ?? "close") as ConnState;
-
-      lista.forEach(a => {
-        // Mostramos o status real para instâncias que coincidem com a oficial
-        // ou um status genérico para outras registradas (legado)
-        if (a.evolution_instancia) {
-          map[a.id] = state;
-        }
-      });
-    } catch (error) {
-      console.error(`[WhatsApp] Erro ao buscar status global:`, error);
-    }
-
+    await Promise.all(lista.map(async (a) => {
+      if (!a.evolution_instancia) return;
+      try {
+        const st = await fetchConnectionStatus(a.evolution_instancia);
+        map[a.id] = (st.state ?? "close") as ConnState;
+      } catch (error) {
+        console.error(`[WhatsApp] Erro ao buscar status de ${a.evolution_instancia}:`, error);
+      }
+    }));
     setStatuses(map);
   };
 

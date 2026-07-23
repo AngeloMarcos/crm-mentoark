@@ -122,7 +122,14 @@ app.use(cors({
 // observados) — troca de um número em middleware local, reversível com git
 // checkout, não escreve em produção. Deploy (scp + docker compose) ainda pendente,
 // decisão do usuário.
-app.use(express.json({ limit: '5mb' }));
+// [AUDITORIA] INCIDENTE REAL (2026-07-22): 5mb não foi suficiente para uma conta
+// WhatsApp Business movimentada (stefanocatedral@hotmail.com, ~29.700 mensagens/1.352
+// contatos históricos no lado da Evolution) — eventos de sincronização em massa
+// (chats.set/messages.set/contacts.upsert) da Evolution passaram a estourar o limite,
+// Evolution tentou reenviar 10x, todas falharam com PayloadTooLargeError, e o evento foi
+// perdido de vez (sem retry futuro) — sintoma reportado: "instância conectada mas não
+// atualiza mensagens". Ver diagnosticos/AUDITORIA_LOG.md. Elevado para 50mb.
+app.use(express.json({ limit: '50mb' }));
 
 // ── Servir imagens de upload com log de auditoria ──────────────────────────
 app.use('/uploads', (req, res, next) => {

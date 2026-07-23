@@ -10,8 +10,10 @@
  */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
+import fs from 'fs/promises';
 import { AuthRequest } from '../middleware';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
+import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto } from '../utils/whatsappMediaStorage';
 import { log } from '../logger';
 
 const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
@@ -24,6 +26,17 @@ const WEBHOOK_URL = (() => {
   return `${base}${base.includes('?') ? '&' : '?'}key=${secret}`;
 })();
 const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'];
+
+// [AUDITORIA] FIX APLICADO (2026-07-22): rotas que casam por `split_part(remote_jid,'@',1)`
+// recebiam o :phone da URL sempre passado por `.replace(/\D/g, '')` — isso stripa o hífen de
+// JIDs de grupo no formato antigo (`123456789-1600000000@g.us`), corrompendo a chave e fazendo
+// a busca não achar nenhuma linha mesmo com as mensagens do grupo já salvas no banco. Grupo
+// aparecia certinho na lista (GET /conversas não filtra @g.us), mas abrir a conversa vinha
+// vazio. Preserva o hífen quando presente (indício de JID de grupo); número normal continua
+// sendo só dígitos como antes.
+function normalizarPhoneParam(raw: string): string {
+  return raw.includes('-') ? raw.replace(/[^\d-]/g, '') : raw.replace(/\D/g, '');
+}
 
 function webhookInner(enabled = true) {
   return {
@@ -55,6 +68,32 @@ function normalizeQr(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const b64 = raw.replace(/^data:image\/\w+;base64,/, '');
   return `data:image/png;base64,${b64}`;
+}
+
+// [AUDITORIA] BUG (SSRF — GET /media): o branch http(s) desta rota fazia `fetch(mediaUrl)`
+// com a URL vinda crua de `?url=` sem NENHUMA validação de host — só checava o prefixo
+// `http(s)://`. Qualquer usuário autenticado podia passar `?url=http://localhost:5432`,
+// `http://<container-interno-na-rede-proxy>:porta`, ou qualquer IP/porta interna da VPS
+// (pgadmin, portainer, containers de outros clientes na mesma rede Docker) e o servidor
+// fazia a requisição por ele, devolvendo o corpo da resposta (e, pior, anexando
+// `cfg.api_key` — a API key admin da Evolution — no header de toda chamada, mesmo pra hosts
+// que não são a Evolution). Confirmado: nada no fluxo restringe o host, só o schema.
+// [AUDITORIA] FIX APLICADO: allowlist de host — só permite domínios do CDN do WhatsApp
+// (`*.whatsapp.net`, onde mídia/foto de perfil realmente residem) ou o host configurado da
+// própria Evolution API. Qualquer outro host é rejeitado com 400 antes do fetch. Mudança
+// isolada nesta rota, não afeta os branches `local://`/`local-pic://` (já seguros, servem do
+// disco com checagem de ownership) nem nenhum outro fluxo.
+function isMediaHostAllowed(mediaUrl: string, evoBaseUrl: string): boolean {
+  try {
+    const u = new URL(mediaUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    if (host === 'whatsapp.net' || host.endsWith('.whatsapp.net')) return true;
+    const evoHost = new URL(evoBaseUrl).hostname.toLowerCase();
+    return host === evoHost;
+  } catch {
+    return false;
+  }
 }
 
 // [AUDITORIA] FIX APLICADO: erros da Evolution API vêm no formato
@@ -110,6 +149,52 @@ export default function whatsappRouter(pool: Pool): Router {
     };
   }
 
+  // [AUDITORIA] LÓGICA (Sprint 1 — multi-instância, 2026-07-23): até aqui, um tenant só
+  // conseguia ter UMA instância Evolution — getEvolutionConfig() sempre devolvia o mesmo nome
+  // determinístico, e POST /connect tratava "instância já existe/aberta" como "já está
+  // conectado", sem meio de pedir explicitamente uma segunda. O objetivo real do produto é
+  // juntar vários números de WhatsApp numa central só — as tabelas (integracoes_config,
+  // agentes) já suportam múltiplas linhas por tenant, faltava só o mecanismo de nomear/criar
+  // a instância extra. instanciasConhecidas() lista o que o tenant já tem registrado;
+  // proximaInstanciaLivre() escolhe o próximo nome livre (crm_<prefixo>, depois _2, _3...) —
+  // a instância "padrão" (sem sufixo) nunca muda de nome, preservando 100% de compatibilidade
+  // com tenants que só têm uma linha hoje.
+  async function instanciasConhecidas(tenantId: string): Promise<Set<string>> {
+    const r = await pool.query(
+      `SELECT instancia FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia IS NOT NULL`,
+      [tenantId]
+    );
+    return new Set(r.rows.map((row: any) => row.instancia as string));
+  }
+
+  async function proximaInstanciaLivre(baseInstancia: string, conhecidas: Set<string>): Promise<string> {
+    if (!conhecidas.has(baseInstancia)) return baseInstancia; // primeira conexão do tenant
+    let n = 2;
+    while (conhecidas.has(`${baseInstancia}_${n}`)) n++;
+    return `${baseInstancia}_${n}`;
+  }
+
+  // [AUDITORIA] LÓGICA (Sprint 2 — multi-instância, 2026-07-23): /connect, /poll-qr e
+  // /disconnect só sabiam operar na instância "padrão" do tenant (via getEvolutionConfig) —
+  // com mais de uma instância por tenant (Sprint 1), reconectar/desconectar um CARD específico
+  // do painel (InstanceManagementPanel.tsx) sempre acabava mexendo na instância errada (a
+  // padrão, não a que o usuário clicou). Helper único: só aceita a instância pedida se ela
+  // realmente pertence ao tenant (evita um usuário forjar o nome de instância de outro tenant
+  // no body/query — mesma classe de checagem já usada em /send e /evo/status).
+  async function resolverInstanciaExplicita(
+    tenantId: string, instanciaSolicitada: string | undefined,
+    cfg: { instancia: string; stableInstancia: string }
+  ): Promise<void> {
+    if (!instanciaSolicitada || instanciaSolicitada === cfg.instancia) return;
+    const conhecidas = await instanciasConhecidas(tenantId);
+    if (conhecidas.has(instanciaSolicitada)) {
+      cfg.instancia = instanciaSolicitada;
+      cfg.stableInstancia = instanciaSolicitada;
+    } else {
+      log.warn('WHATSAPP', 'Instância solicitada não pertence ao tenant — ignorando', { tenantId, instanciaSolicitada });
+    }
+  }
+
   async function saveEvolutionConfig(
     userId: string, agenteId: string | null,
     url: string, api_key: string, instancia: string
@@ -136,9 +221,16 @@ export default function whatsappRouter(pool: Pool): Router {
         [url, api_key, instancia, agenteId, userId]
       );
     } else {
+      // [AUDITORIA] FIX APLICADO (Sprint 1 — multi-instância, 2026-07-23): esse UPDATE
+      // filtrava só por `user_id=$4 AND ativo=true`, sem checar qual instância — ao conectar
+      // um SEGUNDO número, ele reescrevia o `evolution_instancia` da linha da PRIMEIRA
+      // instância pra apontar pra segunda, quebrando o roteamento (agentes) da primeira sem
+      // avisar ninguém. Agora só atualiza uma linha já vinculada a ESSA instância específica;
+      // instância nova (ainda sem linha em agentes) cai no INSERT abaixo, criando uma linha
+      // própria em vez de roubar a de outro chip.
       const updAg = await pool.query(
-        `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2, evolution_instancia=$3, updated_at=NOW()
-         WHERE user_id=$4 AND ativo=true`,
+        `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2, updated_at=NOW()
+         WHERE user_id=$4 AND evolution_instancia=$3 AND ativo=true`,
         [url, api_key, instancia, userId]
       );
       // [AUDITORIA] FIX APLICADO: um usuário sem nenhum "agente" (nem ativo) conseguia conectar o
@@ -184,11 +276,19 @@ export default function whatsappRouter(pool: Pool): Router {
   }
 
   async function salvarFotoContato(userId: string, phone: string, picUrl: string, pushName?: string | null): Promise<void> {
+    // [AUDITORIA] FIX APLICADO (2026-07-23): antes gravava a URL crua da Evolution direto —
+    // ela expira (parâmetro `oe=` na própria URL, mesmo problema já corrigido pra mídia de
+    // mensagem, ver whatsappMediaStorage.ts) e nada nunca re-buscava, então fotos "somem"
+    // silenciosamente semanas depois. Baixa e salva os bytes localmente; só cai pra URL crua
+    // se o download falhar (nunca perde a foto por causa disso, só fica sujeito à expiração
+    // de novo nesse caso raro).
+    const localUrl = await salvarFotoPerfilLocal(picUrl, userId, phone);
+    const valorFinal = localUrl || picUrl;
     const suffix = `%${phone.slice(-11)}`;
     await pool.query(
       `UPDATE contatos SET foto_perfil = $1, profile_pic_url = $1${pushName ? ', push_name = COALESCE($4, push_name)' : ''}
        WHERE user_id = $2 AND telefone ILIKE $3`,
-      pushName ? [picUrl, userId, suffix, pushName] : [picUrl, userId, suffix]
+      pushName ? [valorFinal, userId, suffix, pushName] : [valorFinal, userId, suffix]
     ).catch(() => {});
   }
 
@@ -361,7 +461,7 @@ export default function whatsappRouter(pool: Pool): Router {
     log.info('WHATSAPP', 'request recebida', { method: req.method, path: req.path, userId: req.userId, params: req.params });
     try {
       const userId = req.userId!;
-      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const phone = normalizarPhoneParam(decodeURIComponent(req.params.phone));
       if (!phone || phone.length < 8) return res.status(400).json({ message: 'Telefone inválido' });
 
       const limit = Math.min(Number(req.query.limit) || 100, 500);
@@ -417,7 +517,7 @@ export default function whatsappRouter(pool: Pool): Router {
   router.get('/status/:phone', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
-      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const phone = normalizarPhoneParam(decodeURIComponent(req.params.phone));
       const tenantId = await resolveOwnerId(userId);
       // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
       // homologação (ver diagnosticos/AUDITORIA_LOG.md).
@@ -613,11 +713,75 @@ export default function whatsappRouter(pool: Pool): Router {
   router.get('/media', async (req: AuthRequest, res: Response) => {
     try {
       const mediaUrl = (req.query.url as string || '').trim();
-      if (!mediaUrl || !/^https?:\/\//.test(mediaUrl)) {
+      if (!mediaUrl) return res.status(400).json({ message: 'url inválida' });
+
+      // [AUDITORIA] LÓGICA: mídia decriptografada e salva localmente (ver
+      // utils/whatsappMediaStorage.ts) grava media_url como `local://userId/arquivo` em vez da
+      // URL crua da Evolution. Serve direto do disco privado (fora de UPLOADS_DIR, que é público
+      // sem autenticação) — confere ownership consultando a própria linha da mensagem antes de
+      // entregar o arquivo, pra um usuário não conseguir puxar mídia de outro tenant só
+      // adivinhando/reusando um valor de `url`.
+      if (mediaUrl.startsWith('local://')) {
+        const resolvido = resolverCaminhoLocal(mediaUrl);
+        if (!resolvido) return res.status(400).json({ message: 'url local inválida' });
+
+        const tenantId = await resolveOwnerId(req.userId!);
+        const check = await pool.query(
+          `SELECT media_mimetype FROM whatsapp_messages WHERE user_id = $1 AND media_url = $2 LIMIT 1`,
+          [tenantId, mediaUrl]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (!check.rows.length) return res.status(404).json({ message: 'Mídia não encontrada' });
+
+        try {
+          const buf = await fs.readFile(resolvido.caminho);
+          res.setHeader('Content-Type', check.rows[0].media_mimetype || 'application/octet-stream');
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          res.setHeader('Accept-Ranges', 'bytes');
+          return res.send(buf);
+        } catch {
+          return res.status(404).json({ message: 'Arquivo de mídia não encontrado em disco' });
+        }
+      }
+
+      // [AUDITORIA] LÓGICA (2026-07-23): mesmo esquema do `local://` acima, mas pra fotos de
+      // perfil (marcador `local-pic://userId/arquivo`, ver whatsappMediaStorage.ts) — ownership
+      // confere contra `contatos` em vez de `whatsapp_messages`. Sempre JPEG (é o formato que a
+      // Evolution/WhatsApp sempre devolve pra foto de perfil, não precisa de coluna própria de
+      // mimetype só pra isso).
+      if (mediaUrl.startsWith('local-pic://')) {
+        const resolvido = resolverCaminhoLocalFoto(mediaUrl);
+        if (!resolvido) return res.status(400).json({ message: 'url local inválida' });
+
+        const tenantId = await resolveOwnerId(req.userId!);
+        const check = await pool.query(
+          `SELECT 1 FROM contatos WHERE user_id = $1 AND (foto_perfil = $2 OR profile_pic_url = $2) LIMIT 1`,
+          [tenantId, mediaUrl]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (!check.rows.length) return res.status(404).json({ message: 'Foto não encontrada' });
+
+        try {
+          const buf = await fs.readFile(resolvido.caminho);
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          return res.send(buf);
+        } catch {
+          return res.status(404).json({ message: 'Arquivo de foto não encontrado em disco' });
+        }
+      }
+
+      if (!/^https?:\/\//.test(mediaUrl)) {
         return res.status(400).json({ message: 'url inválida' });
       }
 
       const cfg = await getEvolutionConfig(req.userId!);
+
+      // [AUDITORIA] FIX APLICADO: ver comentário completo em isMediaHostAllowed() — bloqueia
+      // SSRF via ?url= apontando pra host interno/arbitrário antes de qualquer fetch.
+      if (!isMediaHostAllowed(mediaUrl, cfg.url)) {
+        log.warn('WHATSAPP', 'GET /media: host não permitido, requisição bloqueada', { userId: req.userId, host: (() => { try { return new URL(mediaUrl).hostname; } catch { return mediaUrl.slice(0, 80); } })() });
+        return res.status(400).json({ message: 'Host de mídia não permitido' });
+      }
+
       let mediaRes = await fetch(mediaUrl, {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
@@ -647,9 +811,32 @@ export default function whatsappRouter(pool: Pool): Router {
 
   router.post('/status', async (req: AuthRequest, res: Response) => {
     try {
-      const cfg = await getEvolutionConfig(req.userId!);
+      const userId = req.userId!;
+      const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
-      const instancia = (req.body?.instancia as string | undefined) || cfg.instancia;
+
+      // [AUDITORIA] FIX APLICADO (2026-07-22): `instancia` vinha do body sem checagem de
+      // ownership — mesma classe de bug corrigida em DELETE /instances/:name (ver
+      // diagnosticos/AUDITORIA_LOG.md, incidente stefanocatedral@hotmail.com). Esta rota não é
+      // destrutiva (só consulta status e pode re-registrar webhook), mas re-registrar o
+      // webhook de outra instância sem ela pertencer ao usuário não deveria ser possível de
+      // jeito nenhum. Mesmo padrão de checagem já usado em /send (instanciaSolicitada).
+      const instanciaSolicitada = (req.body?.instancia as string | undefined) || undefined;
+      let instancia = cfg.instancia;
+      if (instanciaSolicitada && instanciaSolicitada !== cfg.instancia) {
+        const instRes = await pool.query(
+          `SELECT 1 FROM integracoes_config WHERE user_id = $1 AND instancia = $2 AND tipo = 'evolution'
+           UNION
+           SELECT 1 FROM agentes WHERE user_id = $1 AND evolution_instancia = $2
+           LIMIT 1`,
+          [userId, instanciaSolicitada]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (instRes.rows.length) {
+          instancia = instanciaSolicitada;
+        } else {
+          log.warn('WHATSAPP', 'POST /status: instância solicitada não pertence ao usuário — ignorando', { userId, instanciaSolicitada });
+        }
+      }
 
       const r = await evolutionFetch(`${base}/instance/connectionState/${instancia}`, {
         headers: { apikey: cfg.api_key },
@@ -723,6 +910,26 @@ export default function whatsappRouter(pool: Pool): Router {
       const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
 
+      // [AUDITORIA] LÓGICA (Sprint 1 — multi-instância, 2026-07-23): `nova_conexao: true` pede
+      // explicitamente um NÚMERO NOVO pro mesmo tenant, em vez de reconectar/reutilizar a
+      // instância padrão — sem isso, todo POST /connect resolvia sempre pro mesmo nome
+      // determinístico e, se já estivesse aberta, devolvia "já conectado" sem meio de escapar
+      // (era isso que impedia conectar um segundo WhatsApp). A instância padrão (sem sufixo)
+      // nunca muda — só entra sufixo `_2`, `_3`... quando já existe a anterior.
+      const tenantId = await resolveOwnerId(userId);
+      const conhecidas = await instanciasConhecidas(tenantId);
+      if (req.body?.nova_conexao === true) {
+        const instanciaAlvo = await proximaInstanciaLivre(cfg.stableInstancia, conhecidas);
+        cfg.instancia = instanciaAlvo;
+        cfg.stableInstancia = instanciaAlvo;
+        log.info('WHATSAPP', 'Nova conexão solicitada — instância alvo calculada', { tenantId, instanciaAlvo });
+      } else {
+        // [AUDITORIA] LÓGICA (Sprint 2): "Reconectar" num card específico do painel manda o
+        // nome da instância daquele card — sem isso, reconectar qualquer card sempre mexia na
+        // instância padrão do tenant, nunca na que o usuário realmente clicou.
+        await resolverInstanciaExplicita(tenantId, req.body?.instancia as string | undefined, cfg);
+      }
+
       // [AUDITORIA] FIX APLICADO (Sprint 6): Se a flag force_reconnect for fornecida, realiza a
       // deleção física da instância antes de gerar um novo QR, limpando sockets de memória fantasmas do Baileys.
       // [AUDITORIA] FIX APLICADO: deletava cfg.instancia, mas a criação logo abaixo usa
@@ -747,11 +954,19 @@ export default function whatsappRouter(pool: Pool): Router {
 
         if (listRes?.ok) {
           const instances: any[] = await listRes.json().catch(() => []);
-          const userIdShort = userId.replace(/-/g, '').slice(0, 12);
+          // [AUDITORIA] FIX APLICADO (Sprint 1 — multi-instância): antes, qualquer instância com
+          // o prefixo do tenant que não fosse a "oficial" era tratada como duplicata e apagada —
+          // isso apagaria sozinho qualquer segundo número legitimamente conectado. Agora só
+          // remove o que não está em `conhecidas` (nenhuma linha em integracoes_config aponta
+          // pra ela) — órfã de verdade, não um chip adicional válido. Prefixo comparado contra
+          // tenantId (dono da conta), não userId — cfg.stableInstancia também deriva do
+          // tenantId, então comparar contra userId (como era antes) nunca batia certo pra
+          // membros de equipe que não são o dono.
+          const tenantIdShort = tenantId.replace(/-/g, '').slice(0, 12);
           for (const inst of instances) {
             const name = inst.instanceName || inst.name;
-            if (name && name.includes(userIdShort) && name !== cfg.stableInstancia) {
-              log.info('WHATSAPP', 'Removendo instância duplicada/antiga', { name });
+            if (name && name.includes(tenantIdShort) && name !== cfg.stableInstancia && !conhecidas.has(name)) {
+              log.info('WHATSAPP', 'Removendo instância órfã (sem linha de config)', { name });
               await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
               await evolutionFetch(`${base}/instance/delete/${name}`, {
                 method: 'DELETE',
@@ -808,7 +1023,15 @@ export default function whatsappRouter(pool: Pool): Router {
         qrcode: true,
         integration: 'WHATSAPP-BAILEYS',
         rejectCall: false,
-        groupsIgnore: true,
+        // [AUDITORIA] FIX APLICADO (2026-07-22): groupsIgnore=true fazia a Evolution nunca
+        // encaminhar MESSAGES_UPSERT de grupo pro nosso webhook — mensagem existia na Evolution
+        // (visível via /chat/findMessages direto), mas nunca chegava aqui, então nunca era salva
+        // em whatsapp_messages. Não era filtro nosso (webhook.ts/frontend não filtram @g.us,
+        // conferido) — a Evolution nem chegava a enviar o evento. IA interna continua bloqueada
+        // pra grupo por outro mecanismo (processarComDebounce só é chamado depois de um
+        // `if (isGroup) return` em webhook.ts — ver diagnosticos/AUDITORIA_LOG.md), então habilitar
+        // a entrega do evento não reabre esse risco.
+        groupsIgnore: false,
         alwaysOnline: true,
         readMessages: true,
         readStatus: false,
@@ -928,7 +1151,13 @@ export default function whatsappRouter(pool: Pool): Router {
   // GET /api/whatsapp/poll-qr — polling leve para aguardar QR gerado pelo Baileys
   router.get('/poll-qr', async (req: AuthRequest, res: Response) => {
     try {
-      const cfg = await getEvolutionConfig(req.userId!);
+      const userId = req.userId!;
+      const cfg = await getEvolutionConfig(userId);
+      // [AUDITORIA] LÓGICA (Sprint 2 — multi-instância): sem isso, o polling do QR durante a
+      // conexão de uma instância adicional (_2, _3...) checava a instância padrão em vez da
+      // que estava de fato sendo conectada.
+      const tenantId = await resolveOwnerId(userId);
+      await resolverInstanciaExplicita(tenantId, req.query?.instancia as string | undefined, cfg);
       const base = cfg.url.replace(/\/$/, '');
 
       const stateRes = await evolutionFetch(`${base}/instance/connectionState/${cfg.instancia}`, {
@@ -988,6 +1217,12 @@ export default function whatsappRouter(pool: Pool): Router {
     try {
       const userId = req.userId!;
       const cfg = await getEvolutionConfig(userId);
+      // [AUDITORIA] LÓGICA (Sprint 2 — multi-instância): sem isso, desconectar qualquer card do
+      // painel sempre desconectava a instância padrão do tenant, nunca a instância específica
+      // daquele card — grave aqui porque, diferente de /connect, esta rota também apaga dados
+      // (integracoes_config/agentes/whatsapp_message_status daquela instância) mais abaixo.
+      const tenantId = await resolveOwnerId(userId);
+      await resolverInstanciaExplicita(tenantId, req.body?.instancia as string | undefined, cfg);
       const base = cfg.url.replace(/\/$/, '');
       const instancia = cfg.instancia;
 
@@ -1329,6 +1564,28 @@ export default function whatsappRouter(pool: Pool): Router {
     try {
       const userId = req.userId!;
       const name = req.params.name;
+
+      // [AUDITORIA] FIX APLICADO (2026-07-22): esta rota chamava /instance/logout e
+      // /instance/delete de VERDADE na Evolution usando `name` direto da URL, sem verificar
+      // se a instância pertence ao usuário autenticado — as queries de limpeza no banco já
+      // eram escopadas por user_id+instance_name (não corrompiam dados de outro tenant), mas
+      // a desconexão/exclusão REAL na Evolution acontecia mesmo assim. Incidente real em
+      // produção: o admin (mentoark@gmail.com) chamou esta rota com a instância de outro
+      // cliente (stefanocatedral@hotmail.com) e derrubou o WhatsApp real dele — ver
+      // diagnosticos/AUDITORIA_LOG.md. Mesmo padrão de checagem de ownership já usado em
+      // /send (instanciaSolicitada) e em kanban.ts.
+      const ownRes = await pool.query(
+        `SELECT 1 FROM integracoes_config WHERE user_id = $1 AND instancia = $2 AND tipo = 'evolution'
+         UNION
+         SELECT 1 FROM agentes WHERE user_id = $1 AND evolution_instancia = $2
+         LIMIT 1`,
+        [userId, name]
+      ).catch(() => ({ rows: [] as any[] }));
+      if (!ownRes.rows.length) {
+        log.warn('WHATSAPP', 'DELETE /instances: instância não pertence ao usuário', { userId, name });
+        return res.status(403).json({ message: 'Instância não pertence a este usuário' });
+      }
+
       const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
 
@@ -1448,7 +1705,10 @@ export default function whatsappRouter(pool: Pool): Router {
         headers: { 'Content-Type': 'application/json', apikey: key },
         body: JSON.stringify({
           instanceName: cfg.instancia, qrcode: true, integration: 'WHATSAPP-BAILEYS',
-          groupsIgnore: true, alwaysOnline: true, readMessages: true,
+          // [AUDITORIA] FIX APLICADO (2026-07-22): ver comentário completo no outro
+          // /instance/create acima (mesmo arquivo) — groupsIgnore=true bloqueava a entrega do
+          // webhook de mensagem de grupo na origem (Evolution), não era filtro nosso.
+          groupsIgnore: false, alwaysOnline: true, readMessages: true,
           webhook: webhookInner(),
         }),
       });
@@ -1472,13 +1732,47 @@ export default function whatsappRouter(pool: Pool): Router {
   // 'close', já corrigido em /status e /poll-qr mas esquecido aqui.
   router.get('/evo/status', async (req: AuthRequest, res: Response) => {
     try {
-      const cfg      = await getEvolutionConfig(req.userId!);
-      const instancia = (req.query['instancia'] as string | undefined) || cfg.instancia;
+      const userId = req.userId!;
+      const cfg = await getEvolutionConfig(userId);
+
+      // [AUDITORIA] FIX APLICADO (2026-07-22): `instancia` vinha da query string sem checagem
+      // de ownership — mesma classe do bug corrigido em DELETE /instances/:name e /status
+      // (ver diagnosticos/AUDITORIA_LOG.md), aqui de severidade menor (só leitura de status,
+      // sem escrita), mas ainda assim permitia consultar o estado de conexão de instância de
+      // outro tenant. Mesmo padrão de checagem já usado em /send e /status.
+      const instanciaSolicitada = (req.query['instancia'] as string | undefined) || undefined;
+      let instancia = cfg.instancia;
+      if (instanciaSolicitada && instanciaSolicitada !== cfg.instancia) {
+        const instRes = await pool.query(
+          `SELECT 1 FROM integracoes_config WHERE user_id = $1 AND instancia = $2 AND tipo = 'evolution'
+           UNION
+           SELECT 1 FROM agentes WHERE user_id = $1 AND evolution_instancia = $2
+           LIMIT 1`,
+          [userId, instanciaSolicitada]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (instRes.rows.length) {
+          instancia = instanciaSolicitada;
+        } else {
+          log.warn('WHATSAPP', 'GET /evo/status: instância solicitada não pertence ao usuário — ignorando', { userId, instanciaSolicitada });
+        }
+      }
+
       if (!cfg.url || !cfg.api_key) return res.json({ state: 'nao_configurado' });
       const base = cfg.url.replace(/\/$/, '');
-      const r    = await evolutionFetch(`${base}/instance/connectionState/${instancia}`, { headers: { apikey: cfg.api_key } }).catch(() => null);
-      if (!r) return res.status(503).json({ state: 'close', error: true, message: 'Evolution API inacessível ou offline.', instancia });
-      if (r.status === 401) return res.json({ state: 'unauthorized', instancia });
+
+      // [AUDITORIA] LÓGICA: sync_status/sync_progress alimentam a barra de progresso de
+      // sincronização de histórico no frontend — lidos junto com o status de conexão, sem
+      // endpoint/polling novo (ver diagnosticos/AUDITORIA_LOG.md).
+      const syncRes = await pool.query(
+        `SELECT sync_status, sync_progress, sync_total FROM integracoes_config
+         WHERE user_id = $1 AND instancia = $2 AND tipo = 'evolution' LIMIT 1`,
+        [userId, instancia]
+      ).catch(() => ({ rows: [] as any[] }));
+      const sync = syncRes.rows[0] || {};
+
+      const r = await evolutionFetch(`${base}/instance/connectionState/${instancia}`, { headers: { apikey: cfg.api_key } }).catch(() => null);
+      if (!r) return res.status(503).json({ state: 'close', error: true, message: 'Evolution API inacessível ou offline.', instancia, ...sync });
+      if (r.status === 401) return res.json({ state: 'unauthorized', instancia, ...sync });
       if (!r.ok) {
         const errorText = await r.text().catch(() => 'Erro desconhecido');
         return res.status(r.status).json({
@@ -1487,10 +1781,11 @@ export default function whatsappRouter(pool: Pool): Router {
           code: r.status,
           message: `Evolution API erro (${r.status}): ${errorText.slice(0, 150)}`,
           instancia,
+          ...sync,
         });
       }
       const d: any = await r.json().catch(() => ({}));
-      return res.json({ state: d?.instance?.state || d?.state || 'close', instancia });
+      return res.json({ state: d?.instance?.state || d?.state || 'close', instancia, ...sync });
     } catch (err: any) {
       return res.status(502).json({ message: err.message });
     }
@@ -1548,7 +1843,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
   router.patch('/conversas/:phone/read', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
-    const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+    const phone = normalizarPhoneParam(decodeURIComponent(req.params.phone));
     const tenantId = await resolveOwnerId(userId);
     // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
     // homologação (ver diagnosticos/AUDITORIA_LOG.md).
