@@ -17,6 +17,7 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 import { log } from '../logger';
 
 const WHATSAPP_MEDIA_DIR = process.env.WHATSAPP_MEDIA_DIR || '/app/wa-media';
@@ -163,4 +164,95 @@ export function resolverCaminhoLocalFoto(url: string): { userId: string; caminho
   const fileName = resto.slice(barra + 1);
   if (!fileName || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) return null;
   return { userId, caminho: path.join(WHATSAPP_MEDIA_DIR, 'profile-pics', userId, fileName) };
+}
+
+// ── Mídia de SAÍDA (envio manual e campanhas) — persistência de link instável ────────────────
+// [AUDITORIA] LÓGICA (Sprint 6, 2026-07-23): diferente da mídia de ENTRADA (funções acima,
+// que sempre vêm da própria Evolution/WhatsApp), a mídia de SAÍDA passada em `mediaUrl` pro
+// POST /send (whatsapp.ts) e pra `disparos.url_midia` (disparoProcessor.ts, campanhas em
+// lote) pode ser qualquer URL externa — link de upload provisório, URL assinada com
+// expiração, CDN de terceiro instável. Uma campanha que roda por vários dias reenvia o MESMO
+// `url_midia` centenas de vezes; se o link original expirar no meio do caminho, todo envio
+// subsequente falha silenciosamente (mídia não chega, só o Evolution retorna erro por
+// mensagem). `garantirMidiaEstavel()` baixa esse link UMA VEZ e persiste em `UPLOADS_DIR`
+// (público, já servido via `/uploads` em index.ts — mesmo storage já usado por
+// catalogo.ts/galeria.ts/elevenlabs.ts, não um diretório novo), devolvendo uma URL própria e
+// estável (`${API_BASE_URL}/uploads/...`) que nunca expira por conta própria. Idempotente na
+// prática: se a URL já é do nosso próprio domínio/`/uploads/`, retorna sem re-baixar.
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
+const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
+// Mesmo teto de 5MB do POST /send (Sprint 6, item 2 — antiban/anti-OOM) — evita que este
+// helper baixe (e segure em memória via arrayBuffer) um arquivo gigante só para descobrir
+// depois que ele nunca deveria ter sido enviado.
+export const MAX_OUTBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
+const DOWNLOAD_EXTERNO_TIMEOUT_MS = 15000;
+
+const EXT_POR_CONTENT_TYPE: Record<string, string> = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+  'video/mp4': 'mp4', 'audio/ogg': 'oga', 'audio/mpeg': 'mp3',
+  'application/pdf': 'pdf',
+};
+
+function isUrlJaEstavel(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const apiHost = new URL(API_BASE_URL).hostname;
+    return u.hostname === apiHost && u.pathname.startsWith('/uploads/');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Garante que uma URL de mídia de SAÍDA seja estável (nosso próprio domínio, sem expiração).
+ * Se já for `${API_BASE_URL}/uploads/...`, devolve sem mudar. Se for `http(s)://` externa,
+ * baixa uma vez e persiste em UPLOADS_DIR, devolvendo a nova URL pública. Em qualquer falha
+ * (download, tamanho acima do teto, URL não-http) devolve a URL ORIGINAL inalterada — nunca
+ * bloqueia o envio por conta deste mecanismo, só deixa de blindar contra expiração futura
+ * nesse caso específico (mesma filosofia de fallback de salvarMidiaWhatsapp()/
+ * salvarFotoPerfilLocal() acima: mídia de saída não pode travar por causa de cache).
+ */
+export async function garantirMidiaEstavel(mediaUrl: string | null | undefined): Promise<string | null> {
+  if (!mediaUrl) return mediaUrl ?? null;
+  if (!/^https?:\/\//i.test(mediaUrl)) return mediaUrl; // data:, base64 cru, etc. — nada a cachear
+  if (isUrlJaEstavel(mediaUrl)) return mediaUrl;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_EXTERNO_TIMEOUT_MS);
+  try {
+    const res = await fetch(mediaUrl, { signal: controller.signal });
+    if (!res.ok) {
+      log.warn('WA_MEDIA_OUT', 'Download da mídia de saída falhou — mantendo URL original', { status: res.status, mediaUrl: mediaUrl.slice(0, 100) });
+      return mediaUrl;
+    }
+    const contentLengthHeader = res.headers.get('content-length');
+    if (contentLengthHeader && Number(contentLengthHeader) > MAX_OUTBOUND_MEDIA_BYTES) {
+      log.warn('WA_MEDIA_OUT', 'Mídia de saída acima do teto de 5MB (Content-Length) — não cacheada', { mediaUrl: mediaUrl.slice(0, 100) });
+      return mediaUrl;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength === 0 || buf.byteLength > MAX_OUTBOUND_MEDIA_BYTES) {
+      log.warn('WA_MEDIA_OUT', 'Mídia de saída vazia ou acima do teto de 5MB (bytes reais) — não cacheada', { mediaUrl: mediaUrl.slice(0, 100), bytes: buf.byteLength });
+      return mediaUrl;
+    }
+
+    const contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    const extPorPath = path.extname(new URL(mediaUrl).pathname).replace('.', '').toLowerCase();
+    const ext = EXT_POR_CONTENT_TYPE[contentType] || (/^[a-z0-9]{1,8}$/.test(extPorPath) ? extPorPath : 'bin');
+
+    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+    const fileName = `${crypto.randomUUID()}.${ext}`;
+    await fs.writeFile(path.join(UPLOADS_DIR, fileName), buf);
+
+    const urlEstavel = `${API_BASE_URL}/uploads/${fileName}`;
+    log.info('WA_MEDIA_OUT', 'Mídia de saída persistida localmente — URL estável gerada', {
+      origem: mediaUrl.slice(0, 100), urlEstavel, bytes: buf.byteLength,
+    });
+    return urlEstavel;
+  } catch (err: any) {
+    log.warn('WA_MEDIA_OUT', 'Falha ao cachear mídia de saída — mantendo URL original', { err: err?.message, mediaUrl: mediaUrl.slice(0, 100) });
+    return mediaUrl;
+  } finally {
+    clearTimeout(timer);
+  }
 }

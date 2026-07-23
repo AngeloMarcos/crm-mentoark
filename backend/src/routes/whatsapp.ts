@@ -13,7 +13,7 @@ import { Pool } from 'pg';
 import fs from 'fs/promises';
 import { AuthRequest } from '../middleware';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
-import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto } from '../utils/whatsappMediaStorage';
+import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, garantirMidiaEstavel, MAX_OUTBOUND_MEDIA_BYTES } from '../utils/whatsappMediaStorage';
 import { log } from '../logger';
 
 const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
@@ -1397,6 +1397,47 @@ export default function whatsappRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'text ou mediaUrl são obrigatórios' });
       }
 
+      // [AUDITORIA] FIX APLICADO (Sprint 6, item 2 — teto de segurança de 5MB, 2026-07-23):
+      // antes, `mediaUrl` (que pode ser uma URL http(s) OU um data-URI base64 embutido direto
+      // no corpo da requisição) ia direto pro payload da Evolution sem nenhuma checagem de
+      // tamanho — um base64 gigante (o corpo JSON aceita até 50MB, ver index.ts) ficava
+      // inteiro em memória (string + Buffer decodificado) por request simultânea, risco real
+      // de Heap OOM sob concorrência. Barra 413 cedo, antes de qualquer processamento pesado.
+      let mediaUrlFinal: string | undefined = mediaUrl;
+      if (mediaUrlFinal) {
+        if (mediaUrlFinal.startsWith('data:')) {
+          const base64Part = mediaUrlFinal.slice(mediaUrlFinal.indexOf(',') + 1);
+          const approxBytes = Math.floor(base64Part.length * 0.75); // base64 ≈ 4/3 do tamanho real
+          if (approxBytes > MAX_OUTBOUND_MEDIA_BYTES) {
+            log.warn('DEBUG SEND', 'mídia base64 acima do teto de 5MB — bloqueado', { approxBytes });
+            return res.status(413).json({ message: 'O arquivo excede o limite de segurança de 5MB para transmissões WhatsApp.' });
+          }
+        } else if (/^https?:\/\//i.test(mediaUrlFinal)) {
+          // Checagem best-effort via HEAD (evita baixar o arquivo só pra medir) — se o servidor
+          // remoto não informar Content-Length, a checagem real acontece dentro de
+          // garantirMidiaEstavel() logo abaixo (item 1), que também respeita o mesmo teto.
+          try {
+            const headController = new AbortController();
+            const headTimer = setTimeout(() => headController.abort(), 5000);
+            const headRes = await fetch(mediaUrlFinal, { method: 'HEAD', signal: headController.signal }).catch(() => null);
+            clearTimeout(headTimer);
+            const contentLength = headRes?.headers?.get('content-length');
+            if (contentLength && Number(contentLength) > MAX_OUTBOUND_MEDIA_BYTES) {
+              log.warn('DEBUG SEND', 'mídia via URL acima do teto de 5MB (HEAD) — bloqueado', { contentLength, mediaUrl: mediaUrlFinal.slice(0, 100) });
+              return res.status(413).json({ message: 'O arquivo excede o limite de segurança de 5MB para transmissões WhatsApp.' });
+            }
+          } catch { /* HEAD falhou/sem suporte no servidor remoto — segue, teto real aplicado abaixo */ }
+
+          // [AUDITORIA] FIX APLICADO (Sprint 6, item 1 — mídia expirada em campanhas/envios,
+          // 2026-07-23): se `mediaUrl` for um link externo instável (upload provisório, URL
+          // assinada com expiração), baixa uma vez e reescreve pra uma URL estável no nosso
+          // próprio domínio (ver garantirMidiaEstavel() em whatsappMediaStorage.ts) — evita que
+          // o envio (ou reenvios futuros da mesma mídia) dependam de um link que pode expirar.
+          // Fallback seguro: em qualquer falha, devolve a URL original, nunca bloqueia o envio.
+          mediaUrlFinal = (await garantirMidiaEstavel(mediaUrlFinal)) || mediaUrlFinal;
+        }
+      }
+
       const cfg = await getEvolutionConfig(userId);
 
       // Multi-instância: se o frontend indicar de qual chip a conversa veio, valida que o
@@ -1430,7 +1471,7 @@ export default function whatsappRouter(pool: Pool): Router {
       let evolutionResp: any;
       let msgType = 'text';
 
-      if (mediaUrl && mediaType) {
+      if (mediaUrlFinal && mediaType) {
         msgType = mediaType;
         const mediaEndpoints: Record<string, string> = {
           image: 'sendMedia',
@@ -1442,7 +1483,7 @@ export default function whatsappRouter(pool: Pool): Router {
         const mediaPayload: any = {
           number: phoneClean,
           mediatype: mediaType,
-          media: mediaUrl,
+          media: mediaUrlFinal,
         };
         if (mediaCaption) mediaPayload.caption = mediaCaption;
         if (mediaFilename) mediaPayload.fileName = mediaFilename;
@@ -1551,7 +1592,7 @@ export default function whatsappRouter(pool: Pool): Router {
          VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW())
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
         [tenantId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
-         messageId, msgType, content, mediaUrl || null]
+         messageId, msgType, content, mediaUrlFinal || null]
       ).catch(err => log.warn('SEND', 'Falha ao salvar', { err: err.message }));
 
       return res.json({ ok: true, messageId });

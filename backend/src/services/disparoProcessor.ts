@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
 import { botSentTexts, botMessageIds } from './agentEngine';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
+import { garantirMidiaEstavel } from '../utils/whatsappMediaStorage';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
 
@@ -52,6 +53,15 @@ export async function processarDisparos(pool: Pool) {
     // ser puladas e reenfileiradas também — sem isso, a campanha ficaria com status
     // 'pausado' mas o loop continuaria enviando as mensagens restantes dela normalmente.
     const campanhasPausadasNesteLote = new Set<string>();
+    // [AUDITORIA] FIX APLICADO (Sprint 6, item 1 — mídia expirada em campanhas de múltiplos
+    // dias, 2026-07-23): `disparos.url_midia` é compartilhado por TODOS os destinatários da
+    // campanha — sem cache, o mesmo link externo instável seria re-testado (e continuaria
+    // quebrado) em cada uma das centenas/milhares de mensagens. Estabiliza uma vez por
+    // campanha por execução deste lote (ver bloco de transição de campanha abaixo) e persiste
+    // de volta em `disparos.url_midia`, então a partir da PRÓXIMA leitura (mesmo lote ou dias
+    // depois) `get_next_disparo_batch()` já devolve a URL estável direto, sem precisar
+    // recachear.
+    const urlMidiaEstavelPorCampanha = new Map<string, string>();
 
     for (let i = 0; i < batch.rows.length; i++) {
       const msg = batch.rows[i];
@@ -113,6 +123,25 @@ export async function processarDisparos(pool: Pool) {
           }
         } catch (errCap: any) {
           log.warn('DISPARO', 'Erro ao verificar teto diário de segurança, continuando por precaução', { disparo_id, err: errCap.message });
+        }
+
+        // [AUDITORIA] FIX APLICADO (Sprint 6, item 1): ver comentário completo na declaração de
+        // `urlMidiaEstavelPorCampanha` acima. Só roda pra mídia (`tipo_midia !== 'texto'`) e só
+        // uma vez por campanha por execução deste lote.
+        if (tipo_midia && tipo_midia !== 'texto' && url_midia && !urlMidiaEstavelPorCampanha.has(disparo_id)) {
+          try {
+            const urlEstavel = await garantirMidiaEstavel(url_midia);
+            if (urlEstavel) {
+              urlMidiaEstavelPorCampanha.set(disparo_id, urlEstavel);
+              if (urlEstavel !== url_midia) {
+                await pool.query(`UPDATE disparos SET url_midia = $1 WHERE id = $2`, [urlEstavel, disparo_id])
+                  .catch(errUpd => log.warn('DISPARO', 'Falha ao persistir url_midia estável na campanha', { disparo_id, err: errUpd?.message }));
+                log.info('DISPARO', 'Mídia da campanha migrada para URL estável', { disparo_id, urlEstavel });
+              }
+            }
+          } catch (errMidia: any) {
+            log.warn('DISPARO', 'Falha ao estabilizar mídia da campanha, usando URL original', { disparo_id, err: errMidia.message });
+          }
         }
       }
 
@@ -229,27 +258,30 @@ export async function processarDisparos(pool: Pool) {
         }
 
         // 4. Enviar mensagem
+        // Usa a URL estável já cacheada pra esta campanha (ver bloco de transição de campanha
+        // acima), com fallback pra `url_midia` crua se a estabilização falhou/não rodou.
+        const urlMidiaFinal = urlMidiaEstavelPorCampanha.get(disparo_id) || url_midia;
         let endpoint = `${baseUrl}/message/sendText/${instancia}`;
         let body: any = { number: digits, text: textoFinal };
 
-        if (tipo_midia === 'imagem' && url_midia) {
+        if (tipo_midia === 'imagem' && urlMidiaFinal) {
           endpoint = `${baseUrl}/message/sendMedia/${instancia}`;
-          body = { 
-            number: digits, 
-            media: url_midia, 
-            mediatype: 'image', 
-            caption: legendaFinal 
+          body = {
+            number: digits,
+            media: urlMidiaFinal,
+            mediatype: 'image',
+            caption: legendaFinal
           };
-        } else if (tipo_midia === 'audio' && url_midia) {
+        } else if (tipo_midia === 'audio' && urlMidiaFinal) {
           endpoint = `${baseUrl}/message/sendWhatsAppAudio/${instancia}`;
-          body = { number: digits, audio: url_midia };
-        } else if (tipo_midia === 'documento' && url_midia) {
+          body = { number: digits, audio: urlMidiaFinal };
+        } else if (tipo_midia === 'documento' && urlMidiaFinal) {
           endpoint = `${baseUrl}/message/sendMedia/${instancia}`;
-          body = { 
-            number: digits, 
-            media: url_midia, 
-            mediatype: 'document', 
-            fileName: legendaFinal || 'documento' 
+          body = {
+            number: digits,
+            media: urlMidiaFinal,
+            mediatype: 'document',
+            fileName: legendaFinal || 'documento'
           };
         }
 
@@ -320,7 +352,7 @@ export async function processarDisparos(pool: Pool) {
             realMsgId,
             msgType,
             msgContent,
-            tipo_midia !== 'texto' && url_midia ? url_midia : null,
+            tipo_midia !== 'texto' && urlMidiaFinal ? urlMidiaFinal : null,
             tipo_midia === 'imagem' ? 'image/jpeg' : tipo_midia === 'audio' ? 'audio/ogg' : tipo_midia === 'documento' ? 'application/pdf' : null
           ]
         )).catch(err => log.error('DISPARO INSERT whatsapp_messages ERROR', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
