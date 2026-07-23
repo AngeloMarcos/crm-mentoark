@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
-import { botSentTexts, botMessageIds } from './agentEngine';
+import { botSentTexts, botMessageIds, BOT_ECHO_TTL_MS } from './agentEngine';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
 import { garantirMidiaEstavel } from '../utils/whatsappMediaStorage';
 import { withTenantContext } from '../db';
@@ -285,6 +285,8 @@ export async function processarDisparos(pool: Pool) {
           };
         }
 
+        // [AUDITORIA] LÓGICA (Sprint 7): TTL compartilhado com agentEngine.ts (BOT_ECHO_TTL_MS,
+        // ver comentário completo lá) — mesmo mecanismo de antiloop, mesma janela de expiração.
         // Registrar em botSentTexts antes de enviar para evitar a condição de corrida do webhook (antiloop)
         const keyText = textoFinal || '';
         const keyLegenda = legendaFinal || '';
@@ -306,7 +308,7 @@ export async function processarDisparos(pool: Pool) {
             botSentTexts.delete(`${digits}:${keyLegenda}`);
             botSentTexts.delete(`${digits}:${keyLegenda.trim()}`);
           }
-        }, 120_000);
+        }, BOT_ECHO_TTL_MS);
 
         const resp = await evolutionFetch(endpoint, {
           method: 'POST',
@@ -329,7 +331,7 @@ export async function processarDisparos(pool: Pool) {
 
         if (respData?.key?.id) {
           botMessageIds.add(respData.key.id);
-          setTimeout(() => botMessageIds.delete(respData.key.id), 120_000);
+          setTimeout(() => botMessageIds.delete(respData.key.id), BOT_ECHO_TTL_MS);
         }
 
         // 5. Salvar na tabela whatsapp_messages para aparecer no painel de chat

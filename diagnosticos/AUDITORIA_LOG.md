@@ -1,5 +1,17 @@
 # Auditoria de Código — Log
 
+### 🟢 Sprint 7 — Memória do antiloop e ordem do histórico da IA (agentEngine.ts) (2026-07-23)
+
+**Contexto:** kickoff do usuário com 2 riscos já diagnosticados de antemão (texto trazia inclusive trechos de código ilustrativos): (1) suposto memory leak nos Sets globais `botMessageIds`/`botSentTexts` (nunca deletados) e (2) suposto histórico invertido enviado à IA (`ORDER BY created_at DESC` sem reverter antes de mandar pro provider).
+
+**🟢 Ambos os riscos verificados e NÃO confirmados no código atual** — importante registrar isso explicitamente porque o diagnóstico trazido pelo usuário não corresponde ao estado real do arquivo:
+1. **Sets de antiloop:** todo write-site de `botMessageIds`/`botSentTexts` no backend (só existem dois: `enviarResposta()` em `agentEngine.ts` e o envio de campanha em `disparoProcessor.ts`) já tinha `setTimeout` de limpeza emparelhado com cada `.add()` — não há, nem havia antes desta sessão, vazamento de memória real nesses Sets.
+2. **Ordem do histórico:** a query realmente usa `ORDER BY created_at DESC` (mais eficiente pro índice que ASC+paginação reversa), mas o resultado já passava por `histRes.rows.reverse()` antes de virar `historico`/`mensagens` — o array de fato enviado ao provider de IA. Conferido que não há nenhum caminho no arquivo que pule esse `.reverse()`. A query de exemplo que o usuário trouxe (`SELECT content, from_me FROM whatsapp_messages ...`) também não bate com a query real (`SELECT message FROM n8n_chat_histories ...`) — sinal de que o diagnóstico não foi extraído deste código específico.
+
+**🟢 Ação tomada, mesmo sem bug confirmado:** a instrução de TTL (5-10min) foi honrada mesmo o mecanismo já existindo — TTL subiu de 120s (2min) pra `BOT_ECHO_TTL_MS = 5min`, agora uma constante única exportada de `agentEngine.ts` e reaproveitada em `disparoProcessor.ts` (antes cada arquivo tinha seu próprio literal `120_000` solto). Ordem do histórico não foi tocada — já estava correta, mudar arriscaria quebrar algo que funciona. Ambos os pontos documentados com `[AUDITORIA] LÓGICA` no código pra não reabrir a dúvida numa sessão futura.
+
+Build (`swc`) e type-check isolado de `agentEngine.ts` e `disparoProcessor.ts` passaram limpos.
+
 ### 🟠 Sprint 6 — Robustez e segurança de mídias de saída (whatsapp.ts, disparoProcessor.ts, whatsappMediaStorage.ts) (2026-07-23)
 
 **Contexto:** kickoff explícito do usuário, 2 blindagens sobre mídia de SAÍDA (diferente da mídia de ENTRADA já tratada em sessões anteriores) — envio manual (`POST /send`) e campanhas em lote.

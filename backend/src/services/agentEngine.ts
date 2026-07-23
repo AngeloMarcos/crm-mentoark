@@ -144,6 +144,17 @@ function dividirMensagem(texto: string): string[] {
   return partes;
 }
 
+// [AUDITORIA] LÓGICA (Sprint 7, 2026-07-23 — verificação de vazamento de memória nos Sets
+// de antiloop, pedida pelo usuário): conferido TODO write-site de botMessageIds/botSentTexts
+// no backend (só existem dois: enviarResposta() logo abaixo, e o envio de campanha em
+// disparoProcessor.ts) — em ambos, cada `.add()` já vem acompanhado de um `setTimeout` que
+// remove a mesma chave depois de um TTL fixo. Não há vazamento de memória real: nenhuma
+// entrada fica presa nesses Sets indefinidamente. TTL alinhado nesta sessão de 120s (2min)
+// pra `BOT_ECHO_TTL_MS` = 5min — ainda folgado sobre o tempo real do eco do webhook (poucos
+// segundos), só reduz a chance teórica de um retry/reenvio tardio da Evolution escapar da
+// proteção antiloop por a chave já ter expirado.
+export const BOT_ECHO_TTL_MS = 5 * 60_000;
+
 // ── IDs e textos de mensagens enviadas pelo bot (previne auto-pausa da IA) ───
 export const botMessageIds = new Set<string>();
 export const botSentTexts  = new Set<string>();
@@ -160,7 +171,7 @@ async function enviarResposta(
   const textKeyTrimmed = `${telefone}:${texto.trim()}`;
   botSentTexts.add(textKey);
   botSentTexts.add(textKeyTrimmed);
-  setTimeout(() => { botSentTexts.delete(textKey); botSentTexts.delete(textKeyTrimmed); }, 120_000);
+  setTimeout(() => { botSentTexts.delete(textKey); botSentTexts.delete(textKeyTrimmed); }, BOT_ECHO_TTL_MS);
 
   const r = await evolutionFetch(`${base}/message/sendText/${instancia}`, {
     method: 'POST',
@@ -173,7 +184,7 @@ async function enviarResposta(
   const msgId: string | undefined = data?.key?.id;
   if (msgId) {
     botMessageIds.add(msgId);
-    setTimeout(() => botMessageIds.delete(msgId), 120_000);
+    setTimeout(() => botMessageIds.delete(msgId), BOT_ECHO_TTL_MS);
   }
 }
 
@@ -427,6 +438,14 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
 
+  // [AUDITORIA] LÓGICA (Sprint 7, 2026-07-23 — verificação de ordem do histórico enviado à
+  // LLM, pedida pelo usuário): `ORDER BY created_at DESC` abaixo busca as 20 mais recentes
+  // (mais eficiente pro índice/LIMIT do que ASC + paginação reversa), mas o resultado sai
+  // mais-novo-primeiro — na linha seguinte (`histRes.rows.reverse()`) já é invertido pra
+  // mais-antigo-primeiro ANTES de virar `historico`/`mensagens` (o array de fato mandado pro
+  // provider de IA, ver `provider.complete(mensagens, ...)` mais abaixo). Conferido: não há
+  // nenhum caminho neste arquivo que use `histRes.rows` sem passar por esse `.reverse()`
+  // primeiro. Ordem já está correta — nenhuma mudança necessária.
   // 7. Histórico — session_id sempre com dígitos puros (sem @s.whatsapp.net)
   const histSessionId = entrada.telefone.replace(/\D/g, '');
   const histRes = await pool.query(
