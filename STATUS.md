@@ -1,6 +1,15 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-12 18:12 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-24 05:40 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+
+## Sessão 2026-07-24 — deploy Sprints A-C (Kanban/Inbox) + RAG + fixes, commit `3fa89f8`
+
+- **Commitado e deployado em produção (código apenas):** feature nova de Kanban de vendas (`pipelines`/`pipeline_stages`/`deals`/`deal_stage_history`) e Inbox unificada (`conversations`), rotas `backend/src/routes/funis.ts` e `conversas.ts` (montadas em `/api/funis` e `/api/conversas`), painel `src/components/whatsapp/InboxPanel.tsx` + `src/services/kanbanInboxService.ts` (frontend — **ainda não importados/roteados em nenhuma página**, então não têm efeito visível em produção ainda). `crm-api` e `crm` rebuildados `--no-cache` e reiniciados na VPS, validados no ar (`crm-api /health=200`, `crm=200`, sem erro nos logs pós-deploy).
+- **IMPORTANTE — migrations 003/004/005 (`backend/migrations/`) NÃO foram aplicadas em produção**, só em homolog (`crm_hml`, os runners em `backend/scripts/run-migration-00N.js` recusam rodar fora de `crm_hml` por guarda explícita no código). Isso inclui a migration 004/005, que cria um **TRIGGER `BEFORE INSERT` em `whatsapp_messages`** (`fn_sync_whatsapp_message_to_conversation`) — decisão consciente de não rodar ainda em prod dado o histórico de fragilidade desse fluxo (bug Prisma P2010, VPS sem memória). As rotas `/api/funis` e `/api/conversas` já estão live em prod mas vão retornar erro se chamadas, pois as tabelas (`pipelines`, `deals`, `conversations`) não existem lá — sem risco prático agora porque nada no frontend deployado as chama. **Próximo passo, quando o usuário decidir:** rodar migrations 003→004→005 em produção (ajustar guarda do runner ou rodar SQL manual) e então importar/rotear `InboxPanel.tsx` numa página real.
+- Também deployado: nova ferramenta de IA `buscar_documentos` (RAG via pgvector, usa tabela `documents` já existente em prod), flag `IA_TEST_MODE` (sandbox do motor de IA sem envio real ao WhatsApp), fix de race condition no upsert de contato (`ON CONFLICT` parcial em `agentEngine.ts`, mesmo padrão já usado no trigger novo), timeout de 5s no fetch fire-and-forget do Kanban→N8N em `mcp/tools.ts`, modelo padrão da IA trocado de `gpt-4.1` para `gpt-4o-mini`.
+- **Excluído do commit** (arquivos de debug/scratch da sessão, adicionados ao `.gitignore`): `_tmp_check3.sql`/`_tmp_check4.sql` (queries ad-hoc, um continha API key da Evolution em texto puro) e `.playwright-mcp/` (artefato de trace).
+- Build validado (backend `npm run build` via swc, frontend `npm run build` via vite) antes do deploy, local e na VPS.
+- Sprint 1 do Transcritor de Áudio (Whisper API) foi **proposta nesta sessão mas não iniciada** — usuário redirecionou para esta tarefa de deploy antes da implementação começar.
 
 ## Núcleo CRM
 
