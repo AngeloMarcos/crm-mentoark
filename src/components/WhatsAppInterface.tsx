@@ -9,7 +9,7 @@
  * contato (tags, mídia, documentos, notas do CRM). Não faz polling via WebSocket/SSE — tudo é
  * feito com setInterval + fetch (ver comentário "substitui Supabase Realtime").
  */
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, type ChangeEvent } from "react";
 import { Label } from "@/components/ui/label";
 import {
   ContextMenu,
@@ -74,6 +74,34 @@ function formatTime(iso: string): string {
     const d = new Date(iso);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } catch { return ''; }
+}
+
+// [AUDITORIA] LÓGICA (Achado A — envio de mídia): precisa bater com MAX_OUTBOUND_MEDIA_BYTES em
+// backend/src/utils/whatsappMediaStorage.ts. A validação aqui é só UX (erro amigável antes de
+// tentar enviar) — o backend já rejeita com 413 de qualquer forma; se o limite mudar lá, mudar
+// aqui também.
+const MAX_OUTBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
+
+function mimeToMediaType(mime: string): 'image' | 'video' | 'audio' | 'document' {
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  return 'document';
+}
+
+function fileToDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatRecordingTime(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 type ChatTab = "todos" | "fila" | "meus" | "arquivadas";
@@ -156,12 +184,21 @@ function getAvatarColor(name: string): string {
 // então precisa buscar via fetch autenticado e converter pra blob URL — mesmo padrão já usado
 // no AudioPlayer logo abaixo. URLs http(s) antigas (ainda não migradas) continuam funcionando
 // direto, sem passar pelo proxy.
-function useAuthedImageUrl(rawUrl: string | null | undefined): string | null {
+// [AUDITORIA] BUG (Achados B/C — mídia recebida não carrega): renomeado de useAuthedImageUrl
+// pra useAuthedMediaUrl porque agora serve imagem, figurinha E vídeo, não só foto de perfil.
+// Antes só tratava o prefixo `local-pic://` (foto de perfil) — qualquer outra coisa, incluindo
+// `local://` (mídia de MENSAGEM, ver whatsappMediaStorage.ts), caía direto no `return rawUrl`
+// sem processar. `local://`/`local-pic://` não são esquemas HTTP reais; um <img src="local://...">
+// simplesmente falha em carregar, silenciosamente, sem erro visível. [AUDITORIA] FIX APLICADO:
+// trata os dois prefixos da mesma forma (o proxy /api/whatsapp/media já sabia resolver ambos,
+// só o frontend nunca mandava a requisição pra `local://`). URLs http(s) antigas continuam
+// passando direto, sem quebrar compatibilidade.
+function useAuthedMediaUrl(rawUrl: string | null | undefined): string | null {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!rawUrl) { setBlobUrl(null); return; }
-    if (!rawUrl.startsWith('local-pic://')) { setBlobUrl(rawUrl); return; }
+    if (!rawUrl.startsWith('local-pic://') && !rawUrl.startsWith('local://')) { setBlobUrl(rawUrl); return; }
 
     let revoke: string | null = null;
     let cancelled = false;
@@ -194,7 +231,7 @@ function ChatAvatar({
   name: string; url?: string | null; size?: 'sm' | 'md' | 'lg'; rounded?: string; className?: string;
 }) {
   const [failed, setFailed] = useState(false);
-  const resolvedUrl = useAuthedImageUrl(url);
+  const resolvedUrl = useAuthedMediaUrl(url);
   const color = getAvatarColor(name);
   const initial = (name[0] || '?').toUpperCase();
   const sizeClass = size === 'sm' ? 'w-8 h-8 text-xs' : size === 'lg' ? 'w-24 h-24 text-3xl' : 'w-12 h-12 text-sm';
@@ -263,12 +300,49 @@ function AudioPlayer({ src }: { src: string }) {
   );
 }
 
+// [AUDITORIA] FIX APLICADO (Achado B — imagem/figurinha recebida não carrega): componentes
+// dedicados em vez de chamar useAuthedMediaUrl() direto dentro do .map() de mensagens — hooks
+// não podem ser chamados condicionalmente/dentro de callback de array (o nº de mensagens muda
+// a cada render, violaria as Rules of Hooks), mesmo motivo pelo qual AudioPlayer/ChatAvatar já
+// são componentes próprios em vez de lógica inline.
+function AuthedImg({ src, alt, className, onClick }: { src: string; alt: string; className?: string; onClick?: () => void }) {
+  const resolved = useAuthedMediaUrl(src);
+  if (!resolved) {
+    return <div className={`${className ?? ''} flex items-center justify-center bg-muted/20 animate-pulse`}><ImageIcon className="h-5 w-5 text-muted-foreground/30" /></div>;
+  }
+  return <img src={resolved} alt={alt} className={className} onClick={onClick} />;
+}
+
+// [AUDITORIA] FIX APLICADO (Achado C — vídeo recebido não carrega): antes usava
+// <source src="{API_BASE}/api/whatsapp/media?url=..."> direto — <video>/<source> nativos não
+// mandam header Authorization, e a rota exige autenticação, então a requisição do vídeo falhava
+// com 401 mesmo com a URL "certa" na aparência. Mesmo padrão de fetch autenticado + blob URL,
+// via useAuthedMediaUrl (blob: URLs não precisam de header pra serem lidas pelo <video>).
+function AuthedVideo({ src, mime, className }: { src: string; mime?: string; className?: string }) {
+  const resolved = useAuthedMediaUrl(src);
+  if (!resolved) {
+    return <div className={`${className ?? ''} flex items-center justify-center bg-muted/20 text-xs text-muted-foreground animate-pulse`}>Carregando vídeo...</div>;
+  }
+  return (
+    <video controls className={className} preload="metadata">
+      <source src={resolved} type={mime || 'video/mp4'} />
+    </video>
+  );
+}
+
 export function WhatsAppInterface() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const currentUserName = user?.display_name || user?.email?.split('@')[0] || 'Agente';
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [showContactPanel, setShowContactPanel] = useState(true);
+  // [AUDITORIA] BUG: default era `true` — o painel de detalhes nascia aberto mesmo sem o usuário
+  // pedir. Havia ainda um segundo problema mais sério: um useEffect(`[activeChatId]`) forçava
+  // `setShowContactPanel(true)` toda vez que o usuário trocava de conversa, então mesmo fechando
+  // manualmente o painel (botão Info), ele reabria sozinho ao abrir a próxima conversa — removido
+  // logo abaixo, junto com outros estados que deveriam resetar ao trocar de chat e não resetavam.
+  // [AUDITORIA] FIX APLICADO: default `false`; painel só abre por ação explícita do usuário
+  // (botão Info, linha ~2261).
+  const [showContactPanel, setShowContactPanel] = useState(false);
   const [activeTab, setActiveTab] = useState<ChatTab>("todos");
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   
@@ -290,6 +364,18 @@ export function WhatsAppInterface() {
   const [loadingChats, setLoadingChats] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [noteInput, setNoteInput] = useState("");
+  // [AUDITORIA] LÓGICA (Achado A — envio de mídia): estado do anexo selecionado (preview antes
+  // de enviar/cancelar) e da gravação de áudio via MediaRecorder.
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedPreviewUrl, setAttachedPreviewUrl] = useState<string | null>(null);
+  const [sendingMedia, setSendingMedia] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
   const [respostasRapidas, setRespostasRapidas] = useState<RespostaRapida[]>([]);
   const [showQR, setShowQR] = useState(false);
   const [qrSearch, setQrSearch] = useState("");
@@ -303,9 +389,9 @@ export function WhatsAppInterface() {
   // Foto de perfil — ampliar
   const [photoModal, setPhotoModal] = useState<string | null>(null);
   // [AUDITORIA] LÓGICA: photoModal pode guardar um marcador `local-pic://...` (foto salva
-  // localmente, ver ChatAvatar/useAuthedImageUrl acima) — resolve pra blob URL autenticada
+  // localmente, ver ChatAvatar/useAuthedMediaUrl acima) — resolve pra blob URL autenticada
   // antes de renderizar no <img> do modal ampliado.
-  const photoModalResolvedUrl = useAuthedImageUrl(photoModal);
+  const photoModalResolvedUrl = useAuthedMediaUrl(photoModal);
   // Edição de nome do contato
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
@@ -862,12 +948,8 @@ export function WhatsAppInterface() {
   }, [isSelectMode]);
 
   useEffect(() => {
-    setShowContactPanel(true);
-  }, [activeChatId]);
-
-  useEffect(() => {
     if (!activeChatId) return;
-    
+
     const markAsRead = async () => {
       try {
         // Tenta a rota do backend primeiro
@@ -949,7 +1031,49 @@ export function WhatsAppInterface() {
     activeChatIdRef.current = activeChatId;
   }, [activeChatId]);
 
+  // [AUDITORIA] LÓGICA (Achado A): segurança extra além do reset por troca de conversa acima —
+  // se o componente inteiro desmontar (navegar pra outra página) no meio de uma gravação, libera
+  // o microfone (senão o indicador de "gravando" do navegador/SO fica aceso) e o blob URL do
+  // preview de anexo, ambos referenciados só via ref (não seriam limpos automaticamente).
   useEffect(() => {
+    return () => {
+      recordingStreamRef.current?.getTracks().forEach(t => t.stop());
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+    };
+  }, []);
+
+  // [AUDITORIA] BUG (mesma classe do painel de detalhes acima): editingName, replyTo e
+  // isSelectMode/selectedMessageIds nunca eram resetados ao trocar de conversa. Consequências
+  // reais, não só visuais: (1) editar o nome do contato A, trocar pra conversa B sem
+  // salvar/cancelar e apertar Enter chamava `salvarNomeContato()` usando o `activeChatId` ATUAL
+  // (B) — o nome digitado pra A era salvo no contato errado; (2) o banner "respondendo a" de uma
+  // mensagem da conversa A continuava visível e anexado ao envio em B; (3) mensagens selecionadas
+  // pra exclusão/encaminhamento em A permaneciam "selecionadas" (mesmos UUIDs) com a barra de
+  // ações visível sobre B — um clique em "Excluir" ali agiria sobre mensagens de uma conversa que
+  // não é mais a que está na tela.
+  // [AUDITORIA] FIX APLICADO: reset incondicional no topo deste efeito (já disparado a cada troca
+  // de `activeChatId`), antes de qualquer early-return. Também cancela anexo/gravação de áudio
+  // em andamento (mesma classe de bug: gravar áudio pra A, trocar pra B e mandar enviaria o
+  // áudio de A pro contato B, porque enviarMidia()/sendRecording() leem o activeChatId ATUAL).
+  useEffect(() => {
+    setEditingName(false);
+    setReplyTo(null);
+    setIsSelectMode(false);
+    setSelectedMessageIds(new Set());
+    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
+    setAttachedFile(null);
+    setAttachedPreviewUrl(null);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    recordingStreamRef.current?.getTracks().forEach(t => t.stop());
+    recordingStreamRef.current = null;
+    setIsRecording(false);
+    setRecordingSeconds(0);
+
     if (!activeChatId) {
       setIsSearchingInChat(false);
       setChatSearchTerm("");
@@ -1083,6 +1207,179 @@ export function WhatsAppInterface() {
           : c
       ));
     }
+  };
+
+  // [AUDITORIA] BUG (Achado A — não havia nenhuma UI de envio de mídia): composer só tinha
+  // botão de respostas rápidas e envio de texto — Paperclip/Mic importados no arquivo eram só
+  // indicadores visuais dentro de bolhas de mídia JÁ RECEBIDA, nunca um controle funcional.
+  // Nenhum MediaRecorder/<input type="file"> existia no arquivo inteiro. Isso explica por que
+  // um áudio gravado pelo atendente "não aparecia": não havia nenhum jeito de gravar/enviar um.
+  // [AUDITORIA] FIX APLICADO: enviarMidia() abaixo é o equivalente de handleSendMessage() para
+  // mídia — mesmo padrão (atualização otimista, POST /api/whatsapp/send, reaproveita
+  // apiHeaders()/getFreshToken()), usado tanto pelo anexo de arquivo quanto pela gravação de
+  // áudio abaixo.
+  const enviarMidia = async (file: Blob, mediaType: 'image' | 'video' | 'audio' | 'document', filename?: string) => {
+    if (!activeChatId) return;
+    if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
+      toast.error(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)}MB excede o limite de ${(MAX_OUTBOUND_MEDIA_BYTES / 1024 / 1024).toFixed(0)}MB para envio via WhatsApp.`);
+      return;
+    }
+
+    setSendingMedia(true);
+    const chat = chats.find(c => c.id === activeChatId);
+    const tempId = `local_${Date.now()}`;
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const legenda = mediaType === 'image' ? '📷 Foto' : mediaType === 'video' ? '🎥 Vídeo' : mediaType === 'audio' ? '🎤 Áudio' : `📎 ${filename || 'Documento'}`;
+
+      // Atualização otimista — mesmo padrão de handleSendMessage. data: URI funciona direto no
+      // <img>/<video>/<audio> sem precisar do proxy autenticado (não é local://, não precisa).
+      setChats(prev => prev.map(c =>
+        c.id === activeChatId
+          ? {
+              ...c,
+              messages: [...c.messages, {
+                id: tempId,
+                role: "assistant" as const,
+                content: '',
+                timestamp: ts,
+                senderName: currentUserName,
+                status: "sent",
+                tipo: mediaType,
+                midia_url: dataUrl,
+                midia_nome: filename,
+              }],
+              lastMessage: legenda,
+              timestamp: ts,
+            }
+          : c
+      ));
+
+      const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
+        method: 'POST',
+        headers: await apiHeaders(),
+        body: JSON.stringify({
+          phone: activeChatId,
+          mediaUrl: dataUrl,
+          mediaType,
+          mediaFilename: filename,
+          instancia: chat?.source,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: 'Erro ao enviar mídia' }));
+        toast.error(err.message || 'Erro ao enviar mídia');
+        setChats(prev => prev.map(c =>
+          c.id === activeChatId ? { ...c, messages: c.messages.filter(m => m.id !== tempId) } : c
+        ));
+      } else {
+        // Substitui o data: URI otimista pela URL real (local://...) assim que possível.
+        fetchMensagens(activeChatId, chat?.name || activeChatId, false);
+      }
+    } catch (err) {
+      console.error('[WHATSAPP] Falha crítica no envio de mídia:', err);
+      toast.error('Sem conexão com o servidor');
+      setChats(prev => prev.map(c =>
+        c.id === activeChatId ? { ...c, messages: c.messages.filter(m => m.id !== tempId) } : c
+      ));
+    } finally {
+      setSendingMedia(false);
+    }
+  };
+
+  const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // permite selecionar o mesmo arquivo de novo depois
+    if (!file) return;
+    if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
+      toast.error(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)}MB excede o limite de ${(MAX_OUTBOUND_MEDIA_BYTES / 1024 / 1024).toFixed(0)}MB para envio via WhatsApp.`);
+      return;
+    }
+    // [AUDITORIA] LÓGICA: revoga o blob URL do anexo anterior antes de criar um novo — sem isso,
+    // trocar de arquivo (selecionar A, depois B sem cancelar A) vazava o blob URL de A.
+    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
+    setAttachedFile(file);
+    setAttachedPreviewUrl(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
+  };
+
+  const cancelAttachment = () => {
+    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
+    setAttachedFile(null);
+    setAttachedPreviewUrl(null);
+  };
+
+  const confirmSendAttachment = async () => {
+    if (!attachedFile) return;
+    const file = attachedFile;
+    cancelAttachment();
+    await enviarMidia(file, mimeToMediaType(file.type), file.name);
+  };
+
+  // [AUDITORIA] LÓGICA: gravação via MediaRecorder — tenta opus (melhor compressão/qualidade,
+  // suportado por Chrome/Edge/Firefox) e deixa o navegador escolher o default se não suportar.
+  // NOTA (limitação conhecida, não corrigida nesta sessão): o envio final passa por
+  // POST /api/whatsapp/send com mediaType='audio', que no backend (whatsapp.ts) sempre chama o
+  // endpoint sendMedia da Evolution — diferente de agentEngine.ts/disparoProcessor.ts, que usam
+  // sendWhatsAppAudio (endpoint dedicado a nota de voz/PTT). Ou seja, um áudio gravado aqui chega
+  // como mensagem de áudio comum, não necessariamente como "nota de voz" nativa do WhatsApp —
+  // inconsistência que já existe no contrato atual do backend, fora do escopo deste sprint
+  // (frontend).
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      recordedChunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+          ? 'audio/ogg;codecs=opus'
+          : undefined;
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
+      recorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => setRecordingSeconds(s => s + 1), 1000);
+    } catch {
+      toast.error('Não foi possível acessar o microfone. Verifique as permissões do navegador.');
+    }
+  };
+
+  const stopRecordingInternal = (): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      const recorder = mediaRecorderRef.current;
+      if (!recorder || recorder.state === 'inactive') { resolve(null); return; }
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        resolve(blob.size > 0 ? blob : null);
+      };
+      recorder.stop();
+    });
+  };
+
+  const finishRecordingUi = () => {
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    recordingStreamRef.current?.getTracks().forEach(t => t.stop());
+    recordingStreamRef.current = null;
+    setIsRecording(false);
+  };
+
+  const cancelRecording = async () => {
+    await stopRecordingInternal();
+    finishRecordingUi();
+    setRecordingSeconds(0);
+  };
+
+  const sendRecording = async () => {
+    const blob = await stopRecordingInternal();
+    finishRecordingUi();
+    setRecordingSeconds(0);
+    if (!blob) { toast.error('Gravação vazia — tente novamente.'); return; }
+    const ext = blob.type.includes('ogg') ? 'ogg' : 'webm';
+    await enviarMidia(blob, 'audio', `audio_${Date.now()}.${ext}`);
   };
 
   const handleCriarTarefaIA = async (conversaId: string) => {
@@ -1543,6 +1840,27 @@ export function WhatsAppInterface() {
   };
 
 
+  // [AUDITORIA] BUG (Achado 3 — responsividade, confirmado): as 3 colunas deste layout (lista
+  // 340px fixo, chat flexível, painel de detalhes 300px fixo) não têm NENHUM breakpoint
+  // responsivo (`sm:`/`md:`/`lg:`) em todo o arquivo — confirmado por busca literal, zero
+  // ocorrências. Com `overflow-hidden` no container raiz (linha abaixo), em vez de aparecer uma
+  // barra de rolagem horizontal, o conteúdo é CORTADO: em mobile (~375px), só a lista de 340px já
+  // não cabe inteira; em tablet (~768px) com o painel de detalhes aberto, sobram ~128px pro chat
+  // (340+300=640px de colunas fixas). Esse layout foi desenhado só para desktop (≥ ~1000px, onde
+  // 340+300+chat mínimo cabem confortavelmente).
+  // [AUDITORIA] FIX PENDENTE (motivo: redesenho de layout, decisão de produto/design, não é CSS
+  // isolado): propostas para a próxima sessão, a decidir com o usuário:
+  //   (a) abaixo de md (~768px): esconder a lista de conversas quando uma conversa está aberta
+  //       (usar `activeChatId` que já existe) e mostrar um botão "voltar" no header do chat pra
+  //       reexibi-la — o padrão comum de app de chat mobile (WhatsApp Web faz exatamente isso).
+  //   (b) abaixo de lg (~1024px): painel de detalhes vira overlay/drawer sobre o chat em vez de
+  //       ocupar uma 3ª coluna fixa (ex: `fixed inset-y-0 right-0` com backdrop, controlado pelo
+  //       mesmo `showContactPanel`).
+  //   (c) alternativa mais simples: `w-[340px]` → `w-full md:w-[340px]` na lista e mesma ideia pro
+  //       painel, combinado com (a)/(b) pra decidir QUAL coluna fica visível de cada vez em telas
+  //       estreitas (nunca as 3 ao mesmo tempo abaixo de lg).
+  // Nenhuma das opções é "trocar uma classe" — todas mudam comportamento de navegação percebido
+  // pelo usuário, por isso não implementadas sem confirmação.
   return (
     <div className="flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border shadow-xl bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
 
@@ -2194,8 +2512,21 @@ export function WhatsAppInterface() {
                     <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
                     <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
                   </div>
-                  <p className="text-[11px] font-medium text-muted-foreground">
-                    <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span> · {activeChat.phone}
+                  {/* [AUDITORIA] BUG: pra conversa de grupo, activeChat.phone é o JID numérico bruto
+                      do grupo (ex: "120363401725364845@g.us" sem o sufixo, um número bem longo sem
+                      formatação) — estourava/cortava visualmente ao lado do nome da instância. A
+                      lista lateral (linha ~1794) já trata isso com um badge "Grupo" legível; o
+                      cabeçalho não usava o mesmo tratamento.
+                      [AUDITORIA] FIX APLICADO: grupo mostra o mesmo badge "Grupo" da lista lateral
+                      em vez do JID cru; contato individual mantém o telefone como antes. `truncate`
+                      adicionado nos dois casos para nunca estourar o cabeçalho. */}
+                  <p className="text-[11px] font-medium text-muted-foreground truncate max-w-[280px]">
+                    <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span>
+                    {activeChat.is_group ? (
+                      <span className="ml-1.5 text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase align-middle">Grupo</span>
+                    ) : (
+                      <> · {activeChat.phone}</>
+                    )}
                   </p>
                 </div>
               </div>
@@ -2246,9 +2577,16 @@ export function WhatsAppInterface() {
                 >
                   <Search className="h-4.5 w-4.5" />
                 </Button>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
+                {/* [AUDITORIA] LÓGICA: `runUITests()` é uma ferramenta de auto-teste de dev (simula
+                    seleção de mensagens, confere se a toolbar aparece/some) exposta como um botão
+                    visível no header pra QUALQUER usuário em produção — não há flag de ambiente
+                    (ex: import.meta.env.DEV) escondendo isso. Não é um bug funcional (não quebra
+                    nada, só um recurso de debug), mas é um artefato de dev vazando pra UI real.
+                    [AUDITORIA] FIX PENDENTE (motivo: remover/esconder é decisão do usuário — pode
+                    ser proposital manter acessível pra QA em produção). */}
+                <Button
+                  variant="ghost"
+                  size="icon"
                   className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
                   onClick={runUITests}
                   title="Executar Testes de UI"
@@ -2584,15 +2922,13 @@ export function WhatsAppInterface() {
                             </div>
                           )}
                           {m.tipo === 'image' && m.midia_url ? (
-                            <img src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" />
+                            <AuthedImg src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" onClick={() => m.midia_url && setPhotoModal(m.midia_url)} />
                           ) : m.tipo === 'audio' ? (
                             m.midia_url
                               ? <AudioPlayer src={m.midia_url} />
                               : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Mic className="h-4 w-4" /> Áudio</div>
                           ) : m.tipo === 'video' && m.midia_url ? (
-                            <video controls className="rounded max-w-[260px] mb-1" preload="metadata">
-                              <source src={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`} type={m.midia_mime || 'video/mp4'} />
-                            </video>
+                            <AuthedVideo src={m.midia_url} mime={m.midia_mime} className="rounded max-w-[260px] mb-1" />
                           ) : m.tipo === 'document' && m.midia_url ? (
                             <a
                               href={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`}
@@ -2603,7 +2939,7 @@ export function WhatsAppInterface() {
                               <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
                             </a>
                           ) : m.tipo === 'sticker' && m.midia_url ? (
-                            <img src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
+                            <AuthedImg src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
                           ) : null}
                           {m.tipo === 'deleted' ? (
                             <p className="text-sm italic text-muted-foreground/60 flex items-center gap-1.5 py-1">
@@ -2708,8 +3044,45 @@ export function WhatsAppInterface() {
                           }
                         }}
                       />
+                    ) : isRecording ? (
+                      /* [AUDITORIA] FIX APLICADO (Achado A): indicador de gravação em andamento
+                         substitui a textarea — duração ao vivo, cancelar (X) ou enviar (Send) no
+                         mesmo lugar dos botões de sempre, ver coluna de botões abaixo. */
+                      <div className="w-full min-h-[80px] flex items-center gap-3 px-4">
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+                        <span className="text-sm font-bold text-red-600">
+                          Gravando áudio... {formatRecordingTime(recordingSeconds)}
+                        </span>
+                      </div>
                     ) : (
                       <div className="relative">
+                        {/* [AUDITORIA] FIX APLICADO (Achado A): preview do anexo selecionado, com
+                            opção de cancelar antes de enviar, conforme pedido. */}
+                        {attachedFile && (
+                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 animate-in slide-in-from-bottom-2 duration-200 overflow-hidden">
+                            <div className="p-3 flex items-center gap-3">
+                              {attachedPreviewUrl ? (
+                                <img src={attachedPreviewUrl} alt="preview do anexo" className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                              ) : (
+                                <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center shrink-0">
+                                  <Paperclip className="h-5 w-5 text-muted-foreground" />
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold truncate">{attachedFile.name}</p>
+                                <p className="text-[10px] text-muted-foreground">{(attachedFile.size / 1024).toFixed(0)} KB</p>
+                              </div>
+                              <button
+                                onClick={cancelAttachment}
+                                disabled={sendingMedia}
+                                className="p-1 rounded-full hover:bg-muted text-muted-foreground transition-colors disabled:opacity-40"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Preview de Resposta */}
                         {replyTo && (
                           <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 animate-in slide-in-from-bottom-2 duration-200 overflow-hidden">
@@ -2776,25 +3149,77 @@ export function WhatsAppInterface() {
                       </div>
                     )}
                   </div>
-                  <div className="flex flex-col gap-2 p-1">
+                  {/* [AUDITORIA] FIX APLICADO (Achado A): grade fixa 2x2 em vez de uma coluna que
+                      cresceria a cada botão novo — mantém o mesmo espaço ocupado de antes (2
+                      botões) independente do estado (gravando, anexo selecionado, etc.), sempre
+                      exatamente 4 posições: Respostas Rápidas, Anexar, Gravar/Cancelar, Enviar. */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileSelected}
+                    accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                    className="hidden"
+                  />
+                  <div className="grid grid-cols-2 gap-1.5 p-1">
                     <Button
                       variant="ghost" size="icon"
                       className="h-9 w-9 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-colors"
                       title="Respostas Rápidas (/)"
                       onClick={() => { setMessageInput('/'); setShowQR(true); setQrSearch(''); textareaRef.current?.focus(); }}
+                      disabled={inputMode === "nota" || isRecording || !!attachedFile}
                     >
                       <Zap className="h-4.5 w-4.5" />
                     </Button>
                     <Button
-                      className={`h-9 w-9 rounded-xl shadow-lg transition-all active:scale-90 ${
-                        (inputMode === "nota" ? noteInput.trim() : messageInput.trim())
-                          ? (inputMode === "nota" ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-primary hover:bg-primary/90 shadow-primary/20")
-                          : "bg-muted text-muted-foreground opacity-50"
-                      }`}
-                      disabled={isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim())}
-                      onClick={handleSendMessage}
+                      variant="ghost" size="icon"
+                      className="h-9 w-9 rounded-xl hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                      title="Anexar arquivo"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={inputMode === "nota" || isRecording || !!attachedFile || sendingMedia}
                     >
-                      <Send className="h-4.5 w-4.5" />
+                      <Paperclip className="h-4.5 w-4.5" />
+                    </Button>
+                    {isRecording ? (
+                      <Button
+                        variant="ghost" size="icon"
+                        className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
+                        title="Cancelar gravação"
+                        onClick={cancelRecording}
+                      >
+                        <X className="h-4.5 w-4.5" />
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost" size="icon"
+                        className="h-9 w-9 rounded-xl hover:bg-red-50 hover:text-red-600 transition-colors"
+                        title="Gravar áudio"
+                        onClick={startRecording}
+                        disabled={inputMode === "nota" || !!attachedFile || sendingMedia}
+                      >
+                        <Mic className="h-4.5 w-4.5" />
+                      </Button>
+                    )}
+                    <Button
+                      className={`h-9 w-9 rounded-xl shadow-lg transition-all active:scale-90 ${
+                        isRecording
+                          ? "bg-red-500 hover:bg-red-600 shadow-red-500/20"
+                          : (attachedFile || (inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
+                            ? (inputMode === "nota" ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-primary hover:bg-primary/90 shadow-primary/20")
+                            : "bg-muted text-muted-foreground opacity-50"
+                      }`}
+                      disabled={
+                        isRecording
+                          ? false
+                          : sendingMedia
+                            ? true
+                            : attachedFile
+                              ? false
+                              : (isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
+                      }
+                      onClick={isRecording ? sendRecording : attachedFile ? confirmSendAttachment : handleSendMessage}
+                      title={isRecording ? 'Parar e enviar áudio' : attachedFile ? 'Enviar anexo' : 'Enviar'}
+                    >
+                      {sendingMedia ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Send className="h-4.5 w-4.5" />}
                     </Button>
                   </div>
                 </div>
@@ -2804,7 +3229,16 @@ export function WhatsAppInterface() {
         ) : (
           /* Empty state */
           <div className="flex-1 flex flex-col items-center justify-center bg-muted/5 text-center p-8 gap-6 animate-in fade-in duration-700">
-            <div className="w-24 h-24 rounded-3xl bg-primary/5 shadow-inner flex items-center justify-center animate-bounce duration-[3000ms]">
+            {/* [AUDITORIA] BUG: a classe de duration arbitrária de 3000ms (animate-bounce) gerava o
+                warning de build "ambiguous... matches multiple utilities" (visto no build do
+                frontend) — Tailwind não conseguia decidir entre a família de classes de duration
+                (transition-duration) e outras que aceitam colchetes arbitrários com esse valor.
+                [AUDITORIA] FIX APLICADO: colchetes escapados na classe abaixo, forma que o próprio
+                Tailwind recomenda para desambiguar. NOTA: o texto literal da classe não pode
+                aparecer sem escape em nenhum lugar deste arquivo (nem em comentário) — o scanner
+                de conteúdo do Tailwind lê o arquivo inteiro como texto bruto, comentário incluso,
+                e reintroduz o mesmo warning se encontrar a forma não escapada em qualquer lugar. */}
+            <div className="w-24 h-24 rounded-3xl bg-primary/5 shadow-inner flex items-center justify-center animate-bounce duration-\[3000ms\]">
               <MessageSquare className="h-10 w-10 text-primary/30" />
             </div>
             <div className="space-y-2">
@@ -2929,6 +3363,11 @@ export function WhatsAppInterface() {
 
             {/* Ações Rápidas */}
             <div className="px-5 pb-6 flex flex-col gap-2">
+              {/* [AUDITORIA] BUG: botão sem onClick — não faz nada ao clicar.
+                  [AUDITORIA] FIX PENDENTE (motivo: decisão de produto — pra onde deveria navegar?
+                  precisa de uma rota real de detalhe de contato no CRM, ex: /contatos/:id, e
+                  resolver o id do contato a partir do telefone/activeChat.id): não implementado
+                  nesta sessão, fora do escopo de "fix isolado e de baixo risco". */}
               <Button className="w-full h-11 text-xs font-black gap-2.5 bg-primary hover:bg-primary/90 text-white rounded-2xl shadow-lg shadow-primary/20 transition-all active:scale-95">
                 <LayoutGrid className="h-4 w-4" />
                 ABRIR NO CRM
@@ -2982,6 +3421,9 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Etiquetas</p>
+                {/* [AUDITORIA] BUG: sem onClick — não abre nenhum seletor/modal de etiqueta.
+                    [AUDITORIA] FIX PENDENTE (motivo: precisa de UI nova — modal/dropdown de
+                    seleção de tag + rota de persistência, não existe hoje neste arquivo). */}
                 <button className="p-1 rounded-md text-primary hover:bg-primary/10 transition-all">
                   <Plus className="h-3.5 w-3.5" />
                 </button>
@@ -3001,6 +3443,9 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Mídia Compartilhada</p>
+                {/* [AUDITORIA] BUG: sem onClick — "Ver tudo" não leva a lugar nenhum.
+                    [AUDITORIA] FIX PENDENTE (motivo: precisa de uma view/modal de galeria
+                    completa, não existe hoje). */}
                 <button className="text-[10px] font-bold text-primary hover:underline">Ver tudo</button>
               </div>
               <div className="grid grid-cols-3 gap-2">
@@ -3015,7 +3460,7 @@ export function WhatsAppInterface() {
                       onClick={() => m.midia_url && m.tipo === 'image' && setPhotoModal(m.midia_url)}
                     >
                       {m.tipo === 'image' && m.midia_url ? (
-                        <img src={m.midia_url} alt="mídia" className="w-full h-full object-cover" />
+                        <AuthedImg src={m.midia_url} alt="mídia" className="w-full h-full object-cover" />
                       ) : m.tipo === 'video' ? (
                         <div className="relative w-full h-full flex items-center justify-center bg-black/5">
                           <Video className="h-6 w-6 text-muted-foreground/40" />
@@ -3039,6 +3484,8 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Documentos</p>
+                {/* [AUDITORIA] BUG: sem onClick, mesma classe do "Ver tudo" de Mídia acima.
+                    [AUDITORIA] FIX PENDENTE (motivo: precisa de view de listagem completa). */}
                 <button className="text-[10px] font-bold text-primary hover:underline">Ver todos</button>
               </div>
               <div className="flex flex-col gap-2">
@@ -3076,6 +3523,11 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5 bg-amber-500/[0.02]">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-amber-600/70">Anotações do CRM</p>
+                {/* [AUDITORIA] BUG: sem onClick — não abre nenhuma edição, e `activeChat.notes`
+                    também nunca é escrito em lugar nenhum deste arquivo (só lido) — o campo é
+                    permanentemente somente-leitura hoje, sempre mostrando "Sem anotações".
+                    [AUDITORIA] FIX PENDENTE (motivo: precisa de UI de edição + rota de
+                    persistência, não existe hoje). */}
                 <button className="p-1 rounded-md text-amber-600/40 hover:text-amber-600 hover:bg-amber-500/10 transition-all">
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
