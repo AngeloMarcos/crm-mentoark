@@ -5,6 +5,27 @@ Esses arquivos NÃO rodam no build do frontend. São scripts para a VPS
 
 ---
 
+## deploy.sh (2026-07-24)
+
+**Método recomendado de deploy manual — ver seção "Deploy" no `CLAUDE.md` na raiz do repo.**
+Existe pra evitar a classe de erro que já aconteceu antes: comando de deploy apontando pro
+diretório errado (produção `/opt/crm` vs. homologação `/opt/crm-homolog` — nomes de container
+também diferem: `crm-api` vs `crm-api-homolog`) ou tentando `git pull` num desses diretórios
+(nenhum dos dois é um clone git limpo — sempre foi scp direto). Builda local antes de copiar
+(gate), copia só os arquivos passados, rebuilda só o serviço afetado, valida `/health` +
+`ERROR` nos logs no final.
+
+```bash
+scripts/deploy.sh homolog backend/src/routes/webhook.ts
+scripts/deploy.sh prod --confirm backend/src/routes/webhook.ts   # --confirm obrigatório
+```
+
+Substituiu `deploy.mjs` (removido) — aquele script tinha uma lista fixa de arquivos de uma
+sprint antiga, só sabia deployar em produção, e fazia `git add -A && commit && push` automático
+com mensagem hardcoded (risco real de subir arquivo de debug sem querer).
+
+---
+
 ## monitor-crm.sh (Sprint 8)
 
 Monitora RAM, CPU, disco, containers Docker e health do backend.

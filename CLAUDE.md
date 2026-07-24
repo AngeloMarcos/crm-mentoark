@@ -82,34 +82,62 @@ PostgreSQL 16 com pgvector. Tabelas críticas para a IA:
 | pgadmin.mentoark.com.br | `pgadmin` | `/opt/postgres/docker-compose.yml` |
 | grafana.mentoark.com.br | `grafana` (+ `loki`, `alloy`, sem domínio próprio) | `/opt/observability/docker-compose.yml` |
 
+**Homologação** (ambiente de teste antes de produção — sempre validar aqui primeiro):
+
+| Domínio | Container | Compose |
+|---------|-----------|---------|
+| homolog.mentoark.com.br | `crm-homolog` | `/opt/crm-homolog/docker-compose.yml` |
+| api-homolog.mentoark.com.br | `crm-api-homolog` | `/opt/crm-homolog/backend/docker-compose.yml` |
+
+Banco: `crm_hml` (mesmo Postgres da VPS, schema isolado — sem FK/replicação com `crm`). A
+Evolution de homolog é um servidor **próprio e externo** desde 2026-07-22
+(`fierceparrot-evolution.cloudfy.live`), não compartilha instância com produção.
+
 PostgreSQL: `147.93.9.172:5432` / db `crm` / user `mentoark`. Imagem `pgvector/pgvector:pg16` (extensões `pgcrypto` + `vector`).
 
 MySQL (`147.93.9.172:3306`, imagem `mysql:8.0`, `/opt/mysql/docker-compose.yml`) é compartilhado com o Evolution API (rede `mysql_default`) — não faz parte do banco do CRM.
 
 **Outros projetos na mesma VPS (não são do CRM — não mexer sem necessidade):** `pdv_prod` (pdv.mentoark.com.br, `/opt/pdv/prod/docker-compose.yml`), `hemoclinic_prod` (hemoclinic.mentoark.com.br, `/opt/hemoclinic/prod/docker-compose.yml`), `portainer` (portainer.mentoark.com.br, `/opt/portainer/docker-compose.yml`). Ver `diagnosticos/INVENTARIO_VPS.md` para detalhes completos de todos os containers da VPS.
 
-### Deploy — Frontend
+### Deploy — método recomendado: `scripts/deploy.sh`
+
+**Use isto em vez de montar comandos `scp`/`ssh` na mão.** Existe pra evitar exatamente a
+classe de erro já ocorrida em produção: apontar pro diretório errado (`/opt/crm` é
+**produção**; homologação é **`/opt/crm-homolog`**, containers `crm-homolog`/`crm-api-homolog`),
+ou tentar `git pull` num desses diretórios (**nenhum dos dois é um clone git limpo** — todo
+deploy real sempre foi via arquivo copiado direto, um `git pull` ali tende a conflitar).
+O script builda local primeiro (nunca copia código que não compila), copia só os arquivos
+passados, rebuilda só o(s) serviço(s) afetado(s), e valida sozinho no final (`/health` +
+grep por `ERROR` nos últimos logs).
 
 ```bash
-# Copiar arquivo alterado e rebuildar
-sshpass -p 'Mentoark@2025' scp -o StrictHostKeyChecking=no \
-  /root/mentoark-vision/src/pages/ARQUIVO.tsx \
-  root@147.93.9.172:/opt/crm/src/pages/ARQUIVO.tsx
+# Homologação (sempre teste aqui primeiro)
+scripts/deploy.sh homolog backend/src/routes/ARQUIVO.ts src/pages/ARQUIVO.tsx
 
-sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 \
-  'cd /opt/crm && docker compose build --no-cache crm && docker compose up -d crm'
+# Produção — exige --confirm explícito, de propósito (não é pra ser um acidente de copy/paste)
+scripts/deploy.sh prod --confirm backend/src/routes/ARQUIVO.ts
 ```
 
-### Deploy — Backend
+Requer chave SSH já configurada para `root@147.93.9.172` (`~/.ssh/config`) — sem isso, trocar
+por `sshpass -p 'Mentoark@2025' ssh/scp ...` nos mesmos comandos internos do script.
+
+<details>
+<summary>Comandos manuais equivalentes (só se o script não servir pro seu caso)</summary>
 
 ```bash
-sshpass -p 'Mentoark@2025' scp -o StrictHostKeyChecking=no \
-  /root/mentoark-vision/backend/src/routes/ARQUIVO.ts \
-  root@147.93.9.172:/opt/crm/backend/src/routes/ARQUIVO.ts
+# Frontend — produção
+scp /root/mentoark-vision/src/pages/ARQUIVO.tsx root@147.93.9.172:/opt/crm/src/pages/ARQUIVO.tsx
+ssh root@147.93.9.172 'cd /opt/crm && docker compose build --no-cache crm && docker compose up -d crm'
 
-sshpass -p 'Mentoark@2025' ssh -o StrictHostKeyChecking=no root@147.93.9.172 \
-  'cd /opt/crm/backend && docker compose build --no-cache && docker compose up -d'
+# Backend — produção
+scp /root/mentoark-vision/backend/src/routes/ARQUIVO.ts root@147.93.9.172:/opt/crm/backend/src/routes/ARQUIVO.ts
+ssh root@147.93.9.172 'cd /opt/crm/backend && docker compose build --no-cache crm-api && docker compose up -d crm-api'
+
+# Backend — homologação (repare no diretório e no nome do serviço, DIFERENTES de produção)
+scp backend/src/routes/ARQUIVO.ts root@147.93.9.172:/opt/crm-homolog/backend/src/routes/ARQUIVO.ts
+ssh root@147.93.9.172 'cd /opt/crm-homolog/backend && docker compose build --no-cache crm-api-homolog && docker compose up -d crm-api-homolog'
 ```
+</details>
 
 ### Adicionar novo container
 
