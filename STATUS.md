@@ -1,6 +1,19 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-24 (sessão mídia no chat WhatsApp). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-24 (deploy homolog). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+
+## Sessão 2026-07-24 — Deploy em homologação de todas as sprints do dia (commits c2830ea..78fbae2)
+
+**Commitado e deployado em HOMOLOGAÇÃO** (`scripts/deploy.sh homolog`, 20 arquivos): auditoria de timeout/fetch, Whisper/Vision, resposta em voz (TTS/ElevenLabs), bugs de frontend no chat (painel de detalhes, JID de grupo, estados vazando entre conversas), e mídia de envio/recebimento no composer. `crm-api-homolog` e `crm-homolog` rebuildados `--no-cache`, validados no ar (`/health`=200, frontend=200, sem `ERROR` nos logs pós-deploy). A migration nova (`agent_configs.resposta_voz_habilitada`/`resposta_voz_id`) roda automaticamente no boot do backend — já tinha sido aplicada manualmente em `crm_hml` durante o teste da sprint de TTS, `ADD COLUMN IF NOT EXISTS` é idempotente.
+
+**NÃO deployado em produção** — aguardando validação manual em homolog. Testes que só um humano com navegador/WhatsApp real pode fazer, nenhum deles foi possível nesta sessão:
+1. Enviar áudio/anexo pelo composer novo (imagem, vídeo, documento, áudio gravado) e conferir se chega no WhatsApp de teste.
+2. Receber imagem/figurinha/vídeo de fora e conferir se carrega na tela.
+3. Resposta em voz automática (TTS) — exige configurar uma integração ElevenLabs de teste + ligar a flag `resposta_voz_habilitada` num agente; sem isso, o motor nativo cai no fallback de texto (comportamento esperado, não é bug).
+4. Fixes de UI: painel de detalhes não deve mais abrir sozinho ao trocar de conversa; cabeçalho de grupo não deve mais mostrar o JID numérico cru.
+5. Áudio/foto reais de teste (Whisper/Vision) — pendência já registrada em sessão anterior, ainda aberta.
+
+**Próximo passo:** usuário testa os 5 itens acima em `homolog.mentoark.com.br`/`api-homolog.mentoark.com.br`. Só depois disso, deploy em produção (`scripts/deploy.sh prod --confirm`).
 
 ## Sessão 2026-07-24 — Mídia no Chat WhatsApp: envio (implementado do zero) e recebimento (proxy autenticado corrigido)
 
