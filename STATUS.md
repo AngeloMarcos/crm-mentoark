@@ -1,6 +1,77 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-24 05:40 UTC. Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-24 (sessão mídia no chat WhatsApp). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+
+## Sessão 2026-07-24 — Mídia no Chat WhatsApp: envio (implementado do zero) e recebimento (proxy autenticado corrigido)
+
+Detalhe completo em `diagnosticos/AUDITORIA_LOG.md` (Sprint 9). Resumo:
+
+- **Implementado:** composer ganhou anexo de arquivo (com preview + cancelar) e gravação de áudio (`MediaRecorder`, com duração ao vivo, cancelar ou enviar) — antes não existia nenhuma UI de envio de mídia, só ícones decorativos. Envio reaproveita `POST /api/whatsapp/send` já existente no backend, com validação de 5MB no frontend antes de tentar.
+- **Corrigido:** imagem, figurinha e vídeo recebidos não carregavam — `<img>`/`<video>` usavam URL crua (`local://...`) ou proxy sem header de autenticação. Hook `useAuthedImageUrl` generalizado/renomeado pra `useAuthedMediaUrl`, novos componentes `AuthedImg`/`AuthedVideo` aplicados nos 4 pontos afetados (bolha de mensagem + grid "Mídia Compartilhada" do painel de detalhes).
+- **Limitação conhecida (backend, fora do escopo desta sessão):** áudio gravado pelo atendente sai como mensagem de áudio comum (`sendMedia`), não como nota de voz nativa (`sendWhatsAppAudio`, usado só pelo motor de IA/disparos) — inconsistência já existente no contrato do backend.
+- **Não testado com navegador/WhatsApp real** — sem acesso a browser/microfone/celular nesta sessão. Validado por revisão de código + build limpo + contrato do backend confirmado lendo `whatsapp.ts` antes de implementar. Teste real em homolog (mandar mídia de fora, gravar e enviar áudio pelo CRM) pendente.
+
+Build do frontend (vite) validado limpo.
+
+## Sessão 2026-07-24 — Bugs de frontend no Chat WhatsApp (WhatsAppInterface.tsx)
+
+Reportado pelo usuário por print: painel de detalhes abrindo sozinho, JID de grupo ilegível no cabeçalho, responsividade ruim. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md` (Sprint 8). Resumo:
+
+- **Corrigidos:** painel de detalhes reabrindo sozinho a cada troca de conversa (causa real era um `useEffect` forçando `true`, não só o default — bug mais sério do que o suspeito inicial); JID numérico bruto de grupo no cabeçalho (agora usa o mesmo badge "Grupo" da lista lateral); 3 estados que vazavam de uma conversa pra outra (`editingName` — com risco real de renomear o contato errado —, `replyTo`, seleção múltipla de mensagens); warning de build `duration-[3000ms]` ambíguo (existia antes desta sessão).
+- **Pendente, decisão de produto/design (não é CSS isolado):** responsividade — layout de 3 colunas fixas (340px+chat+300px) sem nenhum breakpoint, quebra abaixo de ~1000px de largura. Proposta documentada no código e no log.
+- **Pendente, precisa de feature nova:** 5 botões no painel de detalhes sem `onClick` ("Abrir no CRM", ver mídia/documentos completos, adicionar etiqueta, editar anotações — `notes` nunca é persistido hoje).
+- **Observado, não corrigido:** botão de auto-teste de dev (`runUITests`) visível no header em produção pra qualquer usuário — decisão do usuário se remove.
+
+Build do frontend (vite) validado limpo, incluindo confirmação de que o warning `duration-[3000ms]` desapareceu.
+
+## Sessão 2026-07-24 — Sprint 1/3 da linha "capacidades do n8n no motor nativo": Resposta em Voz (TTS)
+
+Primeira das 3 sprints decididas após a auditoria de dependência do n8n (ver sessão logo abaixo) — implementa resposta automática em voz via ElevenLabs no `agentEngine.ts`. As outras duas (Google Calendar, ingestão de documentos via Drive) ficam para sessões seguintes.
+
+- **Migration:** `agent_configs` ganhou `resposta_voz_habilitada BOOLEAN DEFAULT false` e `resposta_voz_id TEXT` (`backend/src/migrations.ts`, fim de `runMigrations()`) — estritamente opt-in, nenhum tenant existente muda de comportamento sem configurar essas duas colunas explicitamente. Aplicada manualmente em `crm_hml` para teste; **ainda não aplicada em produção** (roda sozinha no próximo boot do `crm-api` de produção, já que `runMigrations()` é automático).
+- **Novo utilitário `backend/src/utils/elevenlabs.ts`** (`sintetizarVoz()`) — chamada isolada à ElevenLabs (AbortController 30s), deliberadamente **não compartilhada** com a rota existente `routes/elevenlabs.ts` (que já tem sua própria implementação inline testada) — duplicar essas ~15 linhas foi considerado mais seguro que refatorar uma rota existente só para reuso, seguindo o critério de "mudança pequena e isolada" do `AUDITORIA_PROTOCOLO.md`. Confirmado que `/api/elevenlabs/tts` e afins **não são usados por nenhuma tela do frontend hoje** (só a config genérica da API key em Integrações) — rota órfã, como suspeitado na auditoria de fetch/timeout anterior.
+- **Gatilho de decisão voz-vs-texto** (`agentEngine.ts`, dentro do passo "Enviar mensagens"): responde em voz **somente quando** `agent_configs.resposta_voz_habilitada = true` **E** `resposta_voz_id` preenchido **E** a mensagem recebida do cliente foi um áudio (espelha o canal — critério simples sugerido pelo próprio usuário). Fora dessas 3 condições, comportamento idêntico ao anterior.
+- **Fallback obrigatório confirmado:** qualquer falha (sem integração ElevenLabs configurada, chave inválida, timeout, Evolution recusando o áudio) cai pro texto normal, nunca deixa a mensagem sem resposta. `whatsapp_messages` agora registra corretamente `message_type='audio'`+`media_url` quando a voz de fato saiu, ou `'text'` (como sempre) quando caiu no fallback — o registro no painel de chat reflete o que realmente foi enviado.
+- **Testes realizados:** (1) `sintetizarVoz()` chamado com chave inválida contra a API real da ElevenLabs — confirmado retorno `null` sem exceção (401 tratado corretamente). (2) Confirmado que **nenhum tenant tem integração ElevenLabs configurada hoje** (`integracoes_config` tipo='elevenlabs', 0 linhas em `crm_hml`) — o branch "sem API key" do fallback é o caminho real, não hipotético. (3) **Não foi possível testar o pipeline completo via `IA_TEST_MODE` fim-a-fim**: a única `ai_providers` ativa em homolog (OpenAI) tem a chave criptografada com uma `ENCRYPTION_KEY` que não bate com o `.env` local — a chamada falha no provider de LLM (401), antes mesmo de chegar na lógica nova. Não é limitação do código novo, é do ambiente de teste local. Recomendação: se quiser validar ponta a ponta, rodar direto no container de homolog (que tem a `ENCRYPTION_KEY`/chave certas) com `IA_TEST_MODE=true` e um número de teste real mandando um áudio.
+- Build (`npm run build`, swc) e `tsc --strict` isolado em `agentEngine.ts`/`utils/elevenlabs.ts` — limpo, sem erros novos.
+- `diagnosticos/PLANO_MIGRACAO_N8N_PARA_CRM_NATIVO.md` atualizado — item "Resposta em áudio (TTS)" marcado como implementado (código), pendente de deploy/validação real.
+
+## Sessão 2026-07-24 — Auditoria completa: dependência real do n8n (Fases 1-4)
+
+**Investigação read-only, nenhuma mudança de código/infra nesta sessão.** Objetivo: quantificar quem depende do n8n hoje, documentar a lógica real dos workflows, e mapear o gap contra `agentEngine.ts` antes de qualquer decisão de migração.
+
+- **Fase 1 — uso real, medido no banco:** `SELECT ... FROM agentes WHERE n8n_webhook_url IS NOT NULL AND <> ''` retornou **0 linhas em produção (`crm`) e 0 linhas em homologação (`crm_hml`)**. Nenhum tenant real está roteado para n8n hoje — é o campo que `webhook.ts` usa para decidir (`if (n8nWebhookUrl) { ...forward pro n8n... }`, linha ~1451), confirmado lendo o código, não só o dado.
+- **Fase 2 — os workflows existem, mas estão mortos.** Acessado `/var/lib/docker/volumes/n8n_n8n_data/_data/database.sqlite` direto no host da VPS (`DB_TYPE=mysqldb` é inválido e o n8n cai em SQLite silenciosamente, já sinalizado antes). Só **2 workflows** existem no n8n inteiro: "Angelo pospect" e "corretor pospect" (este último para a tenant "Cris", confirmado pelo nome do node-agente `cris Vendas`). **Ambos `active=0` e ZERO execuções registradas em toda a história** (`execution_entity` vazia). Ou seja: nunca rodaram de verdade, nem em teste.
+  - Arquitetura dos workflows (idênticos entre si, ~150 nodes cada, LangChain + Supabase + Redis): `Webhook EVO` (recebe Evolution direto, **não** passa pelo `webhook.ts` do CRM) → busca/cria contato (Supabase) → checa pausa → debounce via node `Wait` + comparação de memória Redis → transcreve áudio/descreve imagem (OpenAI) → agente LangChain (`angeloVendas`/`cris Vendas`, com RAG via Supabase Vector Store) → divide resposta → envia texto/imagem/**áudio via ElevenLabs** (TTS real, o motor nativo não faz isso) via Evolution API. Sub-fluxos paralelos: ingestão automática de documentos do Google Drive num schedule (pro RAG), e **agendamento real via Google Calendar** (criar/cancelar/reagendar reunião como tools do agente — o `criar_agendamento` do motor nativo só grava um lembrete interno em `follow_ups`, não mexe em calendário nenhum).
+  - **Achado importante de arquitetura:** os workflows usam credenciais "Supabase account" e "Postgres account" (criadas 2026-05-15) — tudo indica que foram construídos contra o backend Supabase **anterior** à migração para o Postgres/Express atual (ver `CLAUDE.md`: `src/integrations/lovable` é stub morto, o client real não usa mais Supabase). Isso explica por que nunca foram ligados: são artefato pré-migração, não uma segunda via de produção ativa.
+  - **Segurança:** nenhuma credencial hardcoded encontrada nos nodes (buscado por padrões de chave OpenAI/Google/Slack e pela própria chave da Evolution) — tudo referencia o sistema de credenciais do n8n. Achado operacional (não segurança): os nodes de Evolution API e ElevenLabs referenciam credenciais que **não existem** na tabela `credentials_entity` (só há 2 credenciais cadastradas: Supabase e Postgres) — mais um sinal de workflow nunca finalizado.
+- **Fase 3 — tabela de gap** (capacidades do workflow vs. `agentEngine.ts` hoje):
+
+  | Capacidade do workflow n8n | Já existe no motor nativo? | Gap a implementar | Complexidade |
+  |---|---|---|---|
+  | Debounce + lock por telefone | Sim (3s, mais simples) | — | — |
+  | Pausa/reativação humana | Sim (`atendente_pausou_ia`/`atendimento_ia` + palavra-chave) | — | — |
+  | Transcrição de áudio / descrição de imagem | Sim (Whisper/Vision, homolog) | — | — |
+  | Histórico de conversa | Sim (`n8n_chat_histories`, sem precisar de Redis) | — | — |
+  | Agente com tool-calling + RAG | Sim (`MCP_TOOLS` + `buscar_documentos`, pgvector) | — | — |
+  | Ingestão automática de documentos (Google Drive, agendada) | Não | Integração Google Drive + parser (PDF/Excel) + job agendado — a geração de embedding já existe (`gerarEmbedding()`) | Média-Alta |
+  | Resposta em áudio (ElevenLabs TTS) | Parcial (rota `/api/elevenlabs/tts` já existe, mas `agentEngine.ts` nunca a chama) | Decidir quando disparar voz vs. texto + enviar via Evolution `sendWhatsAppAudio` | Baixa-Média |
+  | Agendamento real (Google Calendar: criar/cancelar/reagendar, checar disponibilidade) | Não (`criar_agendamento` só grava `follow_ups` interno) | OAuth Google Calendar por tenant + tools novas de disponibilidade/CRUD de evento | Média-Alta |
+  | Re-scan periódico de chats + classificador de mensagens | Não | Propósito não totalmente claro só pelos nomes dos nodes — precisa investigação adicional antes de estimar | Indeterminada |
+  | Criação de card no Kanban a partir da conversa | **Já existe só no motor nativo** (`registrar_pausa` → `/api/kanban/webhook/n8n`) — os workflows n8n não têm isso | — | — |
+- **Fase 4 — proposta de migração:** como zero tenants dependem do n8n hoje, **não há urgência de migração** — os workflows podem ficar exatamente como estão (inativos) sem risco. Se o objetivo for aproveitar as capacidades reais que faltam (voz, calendário, ingestão de documentos), a sugestão é implementá-las direto no `agentEngine.ts` uma de cada vez, testando com `IA_TEST_MODE` (já existe) antes de qualquer ativação real — não existe cenário de "trocar `n8n_webhook_url`" porque nenhum agente tem esse campo preenchido hoje.
+- **Consequência prática:** as pendências "N8N_SECRET não configurado" e "integração n8n legítima" citadas em diagnósticos anteriores dizem respeito a um caminho **diferente** (n8n puxando config do CRM via `/api/n8n/agente-config`), não a este (CRM empurrando mensagem pro n8n) — os dois são independentes, e este último está confirmado 100% inativo.
+
+## Sessão 2026-07-24 (cont.) — Sprint 1 (Whisper) + Sprint 2 (Vision) deployados em HOMOLOG, processo de deploy corrigido
+
+- **Sprint 1 — Transcritor de Áudio nativo (Whisper API):** `backend/src/utils/transcribe.ts` (novo). `webhook.ts` transcreve mensagens de áudio recebidas (`fromMe=false`, `tipo=audio`) e substitui `texto` por `[Áudio Transcrito: "..."]` antes do INSERT em `whatsapp_messages` e de `processarComDebounce`. **Desvio deliberado do spec original:** o prompt pedia `fetch` direto em `midia.url`, mas essa URL é sempre a URL crua e CRIPTOGRAFADA do CDN do WhatsApp — um fetch ingênuo mandaria bytes cifrados pro Whisper. Usa `baixarMidiaDecriptografada()` (nova, extraída de `salvarMidiaWhatsapp()` em `whatsappMediaStorage.ts`) que passa pelo endpoint correto da Evolution (`/chat/getBase64FromMediaMessage`).
+- **Sprint 2 — Análise de Imagem (Vision API, gpt-4o-mini):** `backend/src/utils/vision.ts` (novo). Mesmo padrão do Sprint 1 — `webhook.ts` analisa imagens recebidas e substitui `texto` por `[Mídia - Imagem: "..."]`. Mesmo desvio deliberado: usa `baixarMidiaDecriptografada()` em vez de fetch direto na URL crua (mesmo motivo — CDN do WhatsApp é sempre cifrado, não a Evolution).
+- **Deployado e validado em HOMOLOGAÇÃO** (`api-homolog.mentoark.com.br`, container `crm-api-homolog`) — `/health` retornou 200, sem `ERROR` nos logs pós-deploy. **NÃO deployado em produção** — aguardando validação prática do usuário (enviar áudio/foto de teste no WhatsApp de homolog e conferir transcrição/descrição no painel), conforme diretriz do próprio usuário nesta sprint.
+- **Achado e corrigido: comando de deploy sugerido para esta sprint apontava para o diretório ERRADO.** Um prompt de deploy (aparentemente gerado por outra ferramenta) sugeria `cd /opt/crm && git pull origin main` como deploy de homologação — `/opt/crm` é produção (homolog é `/opt/crm-homolog`, container `crm-api-homolog` não `crm-api`), e nenhum dos dois diretórios é clone git limpo (`/opt/crm-homolog` confirmado 9 commits atrás + ~37 arquivos com drift total de conteúdo, provável CRLF/LF — `git pull` ali conflitaria de qualquer forma). Ver [[project_homolog_environment]] na memória.
+- **Processo de deploy corrigido de forma estrutural, não só pontual:** criado `scripts/deploy.sh` (única fonte de verdade — builda local antes de copiar, copia só os arquivos passados pro diretório/serviço corretos conforme o target `homolog`/`prod`, `prod` exige `--confirm` explícito, valida sozinho `/health`+logs no final). Documentado em `CLAUDE.md` (nova seção "Deploy") e `scripts/README.md`. **Removido `deploy.mjs`** (script antigo na raiz, superado e perigoso — lista fixa de arquivos de sprint antiga, só deployava em produção, fazia `git add -A && commit && push` automático com mensagem hardcoded).
+- **Achado, não corrigido nesta sessão** (Sprint 1, `backend/scripts/diag-db.js`): função SQL `match_documents()` esperada pelo diagnóstico de banco não existe em homolog — não é um bloqueio prático hoje (a ferramenta de IA `buscar_documentos` usa `ORDER BY embedding <=>` direto, sem depender dela), mas registrar caso algo mais venha a esperar por ela.
+
+## Sessão 2026-07-24 — deploy Sprints A-C (Kanban/Inbox) + RAG em producao
 
 ## Sessão 2026-07-24 — deploy Sprints A-C (Kanban/Inbox) + RAG + fixes, commit `3fa89f8`
 
@@ -96,12 +167,12 @@ Build do backend validado em ambas as rodadas.
 
 | Serviço | Status | Nota |
 |---------|--------|------|
-| n8n     | ⚪ | `DB_TYPE=mysqldb` inválido, caindo em SQLite silenciosamente — sinalizado, não investigado |
+| n8n     | ⚪ | `DB_TYPE=mysqldb` inválido, caindo em SQLite silenciosamente. **Investigado em 2026-07-24** (ver sessão abaixo): só 2 workflows existem, ambos inativos, zero execuções — n8n não processa nenhuma mensagem real hoje |
 
 ## Pendências abertas (ordem de prioridade)
 
 1. ~~CRÍTICO/URGENTE — Evolution não está enviando mensagens (500 "Connection Closed")~~ — **RESOLVIDO 2026-07-12 13:47 UTC**, restart do container `evolution` confirmado pelo usuário e testado com envio real funcionando.
-2. **CRÍTICO — corrigir o bug upstream do Evolution (Prisma P2010) que bloqueia 100% das mensagens recebidas.** Causa raiz confirmada 2x ao vivo. Uma opção já testada e descartada (`DATABASE_SAVE_DATA_CHATS=false`). Restam: (a) trocar `DATABASE_PROVIDER` de mysql pra postgresql — garantia baixa, mesmo bug já visto em Postgres noutras versões; (b) fixar tag de imagem mais antiga/estável; (c) **reportar/rastrear issue upstream no GitHub do Evolution API — opção mais indicada agora**, decisão do usuário sobre qual tentar.
+2. ~~CRÍTICO — bug upstream do Evolution (Prisma P2010) bloqueando 100% das mensagens recebidas~~ — **RESOLVIDO 2026-07-21**, migração do Evolution pra PostgreSQL + re-pareamento do número (esta linha estava desatualizada; ver `diagnosticos/AUDITORIA_LOG.md` para o fechamento real).
 3. Instância Evolution `crm_5319f0ed61b3` — confirmada genuinamente órfã (sem vínculo em nenhuma tabela de config). Decisão do usuário: deletar (via `DEL_INSTANCE=true`, já habilitado) ou manter disponível pra pareamento manual futuro.
 4. `backend/src/routes/integracoes.ts` — validar `status='conectado'` contra a Evolution API de verdade antes de sincronizar com `agent_configs` (mitigação parcial já aplicada no frontend, ver `AUDITORIA_LOG.md`).
 5. `src/pages/Agentes.tsx` — `testarEvolution()` não testa a instância específica do agente (ver `AUDITORIA_LOG.md`).

@@ -1,5 +1,48 @@
 # Auditoria de Código — Log
 
+### 🟠 Sprint 9 — Mídia no Chat: envio (UI inexistente) e recebimento (proxy autenticado faltando) (WhatsAppInterface.tsx) (2026-07-24)
+
+**Contexto:** usuário reportou que áudio enviado por ele (atendente) não aparece na conversa, enquanto áudio recebido do cliente toca normalmente; foto/vídeo/figurinha recebidos não carregam. Backend já tinha toda a estrutura pronta (`POST /api/whatsapp/send` aceita `mediaUrl`/`mediaType`, proxy `GET /api/whatsapp/media`, `MAX_OUTBOUND_MEDIA_BYTES`) — o gap era 100% frontend.
+
+**🔧 Achado A — não existia nenhuma UI de envio de mídia — implementado do zero.** Confirmado por busca no arquivo inteiro: zero `MediaRecorder`, zero `<input type="file">`, zero handler de upload. `Paperclip`/`Mic` eram só ícones decorativos dentro de bolhas de mensagem já recebida. Implementado:
+- Botão de anexo (seletor de arquivo, `accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"`) com preview (thumbnail se imagem, ícone+nome+tamanho se não) e cancelar antes de enviar.
+- Gravação de áudio via `MediaRecorder` (prioriza `audio/webm;codecs=opus`, cai pro default do navegador se não suportado), indicador de duração ao vivo, cancelar ou parar-e-enviar.
+- `enviarMidia()` — equivalente de `handleSendMessage()` pra mídia: converte o arquivo/blob pra `data:` URI, valida contra `MAX_OUTBOUND_MEDIA_BYTES` (5MB, replicado do backend com erro amigável ANTES de tentar enviar) e chama `POST /api/whatsapp/send` com `mediaUrl`/`mediaType`/`mediaFilename`, mesmo padrão de atualização otimista + `apiHeaders()`/`getFreshToken()` do envio de texto.
+- Coluna de botões do composer virou uma grade fixa 2x2 (Respostas Rápidas / Anexar / Gravar-ou-Cancelar / Enviar) em vez de crescer a cada botão novo.
+- **Limitação conhecida, documentada, não corrigida (fora do escopo — é backend):** áudio gravado sai via `POST /send`, que no backend sempre usa o endpoint `sendMedia` da Evolution pra `mediaType='audio'` — diferente de `agentEngine.ts`/`disparoProcessor.ts`, que usam `sendWhatsAppAudio` (nota de voz/PTT nativa). Um áudio gravado pelo atendente chega como mensagem de áudio comum, não necessariamente como nota de voz nativa do WhatsApp.
+- **Mesma classe de bug do Sprint 8 (estado vazando entre conversas), pega proativamente:** gravação/anexo em andamento agora são cancelados automaticamente ao trocar de conversa (mesmo `useEffect` que já reseta `editingName`/`replyTo`/seleção múltipla) — sem isso, gravar pra A e mandar depois de trocar pra B enviaria o áudio de A pro contato errado.
+
+**🔧 Achado B — imagem/figurinha recebida não carregava — corrigido.** `useAuthedImageUrl()` só tratava o prefixo `local-pic://` (foto de perfil); `local://` (mídia de mensagem) caía direto no `return rawUrl` sem processar — `<img src="local://...">` falha silenciosamente (não é URL HTTP real). Generalizado e renomeado pra `useAuthedMediaUrl()` (trata os dois prefixos); criado componente `AuthedImg` (chamar o hook direto dentro do `.map()` de mensagens violaria Rules of Hooks) usado nos 3 lugares que renderizavam `<img src={m.midia_url}>` cru: imagem e figurinha na bolha de mensagem, e a mesma imagem crua no grid "Mídia Compartilhada" do painel de detalhes (achado extra durante a correção, mesma causa raiz).
+
+**🔧 Achado C — vídeo recebido não carregava — corrigido.** URL do proxy estava certa, mas `<video><source src="...">` nativo não manda header `Authorization` — a requisição falhava com 401 mesmo com a URL "certa" na aparência. Componente `AuthedVideo` (mesmo padrão de `AuthedImg`) resolve pra blob URL antes de montar o `<source>`.
+
+Build do frontend (`npm run build`, vite) validado limpo, sem novos warnings/erros.
+
+**⚠️ Não testado em navegador real nem com envio/recebimento de WhatsApp de verdade** — sem acesso a browser/microfone/celular nesta sessão (mesma limitação já registrada no Sprint 8). Validado por: revisão linha a linha de cada achado, contrato exato do backend confirmado lendo `whatsapp.ts` (`POST /send`, `GET /media`, `MAX_OUTBOUND_MEDIA_BYTES`) antes de implementar, e build limpo. Teste real em homolog (mandar imagem/figurinha/vídeo de fora, gravar e enviar áudio pelo CRM) fica pendente — precisa de alguém com navegador + WhatsApp real.
+
+### 🟠 Sprint 8 — Bugs de frontend no Chat WhatsApp (WhatsAppInterface.tsx) (2026-07-24)
+
+**Contexto:** usuário reportou por print 3 problemas na tela de Conversas: painel de detalhes abrindo sozinho, JID de grupo ilegível no cabeçalho, e responsividade geral ruim. Pedido explícito de varredura mais ampla no mesmo arquivo por outros bugs da mesma classe.
+
+**🔧 Achado 1 — painel de detalhes reabrindo sozinho — corrigido, causa raiz mais profunda que o suspeito inicial.** O prompt apontava só o `useState(true)` (linha ~271) como causa. Achei um segundo problema, mais grave: um `useEffect([activeChatId]) { setShowContactPanel(true) }` **forçava o painel a abrir de novo a cada troca de conversa**, mesmo que o usuário tivesse fechado manualmente — esse era o comportamento real reportado ("abre sozinho toda vez que uma conversa é aberta"), não só no carregamento inicial. Corrigido: default `false` + `useEffect` removido por completo (o painel agora só muda de estado por ação explícita do botão Info).
+
+**🔧 Achado 2 — JID de grupo cru no cabeçalho — corrigido.** `activeChat.phone` (JID numérico bruto, ex: instância + 18 dígitos) estourava o layout do cabeçalho em conversas de grupo. A lista lateral já tratava isso com um badge "Grupo" legível (linha ~1794) — cabeçalho agora reusa o mesmo badge em vez do JID, com `truncate` adicionado nos dois ramos (grupo/individual) por segurança.
+
+**🔧 Achado 4 (mesma classe do Achado 1, achados durante a varredura) — 3 estados que deveriam resetar ao trocar de conversa e não resetavam, corrigidos no mesmo `useEffect([activeChatId])` que já existia:**
+- `editingName` — editar o nome do contato A, trocar pra B sem salvar/cancelar e apertar Enter chamava `salvarNomeContato()` usando o `activeChatId` ATUAL (B) → **risco real de renomear o contato errado**, não só um bug visual.
+- `replyTo` — banner "respondendo a" de uma mensagem da conversa A continuava visível e seria anexado ao envio em B.
+- `isSelectMode`/`selectedMessageIds` — mensagens selecionadas pra exclusão/encaminhamento em A permaneciam selecionadas com a barra de ações visível sobre B.
+
+**🔧 Achado extra (build) — `duration-[3000ms]` ambíguo, causava warning em todo build do frontend desde antes desta sessão.** Corrigido com colchetes escapados. Detalhe não-óbvio: o texto literal não escapado não pode aparecer em NENHUM lugar do arquivo, nem em comentário — o scanner de conteúdo do Tailwind lê o arquivo como texto bruto; minha primeira tentativa reintroduziu o mesmo warning ao citar a classe original dentro do próprio comentário `[AUDITORIA]`, tive que reescrever o comentário sem o token exato.
+
+**⚠️ Achado 3 — responsividade: FIX PENDENTE, redesenho de layout, não CSS isolado.** Confirmado por busca literal: zero breakpoints (`sm:`/`md:`/`lg:`) em todo o arquivo. Layout de 3 colunas fixas (lista 340px + chat flexível + painel 300px) com `overflow-hidden` no container raiz — abaixo de ~1000px de largura o conteúdo é cortado (não aparece scroll, some da tela). Proposta documentada em comentário no código (linha ~1563): esconder lista ao abrir conversa em mobile (padrão WhatsApp Web) + painel de detalhes virar overlay/drawer abaixo de lg. Não implementado — é decisão de produto/UX, não um ajuste de classe.
+
+**⚠️ 5 botões sem `onClick` catalogados como FIX PENDENTE** (não são fixes isolados/seguros — cada um precisa de feature nova): "ABRIR NO CRM", "Ver tudo" (mídia), "Ver todos" (documentos), "+" (adicionar etiqueta), lápis de "Anotações do CRM" (e `activeChat.notes` nunca é escrito em lugar nenhum do arquivo — permanentemente somente-leitura hoje).
+
+**⚠️ Achado observado, não corrigido:** `runUITests()` — ferramenta de auto-teste de dev exposta como botão visível no header pra qualquer usuário em produção (ícone Activity, "Executar Testes de UI"), sem flag de ambiente escondendo. Não é bug funcional, só um artefato de dev vazando pra UI real — decisão do usuário se remove ou mantém pra QA.
+
+Build do frontend (`npm run build`, vite) validado limpo, incluindo confirmação de que o warning `duration-[3000ms]` desapareceu.
+
 ### 🟢 Sprint 7 — Memória do antiloop e ordem do histórico da IA (agentEngine.ts) (2026-07-23)
 
 **Contexto:** kickoff do usuário com 2 riscos já diagnosticados de antemão (texto trazia inclusive trechos de código ilustrativos): (1) suposto memory leak nos Sets globais `botMessageIds`/`botSentTexts` (nunca deletados) e (2) suposto histórico invertido enviado à IA (`ORDER BY created_at DESC` sem reverter antes de mandar pro provider).
