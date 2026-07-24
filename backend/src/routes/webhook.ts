@@ -65,7 +65,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
 import { withTenantContext } from '../db';
-import { salvarMidiaWhatsapp, salvarFotoPerfilLocal } from '../utils/whatsappMediaStorage';
+import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada } from '../utils/whatsappMediaStorage';
+import { transcreverAudio } from '../utils/transcribe';
+import { analisarImagem } from '../utils/vision';
 import { log } from '../logger';
 
 const MIDIA_TIPOS = new Set(['image', 'audio', 'video', 'document', 'sticker']);
@@ -1048,11 +1050,94 @@ export default function webhookRouter(pool: Pool): Router {
       ).catch(err => log.error('WEBHOOK', 'Erro ao inserir webhook_mensagens_processadas', { traceId, err: err.message }));
 
       // ── Extrair dados ─────────────────────────────────────────────────────────
-      const texto    = extrairTexto(payload.data);
+      let texto      = extrairTexto(payload.data);
       const tipo     = extrairTipo(payload.data);
       const midia    = extrairMidia(payload.data);
       const ts       = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
       const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
+
+      // ── Transcrição nativa de áudio recebido (Sprint 1 — Whisper API) ────────
+      // Só para mensagens de voz recebidas de fora (fromMe=false, tipo=audio). Roda
+      // ANTES do INSERT em whatsapp_messages e de processarComDebounce (aguardada aqui,
+      // ainda que o handler já tenha respondido 200 pra Evolution lá em cima — não
+      // bloqueia o webhook, só atrasa em até ~13s o processamento interno desta mensagem
+      // específica) para que `texto` já chegue transcrito em ambos.
+      // [AUDITORIA] LÓGICA: midia.url é sempre a URL crua do CDN do WhatsApp, CRIPTOGRAFADA
+      // (ver cabeçalho de whatsappMediaStorage.ts) — baixá-la direto renderia bytes cifrados
+      // pro Whisper, não áudio real. Usa o mesmo endpoint de decrypt da Evolution
+      // (getBase64FromMediaMessage) já usado por salvarMidiaWhatsapp() para outros tipos de
+      // mídia, via baixarMidiaDecriptografada() (extraída daquela função nesta sprint).
+      if (!fromMe && tipo === 'audio' && userId && process.env.OPENAI_API_KEY) {
+        try {
+          const cfgAudio = await pool.query(
+            `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+             FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+            [userId]
+          ).catch(() => ({ rows: [] as any[] }));
+          const evoUrlAudio = cfgAudio.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
+          const evoKeyAudio = cfgAudio.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+
+          const midiaDecriptografada = await baixarMidiaDecriptografada({
+            evoUrl: evoUrlAudio, apiKey: evoKeyAudio, instancia, messageId, remoteJid, fromMe,
+          });
+
+          if (midiaDecriptografada) {
+            const textoGerado = await transcreverAudio(
+              midiaDecriptografada.buffer,
+              midiaDecriptografada.mimetype || midia.mime || 'audio/ogg',
+              process.env.OPENAI_API_KEY,
+            );
+            if (textoGerado) {
+              texto = `[Áudio Transcrito: "${textoGerado}"]`;
+              log.info('WEBHOOK', 'Áudio transcrito com sucesso', { traceId, tamanho: textoGerado.length });
+            } else {
+              log.warn('WEBHOOK', 'Transcrição de áudio não retornou texto', { traceId, msgId: messageId });
+            }
+          }
+        } catch (err: any) {
+          log.warn('WEBHOOK', 'Falha no fluxo de transcrição de áudio', { traceId, err: err?.message });
+        }
+      }
+
+      // ── Análise de imagem recebida (Sprint 2 — Vision API) ────────────────────
+      // Só para imagens recebidas de fora (fromMe=false, tipo=image). Mesmo padrão da
+      // transcrição de áudio acima: aguardada antes do INSERT em whatsapp_messages e de
+      // processarComDebounce, para que `texto` já chegue com a descrição gerada pela IA de
+      // visão. Mesma ressalva de midia.url ser sempre a URL crua/criptografada do CDN do
+      // WhatsApp (não a Evolution) — baixarMidiaDecriptografada() é usada em vez de um fetch
+      // direto na URL com o header apikey (não decriptografaria nada; a Evolution só decripta
+      // via POST /chat/getBase64FromMediaMessage, mesmo endpoint já usado no fluxo de áudio).
+      if (!fromMe && tipo === 'image' && userId && process.env.OPENAI_API_KEY) {
+        try {
+          const cfgImagem = await pool.query(
+            `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+             FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+            [userId]
+          ).catch(() => ({ rows: [] as any[] }));
+          const evoUrlImagem = cfgImagem.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
+          const evoKeyImagem = cfgImagem.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+
+          const midiaDecriptografadaImg = await baixarMidiaDecriptografada({
+            evoUrl: evoUrlImagem, apiKey: evoKeyImagem, instancia, messageId, remoteJid, fromMe,
+          });
+
+          if (midiaDecriptografadaImg) {
+            const descricaoGerada = await analisarImagem(
+              midiaDecriptografadaImg.buffer,
+              midiaDecriptografadaImg.mimetype || midia.mime || 'image/jpeg',
+              process.env.OPENAI_API_KEY,
+            );
+            if (descricaoGerada) {
+              texto = `[Mídia - Imagem: "${descricaoGerada}"]`;
+              log.info('WEBHOOK', 'Imagem analisada com sucesso', { traceId, tamanho: descricaoGerada.length });
+            } else {
+              log.warn('WEBHOOK', 'Análise de imagem não retornou descrição', { traceId, msgId: messageId });
+            }
+          }
+        } catch (err: any) {
+          log.warn('WEBHOOK', 'Falha no fluxo de análise de imagem', { traceId, err: err?.message });
+        }
+      }
 
       // [AUDITORIA] DIAGNÓSTICO TEMPORÁRIO (2026-07-22, incidente Stefano/crm_a5d1255fce86):
       // extrairTexto()/extrairTipo() não reconhecem o shape de mensagens vindas de contatos

@@ -57,14 +57,31 @@ export interface SalvarMidiaOpts {
   fileNameHint?: string;
 }
 
+export interface BaixarMidiaOpts {
+  evoUrl: string;
+  apiKey: string;
+  instancia: string;
+  messageId: string;
+  remoteJid: string;
+  fromMe: boolean;
+}
+
+export interface MidiaDecriptografada {
+  buffer: Buffer;
+  mimetype?: string;
+  fileName?: string;
+}
+
 /**
- * Decriptografa a mídia da mensagem via Evolution e salva em disco local privado.
- * Retorna a URL local (`local://...`, servida via /api/whatsapp/media) em caso de sucesso,
- * ou `null` em qualquer falha — chamador deve manter a `media_url` original (Evolution crua)
- * como fallback, nunca travar o fluxo de recebimento da mensagem por causa disso.
+ * Decriptografa a mídia de uma mensagem via Evolution (`POST /chat/getBase64FromMediaMessage`)
+ * e devolve os bytes reais em memória — sem tocar disco. Extraído de `salvarMidiaWhatsapp()`
+ * (que usa esta função e depois persiste em arquivo) para ser reaproveitado por qualquer
+ * consumidor que só precise dos bytes (ex: transcrição de áudio via Whisper, que nunca deveria
+ * receber a URL crua/criptografada — ver cabeçalho do arquivo). Retorna `null` em qualquer
+ * falha, mesma filosofia de fallback do resto deste arquivo.
  */
-export async function salvarMidiaWhatsapp(opts: SalvarMidiaOpts): Promise<string | null> {
-  const { evoUrl, apiKey, instancia, messageId, remoteJid, fromMe, userId, tipo, mimetypeHint, fileNameHint } = opts;
+export async function baixarMidiaDecriptografada(opts: BaixarMidiaOpts): Promise<MidiaDecriptografada | null> {
+  const { evoUrl, apiKey, instancia, messageId, remoteJid, fromMe } = opts;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DECRYPT_TIMEOUT_MS);
   try {
@@ -88,27 +105,46 @@ export async function salvarMidiaWhatsapp(opts: SalvarMidiaOpts): Promise<string
       log.warn('WA_MEDIA', 'Evolution não retornou base64', { messageId });
       return null;
     }
-    const buf = Buffer.from(base64, 'base64');
-    if (buf.byteLength === 0 || buf.byteLength > MAX_MEDIA_BYTES) {
-      log.warn('WA_MEDIA', 'Mídia vazia ou acima do limite — não salva', { messageId, bytes: buf.byteLength });
+    const buffer = Buffer.from(base64, 'base64');
+    if (buffer.byteLength === 0 || buffer.byteLength > MAX_MEDIA_BYTES) {
+      log.warn('WA_MEDIA', 'Mídia vazia ou acima do limite', { messageId, bytes: buffer.byteLength });
       return null;
     }
+    return { buffer, mimetype: data?.mimetype, fileName: data?.fileName };
+  } catch (err: any) {
+    log.warn('WA_MEDIA', 'Falha ao decriptografar mídia', { messageId, err: err?.message });
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-    const ext = extensaoParaArquivo(data?.fileName || fileNameHint, data?.mimetype || mimetypeHint, tipo);
+/**
+ * Decriptografa a mídia da mensagem via Evolution e salva em disco local privado.
+ * Retorna a URL local (`local://...`, servida via /api/whatsapp/media) em caso de sucesso,
+ * ou `null` em qualquer falha — chamador deve manter a `media_url` original (Evolution crua)
+ * como fallback, nunca travar o fluxo de recebimento da mensagem por causa disso.
+ */
+export async function salvarMidiaWhatsapp(opts: SalvarMidiaOpts): Promise<string | null> {
+  const { evoUrl, apiKey, instancia, messageId, remoteJid, fromMe, userId, tipo, mimetypeHint, fileNameHint } = opts;
+  const decriptografada = await baixarMidiaDecriptografada({ evoUrl, apiKey, instancia, messageId, remoteJid, fromMe });
+  if (!decriptografada) return null;
+
+  try {
+    const { buffer, mimetype, fileName: fileNameRemoto } = decriptografada;
+    const ext = extensaoParaArquivo(fileNameRemoto || fileNameHint, mimetype || mimetypeHint, tipo);
     const dir = path.join(WHATSAPP_MEDIA_DIR, userId);
     await fs.mkdir(dir, { recursive: true });
     // messageId já é único por instância (constraint em whatsapp_messages) — nome de arquivo seguro,
     // sem depender de nada vindo do payload externo (fileName da Evolution não vira parte do path).
     const fileName = `${messageId}.${ext}`;
-    await fs.writeFile(path.join(dir, fileName), buf);
+    await fs.writeFile(path.join(dir, fileName), buffer);
 
-    log.info('WA_MEDIA', 'Mídia decriptografada e salva', { messageId, bytes: buf.byteLength, ext });
+    log.info('WA_MEDIA', 'Mídia decriptografada e salva', { messageId, bytes: buffer.byteLength, ext });
     return `local://${userId}/${fileName}`;
   } catch (err: any) {
-    log.warn('WA_MEDIA', 'Falha ao decriptografar/salvar mídia', { messageId, err: err?.message });
+    log.warn('WA_MEDIA', 'Falha ao salvar mídia em disco', { messageId, err: err?.message });
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
