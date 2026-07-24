@@ -5,17 +5,26 @@
  * mensagem recebida ser atribuída a um userId. Resolve o agente (tabela agentes) e a config de
  * IA (agent_configs: prompt, modelo, provider), monta o histórico (n8n_chat_histories), chama o
  * provider (OpenAI/Claude/Gemini), faz parsing nativo da resposta (quebra em até 2
- * mensagens, detecta sinal de pausa) e envia via Evolution API (enviarResposta). Mantém os Sets
+ * mensagens, detecta sinal de pausa) e envia via Evolution API (enviarResposta ou, quando
+ * configurado por agente e a mensagem recebida foi um áudio, enviarRespostaVoz — TTS via
+ * ElevenLabs, com fallback automático pro texto em qualquer falha). Mantém os Sets
  * globais botMessageIds/botSentTexts que webhook.ts usa para não confundir a própria resposta
  * do bot com uma intervenção humana (ver [WEBHOOK_ANTILOOP] em webhook.ts).
  */
 import OpenAI from 'openai';
 import { Pool } from 'pg';
+import fs from 'fs';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
+import { sintetizarVoz } from '../utils/elevenlabs';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
+
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
+const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
 
 // Cliente global — usado como fallback; substituído pela chave do banco sempre que possível
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -196,6 +205,72 @@ async function enviarResposta(
   if (msgId) {
     botMessageIds.add(msgId);
     setTimeout(() => botMessageIds.delete(msgId), BOT_ECHO_TTL_MS);
+  }
+}
+
+// [AUDITORIA] LÓGICA (Sprint TTS): tenta sintetizar a resposta em voz (ElevenLabs) e enviar via
+// Evolution (mesmo endpoint/payload já usado em disparoProcessor.ts para mídia de áudio:
+// sendWhatsAppAudio + {number, audio: <url>}). Falha em qualquer etapa (sem API key, sem
+// voice_id, ElevenLabs fora do ar, Evolution recusando) retorna false e NUNCA lança — o
+// chamador (processarMensagem) trata false como "cai pro texto normal", conforme exigido.
+// Retorna a URL do áudio gerado (pra registrar em whatsapp_messages) quando dá certo.
+async function enviarRespostaVoz(
+  pool: Pool, userId: string,
+  serverUrl: string, apiKey: string,
+  instancia: string, telefone: string,
+  texto: string, voiceId: string,
+): Promise<{ ok: true; audioUrl: string } | { ok: false }> {
+  try {
+    const elevenApiKeyRes = await pool.query(
+      `SELECT api_key FROM integracoes_config
+       WHERE user_id = $1 AND tipo = 'elevenlabs' AND status = 'conectado'
+       LIMIT 1`,
+      [userId]
+    );
+    const elevenApiKey = elevenApiKeyRes.rows[0]?.api_key;
+    if (!elevenApiKey) {
+      log.warn('ENGINE VOZ', 'Integração ElevenLabs não configurada — caindo pro texto', { userId });
+      return { ok: false };
+    }
+
+    const buffer = await sintetizarVoz(texto, elevenApiKey, voiceId);
+    if (!buffer) return { ok: false }; // já logado dentro de sintetizarVoz
+
+    if (process.env.IA_TEST_MODE === 'true') {
+      log.info('IA_SANDBOX', 'Áudio de teste gerado (envio real suprimido)', {
+        telefone, instancia, bytes: buffer.length,
+      });
+      return { ok: true, audioUrl: 'sandbox://ia-test-mode' };
+    }
+
+    if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    const filename = `tts_${uuidv4()}.mp3`;
+    fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+    const audioUrl = `${API_BASE_URL}/uploads/${filename}`;
+
+    const base = sanitizeEvolutionUrl(serverUrl);
+    const r = await evolutionFetch(`${base}/message/sendWhatsAppAudio/${instancia}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      body: JSON.stringify({ number: telefone, audio: audioUrl }),
+    });
+    if (!r.ok) {
+      log.warn('ENGINE VOZ', 'Evolution recusou o envio de áudio — caindo pro texto', {
+        status: r.status, body: await r.text().catch(() => ''),
+      });
+      return { ok: false };
+    }
+
+    const data = await r.json().catch(() => ({})) as any;
+    const msgId: string | undefined = data?.key?.id;
+    if (msgId) {
+      botMessageIds.add(msgId);
+      setTimeout(() => botMessageIds.delete(msgId), BOT_ECHO_TTL_MS);
+    }
+    return { ok: true, audioUrl };
+  } catch (err: any) {
+    log.warn('ENGINE VOZ', 'Falha inesperada no envio de voz — caindo pro texto', { err: err?.message });
+    return { ok: false };
   }
 }
 
@@ -428,7 +503,8 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
             modelo_llm, evolution_server_url, evolution_api_key,
             operation_mode, distribution_mode,
             saudacao_inicial, bloco_qualificacao,
-            mensagem_encaminhamento, mensagem_encerramento
+            mensagem_encaminhamento, mensagem_encerramento,
+            resposta_voz_habilitada, resposta_voz_id
      FROM agent_configs
      WHERE user_id = $1 AND ativo = true
      LIMIT 1`,
@@ -630,47 +706,12 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     );
   }
 
-  // 11. Persistir em whatsapp_messages para o painel de chat
-  // [AUDITORIA] FIX APLICADO (2026-07-21): INSERT agora roda dentro de withTenantContext
-  // (db.ts) — propaga app.user_id pro Postgres via SET LOCAL, necessário pro piloto de RLS
-  // em whatsapp_messages (só homologação por enquanto, ver diagnosticos/AUDITORIA_LOG.md).
-  // Sem isso, esse INSERT falharia o WITH CHECK da policy em qualquer ambiente com RLS ativo.
-  if (respostaFinal) {
-    await withTenantContext({ userId: userIdFinal, isAdmin: false }, client => client.query(
-      `INSERT INTO whatsapp_messages
-         (user_id, instance_name, remote_jid, message_id, from_me,
-          message_type, content, status, timestamp_wa, push_name)
-       VALUES ($1,$2,$3,$4,true,'text',$5,'sent',to_timestamp($6), $7)
-       ON CONFLICT (message_id, instance_name) DO NOTHING`,
-      [userIdFinal, agente.evolution_instancia || entrada.instancia,
-       `${entrada.telefone}@s.whatsapp.net`,
-       // [AUDITORIA] LÓGICA: prefixo "resp_" é o sinal que webhook.ts usa (checagem
-       // messageId.startsWith('resp_')) para reconhecer que esta mensagem veio do próprio bot e
-       // não deve disparar a lógica de "atendente assumiu, pausar IA" — acoplamento implícito
-       // entre os dois arquivos, sem constante compartilhada.
-       `resp_${entrada.messageId}`,
-       respostaFinal,
-       Math.floor(Date.now() / 1000),
-       nomeAgente]
-    )).catch(err => log.error('ENGINE INSERT whatsapp_messages', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
-  }
+  // 11. Enviar mensagens (replica o Loop do n8n: 3s entre cada parte). Movido pra antes do
+  // registro em whatsapp_messages (abaixo) para que esse registro reflita corretamente se a
+  // resposta saiu como texto ou voz — ver `tipoEnviado`/`mediaUrlEnviada`.
+  let tipoEnviado: 'text' | 'audio' = 'text';
+  let mediaUrlEnviada: string | null = null;
 
-  // 12. Registrar uso de tokens
-  if (tokensEntrada || tokensSaida) {
-    await pool.query(
-      `INSERT INTO ai_uso_diario
-         (user_id, data, provider_slug, modelo, total_mensagens, tokens_entrada, tokens_saida)
-       VALUES ($1, CURRENT_DATE, $2, $3, 1, $4, $5)
-       ON CONFLICT (user_id, data, provider_slug, modelo) DO UPDATE
-       SET total_mensagens = ai_uso_diario.total_mensagens + 1,
-           tokens_entrada  = ai_uso_diario.tokens_entrada  + $4,
-           tokens_saida    = ai_uso_diario.tokens_saida    + $5,
-           updated_at = now()`,
-      [userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida]
-    ).catch(err => log.error('ENGINE INSERT ai_uso_diario', 'Falha ao registrar uso de tokens', { err: err?.message, stack: err?.stack }));
-  }
-
-  // 13. Enviar mensagens (replica o Loop do n8n: 3s entre cada parte)
   if (!pausaAtivada && parserMessages.length) {
     // Correção 1 — Validar telefone antes de enviar
     const telefoneDigitos = entrada.telefone.replace(/\D/g, '');
@@ -691,17 +732,90 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       return;
     }
 
-    for (let i = 0; i < parserMessages.length; i++) {
-      if (i > 0) await new Promise(r => setTimeout(r, 3000));
-      const textoFormatado = `*${nomeAgente}*\n${parserMessages[i]}`;
-      await enviarResposta(
-        agente.evolution_server_url,
-        agente.evolution_api_key,
+    // [AUDITORIA] LÓGICA (Sprint TTS): resposta em voz é opt-in por agente
+    // (agent_configs.resposta_voz_habilitada + resposta_voz_id) e só é tentada quando a
+    // mensagem RECEBIDA do cliente foi um áudio (espelha o canal — critério simples e seguro
+    // sugerido pelo usuário). Fora dessas condições, comportamento 100% idêntico ao anterior
+    // (texto em pedaços, sem nenhuma mudança pra tenants sem a flag ativada).
+    const deveResponderEmVoz =
+      agentConfig?.resposta_voz_habilitada === true &&
+      !!agentConfig?.resposta_voz_id &&
+      entrada.tipo === 'audio';
+
+    let vozEnviada = false;
+    if (deveResponderEmVoz) {
+      const resultado = await enviarRespostaVoz(
+        pool, userIdFinal,
+        agente.evolution_server_url, agente.evolution_api_key,
         agente.evolution_instancia || entrada.instancia,
-        entrada.telefone,
-        textoFormatado
+        entrada.telefone, respostaFinal, agentConfig.resposta_voz_id,
       );
+      if (resultado.ok) {
+        vozEnviada = true;
+        tipoEnviado = 'audio';
+        mediaUrlEnviada = resultado.audioUrl;
+      } else {
+        log.warn('ENGINE VOZ', 'Falha ao responder em voz — caindo pro texto normal', { telefone: entrada.telefone });
+      }
     }
+
+    // Fallback obrigatório: texto normal quando voz não foi tentada ou falhou por qualquer motivo.
+    if (!vozEnviada) {
+      for (let i = 0; i < parserMessages.length; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 3000));
+        const textoFormatado = `*${nomeAgente}*\n${parserMessages[i]}`;
+        await enviarResposta(
+          agente.evolution_server_url,
+          agente.evolution_api_key,
+          agente.evolution_instancia || entrada.instancia,
+          entrada.telefone,
+          textoFormatado
+        );
+      }
+    }
+  }
+
+  // 12. Persistir em whatsapp_messages para o painel de chat
+  // [AUDITORIA] FIX APLICADO (2026-07-21): INSERT agora roda dentro de withTenantContext
+  // (db.ts) — propaga app.user_id pro Postgres via SET LOCAL, necessário pro piloto de RLS
+  // em whatsapp_messages (só homologação por enquanto, ver diagnosticos/AUDITORIA_LOG.md).
+  // Sem isso, esse INSERT falharia o WITH CHECK da policy em qualquer ambiente com RLS ativo.
+  if (respostaFinal) {
+    await withTenantContext({ userId: userIdFinal, isAdmin: false }, client => client.query(
+      `INSERT INTO whatsapp_messages
+         (user_id, instance_name, remote_jid, message_id, from_me,
+          message_type, content, media_url, media_mimetype, status, timestamp_wa, push_name)
+       VALUES ($1,$2,$3,$4,true,$5,$6,$7,$8,'sent',to_timestamp($9), $10)
+       ON CONFLICT (message_id, instance_name) DO NOTHING`,
+      [userIdFinal, agente.evolution_instancia || entrada.instancia,
+       `${entrada.telefone}@s.whatsapp.net`,
+       // [AUDITORIA] LÓGICA: prefixo "resp_" é o sinal que webhook.ts usa (checagem
+       // messageId.startsWith('resp_')) para reconhecer que esta mensagem veio do próprio bot e
+       // não deve disparar a lógica de "atendente assumiu, pausar IA" — acoplamento implícito
+       // entre os dois arquivos, sem constante compartilhada.
+       `resp_${entrada.messageId}`,
+       tipoEnviado,
+       respostaFinal,
+       mediaUrlEnviada,
+       tipoEnviado === 'audio' ? 'audio/mpeg' : null,
+       Math.floor(Date.now() / 1000),
+       nomeAgente]
+    )).catch(err => log.error('ENGINE INSERT whatsapp_messages', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
+  }
+
+  // 13. Registrar uso de tokens
+  if (tokensEntrada || tokensSaida) {
+    await pool.query(
+      `INSERT INTO ai_uso_diario
+         (user_id, data, provider_slug, modelo, total_mensagens, tokens_entrada, tokens_saida)
+       VALUES ($1, CURRENT_DATE, $2, $3, 1, $4, $5)
+       ON CONFLICT (user_id, data, provider_slug, modelo) DO UPDATE
+       SET total_mensagens = ai_uso_diario.total_mensagens + 1,
+           tokens_entrada  = ai_uso_diario.tokens_entrada  + $4,
+           tokens_saida    = ai_uso_diario.tokens_saida    + $5,
+           updated_at = now()`,
+      [userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida]
+    ).catch(err => log.error('ENGINE INSERT ai_uso_diario', 'Falha ao registrar uso de tokens', { err: err?.message, stack: err?.stack }));
   }
 
   // 14. Ações de pausa

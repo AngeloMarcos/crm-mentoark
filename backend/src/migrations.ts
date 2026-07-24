@@ -1504,5 +1504,16 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'team_members/team_role_permissions schema fix OK');
 
+  // ── agent_configs: resposta em voz (TTS via ElevenLabs) — opt-in, default false ────
+  // [AUDITORIA] LÓGICA: par de colunas necessário pro motor nativo (agentEngine.ts) decidir
+  // se/como sintetizar a resposta em voz. `resposta_voz_id` é obrigatório pra chamada real à
+  // ElevenLabs (endpoint exige voice_id) — sem ele, mesmo com a flag ligada, o motor cai pro
+  // texto normal (ver agentEngine.ts). Estritamente aditivo: default false não muda nenhum
+  // comportamento existente até o usuário configurar isso explicitamente.
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS resposta_voz_habilitada BOOLEAN DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS resposta_voz_id         TEXT`).catch(() => {});
+
+  log.info('MIGRATIONS', 'agent_configs resposta_voz columns OK');
+
   log.info('MIGRATIONS', 'OK');
 }
