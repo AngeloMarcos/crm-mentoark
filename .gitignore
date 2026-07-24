@@ -29,3 +29,7 @@ backend/.env
 .agents/
 .claude/skills/
 skills-lock.json
+
+# Debug/scratch artifacts
+.playwright-mcp/
+_tmp_*.sql

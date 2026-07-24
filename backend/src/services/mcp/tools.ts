@@ -9,7 +9,9 @@ import {
   BuscarProdutosArgsSchema,
   CriarAgendamentoArgsSchema,
   ConsultarFaqArgsSchema,
+  BuscarDocumentosArgsSchema,
 } from '../functionCallingSecurity';
+import { gerarEmbedding } from '../../utils/embeddings';
 import { log } from '../../logger';
 
 export interface MCPTool {
@@ -111,6 +113,18 @@ export const MCP_TOOLS: MCPTool[] = [
       required: ['pergunta'],
     },
   },
+  {
+    name: 'buscar_documentos',
+    description: 'Busca trechos de documentos de conhecimento e FAQs armazenados na base de conhecimento (RAG/pgvector) para responder a dúvidas institucionais ou de regras do negócio do cliente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'A pergunta ou termo de busca do usuário de forma clara para pesquisa semântica.' },
+        limite: { type: 'number', description: 'Quantidade máxima de trechos a retornar (padrão: 3).' },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 export async function executarFerramenta(
@@ -191,18 +205,31 @@ export async function executarFerramenta(
 
         const backendUrl = process.env.BACKEND_URL || 'https://api.mentoark.com.br';
         const secret = process.env.N8N_WEBHOOK_SECRET || 'mentoark-kanban-secret-2025';
-        await fetch(`${backendUrl}/api/kanban/webhook/n8n`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-webhook-secret': secret },
-          body: JSON.stringify({
-            user_id: userId,
-            titulo: `Lead ${validatedArgs.motivo}: ${validatedArgs.telefone}`,
-            resumo: validatedArgs.resumo || `Pausa: ${validatedArgs.motivo}`,
-            contato_telefone: validatedArgs.telefone,
-            remote_jid: `${validatedArgs.telefone}@s.whatsapp.net`,
-            prioridade: validatedArgs.motivo === 'qualificado' ? 'alta' : 'media',
-          }),
-        }).catch(() => {});
+        // [AUDITORIA] FIX APLICADO: esta chamada é aguardada (await) dentro do loop agêntico,
+        // sob o lock atendimentosAtivos do contato — sem timeout, uma lentidão nesse endpoint
+        // interno travaria o processamento daquela conversa inteira. Mesmo padrão de
+        // AbortController já usado em transcreverAudio() (agentEngine.ts).
+        const kanbanController = new AbortController();
+        const kanbanTimer = setTimeout(() => kanbanController.abort(), 5_000);
+        try {
+          await fetch(`${backendUrl}/api/kanban/webhook/n8n`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-webhook-secret': secret },
+            body: JSON.stringify({
+              user_id: userId,
+              titulo: `Lead ${validatedArgs.motivo}: ${validatedArgs.telefone}`,
+              resumo: validatedArgs.resumo || `Pausa: ${validatedArgs.motivo}`,
+              contato_telefone: validatedArgs.telefone,
+              remote_jid: `${validatedArgs.telefone}@s.whatsapp.net`,
+              prioridade: validatedArgs.motivo === 'qualificado' ? 'alta' : 'media',
+            }),
+            signal: kanbanController.signal,
+          });
+        } catch {
+          // não-crítico: falha/timeout ao notificar o Kanban não deve impedir a pausa do atendimento
+        } finally {
+          clearTimeout(kanbanTimer);
+        }
 
         return `PAUSA_ATIVADA:${validatedArgs.motivo}`;
       }
@@ -254,6 +281,41 @@ export async function executarFerramenta(
         );
         if (!r.rows.length) return 'Não encontrei essa informação na base de conhecimento.';
         return r.rows.map((k: any) => k.conteudo).join('\n---\n');
+      }
+
+      case 'buscar_documentos': {
+        // Valida argumentos com zod schema
+        const validatedArgs = BuscarDocumentosArgsSchema.parse(args);
+
+        // [AUDITORIA] LÓGICA: usa a OPENAI_API_KEY global do ambiente (não a chave por-tenant
+        // de ai_providers) para gerar o embedding — decisão explícita: o RAG do CRM roda sobre
+        // um único modelo de embeddings fixo, independente de qual provider/modelo o tenant
+        // tenha configurado para a conversa (Claude, GPT, etc.).
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) {
+          return 'Busca de documentos indisponível: OPENAI_API_KEY não configurada no servidor.';
+        }
+
+        const embedding = await gerarEmbedding(validatedArgs.query, apiKey);
+        if (!embedding) {
+          return 'Não foi possível processar a busca de documentos no momento.';
+        }
+
+        // Distância cosseno via pgvector (<=>), isolamento estrito por user_id — mesmo padrão
+        // de todas as outras ferramentas deste arquivo.
+        const vectorStr = `[${embedding.join(',')}]`;
+        const r = await pool.query(
+          `SELECT content FROM documents
+           WHERE user_id = $1
+           ORDER BY embedding <=> $2::vector
+           LIMIT $3`,
+          [userId, vectorStr, validatedArgs.limite]
+        );
+
+        if (!r.rows.length) return 'Nenhum documento correspondente encontrado na base de conhecimento.';
+        return r.rows
+          .map((row: any, idx: number) => `[Trecho ${idx + 1}]: ${row.content}`)
+          .join('\n\n');
       }
 
       default:

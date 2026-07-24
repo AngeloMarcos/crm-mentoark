@@ -164,6 +164,17 @@ async function enviarResposta(
   serverUrl: string, apiKey: string,
   instancia: string, telefone: string, texto: string
 ): Promise<void> {
+  // [AUDITORIA] LÓGICA: sandbox de teste — com IA_TEST_MODE=true, a resposta é gerada
+  // normalmente pelo motor mas nunca chega a sair para o WhatsApp de verdade (nem passa pelo
+  // bookkeeping antiloop abaixo, que só faz sentido quando há um envio real). Permite testar o
+  // motor de IA ponta a ponta sem risco de mensagem real sendo entregue a um contato.
+  if (process.env.IA_TEST_MODE === 'true') {
+    log.info('IA_SANDBOX', 'Mensagem gerada de teste (envio real suprimido)', {
+      telefone, instancia, responseText: texto, ok: true,
+    });
+    return;
+  }
+
   const base = sanitizeEvolutionUrl(serverUrl);
 
   // Registra o conteúdo ANTES de enviar para evitar condição de corrida no antiloop
@@ -245,12 +256,27 @@ async function upsertContato(
   );
   if (ex.rows.length) return ex.rows[0];
 
+  // [AUDITORIA] LÓGICA: idx_contatos_user_tel_unique é um índice único PARCIAL
+  // (UNIQUE (user_id, telefone) WHERE telefone IS NOT NULL) — o ON CONFLICT abaixo repete o
+  // mesmo predicado WHERE de propósito, senão o Postgres recusa o INSERT com "no unique or
+  // exclusion constraint matching the ON CONFLICT specification" em toda tentativa de criar
+  // contato novo (mesmo detalhe já corrigido hoje na trigger de sincronização da Inbox).
   const novo = await pool.query(
     `INSERT INTO contatos (user_id, nome, telefone, origem, status)
-     VALUES ($1, $2, $3, 'WhatsApp', 'novo') RETURNING id, opt_out`,
+     VALUES ($1, $2, $3, 'WhatsApp', 'novo')
+     ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
+     RETURNING id, opt_out`,
     [userId, nome || telefone, telefone]
   );
-  return novo.rows[0];
+  if (novo.rows.length) return novo.rows[0];
+
+  // Conflito concorrente: outra chamada (ex: upsert antecipado do webhook.ts) venceu a
+  // corrida e criou o contato entre o SELECT e o INSERT acima — busca o registro já existente.
+  const pos = await pool.query(
+    `SELECT id, opt_out FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+    [userId, `%${telefone.slice(-11)}`]
+  );
+  return pos.rows[0];
 }
 
 // ── MOTOR PRINCIPAL ───────────────────────────────────────────────────────────
@@ -479,7 +505,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   // 8. Finalizar configuração do provider
   const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
-  const modelo = providerInfo?.modelo || agentConfig?.modelo_llm || agente.modelo || 'gpt-4.1';
+  const modelo = providerInfo?.modelo || agentConfig?.modelo_llm || agente.modelo || 'gpt-4o-mini';
   const providerSlug = providerInfo?.providerSlug || 'openai';
   log.info('ENGINE', 'Provider selecionado', {
     provider: providerInfo ? providerSlug + '/' + modelo : 'FALLBACK env',

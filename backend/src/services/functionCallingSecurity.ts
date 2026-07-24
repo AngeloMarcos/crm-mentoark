@@ -172,6 +172,13 @@ export const ConsultarFaqArgsSchema = z.object({
 
 export type ConsultarFaqArgs = z.infer<typeof ConsultarFaqArgsSchema>;
 
+export const BuscarDocumentosArgsSchema = z.object({
+  query: z.string().min(1).max(500).describe('Pergunta ou termo de busca para pesquisa semântica'),
+  limite: z.number().int().min(1).max(10).default(3).describe('Quantidade máxima de trechos a retornar'),
+}).strict();
+
+export type BuscarDocumentosArgs = z.infer<typeof BuscarDocumentosArgsSchema>;
+
 /**
  * MCP.TS — Ferramentas genéricas do MCP Server
  */
