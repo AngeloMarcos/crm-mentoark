@@ -102,9 +102,13 @@ export default function marketing(pool: Pool) {
         `insights.date_preset(last_30d){impressions,reach,clicks,ctr,cpc,spend,actions}&` +
         `effective_status=${status}`;
 
+      // [AUDITORIA] FIX APLICADO: sem timeout, uma lentidão da Graph API travava a request. AbortController 10s.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
       const r = await fetch(url, {
-        headers: { Authorization: `Bearer ${conta.access_token}` }
-      });
+        headers: { Authorization: `Bearer ${conta.access_token}` },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
       const data: any = await r.json();
 
       if (data.error) {
@@ -146,10 +150,13 @@ export default function marketing(pool: Pool) {
       );
       if (!conta) return res.status(401).json({ error: "Meta não conectado" });
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
       const r = await fetch(`https://graph.facebook.com/v19.0/${req.params.id}?status=PAUSED`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${conta.access_token}` }
-      });
+        headers: { Authorization: `Bearer ${conta.access_token}` },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
       const data: any = await r.json();
       if (data.error) return res.status(400).json({ error: data.error });
       res.json({ ok: true });
@@ -166,10 +173,13 @@ export default function marketing(pool: Pool) {
       );
       if (!conta) return res.status(401).json({ error: "Meta não conectado" });
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
       const r = await fetch(`https://graph.facebook.com/v19.0/${req.params.id}?status=ACTIVE`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${conta.access_token}` }
-      });
+        headers: { Authorization: `Bearer ${conta.access_token}` },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
       const data: any = await r.json();
       if (data.error) return res.status(400).json({ error: data.error });
       res.json({ ok: true });
@@ -197,9 +207,12 @@ export default function marketing(pool: Pool) {
     try {
       const { telefone, nome, campanha } = req.body;
       const n8nWebhook = process.env.N8N_CRIS_WEBHOOK || "https://fierceparrot-n8n.cloudfy.live/webhook/cris-lead";
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
       await fetch(n8nWebhook, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           telefone,
           nome,
@@ -207,7 +220,7 @@ export default function marketing(pool: Pool) {
           origem: "facebook_ads",
           mensagem_inicial: `Olá ${nome.split(" ")[0]}! Vi que você se interessou em ${campanha}. Posso te ajudar? 😊`,
         }),
-      });
+      }).finally(() => clearTimeout(timer));
       await pool.query(
         "UPDATE marketing_leads SET status_crm='cris_ativada' WHERE id=$1 AND user_id=$2",
         [req.params.id, req.userId]
@@ -242,17 +255,22 @@ export default function marketing(pool: Pool) {
       // Limpar nonce usado
       await pool.query('DELETE FROM oauth_state WHERE user_id = $1', [user_id]);
 
+      const tokenController = new AbortController();
+      const tokenTimer = setTimeout(() => tokenController.abort(), 10_000);
       const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?` +
         `client_id=${process.env.FACEBOOK_APP_ID}&client_secret=${process.env.FACEBOOK_APP_SECRET}` +
         `&redirect_uri=${encodeURIComponent(`${process.env.API_URL}/api/marketing/facebook/callback`)}` +
-        `&code=${code}`);
+        `&code=${code}`, { signal: tokenController.signal }).finally(() => clearTimeout(tokenTimer));
       const tokenData: any = await tokenRes.json();
-      
+
       if (tokenData.error) return res.status(400).json({ error: tokenData.error });
 
+      const meController = new AbortController();
+      const meTimer = setTimeout(() => meController.abort(), 10_000);
       const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=name,adaccounts{name}`, {
-        headers: { Authorization: `Bearer ${tokenData.access_token}` }
-      });
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+        signal: meController.signal,
+      }).finally(() => clearTimeout(meTimer));
       const meData: any = await meRes.json();
       const adAccount = meData.adaccounts?.data?.[0];
 

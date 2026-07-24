@@ -31,6 +31,8 @@ export default function kanban(pool: Pool): Router {
       const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
       if (ANTHROPIC_KEY) {
         try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15_000);
           const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: {
@@ -43,15 +45,16 @@ export default function kanban(pool: Pool): Router {
               max_tokens: 500,
               messages: [{
                 role: 'user',
-                content: `Resuma em 2-3 linhas o assunto desta conversa e sugira um título de tarefa. 
+                content: `Resuma em 2-3 linhas o assunto desta conversa e sugira um título de tarefa.
                 Retorne APENAS um JSON: { "titulo": "string", "resumo": "string", "prioridade": "baixa"|"media"|"alta" }
-                
+
                 Conversa:
                 ${context}`
               }]
-            })
-          });
-          
+            }),
+            signal: controller.signal,
+          }).finally(() => clearTimeout(timer));
+
           const aiJson: any = await aiResp.json();
           const text = aiJson.content?.[0]?.text || '';
           const match = text.match(/\{.*\}/s);

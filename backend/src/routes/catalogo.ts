@@ -5,6 +5,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+import { evolutionFetch } from '../utils/resilientFetch';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -247,7 +248,7 @@ export default function catalogoRouter(pool: Pool): Router {
         try {
           let resp: any;
           if (produto.img_url) {
-            const r = await fetch(`${base}/message/sendMedia/${instancia}`, {
+            const r = await evolutionFetch(`${base}/message/sendMedia/${instancia}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: evoKey },
               body: JSON.stringify({
@@ -262,7 +263,7 @@ export default function catalogoRouter(pool: Pool): Router {
             resp = await r.json();
             if (!r.ok) throw new Error(resp.message || 'Erro Evolution API');
           } else {
-            const r = await fetch(`${base}/message/sendText/${instancia}`, {
+            const r = await evolutionFetch(`${base}/message/sendText/${instancia}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: evoKey },
               body: JSON.stringify({ number: numero, text: caption }),
@@ -370,7 +371,7 @@ export default function catalogoRouter(pool: Pool): Router {
           const introText = intro
             || `🛒 *${catalogo.nome}*\n${catalogo.descricao || ''}\n\nConfira nossos produtos 👇`;
 
-          await fetch(`${base}/message/sendText/${instancia}`, {
+          await evolutionFetch(`${base}/message/sendText/${instancia}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: evoKey },
             body: JSON.stringify({ number: numero, text: introText }),
@@ -388,7 +389,7 @@ export default function catalogoRouter(pool: Pool): Router {
             ].filter(Boolean).join('\n');
 
             if (produto.img_url) {
-              await fetch(`${base}/message/sendMedia/${instancia}`, {
+              await evolutionFetch(`${base}/message/sendMedia/${instancia}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', apikey: evoKey },
                 body: JSON.stringify({
@@ -397,7 +398,7 @@ export default function catalogoRouter(pool: Pool): Router {
                 }),
               });
             } else {
-              await fetch(`${base}/message/sendText/${instancia}`, {
+              await evolutionFetch(`${base}/message/sendText/${instancia}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', apikey: evoKey },
                 body: JSON.stringify({ number: numero, text: caption }),

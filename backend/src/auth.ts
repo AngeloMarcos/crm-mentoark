@@ -307,14 +307,19 @@ router.post('/turnstile-verify', async (req, res) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (ip) formData.append('remoteip', String(ip).split(',')[0].trim());
 
+    // [AUDITORIA] FIX APLICADO: sem timeout, uma lentidão na Cloudflare travava o login/registro
+    // indefinidamente (nenhum limite superior de espera). AbortController 10s.
+    const cfController = new AbortController();
+    const cfTimer = setTimeout(() => cfController.abort(), 10_000);
     const cfResp = await fetch(
       'https://challenges.cloudflare.com/turnstile/v0/siteverify',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: formData.toString(),
+        signal: cfController.signal,
       }
-    );
+    ).finally(() => clearTimeout(cfTimer));
 
     const result = await cfResp.json() as { success: boolean; 'error-codes'?: string[] };
 
@@ -384,7 +389,13 @@ router.get('/callback/google', async (req: Request, res: Response) => {
     }
     const redirect_to: string = payload.redirect_to;
 
+    // [AUDITORIA] FIX APLICADO: as duas chamadas abaixo (token exchange + userinfo) rodavam sem
+    // timeout — uma lentidão da Google travava o callback de login indefinidamente. AbortController
+    // 10s em cada, mesmo padrão já usado no restante do arquivo/projeto.
+
     // 1) Trocar code por token
+    const tokenController = new AbortController();
+    const tokenTimer = setTimeout(() => tokenController.abort(), 10_000);
     const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -395,7 +406,8 @@ router.get('/callback/google', async (req: Request, res: Response) => {
         redirect_uri: GOOGLE_REDIRECT_URI,
         grant_type: 'authorization_code',
       }).toString(),
-    });
+      signal: tokenController.signal,
+    }).finally(() => clearTimeout(tokenTimer));
     const tokenData = await tokenResp.json() as any;
     if (!tokenResp.ok || !tokenData.access_token) {
       log.error('GOOGLE', 'Token exchange falhou', { tokenData });
@@ -403,9 +415,12 @@ router.get('/callback/google', async (req: Request, res: Response) => {
     }
 
     // 2) Buscar perfil
+    const profileController = new AbortController();
+    const profileTimer = setTimeout(() => profileController.abort(), 10_000);
     const profileResp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
+      signal: profileController.signal,
+    }).finally(() => clearTimeout(profileTimer));
     const profile = await profileResp.json() as any;
     if (!profile.email) {
       return res.status(400).send('Não foi possível obter o e-mail do Google');

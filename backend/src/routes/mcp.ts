@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { evolutionFetch } from '../utils/resilientFetch';
 
 // SSE sessions (Claude Code / legacy clients)
 const sseSessions = new Map<string, SSEServerTransport>();
@@ -156,7 +157,7 @@ export function buildServer(pool: Pool): McpServer {
         return { content: [{ type: 'text' as const, text: 'Evolution API não configurada para este usuário' }] };
       }
       const { url, api_key, instancia } = evo.rows[0];
-      const resp = await fetch(`${url.replace(/\/$/, '')}/message/sendText/${instancia}`, {
+      const resp = await evolutionFetch(`${url.replace(/\/$/, '')}/message/sendText/${instancia}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: api_key },
         body: JSON.stringify({ number: telefone, text: texto, delay: 1200 }),

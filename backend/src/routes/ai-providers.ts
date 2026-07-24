@@ -44,10 +44,15 @@ export default function aiProviders(pool: Pool): Router {
     if (!slug || !api_key) {
       return res.status(400).json({ ok: false, message: 'slug e api_key são obrigatórios' });
     }
+    // [AUDITORIA] FIX APLICADO: as 3 chamadas abaixo (teste de chave de provider) rodavam sem
+    // timeout — AbortController 10s em cada, para não travar a request caso o provedor esteja lento.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
     try {
       if (slug === 'openai') {
         const r = await fetch('https://api.openai.com/v1/models', {
           headers: { Authorization: `Bearer ${api_key}` },
+          signal: controller.signal,
         });
         return res.json({ ok: r.ok, status: r.status });
       }
@@ -64,18 +69,22 @@ export default function aiProviders(pool: Pool): Router {
             max_tokens: 10,
             messages: [{ role: 'user', content: 'ping' }],
           }),
+          signal: controller.signal,
         });
         return res.json({ ok: r.ok, status: r.status });
       }
       if (slug === 'gemini') {
         const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models?key=${api_key}`
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${api_key}`,
+          { signal: controller.signal }
         );
         return res.json({ ok: r.ok, status: r.status });
       }
       return res.json({ ok: false, message: 'Provider não suportado' });
     } catch (e: any) {
       return res.status(500).json({ ok: false, message: e.message });
+    } finally {
+      clearTimeout(timer);
     }
   });
 

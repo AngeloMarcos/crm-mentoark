@@ -64,6 +64,12 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
     mensagemUsuario: mensagemBase.slice(0, 150),
   });
 
+  // [AUDITORIA] FIX APLICADO: esta chamada é aguardada (await) dentro do loop principal de
+  // disparoProcessor.ts, uma mensagem por vez — sem timeout, uma OpenAI lenta/travada bloqueava
+  // o processamento de TODA a fila de disparos em massa. AbortController com 15s, mesmo padrão
+  // já usado em agentEngine.ts (transcreverAudio).
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
   try {
     const resp = await fetch(OPENAI_API_URL, {
       method: 'POST',
@@ -80,7 +86,8 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
           { role: 'user', content: `Mensagem original:\n${mensagemBase}` },
         ],
       }),
-    });
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');

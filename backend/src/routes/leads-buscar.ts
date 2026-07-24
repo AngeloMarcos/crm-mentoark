@@ -197,6 +197,8 @@ export default function leadsBuscarRouter(pool: Pool): Router {
         .join(' ');
       const maxResults = Math.min(Number(limite) || 20, 20);
 
+      const placesController = new AbortController();
+      const placesTimer = setTimeout(() => placesController.abort(), 15_000);
       const placesRes = await fetch('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
         headers: {
@@ -217,7 +219,8 @@ export default function leadsBuscarRouter(pool: Pool): Router {
           regionCode: 'BR',
           maxResultCount: maxResults,
         }),
-      });
+        signal: placesController.signal,
+      }).finally(() => clearTimeout(placesTimer));
 
       if (!placesRes.ok) {
         const errText = await placesRes.text();
@@ -295,6 +298,8 @@ export default function leadsBuscarRouter(pool: Pool): Router {
             tem_website: !!l.website,
           }));
 
+          const aiController = new AbortController();
+          const aiTimer = setTimeout(() => aiController.abort(), 15_000);
           const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -326,7 +331,8 @@ export default function leadsBuscarRouter(pool: Pool): Router {
                 },
               ],
             }),
-          });
+            signal: aiController.signal,
+          }).finally(() => clearTimeout(aiTimer));
 
           if (aiRes.ok) {
             const aiData = (await aiRes.json()) as any;

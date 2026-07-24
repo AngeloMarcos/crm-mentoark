@@ -252,7 +252,7 @@ export default function whatsappRouter(pool: Pool): Router {
 
   async function buscarFotoEvo(base: string, apiKey: string, instancia: string, phone: string): Promise<string | null> {
     try {
-      const r = await fetch(`${base}/chat/fetchProfilePictureUrl/${instancia}`, {
+      const r = await evolutionFetch(`${base}/chat/fetchProfilePictureUrl/${instancia}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: apiKey },
         body: JSON.stringify({ number: phone }),
@@ -264,7 +264,7 @@ export default function whatsappRouter(pool: Pool): Router {
       }
     } catch {}
     try {
-      const r = await fetch(`${base}/fetchProfilePicture/${instancia}?number=${phone}`, {
+      const r = await evolutionFetch(`${base}/fetchProfilePicture/${instancia}?number=${phone}`, {
         headers: { apikey: apiKey },
       });
       if (r.ok) {
@@ -782,12 +782,12 @@ export default function whatsappRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'Host de mídia não permitido' });
       }
 
-      let mediaRes = await fetch(mediaUrl, {
+      let mediaRes = await evolutionFetch(mediaUrl, {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
       if (!mediaRes || !mediaRes.ok) {
-        mediaRes = await fetch(mediaUrl).catch(() => null);
+        mediaRes = await evolutionFetch(mediaUrl).catch(() => null);
       }
 
       if (!mediaRes || !mediaRes.ok) {
@@ -953,7 +953,7 @@ export default function whatsappRouter(pool: Pool): Router {
         }).catch(() => null);
 
         if (listRes?.ok) {
-          const instances: any[] = await listRes.json().catch(() => []);
+          const instances: any[] = (await listRes.json().catch(() => [])) as any[];
           // [AUDITORIA] FIX APLICADO (Sprint 1 — multi-instância): antes, qualquer instância com
           // o prefixo do tenant que não fosse a "oficial" era tratada como duplicata e apagada —
           // isso apagaria sozinho qualquer segundo número legitimamente conectado. Agora só
@@ -1230,12 +1230,12 @@ export default function whatsappRouter(pool: Pool): Router {
 
       await registrarWebhook(base, cfg.api_key, instancia, false).catch(() => {});
 
-      await fetch(`${base}/instance/logout/${instancia}`, {
+      await evolutionFetch(`${base}/instance/logout/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(err => log.warn('WHATSAPP', 'Erro no logout', { instancia, err: err.message }));
 
-      const deleteRes = await fetch(`${base}/instance/delete/${instancia}`, {
+      const deleteRes = await evolutionFetch(`${base}/instance/delete/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(err => {
@@ -1303,7 +1303,7 @@ export default function whatsappRouter(pool: Pool): Router {
       let totalPages = 1;
 
       do {
-        const msgsRes = await fetch(`${base}/chat/findMessages/${instancia}`, {
+        const msgsRes = await evolutionFetch(`${base}/chat/findMessages/${instancia}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
           body: JSON.stringify({ where: {}, limit: PAGE_SIZE, page }),
@@ -1632,12 +1632,12 @@ export default function whatsappRouter(pool: Pool): Router {
 
       await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
 
-      await fetch(`${base}/instance/logout/${name}`, {
+      await evolutionFetch(`${base}/instance/logout/${name}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
-      await fetch(`${base}/instance/delete/${name}`, {
+      await evolutionFetch(`${base}/instance/delete/${name}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
@@ -1691,7 +1691,7 @@ export default function whatsappRouter(pool: Pool): Router {
       if (!url || !api_key) return res.status(400).json({ message: 'Configure a URL e API Key em Conectores primeiro.' });
 
       const base = url.replace(/\/$/, '');
-      const r = await fetch(`${base}/instance/fetchInstances`, { headers: { apikey: api_key } });
+      const r = await evolutionFetch(`${base}/instance/fetchInstances`, { headers: { apikey: api_key } });
       if (!r.ok) {
         const txt = await r.text().catch(() => '');
         return res.status(r.status).json({ message: `Evolution retornou HTTP ${r.status}`, detail: txt.slice(0, 300) });
@@ -1718,7 +1718,7 @@ export default function whatsappRouter(pool: Pool): Router {
       connectingUsers.add(lockKey);
       setTimeout(() => connectingUsers.delete(lockKey), 30_000);
 
-      const stateR = await fetch(`${base}/instance/connectionState/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
+      const stateR = await evolutionFetch(`${base}/instance/connectionState/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
       if (stateR?.status === 401) {
         return res.json({ state: 'unauthorized', instancia: cfg.instancia });
       }
@@ -1731,7 +1731,7 @@ export default function whatsappRouter(pool: Pool): Router {
         }
       }
 
-      const connR = await fetch(`${base}/instance/connect/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
+      const connR = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
       if (connR?.ok) {
         const cd: any = await connR.json().catch(() => ({}));
         const qrRaw = cd?.base64 || cd?.qrcode?.base64 || cd?.code || null;
@@ -1741,7 +1741,7 @@ export default function whatsappRouter(pool: Pool): Router {
         }
       }
 
-      const createR = await fetch(`${base}/instance/create`, {
+      const createR = await evolutionFetch(`${base}/instance/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: key },
         body: JSON.stringify({
@@ -1756,7 +1756,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const created: any = await createR.json().catch(() => ({}));
 
       await new Promise(r => setTimeout(r, 1500));
-      const qrR = await fetch(`${base}/instance/connect/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
+      const qrR = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}`, { headers: { apikey: key } }).catch(() => null);
       const qd: any = qrR?.ok ? await qrR.json().catch(() => ({})) : {};
       const qrCode = created?.qrcode?.base64 || qd?.base64 || qd?.code || null;
       await registrarWebhook(base, key, cfg.instancia);
@@ -1873,7 +1873,7 @@ export default function whatsappRouter(pool: Pool): Router {
     if (forEveryone && instancia && remoteJid) {
       const cfg = await getEvolutionConfig(userId);
       const base = cfg.url.replace(/\/$/, '');
-      await fetch(`${base}/chat/deleteMessage/${instancia}`, {
+      await evolutionFetch(`${base}/chat/deleteMessage/${instancia}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
         body: JSON.stringify({ remoteJid, messageId: id }),

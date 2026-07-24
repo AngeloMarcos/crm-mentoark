@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import { evolutionFetch } from '../utils/resilientFetch';
 
 function normalizarBR(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -71,7 +72,7 @@ export default function functions(pool: Pool): Router {
       for (let i = 0; i < jids.length; i += CHUNK) {
         const lote = jids.slice(i, i + CHUNK);
         try {
-          const r = await fetch(`${baseUrl}/chat/whatsappNumbers/${evo.instancia}`, {
+          const r = await evolutionFetch(`${baseUrl}/chat/whatsappNumbers/${evo.instancia}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: evo.api_key },
             body: JSON.stringify({ numbers: lote }),

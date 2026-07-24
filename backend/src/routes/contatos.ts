@@ -45,6 +45,18 @@ export default function contatos(pool: Pool): Router {
         params.push(s);
         idx++;
       }
+      // [AUDITORIA] FIX APLICADO (hardening, não injeção): antes, qualquer nome de coluna que
+      // batesse a regex /^[a-z_]+$/ virava filtro/ORDER BY direto — não era injetável (a regex já
+      // bloqueava `;`/`--`/aspas/espaços), mas era mais permissivo que o necessário: um cliente
+      // podia filtrar/ordenar por qualquer coluna existente na tabela, não só as pretendidas pela
+      // UI. Troca por whitelist explícita das colunas reais de `contatos`.
+      const COLUNAS_FILTRAVEIS = new Set([
+        'nome', 'telefone', 'email', 'empresa', 'cargo', 'origem', 'status', 'notas',
+        'valor_potencial', 'responsavel', 'temperatura', 'created_at', 'updated_at',
+        'base_legal', 'opt_out', 'push_name', 'estagio_id', 'funil_estagio_id',
+        'atendente_pausou_ia', 'is_pinned', 'is_archived', 'atribuido_a',
+      ]);
+
       // Arbitrary field filter (e.g. ?telefone_ilike=%551199%)
       for (const [key, val] of Object.entries(req.query)) {
         const skip = new Set(['lista_id', 'status', 'status_in', 'search', 'order', 'asc', 'limit', 'page', 'head', 'user_id']);
@@ -52,11 +64,11 @@ export default function contatos(pool: Pool): Router {
         const str = String(val);
         if (key.endsWith('_ilike')) {
           const col = key.slice(0, -6);
-          if (/^[a-z_]+$/.test(col)) {
+          if (COLUNAS_FILTRAVEIS.has(col)) {
             conditions.push(`${col} ILIKE $${idx++}`);
             params.push(str);
           }
-        } else if (/^[a-z_]+$/.test(key) && key !== 'user_id') {
+        } else if (COLUNAS_FILTRAVEIS.has(key)) {
           conditions.push(`${key} = $${idx++}`);
           params.push(str);
         }
@@ -65,7 +77,7 @@ export default function contatos(pool: Pool): Router {
       let sql = `SELECT * FROM contatos WHERE ${conditions.join(' AND ')}`;
 
       const orderCol = String(req.query.order || 'created_at');
-      if (/^[a-z_]+$/.test(orderCol)) {
+      if (COLUNAS_FILTRAVEIS.has(orderCol)) {
         const dir = req.query.asc === 'false' ? 'DESC' : 'ASC';
         sql += ` ORDER BY ${orderCol} ${dir}`;
       }

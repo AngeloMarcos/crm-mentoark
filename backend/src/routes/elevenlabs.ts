@@ -35,9 +35,12 @@ export default function elevenLabsRouter(pool: Pool): Router {
         });
       }
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
       const response = await fetch(`${ELEVENLABS_API}/voices`, {
         headers: { 'xi-api-key': apiKey },
-      });
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
 
       if (!response.ok) {
         const err = await response.text();
@@ -72,9 +75,12 @@ export default function elevenLabsRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'Integração ElevenLabs não configurada.' });
       }
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
       const response = await fetch(`${ELEVENLABS_API}/models`, {
         headers: { 'xi-api-key': apiKey },
-      });
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
 
       if (!response.ok) {
         const err = await response.text();
@@ -124,6 +130,8 @@ export default function elevenLabsRouter(pool: Pool): Router {
         });
       }
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30_000);
       const response = await fetch(
         `${ELEVENLABS_API}/text-to-speech/${voice_id}`,
         {
@@ -138,8 +146,9 @@ export default function elevenLabsRouter(pool: Pool): Router {
             model_id,
             voice_settings: { stability, similarity_boost },
           }),
+          signal: controller.signal,
         }
-      );
+      ).finally(() => clearTimeout(timer));
 
       if (!response.ok) {
         const err = await response.text();
@@ -193,6 +202,8 @@ export default function elevenLabsRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'Integração ElevenLabs não configurada.' });
       }
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30_000);
       const response = await fetch(
         `${ELEVENLABS_API}/text-to-speech/${voice_id}/stream`,
         {
@@ -207,8 +218,9 @@ export default function elevenLabsRouter(pool: Pool): Router {
             model_id,
             voice_settings: { stability: 0.5, similarity_boost: 0.75 },
           }),
+          signal: controller.signal,
         }
-      );
+      ).finally(() => clearTimeout(timer));
 
       if (!response.ok) {
         const err = await response.text();
@@ -245,9 +257,12 @@ export default function elevenLabsRouter(pool: Pool): Router {
         return res.status(400).json({ message: 'Integração ElevenLabs não configurada.' });
       }
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
       const response = await fetch(`${ELEVENLABS_API}/user/subscription`, {
         headers: { 'xi-api-key': apiKey },
-      });
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
 
       if (!response.ok) {
         const err = await response.text();
