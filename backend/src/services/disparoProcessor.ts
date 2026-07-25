@@ -22,6 +22,56 @@ async function deveHumanizar(pool: Pool, disparoId: string): Promise<boolean> {
   return flag;
 }
 
+// [AUDITORIA] BUG (Sprint Disparos/Multi-instância, 2026-07-25): `disparos.instancias_ids` é
+// preenchido pela tela (StepAntiBan) mas nunca era lido aqui — a resolução de config abaixo
+// sempre pegava UMA linha arbitrária de `integracoes_config`/`agentes` (sem ORDER BY
+// determinístico por instância selecionada), então marcar 1 ou 5 instâncias na tela dava o
+// mesmo resultado: tudo saindo por um único número. Isso anulava o propósito anti-ban da tela
+// (distribuir volume entre chips). [AUDITORIA] FIX APLICADO: cache por campanha (mesmo padrão
+// de `humanizarCache`/`urlMidiaEstavelPorCampanha`) resolve `instancias_ids` -> linhas de
+// `agentes` uma vez, e `proximaInstanciaRoundRobin` alterna entre elas a cada mensagem enviada
+// da campanha. Campanhas sem `instancias_ids` (vazias, ou criadas antes deste fix) caem no
+// fallback original (`integracoes_config` -> `agentes` ativo -> defaults de env), sem quebrar
+// nada existente.
+interface InstanciaElegivel {
+  url: string;
+  api_key: string;
+  instancia: string;
+}
+const instanciasCampanhaCache = new Map<string, { instancias: InstanciaElegivel[]; proximoIndex: number }>();
+
+async function resolverInstanciasCampanha(pool: Pool, disparoId: string, userId: string): Promise<InstanciaElegivel[]> {
+  const cache = instanciasCampanhaCache.get(disparoId);
+  if (cache) return cache.instancias;
+
+  const disparoRes = await pool.query(
+    `SELECT instancias_ids FROM disparos WHERE id = $1`,
+    [disparoId]
+  ).catch(() => ({ rows: [] as any[] }));
+  const ids: string[] = disparoRes.rows[0]?.instancias_ids || [];
+
+  let instancias: InstanciaElegivel[] = [];
+  if (ids.length) {
+    const agentesRes = await pool.query(
+      `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
+       FROM agentes WHERE id = ANY($1::uuid[]) AND user_id = $2 AND evolution_instancia IS NOT NULL`,
+      [ids, userId]
+    ).catch(() => ({ rows: [] as any[] }));
+    instancias = agentesRes.rows.filter((r: any) => r.url && r.instancia);
+  }
+
+  instanciasCampanhaCache.set(disparoId, { instancias, proximoIndex: 0 });
+  return instancias;
+}
+
+function proximaInstanciaRoundRobin(disparoId: string): InstanciaElegivel | null {
+  const cache = instanciasCampanhaCache.get(disparoId);
+  if (!cache || !cache.instancias.length) return null;
+  const escolhida = cache.instancias[cache.proximoIndex % cache.instancias.length];
+  cache.proximoIndex++;
+  return escolhida;
+}
+
 // [AUDITORIA] LÓGICA: get_next_disparo_batch marca as linhas como 'sending' atomicamente ao
 // dequeueá-las. Se o motor abortar o lote (pausa de horário/fim de semana ou limite de erros
 // consecutivos) sem processar todas as linhas já dequeueadas, elas ficariam presas em 'sending'
@@ -209,30 +259,51 @@ export async function processarDisparos(pool: Pool) {
           continue;
         }
 
-        // 2. Buscar config da Evolution API (primeiro em integracoes_config, depois em agentes, depois default)
+        // 2. Buscar config da Evolution API. Prioridade: instâncias selecionadas na campanha
+        //    (round-robin, ver resolverInstanciasCampanha/proximaInstanciaRoundRobin acima) ->
+        //    integracoes_config -> agentes ativo -> defaults de env.
         let config: { url: string; api_key: string; instancia: string } | null = null;
 
-        const integracaoRes = await pool.query(
-          `SELECT url, api_key, instancia FROM integracoes_config 
-           WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado') 
-           LIMIT 1`,
-          [user_id]
-        );
+        const instanciasElegiveis = await resolverInstanciasCampanha(pool, disparo_id, user_id);
+        if (instanciasElegiveis.length) {
+          config = proximaInstanciaRoundRobin(disparo_id);
+        }
 
-        if (integracaoRes.rows.length) {
-          config = integracaoRes.rows[0];
-        } else {
-          const agenteRes = await pool.query(
-            `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
-             FROM agentes
-             WHERE user_id = $1 AND ativo = true
-             ORDER BY updated_at DESC LIMIT 1`,
+        if (!config) {
+          const integracaoRes = await pool.query(
+            `SELECT url, api_key, instancia FROM integracoes_config
+             WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado')
+             LIMIT 1`,
             [user_id]
           );
-          if (agenteRes.rows.length && agenteRes.rows[0].url) {
-            config = agenteRes.rows[0];
+
+          if (integracaoRes.rows.length) {
+            config = integracaoRes.rows[0];
+          } else {
+            const agenteRes = await pool.query(
+              `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
+               FROM agentes
+               WHERE user_id = $1 AND ativo = true
+               ORDER BY updated_at DESC LIMIT 1`,
+              [user_id]
+            );
+            if (agenteRes.rows.length && agenteRes.rows[0].url) {
+              config = agenteRes.rows[0];
+            }
           }
         }
+
+        // [AUDITORIA] FIX PENDENTE (motivo: decisão de produto sobre robustez vs. simplicidade
+        // — Sprint Disparos/Multi-instância, 2026-07-25): se a instância escolhida pelo
+        // round-robin estiver desconectada, a mensagem cai no fluxo de erro/retry normal
+        // (`catch` abaixo, com `errosConsecutivos` compartilhado por CAMPANHA, não por
+        // instância) em vez de pular pra próxima instância elegível — uma instância caída no
+        // meio de uma campanha distribuída pode pausar a campanha inteira por erros
+        // consecutivos mesmo tendo outras instâncias saudáveis disponíveis. Não implementado
+        // agora porque exigiria isolar o contador de erros consecutivos por instância (não só
+        // por campanha) e decidir se uma instância "removida" do round-robin no meio do envio
+        // deve voltar sozinha depois de reconectar — comportamento não trivial o suficiente pra
+        // decidir sem confirmação do usuário.
 
         // Fallback para defaults do sistema
         const url = config?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
@@ -372,8 +443,8 @@ export async function processarDisparos(pool: Pool) {
 
         // 5. Atualizar status para enviado
         await pool.query(
-          `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW(), erro = NULL WHERE id = $1`,
-          [log_id]
+          `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW(), erro = NULL, instancia = $2 WHERE id = $1`,
+          [log_id, instancia]
         );
         await pool.query(
           `UPDATE disparos SET enviados = enviados + 1 WHERE id = $1`,

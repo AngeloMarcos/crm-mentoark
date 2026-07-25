@@ -485,6 +485,13 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
 
+  // [AUDITORIA] FIX APLICADO (Sprint Disparos/Multi-instância, 2026-07-25): registra qual
+  // instância Evolution efetivamente enviou cada mensagem — necessário pro round-robin de
+  // `disparoProcessor.ts` ser auditável (conferir na prática que alternou entre instâncias) e
+  // resolve de graça o `[AUDITORIA] FIX PENDENTE` do Sprint 5 (teto diário hoje é só por
+  // user_id inteiro, porque não havia como somar por instância/chip individual).
+  await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS instancia TEXT`).catch(() => {});
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_disparo_logs_status
     ON disparo_logs (status) WHERE status = 'pending'

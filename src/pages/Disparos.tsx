@@ -655,6 +655,14 @@ function StepMessage({ form, setForm }: any) {
 function StepAntiBan({ form, setForm }: any) {
   const [instancias, setInstancias] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // [AUDITORIA] BUG (Sprint Disparos/Multi-instância, 2026-07-25): <Switch /> sem
+  // checked/onCheckedChange — não filtrava nada, e o limiar (>70) nem batia com o hardcoded
+  // (>=40) do botão "Selecionar todas" logo ao lado. [AUDITORIA] FIX APLICADO: estado local
+  // ligado ao toggle, usado tanto para filtrar a lista abaixo quanto para decidir o limiar do
+  // "Selecionar todas" (uniformizado: >70 quando o toggle está ativo, >=40 caso contrário).
+  const [apenasSaudaveis, setApenasSaudaveis] = useState(false);
+  const LIMIAR_SAUDAVEL = 70;
+  const LIMIAR_PADRAO = 40;
 
   useEffect(() => {
     const fetchInstancias = async () => {
@@ -664,6 +672,10 @@ function StepAntiBan({ form, setForm }: any) {
     };
     fetchInstancias();
   }, []);
+
+  const instanciasVisiveis = apenasSaudaveis
+    ? instancias.filter(i => (i.whatsapp_score || 0) > LIMIAR_SAUDAVEL)
+    : instancias;
 
   const profiles = [
     { id: "safe", label: "SEGURO", icon: ShieldCheck, color: "text-emerald-500", delay: "30-60s", limit: "50", desc: "Recomendado para novos números" },
@@ -683,7 +695,9 @@ function StepAntiBan({ form, setForm }: any) {
               size="sm"
               className="h-7 text-xs"
               onClick={() => {
-                const available = instancias.filter(i => (i.whatsapp_score || 0) >= 40).map(i => i.id);
+                const available = instancias
+                  .filter(i => apenasSaudaveis ? (i.whatsapp_score || 0) > LIMIAR_SAUDAVEL : (i.whatsapp_score || 0) >= LIMIAR_PADRAO)
+                  .map(i => i.id);
                 const allSelected = available.length > 0 && available.every(id => form.instancias_ids.includes(id));
                 setForm({ ...form, instancias_ids: allSelected ? [] : available });
               }}
@@ -691,14 +705,14 @@ function StepAntiBan({ form, setForm }: any) {
               Selecionar todas
             </Button>
             <div className="flex items-center gap-2">
-              <Switch />
+              <Switch checked={apenasSaudaveis} onCheckedChange={setApenasSaudaveis} />
               <span className="text-xs">Apenas saudáveis (&gt;70)</span>
             </div>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          {instancias.map(inst => {
-            const isBlocked = (inst.whatsapp_score || 0) < 40;
+          {instanciasVisiveis.map(inst => {
+            const isBlocked = (inst.whatsapp_score || 0) < LIMIAR_PADRAO;
             return (
               <div key={inst.id} className={`flex items-center justify-between p-3 border rounded-lg ${isBlocked ? 'bg-red-50/50 dark:bg-red-950/10 border-red-200' : ''}`}>
                 <div className="flex items-center gap-3">
