@@ -1,5 +1,17 @@
 # Auditoria de Código — Log
 
+### 🔴 Sprint Disparos 1/2 — Agendamento travado + multi-instância decorativa (2026-07-25)
+
+**Contexto:** dois `FIX PENDENTE` críticos catalogados em `diagnosticos/SPRINT_DISPAROS_*.md` (achados confirmados por leitura de código em sessão anterior). Faltam ainda: importação CSV/XLSX cosmética e placeholders/upload de mídia incompletos (`SPRINT_DISPAROS_IMPORTACAO_CSV_XLSX.md`, `SPRINT_DISPAROS_PERSONALIZACAO_E_UPLOAD.md`) — não iniciados.
+
+**🔧 Corrigido — campanha agendada nunca saía de `'rascunho'`.** `get_next_disparo_batch()` só enfileira `disparos.status='em_andamento'`; "Agendar Disparo" criava a campanha em `'rascunho'` e nada no sistema promovia o status quando `agendado_para` chegava (nem cron, nem trigger). Resultado real: toast de sucesso, campanha nunca enviada, nenhum erro visível. Fix: `promover_disparos_agendados()` (SQL, `migrations.ts`) chamada a cada tick de 2s no início de `processarDisparos()` — precisão de segundos, não os 5min do `cron.ts`. Índice `idx_disparos_status_agendado_para` adicionado de suporte.
+
+**🔧 Corrigido — seleção de instâncias no "Proteção Anti-ban" era decorativa.** `disparos.instancias_ids` era salvo pela tela mas nunca lido no envio — a resolução de config sempre pegava uma linha arbitrária de `integracoes_config`/`agentes`, sem `ORDER BY` nem relação com o que foi marcado. Selecionar 1 ou 5 instâncias dava o mesmo resultado (tudo por um único número), anulando o propósito anti-ban de distribuir volume. Fix: `resolverInstanciasCampanha()`/`proximaInstanciaRoundRobin()` em `disparoProcessor.ts` — cache por campanha, round-robin a cada mensagem; fallback para o comportamento antigo quando a campanha não tem instâncias selecionadas (campanhas antigas). Nova coluna `disparo_logs.instancia` registra qual instância enviou cada mensagem (resolve de graça o `FIX PENDENTE` do Sprint 5 sobre teto diário por instância). Toggle "Apenas saudáveis (>70)" na tela (`Disparos.tsx`) não tinha `checked`/`onCheckedChange` — ligado agora, e uniformizado com o limiar do botão "Selecionar todas" (antes 40 vs 70 sem explicação).
+
+**⚠️ Pendente (documentado no código como `FIX PENDENTE`):** failover automático para outra instância quando uma específica cai no meio de uma campanha distribuída — hoje o contador de erros consecutivos é por campanha, não por instância, então uma instância desconectada ainda pode pausar a campanha inteira mesmo com outras saudáveis disponíveis. Não implementado por exigir isolar esse contador por instância — decisão de produto sobre robustez vs. simplicidade.
+
+**Build:** backend (`swc`) e frontend (`vite`) passaram limpos; scoped `tsc --strict` em `disparoProcessor.ts` sem erros. **Não testado com número real em homolog nesta sessão** (exige criar campanha de teste agendada + 2 instâncias conectadas) — ver `STATUS.md`.
+
 ### 🟠 Sprint 9 — Mídia no Chat: envio (UI inexistente) e recebimento (proxy autenticado faltando) (WhatsAppInterface.tsx) (2026-07-24)
 
 **Contexto:** usuário reportou que áudio enviado por ele (atendente) não aparece na conversa, enquanto áudio recebido do cliente toca normalmente; foto/vídeo/figurinha recebidos não carregam. Backend já tinha toda a estrutura pronta (`POST /api/whatsapp/send` aceita `mediaUrl`/`mediaType`, proxy `GET /api/whatsapp/media`, `MAX_OUTBOUND_MEDIA_BYTES`) — o gap era 100% frontend.

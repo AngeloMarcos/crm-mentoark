@@ -1,19 +1,32 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-24 (deploy homolog). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-25 (Sprints Disparos 1/2, ainda não deployadas). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
-## Sessão 2026-07-24 — Deploy em homologação de todas as sprints do dia (commits c2830ea..78fbae2)
+## Sessão 2026-07-25 — Disparos: agendamento travado + multi-instância decorativa corrigidos (commits b8695ea, c2db746)
 
-**Commitado e deployado em HOMOLOGAÇÃO** (`scripts/deploy.sh homolog`, 20 arquivos): auditoria de timeout/fetch, Whisper/Vision, resposta em voz (TTS/ElevenLabs), bugs de frontend no chat (painel de detalhes, JID de grupo, estados vazando entre conversas), e mídia de envio/recebimento no composer. `crm-api-homolog` e `crm-homolog` rebuildados `--no-cache`, validados no ar (`/health`=200, frontend=200, sem `ERROR` nos logs pós-deploy). A migration nova (`agent_configs.resposta_voz_habilitada`/`resposta_voz_id`) roda automaticamente no boot do backend — já tinha sido aplicada manualmente em `crm_hml` durante o teste da sprint de TTS, `ADD COLUMN IF NOT EXISTS` é idempotente.
+**Commitado, NÃO deployado ainda.** Duas correções críticas em `diagnosticos/SPRINT_DISPAROS_*.md`:
+1. Campanha criada via "Agendar Disparo" ficava presa em `status='rascunho'` para sempre — nada promovia pra `'em_andamento'` quando a hora chegava. Fix: `promover_disparos_agendados()` chamada a cada 2s no motor de disparo.
+2. Seleção de instâncias no Passo "Proteção Anti-ban" era decorativa — `instancias_ids` nunca era lido no envio, tudo saía por uma única instância arbitrária. Fix: round-robin real entre as instâncias selecionadas, com fallback para campanhas sem seleção. Toggle "Apenas saudáveis (>70)" (não fazia nada) ligado e uniformizado com "Selecionar todas".
 
-**NÃO deployado em produção** — aguardando validação manual em homolog. Testes que só um humano com navegador/WhatsApp real pode fazer, nenhum deles foi possível nesta sessão:
-1. Enviar áudio/anexo pelo composer novo (imagem, vídeo, documento, áudio gravado) e conferir se chega no WhatsApp de teste.
-2. Receber imagem/figurinha/vídeo de fora e conferir se carrega na tela.
-3. Resposta em voz automática (TTS) — exige configurar uma integração ElevenLabs de teste + ligar a flag `resposta_voz_habilitada` num agente; sem isso, o motor nativo cai no fallback de texto (comportamento esperado, não é bug).
-4. Fixes de UI: painel de detalhes não deve mais abrir sozinho ao trocar de conversa; cabeçalho de grupo não deve mais mostrar o JID numérico cru.
-5. Áudio/foto reais de teste (Whisper/Vision) — pendência já registrada em sessão anterior, ainda aberta.
+Detalhe completo em `diagnosticos/AUDITORIA_LOG.md` (Sprint Disparos 1/2). Build backend+frontend passou; **nenhum teste real feito** (exige campanha de teste agendada + 2 instâncias conectadas em homolog).
 
-**Próximo passo:** usuário testa os 5 itens acima em `homolog.mentoark.com.br`/`api-homolog.mentoark.com.br`. Só depois disso, deploy em produção (`scripts/deploy.sh prod --confirm`).
+**Ainda não iniciado dessa mesma leva de 4 sprints de Disparos:** importação de contatos por CSV/XLSX (`SPRINT_DISPAROS_IMPORTACAO_CSV_XLSX.md`) e placeholders/upload de mídia na campanha (`SPRINT_DISPAROS_PERSONALIZACAO_E_UPLOAD.md`).
+
+**Próximo passo:** deploy em homolog primeiro (`scripts/deploy.sh homolog backend/src/migrations.ts backend/src/services/disparoProcessor.ts src/pages/Disparos.tsx`), depois teste real: criar campanha agendada pra ~2-3min no futuro e confirmar que dispara sozinha; criar campanha com 2+ instâncias conectadas e confirmar (via `disparo_logs.instancia`) que alterna entre elas. Só depois disso, produção.
+
+## Sessão 2026-07-24 — Deploy em PRODUÇÃO de todas as sprints do dia (commits c2830ea..87cc793) + git push
+
+**Commitado, deployado em homologação e depois em PRODUÇÃO** (`scripts/deploy.sh prod --confirm`, mesmos 20 arquivos já validados em homolog): auditoria de timeout/fetch, Whisper/Vision, resposta em voz (TTS/ElevenLabs), bugs de frontend no chat (painel de detalhes, JID de grupo, estados vazando entre conversas), e mídia de envio/recebimento no composer. `crm-api` e `crm` rebuildados `--no-cache` em `/opt/crm`, validados no ar (`/health`=200 em `api.mentoark.com.br`, `crm.mentoark.com.br`=200, sem `ERROR` nos logs pós-deploy). A migration nova (`agent_configs.resposta_voz_habilitada`/`resposta_voz_id`) roda automaticamente no boot do backend (`ADD COLUMN IF NOT EXISTS`, idempotente).
+
+**Autorizado pelo usuário diretamente** ("pode fazer o deploy e push"), sem confirmação explícita registrada nesta sessão dos 5 itens de validação manual em homolog listados anteriormente (envio de mídia, recebimento de mídia, TTS, os 2 fixes de UI, Whisper/Vision com áudio real) — deploy prosseguiu com base na autorização e na validação automática (`/health` + grep de log) do próprio `deploy.sh`, que não pega regressões de UX/UI só visíveis manualmente.
+
+**`git push origin main` também executado** — 12 commits enviados sem conflito (fast-forward, `b22cc72..87cc793`). Repare que isso é uma exceção ao fluxo documentado em `CLAUDE.md` ("usar scp direto pra VPS ao invés de git push") — o push funcionou normalmente pois o remote aceita HTTPS com credencial já armazenada localmente nesta máquina.
+
+**Pendências que continuam sem teste real** (agora já em produção, não só homolog):
+1. Envio de mídia pelo composer (imagem, vídeo, documento, áudio gravado) — chega de fato no WhatsApp do destinatário?
+2. Recebimento de imagem/figurinha/vídeo de fora — carrega corretamente na tela?
+3. Resposta em voz automática (TTS) — ninguém configurou uma integração ElevenLabs real ainda; sem isso, o motor cai no fallback de texto (esperado).
+4. Whisper/Vision com áudio/foto reais.
 
 ## Sessão 2026-07-24 — Mídia no Chat WhatsApp: envio (implementado do zero) e recebimento (proxy autenticado corrigido)
 
