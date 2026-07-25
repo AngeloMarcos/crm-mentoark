@@ -139,14 +139,16 @@ export async function processarDisparos(pool: Pool) {
         // antes de processar a primeira mensagem de uma campanha neste lote, conta quantas
         // mensagens já foram efetivamente ENVIADAS (status='sent') pelo dono da campanha nas
         // últimas 24h corridas, em TODAS as campanhas dele — não só nesta. Escopo é por
-        // user_id (não por instância/chip individual): disparo_logs não guarda qual instância
-        // Evolution enviou cada mensagem, só o dono da campanha, então não dá pra somar por
-        // instância sem antes adicionar essa coluna. [AUDITORIA] FIX PENDENTE (motivo: exige
-        // migração de schema — adicionar `instancia` em disparo_logs, preenchida no INSERT do
-        // log e no envio real — pra permitir teto por número/chip em vez de por conta inteira,
-        // relevante agora que multi-instância existe). Teto configurável por campanha
-        // (`disparos.limite_diario_mensagens`, default 500) — mesmo padrão já usado por
-        // `limite_erros_consecutivos`.
+        // user_id (não por instância/chip individual). [AUDITORIA] FIX PENDENTE (motivo:
+        // decisão de produto — teto por conta inteira vs. por número/chip, mais uma 2ª query de
+        // contagem por instância a cada transição de campanha): `disparo_logs.instancia` já
+        // existe desde a Sprint Disparos/Multi-instância (2026-07-25, preenchido no UPDATE de
+        // envio abaixo) — o bloqueio de schema que motivou este pendente original não existe
+        // mais, mas a query de contagem logo abaixo continua somando por user_id, não por
+        // instancia. Ainda não fechado porque não estava no escopo daquela sprint (só criou a
+        // coluna) e falta decidir se o teto passa a ser por instância ou continua por conta.
+        // Teto configurável por campanha (`disparos.limite_diario_mensagens`, default 500) —
+        // mesmo padrão já usado por `limite_erros_consecutivos`.
         try {
           const capMetaRes = await pool.query(
             `SELECT user_id, COALESCE(limite_diario_mensagens, 500) AS limite_diario_mensagens
