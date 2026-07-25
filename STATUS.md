@@ -1,6 +1,14 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-25 (Sprints Disparos 1/2/3 deployadas em HOMOLOGAÇÃO). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-25 (bug crítico no cliente de API corrigido, commitado, deploy em homolog pendente). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+
+## Sessão 2026-07-25 — Bug transversal: `.select()` depois de `.insert()`/`.update()` virava GET silencioso (commit 8e5a42d)
+
+**Achado real, reportado pelo usuário como "Erro ao criar lista de importação"** na tela de Disparos. Investigação: logs do backend não mostravam NENHUM `POST /api/listas` na janela do teste — só `GET`. Causa raiz em `src/integrations/database/client.ts`: `QueryBuilder.select()` sobrescrevia `_op` incondicionalmente pra `'select'`, então qualquer `api.from(t).insert(x).select().single()` (padrão usado em pelo menos 3 lugares: criar campanha de disparo, criar lista de importação, e `ConfigAgenteIA.tsx`) executava um `GET` sem filtro em vez do `POST` esperado. Numa tabela vazia isso vira o erro relatado (`data[0]` de array vazio = `null`); numa tabela com dados já existentes o bug é **silencioso e mais grave** — pega uma linha arbitrária já existente em vez da recém-criada, sem erro nenhum visível (`ConfigAgenteIA.tsx` pode estar mostrando config errada há um tempo sem ninguém perceber).
+
+**Fix:** `.select()` só reseta `_op` pra `'select'` quando não há operação de escrita em andamento — corrige o encadeamento em toda a aplicação de uma vez, não só na importação. Build frontend sem erros. **Deploy em homolog ainda não feito** — é o próximo passo antes de qualquer outra coisa.
+
+**Todas as pendências anteriores de Disparos** (agendamento, multi-instância, importação CSV/XLSX com encoding/pré-validação) seguem commitadas e parcialmente deployadas em homolog (ver seção abaixo) — nenhuma delas foi de fato testável pelo usuário até agora porque a importação sempre esbarrava neste bug do cliente de API antes de chegar em qualquer lógica de negócio.
 
 ## Sessão 2026-07-25 — Disparos: agendamento, multi-instância e importação CSV/XLSX corrigidos e deployados em HOMOLOGAÇÃO (commits b8695ea..7216d34)
 
