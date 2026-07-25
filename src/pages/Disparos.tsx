@@ -126,6 +126,72 @@ function sanitizarTelefoneImportacao(raw: string): TelefoneImportado {
   return { telefone: d, corrigido: false };
 }
 
+interface ContatoImportado {
+  nome: string; telefone: string; email: string; empresa: string; cargo: string; notas: string;
+}
+
+interface AnaliseImportacao {
+  novos: ContatoImportado[];
+  totalLinhas: number;
+  corrigidos: number;
+  descartados: number;
+}
+
+// [AUDITORIA] LÓGICA (Sprint Disparos/Importação, revisão 2026-07-25): extraída de dentro de
+// `confirmarImportacao` pra ser compartilhada com o resumo de pré-validação mostrado assim que o
+// arquivo é lido (antes de clicar "Confirmar Importação") — usuário reportou achar que a
+// importação estava "trazendo contatos com telefone vazio" porque a PREVIEW (5 primeiras linhas
+// cruas do arquivo, sem filtro nenhum) mostra o telefone em branco tal como está no arquivo; o
+// filtro de verdade só acontecia no clique de confirmar, sem nenhum retorno visual antes disso.
+// Mesma função agora roda nos dois lugares — sem duplicar a regra de validação, e garantindo que
+// o número mostrado no resumo bate exatamente com o que será importado de fato.
+function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
+  const headers = rows[0].map(h => (h || "").toLowerCase().trim());
+  const getPorSubstring = (cols: string[], ...keys: string[]) => {
+    for (const key of keys) {
+      const idx = headers.findIndex(h => h.includes(key));
+      if (idx >= 0 && cols[idx]) return cols[idx];
+    }
+    return "";
+  };
+
+  const totalLinhas = rows.length - 1;
+  let corrigidos = 0;
+  let descartados = 0;
+  const novos: ContatoImportado[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const cols = (rows[i] || []).map(c => (c || "").replace(/^["']|["']$/g, "").trim());
+    const telefoneRaw = getPorSubstring(cols, "telefone", "celular", "whatsapp", "phone", "mobile", "tel", "fone", "contato");
+    const { telefone, corrigido } = sanitizarTelefoneImportacao(telefoneRaw);
+
+    // [AUDITORIA] LÓGICA: único critério de descarte é telefone inválido (<10 dígitos após
+    // sanitização) — nome, e-mail e demais campos vazios NUNCA descartam o lead, só ficam
+    // em branco no contato criado.
+    if (!telefone) {
+      descartados++;
+      continue;
+    }
+    if (corrigido) corrigidos++;
+
+    const nome = getPorSubstring(cols, "nome completo", "nome", "cliente", "name");
+    // [AUDITORIA] LÓGICA: contatos.cpf não existe como coluna própria (confirmado por grep em
+    // migrations.ts) — CPF, quando presente na planilha, é preservado em `notas` em vez de
+    // descartado, sem exigir migração de schema pra este sprint.
+    const cpf = getPorSubstring(cols, "cpf", "documento");
+    novos.push({
+      nome: nome || telefone,
+      telefone,
+      email: getPorSubstring(cols, "e-mail", "email", "mail"),
+      empresa: getPorSubstring(cols, "empresa", "company"),
+      cargo: getPorSubstring(cols, "cargo", "função", "role"),
+      notas: cpf ? `CPF: ${cpf}` : "",
+    });
+  }
+
+  return { novos, totalLinhas, corrigidos, descartados };
+}
+
 const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
 
 export default function DisparosPage() {
@@ -425,65 +491,29 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
     setImportFileName("");
   };
 
+  // [AUDITORIA] FIX APLICADO (Sprint Disparos/Importação, revisão 2026-07-25): usuário reportou
+  // achar que a importação estava "trazendo contatos com telefone vazio" — na prática, ele estava
+  // vendo a PREVIEW (5 primeiras linhas cruas do arquivo, sem filtro nenhum) e interpretando isso
+  // como o resultado final. Resumo de pré-validação abaixo roda a mesma análise que
+  // `confirmarImportacao` vai aplicar de fato, mostrado assim que o arquivo é lido — não precisa
+  // mais confirmar pra descobrir quantos vão ser aproveitados.
+  const preAnalise = useMemo(
+    () => (pendingImportRows ? analisarLinhasImportacao(pendingImportRows) : null),
+    [pendingImportRows]
+  );
+
   const confirmarImportacao = async () => {
     if (!pendingImportRows || !user) return;
     setImportLoading(true);
     try {
-      const rows = pendingImportRows;
-      const headers = rows[0].map(h => (h || "").toLowerCase().trim());
-      // [AUDITORIA] BUG (Sprint Disparos/Importação, revisão 2026-07-25): mapeamento de coluna
-      // original comparava o cabeçalho por igualdade exata ("telefone", "nome"...) — um cabeçalho
-      // real como "Tel. Celular" ou "Nº Whatsapp" não batia com nenhuma chave, a coluna não era
-      // encontrada, e a linha inteira era tratada como "telefone vazio" (descartada). [AUDITORIA]
-      // FIX APLICADO: match por substring (primeira coluna cujo cabeçalho CONTÉM uma das
-      // palavras-chave, na ordem dada — mais específica primeiro) em vez de igualdade exata.
-      // "contato" entra só como sinônimo de telefone, não de nome — é ambíguo nos dois sentidos em
-      // planilhas reais, mas nesta tela (CRM de WhatsApp) o uso dominante é "Contato" = número.
-      const getPorSubstring = (cols: string[], ...keys: string[]) => {
-        for (const key of keys) {
-          const idx = headers.findIndex(h => h.includes(key));
-          if (idx >= 0 && cols[idx]) return cols[idx];
-        }
-        return "";
-      };
-
-      const totalLinhas = rows.length - 1;
-      let corrigidos = 0;
-      let descartados = 0;
-      const novos: any[] = [];
-
-      for (let i = 1; i < rows.length; i++) {
-        const cols = (rows[i] || []).map(c => (c || "").replace(/^["']|["']$/g, "").trim());
-        const telefoneRaw = getPorSubstring(cols, "telefone", "celular", "whatsapp", "phone", "mobile", "tel", "fone", "contato");
-        const { telefone, corrigido } = sanitizarTelefoneImportacao(telefoneRaw);
-
-        // [AUDITORIA] LÓGICA: único critério de descarte é telefone inválido (<10 dígitos após
-        // sanitização) — nome, e-mail e demais campos vazios NUNCA descartam o lead, só ficam
-        // em branco no contato criado.
-        if (!telefone) {
-          descartados++;
-          continue;
-        }
-        if (corrigido) corrigidos++;
-
-        const nome = getPorSubstring(cols, "nome completo", "nome", "cliente", "name");
-        // [AUDITORIA] LÓGICA: contatos.cpf não existe como coluna própria (confirmado por
-        // grep em migrations.ts) — CPF, quando presente na planilha, é preservado em `notas` em
-        // vez de descartado, sem exigir migração de schema pra este sprint.
-        const cpf = getPorSubstring(cols, "cpf", "documento");
-        novos.push({
-          nome: nome || telefone,
-          telefone,
-          email: getPorSubstring(cols, "e-mail", "email", "mail"),
-          empresa: getPorSubstring(cols, "empresa", "company"),
-          cargo: getPorSubstring(cols, "cargo", "função", "role"),
-          origem: "Importado (Disparos)",
-          status: "novo",
-          tags: [] as string[],
-          notas: cpf ? `CPF: ${cpf}` : "",
-          user_id: user.id,
-        });
-      }
+      const { novos: analisados, totalLinhas, corrigidos, descartados } = analisarLinhasImportacao(pendingImportRows);
+      const novos = analisados.map(n => ({
+        ...n,
+        origem: "Importado (Disparos)",
+        status: "novo",
+        tags: [] as string[],
+        user_id: user.id,
+      }));
 
       if (!novos.length) {
         toast.error("Nenhum contato válido encontrado", {
@@ -791,11 +821,29 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                   </tbody>
                 </table>
               </div>
+              {/* [AUDITORIA] FIX APLICADO: preview acima mostra o arquivo cru (por isso telefone
+                  aparece em branco quando o arquivo tem essas linhas) — este resumo roda a MESMA
+                  validação que "Confirmar Importação" vai aplicar, então dá pra saber quantos
+                  contatos de verdade vêm ANTES de confirmar, sem precisar adivinhar pela preview. */}
+              {preAnalise && (
+                <div className={`p-3 rounded-lg border text-xs space-y-1 ${preAnalise.novos.length === 0 ? "bg-destructive/10 border-destructive/30" : "bg-emerald-50/50 dark:bg-emerald-950/10 border-emerald-500/30"}`}>
+                  <p className="font-bold uppercase tracking-wider text-muted-foreground">Pré-validação (o que será importado de fato)</p>
+                  <p>
+                    <span className="font-bold text-emerald-600">{preAnalise.novos.length}</span> de {preAnalise.totalLinhas} linha(s) têm telefone válido e serão importadas
+                    {preAnalise.corrigidos > 0 && <> (<span className="font-bold">{preAnalise.corrigidos}</span> com DDI/9º dígito corrigido automaticamente)</>}.
+                  </p>
+                  {preAnalise.descartados > 0 && (
+                    <p className="text-muted-foreground">
+                      <span className="font-bold text-destructive">{preAnalise.descartados}</span> linha(s) serão descartadas por telefone vazio ou inválido (menos de 10 dígitos) — a preview acima mostra o arquivo cru, essas linhas não geram contato.
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="flex items-center justify-end gap-2">
                 <Button variant="ghost" size="sm" onClick={cancelarImportacao} disabled={importLoading}>
                   Cancelar
                 </Button>
-                <Button size="sm" onClick={confirmarImportacao} disabled={importLoading}>
+                <Button size="sm" onClick={confirmarImportacao} disabled={importLoading || (preAnalise?.novos.length ?? 0) === 0}>
                   {importLoading ? "Importando..." : "Confirmar Importação"}
                 </Button>
               </div>
