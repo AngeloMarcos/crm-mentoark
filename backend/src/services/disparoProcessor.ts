@@ -37,6 +37,14 @@ async function requeuePendentes(pool: Pool, rows: { log_id: string }[]) {
 
 export async function processarDisparos(pool: Pool) {
   try {
+    // [AUDITORIA] FIX APLICADO (Sprint Disparos/Agendamento, 2026-07-25): promove campanhas
+    // agendadas ('rascunho' + agendado_para no passado) para 'em_andamento' antes de buscar o
+    // lote — sem isso elas nunca eram pegas por get_next_disparo_batch (ver
+    // promover_disparos_agendados() em migrations.ts para o achado completo). Roda a cada tick
+    // de 2s deste motor, não no cron de 5min, para respeitar o horário agendado com precisão.
+    await pool.query('SELECT promover_disparos_agendados()')
+      .catch(err => log.warn('DISPARO', 'Falha ao promover campanhas agendadas', { err: err?.message }));
+
     // 1. Buscar lote de mensagens pendentes usando a função SQL atômica
     const batch = await pool.query('SELECT * FROM public.get_next_disparo_batch(5)');
     

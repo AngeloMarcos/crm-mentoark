@@ -518,6 +518,45 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausado_em TIMESTAMPTZ`).catch(() => {});
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausado_motivo TEXT`).catch(() => {});
 
+  // [AUDITORIA] BUG (Sprint Disparos/Agendamento, 2026-07-25): campanha criada com "Agendar
+  // Disparo" nasce com status='rascunho' (Disparos.tsx, StepReview.handleStart) — mas
+  // get_next_disparo_batch() só enfileira linhas com d.status='em_andamento'. Não existia, em
+  // lugar nenhum do sistema, algo que promovesse 'rascunho'->'em_andamento' quando
+  // agendado_para chegasse: nem cron, nem trigger, nem checagem em processarDisparos(). A
+  // cláusula `(d.agendado_para IS NULL OR d.agendado_para <= NOW())` da função de fila nunca
+  // era alcançada na prática porque o filtro de status vem antes — resultado real: usuário
+  // clica "Agendar Disparo", recebe toast de sucesso, e a campanha nunca é enviada.
+  // [AUDITORIA] FIX APLICADO: função de promoção abaixo (mesmo padrão de
+  // `reativar_disparos_por_limite_diario` logo abaixo), chamada a cada tick de 2s no início de
+  // `processarDisparos()` (disparoProcessor.ts) — precisa ser tão frequente quanto o motor de
+  // envio, não os 5min do cron.ts, porque o usuário agenda pra um horário exato (ex: "daqui a 2
+  // minutos") e esperaria o disparo começar perto disso, não com até 5min de atraso.
+  // `agendado_para IS NOT NULL` é proposital: não promove um 'rascunho' sem data (uso futuro
+  // hipotético, ex: "salvar como rascunho" sem agendamento) — hoje não existe esse fluxo, mas o
+  // filtro é defensivo e não custa nada.
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION promover_disparos_agendados()
+    RETURNS INTEGER AS $$
+    DECLARE
+      promovidos INTEGER := 0;
+    BEGIN
+      UPDATE disparos
+      SET status = 'em_andamento', updated_at = NOW()
+      WHERE status = 'rascunho'
+        AND agendado_para IS NOT NULL
+        AND agendado_para <= NOW();
+      GET DIAGNOSTICS promovidos = ROW_COUNT;
+      RETURN promovidos;
+    END;
+    $$ LANGUAGE plpgsql;
+  `).catch(err => log.warn('MIGRATIONS', 'promover_disparos_agendados', { err: err.message }));
+
+  // Índice de suporte à query acima — chamada a cada 2s pelo motor de disparo.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_disparos_status_agendado_para
+    ON disparos (status, agendado_para) WHERE agendado_para IS NOT NULL
+  `).catch(() => {});
+
   // [AUDITORIA] LÓGICA: reativação automática de campanhas pausadas especificamente pelo teto
   // diário (Sprint 5) — o aviso mostrado ao usuário promete "retomando automaticamente amanhã";
   // sem este mecanismo essa frase seria uma promessa falsa na UI. Só reativa depois de 24h
