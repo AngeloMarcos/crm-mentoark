@@ -22,6 +22,81 @@ import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
 
+// [AUDITORIA] LÓGICA (Sprint Disparos/Importação, 2026-07-25): parser de CSV tolerante — separa
+// campos por vírgula OU ponto e vírgula (detecta o delimitador pela linha de cabeçalho, contando
+// qual aparece mais vezes: exportações de Excel em pt-BR costumam usar ";"), e remove aspas duplas
+// que envelopam valores (inclusive `""` escapado dentro de um campo entre aspas). Usado só pra CSV
+// — XLSX/XLS é lido nativamente via XLSX.read + sheet_to_json (ver handleImportFile), sem precisar
+// desse parser.
+function parseCsvRowsTolerante(text: string): string[][] {
+  const clean = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const firstLine = clean.split("\n", 1)[0] || "";
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const semiCount = (firstLine.match(/;/g) || []).length;
+  const delim = semiCount > commaCount ? ";" : ",";
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean[i];
+    if (ch === '"') {
+      if (inQuotes && clean[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (ch === delim && !inQuotes) {
+      row.push(cur.trim()); cur = "";
+    } else if (ch === "\n" && !inQuotes) {
+      row.push(cur.trim()); cur = "";
+      if (row.some(c => c.length > 0)) rows.push(row);
+      row = [];
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.length > 0 || row.length > 0) {
+    row.push(cur.trim());
+    if (row.some(c => c.length > 0)) rows.push(row);
+  }
+  return rows;
+}
+
+interface TelefoneImportado {
+  telefone: string | null; // já com DDI 55, ou null se descartado
+  corrigido: boolean;      // true se o 55 e/ou o 9º dígito foram adicionados automaticamente
+}
+
+// [AUDITORIA] LÓGICA (Sprint Disparos/Importação, 2026-07-25): sanitização de telefone própria
+// desta tela — DELIBERADAMENTE diferente de `normalizarTelefoneBR` (src/lib/phone.ts, usada por
+// Leads.tsx e pelo motor de disparo/whatsapp). Aquela função rejeita fixos e exige formato exato
+// de celular (9 dígitos após o DDD); aqui a instrução explícita foi "nunca descartar um lead" a
+// não ser por telefone com menos de 10 dígitos após a sanitização — ou seja, mais permissiva de
+// propósito, pra não perder contatos importados por um filtro rígido demais. Não é duplicação por
+// descuido: é uma política de validação diferente para este fluxo específico de importação.
+function sanitizarTelefoneImportacao(raw: string): TelefoneImportado {
+  const d = (raw || "").replace(/\D/g, "");
+  if (d.length < 10) return { telefone: null, corrigido: false };
+
+  // Já tem DDI 55 (12 ou 13 dígitos) — mantém como está.
+  if ((d.length === 12 || d.length === 13) && d.startsWith("55")) {
+    return { telefone: d, corrigido: false };
+  }
+
+  // 10 ou 11 dígitos sem DDI — insere o 9º dígito preventivamente (celular antigo: DDD + 8
+  // dígitos começando em 6-9) antes de adicionar o "55" na frente.
+  if (d.length === 10 || d.length === 11) {
+    const ddd = d.slice(0, 2);
+    let resto = d.slice(2);
+    if (resto.length === 8 && /^[6-9]/.test(resto)) {
+      resto = "9" + resto;
+    }
+    return { telefone: "55" + ddd + resto, corrigido: true };
+  }
+
+  // Comprimento fora do esperado (ex: 12/13 dígitos sem começar com 55) — não descarta (único
+  // critério de descarte é <10 dígitos), mantém os dígitos como vieram.
+  return { telefone: d, corrigido: false };
+}
 
 const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
 
@@ -211,6 +286,7 @@ export default function DisparosPage() {
 }
 
 function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [] }: any) {
+  const { user } = useAuth();
   const [previewSearch, setPreviewSearch] = useState("");
   const filteredPreview = targetContacts.filter((c: any) => {
     if (!previewSearch.trim()) return true;
@@ -222,51 +298,202 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
   const [listas, setListas] = useState<any[]>([]);
   const [listasCounts, setListasCounts] = useState<Record<string, number>>({});
   const [totalContatos, setTotalContatos] = useState<number>(0);
-  const [csvPreview, setCsvPreview] = useState<any[]>([]);
+  const [csvPreview, setCsvPreview] = useState<string[][]>([]);
   const [tagSearch, setTagSearch] = useState("");
 
-  useEffect(() => {
-    const fetchTargets = async () => {
-      const { data: tagsData } = await api.from("tags").select("*");
-      const { data: estagiosData } = await api.from("funil_estagios").select("*");
-      const { data: listasData } = await api.from("listas").select("*").order("nome", { ascending: true });
-      setTags(tagsData || []);
-      setEstagios(estagiosData || []);
-      setListas(listasData || []);
+  // [AUDITORIA] FIX APLICADO (Sprint Disparos/Importação, 2026-07-25): extraída pra fora do
+  // useEffect (era uma função anônima só chamada no mount) pra poder ser rechamada depois de uma
+  // importação bem-sucedida — sem isso, a lista recém-criada não apareceria na aba "Por Lista"
+  // nem teria contagem, mesmo já estando selecionada em form.listas_selecionadas.
+  const fetchTargets = async () => {
+    const { data: tagsData } = await api.from("tags").select("*");
+    const { data: estagiosData } = await api.from("funil_estagios").select("*");
+    const { data: listasData } = await api.from("listas").select("*").order("nome", { ascending: true });
+    setTags(tagsData || []);
+    setEstagios(estagiosData || []);
+    setListas(listasData || []);
 
-      // Total geral de contatos (usado pela opção "Todos os Leads")
-      const { count: totalCount } = await api.from("contatos").select("id", { count: "exact", head: true });
-      setTotalContatos(totalCount || 0);
+    // Total geral de contatos (usado pela opção "Todos os Leads")
+    const { count: totalCount } = await api.from("contatos").select("id", { count: "exact", head: true });
+    setTotalContatos(totalCount || 0);
 
-      // Buscar contagem de contatos por lista (em paralelo)
-      if (listasData && listasData.length) {
-        const counts: Record<string, number> = {};
-        await Promise.all(
-          listasData.map(async (l: any) => {
-            const { count } = await api.from("contatos").select("id", { count: "exact", head: true }).eq("lista_id", l.id);
-            counts[l.id] = count || 0;
-          })
-        );
-        setListasCounts(counts);
-      }
-    };
-    fetchTargets();
-  }, []);
+    // Buscar contagem de contatos por lista (em paralelo)
+    if (listasData && listasData.length) {
+      const counts: Record<string, number> = {};
+      await Promise.all(
+        listasData.map(async (l: any) => {
+          const { count } = await api.from("contatos").select("id", { count: "exact", head: true }).eq("lista_id", l.id);
+          counts[l.id] = count || 0;
+        })
+      );
+      setListasCounts(counts);
+    }
+  };
 
-  const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  useEffect(() => { fetchTargets(); }, []);
+
+  // [AUDITORIA] BUG (Sprint Disparos/Importação, 2026-07-25, ver
+  // diagnosticos/SPRINT_DISPAROS_IMPORTACAO_CSV_XLSX.md): `handleCsvUpload` só sabia ler XLSX
+  // (readAsBinaryString + XLSX.read(type:'binary'), sem try/catch — arquivo .xlsx real
+  // frequentemente falhava silenciosamente nesse modo, explicando o relato "Excel não subiu"), e
+  // mesmo quando o parse funcionava (CSV), o resultado (`csvPreview`) só alimentava uma tabela de
+  // preview — nunca virava contato de verdade nem entrava em `targetContacts`. O botão "Selecionar
+  // Arquivo" era decorativo.
+  // [AUDITORIA] FIX APLICADO: dois arquivos, duas etapas — (1) `handleImportFile` só lê e mostra
+  // preview (csv via file.text() + parseCsvRowsTolerante; xlsx/xls via file.arrayBuffer() +
+  // XLSX.read(type:'array'), padrão robusto igual Leads.tsx, dentro de try/catch com toast de
+  // erro real); (2) botão novo "Confirmar Importação" (`confirmarImportacao`, abaixo) de fato cria
+  // os contatos e uma lista de destino, e marca essa lista como selecionada — só então o
+  // useEffect de targetContacts (linha ~57 do componente pai) passa a enxergar esses contatos.
+  const [pendingImportRows, setPendingImportRows] = useState<string[][] | null>(null);
+  const [importFileName, setImportFileName] = useState("");
+  const [importLoading, setImportLoading] = useState(false);
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: "binary" });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      setCsvPreview(data.slice(0, 5));
-      toast.success("CSV importado com sucesso!");
-    };
-    reader.readAsBinaryString(file);
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    try {
+      let rows: string[][];
+      if (ext === "csv") {
+        const texto = await file.text();
+        rows = parseCsvRowsTolerante(texto);
+      } else if (ext === "xlsx" || ext === "xls") {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+        rows = raw.map(r => (r || []).map(c => (c === null || c === undefined ? "" : String(c).trim())));
+      } else {
+        toast.error("Formato não suportado", { description: "Use um arquivo .csv, .xlsx ou .xls." });
+        e.target.value = "";
+        return;
+      }
+
+      rows = rows.filter(r => r.some(c => c.length > 0));
+      if (rows.length < 2) {
+        toast.error("Arquivo vazio ou sem linhas de dados", { description: "É preciso ao menos uma linha de cabeçalho e uma linha de dados." });
+        e.target.value = "";
+        return;
+      }
+
+      setCsvPreview(rows.slice(0, 5));
+      setPendingImportRows(rows);
+      setImportFileName(file.name);
+      toast.success(`${file.name} carregado`, {
+        description: `${rows.length - 1} linha(s) de dados encontradas. Confira o preview e clique em "Confirmar Importação" para criar os contatos.`,
+      });
+    } catch (err: any) {
+      toast.error("Não foi possível ler o arquivo", { description: err?.message || "Verifique o formato e tente novamente." });
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  const cancelarImportacao = () => {
+    setPendingImportRows(null);
+    setCsvPreview([]);
+    setImportFileName("");
+  };
+
+  const confirmarImportacao = async () => {
+    if (!pendingImportRows || !user) return;
+    setImportLoading(true);
+    try {
+      const rows = pendingImportRows;
+      const headers = rows[0].map(h => (h || "").toLowerCase().trim());
+      const get = (cols: string[], ...keys: string[]) => {
+        for (const key of keys) {
+          const idx = headers.indexOf(key);
+          if (idx >= 0 && cols[idx]) return cols[idx];
+        }
+        return "";
+      };
+
+      const totalLinhas = rows.length - 1;
+      let corrigidos = 0;
+      let descartados = 0;
+      const novos: any[] = [];
+
+      for (let i = 1; i < rows.length; i++) {
+        const cols = rows[i] || [];
+        const telefoneRaw = get(cols, "telefone", "telefones", "fone", "celular", "phone", "whatsapp");
+        const { telefone, corrigido } = sanitizarTelefoneImportacao(telefoneRaw);
+
+        // [AUDITORIA] LÓGICA: único critério de descarte é telefone inválido (<10 dígitos após
+        // sanitização) — nome, e-mail e demais campos vazios NUNCA descartam o lead, só ficam
+        // em branco no contato criado.
+        if (!telefone) {
+          descartados++;
+          continue;
+        }
+        if (corrigido) corrigidos++;
+
+        const nome = get(cols, "nome", "name", "nome completo", "nome do contato");
+        novos.push({
+          nome: nome || telefone,
+          telefone,
+          email: get(cols, "email", "e-mail", "mail"),
+          empresa: get(cols, "empresa", "company"),
+          cargo: get(cols, "cargo", "função", "role"),
+          origem: "Importado (Disparos)",
+          status: "novo",
+          tags: [] as string[],
+          notas: "",
+          user_id: user.id,
+        });
+      }
+
+      if (!novos.length) {
+        toast.error("Nenhum contato válido encontrado", {
+          description: `${totalLinhas} linha(s) lida(s), todas com telefone inválido ou em branco (menos de 10 dígitos).`,
+        });
+        return;
+      }
+
+      const nomeLista = `Importação ${importFileName} ${new Date().toLocaleDateString("pt-BR")}`;
+      const { data: listaCriada, error: listaError } = await api
+        .from("listas")
+        .insert({ user_id: user.id, nome: nomeLista })
+        .select()
+        .single();
+
+      if (listaError || !listaCriada) {
+        toast.error("Erro ao criar lista de importação", { description: listaError?.message });
+        return;
+      }
+
+      const { error: insertError } = await api
+        .from("contatos")
+        .insert(novos.map(n => ({ ...n, lista_id: listaCriada.id })));
+
+      if (insertError) {
+        toast.error("Erro ao importar contatos", { description: insertError.message });
+        return;
+      }
+
+      // [AUDITORIA] FIX APLICADO: marca a lista recém-criada como selecionada — é isso que faz o
+      // useEffect de targetContacts (componente pai) de fato puxar esses contatos pra campanha,
+      // fechando a ponte que faltava entre "arquivo importado" e "quem recebe o disparo".
+      setForm({
+        ...form,
+        listas_selecionadas: Array.from(new Set([
+          ...form.listas_selecionadas.filter((id: string) => id !== "__all__"),
+          listaCriada.id,
+        ])),
+      });
+
+      toast.success("Importação concluída", {
+        description: `${totalLinhas} linha(s) lidas · ${novos.length} importado(s) · ${corrigidos} telefone(s) corrigido(s) automaticamente · ${descartados} descartado(s) por telefone inválido.`,
+      });
+
+      await fetchTargets();
+      cancelarImportacao();
+    } catch (err: any) {
+      toast.error("Erro inesperado na importação", { description: err?.message });
+    } finally {
+      setImportLoading(false);
+    }
   };
 
   const filteredTags = tags.filter(t => t.nome?.toLowerCase().includes(tagSearch.toLowerCase()));
@@ -294,7 +521,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
           <TabsTrigger value="lista">Por Lista {form.listas_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.listas_selecionadas.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="tags">Por Tag {form.tags_selecionadas.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.tags_selecionadas.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="estagio">Por Estágio {form.estagios_selecionados.length > 0 && <Badge variant="secondary" className="ml-2 h-5">{form.estagios_selecionados.length}</Badge>}</TabsTrigger>
-          <TabsTrigger value="csv">Importar CSV</TabsTrigger>
+          <TabsTrigger value="csv">Importar Arquivo</TabsTrigger>
         </TabsList>
 
         <TabsContent value="lista" className="p-4 border rounded-lg bg-card space-y-4">
@@ -503,25 +730,33 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         <TabsContent value="csv" className="p-4 border rounded-lg bg-card space-y-4 text-center">
           <div className="py-8 border-2 border-dashed rounded-lg">
             <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
-            <p className="text-sm text-muted-foreground">Clique para fazer upload ou arraste o arquivo CSV</p>
-            <input type="file" className="hidden" id="csv-upload" accept=".csv,.xlsx" onChange={handleCsvUpload} />
+            <p className="text-sm text-muted-foreground">Clique para fazer upload ou arraste o arquivo (CSV, XLSX ou XLS)</p>
+            <input type="file" className="hidden" id="csv-upload" accept=".csv,.xlsx,.xls" onChange={handleImportFile} />
             <Button variant="outline" size="sm" className="mt-4" onClick={() => document.getElementById('csv-upload')?.click()}>
               Selecionar Arquivo
             </Button>
           </div>
           {csvPreview.length > 0 && (
-            <div className="space-y-2 text-left">
-              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Preview (Primeiras 5 linhas)</p>
-              <div className="border rounded overflow-hidden">
+            <div className="space-y-3 text-left">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Preview (Primeiras 5 linhas) — {importFileName}</p>
+              <div className="border rounded overflow-hidden overflow-x-auto">
                 <table className="w-full text-xs">
                   <tbody className="divide-y">
                     {csvPreview.map((row, i) => (
-                      <tr key={i} className="divide-x">
-                        {row.map((cell: any, j: number) => <td key={j} className="p-1">{cell}</td>)}
+                      <tr key={i} className={`divide-x ${i === 0 ? "font-bold bg-muted/50" : ""}`}>
+                        {row.map((cell, j) => <td key={j} className="p-1 whitespace-nowrap">{cell}</td>)}
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={cancelarImportacao} disabled={importLoading}>
+                  Cancelar
+                </Button>
+                <Button size="sm" onClick={confirmarImportacao} disabled={importLoading}>
+                  {importLoading ? "Importando..." : "Confirmar Importação"}
+                </Button>
               </div>
             </div>
           )}
