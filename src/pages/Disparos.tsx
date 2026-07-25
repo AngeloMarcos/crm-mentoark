@@ -29,7 +29,16 @@ import * as XLSX from "xlsx";
 // — XLSX/XLS é lido nativamente via XLSX.read + sheet_to_json (ver handleImportFile), sem precisar
 // desse parser.
 function parseCsvRowsTolerante(text: string): string[][] {
-  const clean = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // [AUDITORIA] FIX APLICADO (Sprint Disparos/Importação, revisão 2026-07-25): CSV exportado pelo
+  // Excel em "UTF-8 com BOM" começa com o caractere invisível BOM (code point U+FEFF, decimal
+  // 65279), que gruda no primeiro cabeçalho (ex: vira "<BOM>Nome Completo") e faz o mapeamento de
+  // coluna por nome falhar silenciosamente pra esse campo específico. Removido via
+  // String.fromCharCode(65279) em vez de um caractere/escape literal no código-fonte — invisível
+  // direto no arquivo é frágil (fácil de corromper sem perceber num editor ou diff).
+  const BOM = String.fromCharCode(65279);
+  const clean = (text.startsWith(BOM) ? text.slice(BOM.length) : text)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
   const firstLine = clean.split("\n", 1)[0] || "";
   const commaCount = (firstLine.match(/,/g) || []).length;
   const semiCount = (firstLine.match(/;/g) || []).length;
@@ -402,9 +411,17 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
     try {
       const rows = pendingImportRows;
       const headers = rows[0].map(h => (h || "").toLowerCase().trim());
-      const get = (cols: string[], ...keys: string[]) => {
+      // [AUDITORIA] BUG (Sprint Disparos/Importação, revisão 2026-07-25): mapeamento de coluna
+      // original comparava o cabeçalho por igualdade exata ("telefone", "nome"...) — um cabeçalho
+      // real como "Tel. Celular" ou "Nº Whatsapp" não batia com nenhuma chave, a coluna não era
+      // encontrada, e a linha inteira era tratada como "telefone vazio" (descartada). [AUDITORIA]
+      // FIX APLICADO: match por substring (primeira coluna cujo cabeçalho CONTÉM uma das
+      // palavras-chave, na ordem dada — mais específica primeiro) em vez de igualdade exata.
+      // "contato" entra só como sinônimo de telefone, não de nome — é ambíguo nos dois sentidos em
+      // planilhas reais, mas nesta tela (CRM de WhatsApp) o uso dominante é "Contato" = número.
+      const getPorSubstring = (cols: string[], ...keys: string[]) => {
         for (const key of keys) {
-          const idx = headers.indexOf(key);
+          const idx = headers.findIndex(h => h.includes(key));
           if (idx >= 0 && cols[idx]) return cols[idx];
         }
         return "";
@@ -416,8 +433,8 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
       const novos: any[] = [];
 
       for (let i = 1; i < rows.length; i++) {
-        const cols = rows[i] || [];
-        const telefoneRaw = get(cols, "telefone", "telefones", "fone", "celular", "phone", "whatsapp");
+        const cols = (rows[i] || []).map(c => (c || "").replace(/^["']|["']$/g, "").trim());
+        const telefoneRaw = getPorSubstring(cols, "telefone", "celular", "whatsapp", "phone", "mobile", "tel", "fone", "contato");
         const { telefone, corrigido } = sanitizarTelefoneImportacao(telefoneRaw);
 
         // [AUDITORIA] LÓGICA: único critério de descarte é telefone inválido (<10 dígitos após
@@ -429,17 +446,21 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         }
         if (corrigido) corrigidos++;
 
-        const nome = get(cols, "nome", "name", "nome completo", "nome do contato");
+        const nome = getPorSubstring(cols, "nome completo", "nome", "cliente", "name");
+        // [AUDITORIA] LÓGICA: contatos.cpf não existe como coluna própria (confirmado por
+        // grep em migrations.ts) — CPF, quando presente na planilha, é preservado em `notas` em
+        // vez de descartado, sem exigir migração de schema pra este sprint.
+        const cpf = getPorSubstring(cols, "cpf", "documento");
         novos.push({
           nome: nome || telefone,
           telefone,
-          email: get(cols, "email", "e-mail", "mail"),
-          empresa: get(cols, "empresa", "company"),
-          cargo: get(cols, "cargo", "função", "role"),
+          email: getPorSubstring(cols, "e-mail", "email", "mail"),
+          empresa: getPorSubstring(cols, "empresa", "company"),
+          cargo: getPorSubstring(cols, "cargo", "função", "role"),
           origem: "Importado (Disparos)",
           status: "novo",
           tags: [] as string[],
-          notas: "",
+          notas: cpf ? `CPF: ${cpf}` : "",
           user_id: user.id,
         });
       }
