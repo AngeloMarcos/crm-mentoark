@@ -22,6 +22,25 @@ import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
 
+// [AUDITORIA] BUG (Sprint Disparos/Importação, revisão 2026-07-25): usuário reportou nomes
+// corrompidos na importação real (ex: "GraÃ§a" em vez de "Graça", "JosÃ©" em vez de "José") —
+// assinatura clássica de um CSV exportado pelo Excel em Windows-1252/"ANSI" (o padrão do Excel
+// pt-BR pra "Salvar como > CSV", não "CSV UTF-8") sendo decodificado como se fosse UTF-8.
+// `file.text()` SEMPRE decodifica como UTF-8 (é fixo na spec do navegador, não dá pra escolher
+// outra codificação com esse método) — não tem como esse método sozinho ler um arquivo
+// Windows-1252 corretamente. [AUDITORIA] FIX APLICADO: lê o arquivo como bytes crus
+// (`arrayBuffer`) e tenta decodificar como UTF-8 estrito (`fatal: true`); bytes acentuados em
+// Windows-1252 (ex: "ç" = 0xE7 sozinho) não formam uma sequência UTF-8 válida e o decoder estoura
+// — nesse caso, cai pro fallback Windows-1252, que sempre decodifica com sucesso (todo byte
+// 0-255 mapeia pra algum caractere nessa codificação) e é o padrão de fato do Excel brasileiro.
+function decodeTextoTolerante(buf: ArrayBuffer): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder("windows-1252").decode(buf);
+  }
+}
+
 // [AUDITORIA] LÓGICA (Sprint Disparos/Importação, 2026-07-25): parser de CSV tolerante — separa
 // campos por vírgula OU ponto e vírgula (detecta o delimitador pela linha de cabeçalho, contando
 // qual aparece mais vezes: exportações de Excel em pt-BR costumam usar ";"), e remove aspas duplas
@@ -365,7 +384,8 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
     try {
       let rows: string[][];
       if (ext === "csv") {
-        const texto = await file.text();
+        const buf = await file.arrayBuffer();
+        const texto = decodeTextoTolerante(buf);
         rows = parseCsvRowsTolerante(texto);
       } else if (ext === "xlsx" || ext === "xls") {
         const buf = await file.arrayBuffer();
