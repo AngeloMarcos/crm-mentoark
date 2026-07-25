@@ -280,7 +280,26 @@ class QueryBuilder {
 
   constructor(table: string) { this._table = table; }
 
-  select(cols = '*', opts: Record<string, any> = {}) { this._op = 'select'; this._selectCols = cols; this._selectOpts = opts; return this; }
+  // [AUDITORIA] BUG (2026-07-25): `.select()` sobrescrevia `_op` incondicionalmente pra 'select'
+  // — o padrão idiomático `api.from(t).insert(x).select().single()` (usado em vários lugares,
+  // ex: StepReview.handleStart em Disparos.tsx pra criar campanha, e a importação de CSV/XLSX
+  // pra criar lista) perdia a operação de INSERT: `_exec()` via `_op==='select'` executava um
+  // GET sem filtro nenhum em vez do POST esperado, silenciosamente. Numa tabela vazia (ex:
+  // usuário sem nenhuma `lista` ainda) o GET devolve array vazio, `data[0]` vira `null`, e o
+  // chamador recebe um "erro ao criar" mesmo a operação nunca tendo sido uma criação de verdade
+  // — não aparecia nenhum POST nos logs do backend porque nenhum POST era de fato disparado.
+  // Numa tabela não-vazia o bug era pior e silencioso: `data[0]` de um GET sem filtro é uma linha
+  // ARBITRÁRIA já existente, não a recém-criada — o chamador seguia usando o id errado sem
+  // nenhum erro visível. [AUDITORIA] FIX APLICADO: `.select()` só assume `_op='select'` quando
+  // ainda não há uma operação de escrita (insert/update/delete) em andamento — preserva o
+  // comportamento padrão (`api.from(t).select(...)` sozinho continua funcionando igual) e
+  // corrige o encadeamento `.insert()/.update()/.delete().select()`.
+  select(cols = '*', opts: Record<string, any> = {}) {
+    if (this._op !== 'insert' && this._op !== 'update' && this._op !== 'delete') this._op = 'select';
+    this._selectCols = cols;
+    this._selectOpts = opts;
+    return this;
+  }
   insert(data: any)  { this._op = 'insert'; this._insertData = data; return this; }
   update(data: any)  { this._op = 'update'; this._updateData = data; return this; }
   delete()           { this._op = 'delete'; return this; }
