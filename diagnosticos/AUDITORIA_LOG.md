@@ -1,5 +1,11 @@
 # Auditoria de Código — Log
 
+### 🔧 Sprint Disparos 3 — Resumo de pré-validação na importação (2026-07-25, revisão 3)
+
+**Contexto:** usuário reportou repetidamente "ainda está trazendo contatos com telefone vazio" mesmo após a correção de encoding. Investigação (simulação completa do pipeline com 22 linhas reais do arquivo enviado) mostrou que a lógica de validação já estava correta: 12 importados (todos com telefone real), 10 descartados, nenhum CPF virando telefone. Perguntado diretamente, o usuário confirmou que via isso na PREVIEW (5 primeiras linhas cruas do arquivo, sem filtro nenhum — mostra o que está no arquivo, não o resultado da importação) e não depois de confirmar. Confirmou também manter a política de validação como está (não exigir formato exato de celular).
+
+**🔧 Corrigido — falta de retorno visual antes de confirmar.** Extraída `analisarLinhasImportacao()` de dentro de `confirmarImportacao` (era lógica local, não reaproveitável) pra rodar também assim que o arquivo é lido, via `useMemo` sobre `pendingImportRows`. Novo card "Pré-validação" na aba de importação mostra, antes de qualquer confirmação: quantos de fato serão importados (têm telefone válido), quantos foram corrigidos automaticamente (DDI/9º dígito), quantos serão descartados — usando a MESMA função que roda a importação real, não uma estimativa separada que poderia divergir. Botão "Confirmar Importação" desabilitado quando zero linhas são válidas.
+
 ### 🔴 Sprint Disparos 1/2/3 — Agendamento travado, multi-instância decorativa e importação CSV/XLSX cosmética (2026-07-25)
 
 **Contexto:** achados críticos catalogados em `diagnosticos/SPRINT_DISPAROS_*.md` (confirmados por leitura de código em sessão anterior). Falta ainda: placeholders/upload de mídia na campanha (`SPRINT_DISPAROS_PERSONALIZACAO_E_UPLOAD.md`) — não iniciado.
