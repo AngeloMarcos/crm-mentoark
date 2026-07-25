@@ -1,18 +1,19 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-25 (Sprints Disparos 1/2, ainda não deployadas). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-25 (Sprints Disparos 1/2/3, ainda não deployadas). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
-## Sessão 2026-07-25 — Disparos: agendamento travado + multi-instância decorativa corrigidos (commits b8695ea, c2db746)
+## Sessão 2026-07-25 — Disparos: agendamento, multi-instância e importação CSV/XLSX corrigidos (commits b8695ea, c2db746, 513aa99)
 
-**Commitado, NÃO deployado ainda.** Duas correções críticas em `diagnosticos/SPRINT_DISPAROS_*.md`:
+**Commitado, NÃO deployado ainda.** Três correções nesta mesma leva de `diagnosticos/SPRINT_DISPAROS_*.md`:
 1. Campanha criada via "Agendar Disparo" ficava presa em `status='rascunho'` para sempre — nada promovia pra `'em_andamento'` quando a hora chegava. Fix: `promover_disparos_agendados()` chamada a cada 2s no motor de disparo.
 2. Seleção de instâncias no Passo "Proteção Anti-ban" era decorativa — `instancias_ids` nunca era lido no envio, tudo saía por uma única instância arbitrária. Fix: round-robin real entre as instâncias selecionadas, com fallback para campanhas sem seleção. Toggle "Apenas saudáveis (>70)" (não fazia nada) ligado e uniformizado com "Selecionar todas".
+3. Aba "Importar Arquivo" nunca alimentava a campanha (CSV ou XLSX) — o parser só preenchia uma preview em memória, nunca criava contato nem entrava em `targetContacts`; XLSX além disso quebrava silenciosamente. Fix: upload agora só faz preview (com try/catch real), e um botão novo "Confirmar Importação" sanitiza telefone (DDI 55 automático, 9º dígito para celular antigo), cria uma lista de destino e insere os contatos de verdade, já selecionando essa lista pra campanha. Validação de telefone desta tela é deliberadamente mais permissiva que a usada em Leads.tsx/disparo (só descarta com <10 dígitos) — decisão de produto explícita pra não perder leads.
 
-Detalhe completo em `diagnosticos/AUDITORIA_LOG.md` (Sprint Disparos 1/2). Build backend+frontend passou; **nenhum teste real feito** (exige campanha de teste agendada + 2 instâncias conectadas em homolog).
+Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`. Build backend+frontend passou em todas as três; **nenhuma foi testada com dado real** (exige campanha agendada real, 2+ instâncias conectadas, e um CSV/XLSX real com linha inválida proposital em homolog).
 
-**Ainda não iniciado dessa mesma leva de 4 sprints de Disparos:** importação de contatos por CSV/XLSX (`SPRINT_DISPAROS_IMPORTACAO_CSV_XLSX.md`) e placeholders/upload de mídia na campanha (`SPRINT_DISPAROS_PERSONALIZACAO_E_UPLOAD.md`).
+**Ainda não iniciado dessa mesma leva de 4 sprints de Disparos:** placeholders/upload de mídia na campanha (`SPRINT_DISPAROS_PERSONALIZACAO_E_UPLOAD.md`).
 
-**Próximo passo:** deploy em homolog primeiro (`scripts/deploy.sh homolog backend/src/migrations.ts backend/src/services/disparoProcessor.ts src/pages/Disparos.tsx`), depois teste real: criar campanha agendada pra ~2-3min no futuro e confirmar que dispara sozinha; criar campanha com 2+ instâncias conectadas e confirmar (via `disparo_logs.instancia`) que alterna entre elas. Só depois disso, produção.
+**Próximo passo:** deploy em homolog primeiro (`scripts/deploy.sh homolog backend/src/migrations.ts backend/src/services/disparoProcessor.ts src/pages/Disparos.tsx`), depois teste real: (a) campanha agendada pra ~2-3min no futuro dispara sozinha; (b) campanha com 2+ instâncias conectadas alterna entre elas (via `disparo_logs.instancia`); (c) importar um CSV e um XLSX reais (com ao menos 1 linha sem telefone) e confirmar que os contatos aparecem em `targetContacts`. Só depois disso, produção.
 
 ## Sessão 2026-07-24 — Deploy em PRODUÇÃO de todas as sprints do dia (commits c2830ea..87cc793) + git push
 
