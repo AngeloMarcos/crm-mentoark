@@ -1,6 +1,27 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-25 (bug crítico no cliente de API corrigido, commitado, deploy em homolog pendente). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-27 (bug de auto-scroll no chat corrigido localmente, NÃO commitado nem deployado ainda). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+
+## Sessão 2026-07-27 — Chat WhatsApp: causa raiz #2 do "puxa pra baixo sozinho" + varredura de botões decorativos
+
+**Usuário reportou que o bug já persiste**: ao tentar subir na conversa pra ler mensagens antigas, o chat volta sozinho pro fim. Duas causas encontradas, empilhadas (detalhe completo em `diagnosticos/AUDITORIA_LOG.md`):
+1. Um fix inteiro de 2026-07-26 (backend: cursor `before` real na paginação; frontend: `loadOlderMessages` usando o viewport certo do Radix ScrollArea) **existia só no working tree, nunca foi commitado nem deployado** — o ambiente que o usuário testa nunca teve essa correção.
+2. Um segundo bug, não coberto pelo fix acima: um `useEffect` (WhatsAppInterface.tsx ~linha 1200) forçava `scrollIntoView` pro fim a cada mudança de `chats` — ou seja, a cada poll (2-5s) — sem checar se o usuário estava lendo histórico antigo. **Corrigido nesta sessão** (dependência reduzida a `[activeChatId]`).
+
+**Build limpo (frontend `vite build`+`tsc --noEmit`, backend `swc`). NADA commitado nem deployado ainda** — próximo passo: commit, deploy em homolog, e só depois o usuário testar subir/descer na conversa de verdade antes de ir pra produção.
+
+**Varredura de "botões sem utilidade" pedida pelo usuário** — 3 novos casos catalogados (além dos 7 já conhecidos de sessões anteriores), todos `FIX PENDENTE` por exigirem decisão de produto e/ou coluna nova no banco:
+- Ícone de filtro (`SlidersHorizontal`) no header da lista de conversas — sem `onClick`, sem estado de filtro implementado.
+- "Favoritar" mensagem (seleção múltipla) — só estado local, não persiste (recarregar a página perde tudo).
+- "Marcar como não lida" (menu de contexto da lista) — bump local sobrescrito pelo próprio polling em poucos segundos.
+
+**Segunda passada, leitura completa do arquivo (usuário pediu pra continuar a varredura) — mais 4 achados:**
+1. **🔴 Corrigido — crash em potencial na busca.** `highlightText()` montava regex direto do texto digitado nas duas caixas de busca, sem escapar. Um termo com parênteses/colchetes desbalanceados (plausível ao digitar um telefone formatado) podia derrubar a tela do chat inteira. Corrigido com escape de metacaracteres — comportamento de busca válido não muda.
+2. **Gap confirmado, não corrigido — busca global não navega até a mensagem.** Clicar num resultado da busca global só abre a conversa (parada no fim), nunca rola até a mensagem específica encontrada. `FIX PENDENTE` — exigiria paginar pra trás até achar a mensagem, risco de loop sem fim se implementado sem testar num navegador real.
+3. **Limitação documentada — busca dentro da conversa só olha mensagens já carregadas no cliente**, não o histórico completo (diferente da busca global, que consulta o banco inteiro). Não é bug, é escopo — decisão de produto pendente.
+4. **Novo botão decorativo — "chips" de filtro** ("Status Especial", "Etiqueta") na lista de conversas, mesma classe do ícone de filtro já catalogado — sem `onClick`, sem estado.
+
+Build (`tsc --noEmit`) limpo após os 4 achados novos. Nada commitado/deployado ainda desta sessão inteira.
 
 ## Sessão 2026-07-25 — Bug transversal: `.select()` depois de `.insert()`/`.update()` virava GET silencioso (commit 8e5a42d)
 

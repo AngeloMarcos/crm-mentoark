@@ -130,6 +130,35 @@ interface Message {
   };
 }
 
+// Compartilhado entre fetchMensagens (janela recente) e loadOlderMessages (scroll-up) — mesmo
+// mapeamento de linha da API pra Message, pra não divergir entre os dois pontos de carga.
+function mapRowsToMessages(rows: any[], chatName: string): Message[] {
+  return rows.map((m, i) => ({
+    id: String(m.id || `msg-${i}`),
+    message_id: m.message_id,
+    role: (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant',
+    content: m.content || m.conteudo || '',
+    timestamp: formatTime(m.timestamp_wa || m.created_at),
+    rawTimestamp: m.timestamp_wa || m.created_at || new Date().toISOString(),
+    // sender_name: nome de quem enviou (humano ou IA); push_name: nome do contato recebido
+    senderName: m.from_me
+      ? (m.sender_name || 'IA')
+      : (m.push_name || chatName),
+    tipo: m.tipo || 'text',
+    midia_url: m.midia_url,
+    midia_mime: m.midia_mime,
+    midia_nome: m.midia_nome,
+    status: m.status || m.delivery_status,
+    is_read: m.is_read,
+    reply_to: m.reply_to_message_id ? {
+      message_id: m.reply_to_message_id,
+      content: m.reply_to_content || 'Mensagem original',
+      senderName: m.reply_to_sender === 'assistant' ? 'Você' : (m.push_name || chatName),
+      role: (m.reply_to_sender || 'user') as 'user' | 'assistant'
+    } : undefined
+  }));
+}
+
 interface Chat {
   id: string;
   name: string;
@@ -408,8 +437,22 @@ export function WhatsAppInterface() {
   const activeChatNameRef = useRef<string>('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  // Viewport de scroll real do Radix ScrollArea — o `ref` do componente <ScrollArea> aponta pro
+  // Root (que tem overflow-hidden e nunca rola), o elemento que de fato rola é o filho
+  // [data-radix-scroll-area-viewport]. Sem isso, onScroll nunca dispara (evento 'scroll' não
+  // borbulha) e não dá pra ler/ajustar scrollTop de verdade — ver useEffect que o popula.
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
+  useEffect(() => { isAtBottomRef.current = isAtBottom; }, [isAtBottom]);
+  // Espelha `chats` em ref pra loadOlderMessages ler o estado mais atual sem precisar recriar a
+  // função/listener de scroll a cada mudança de `chats` (que muda a cada poll, ~2-3s).
+  const chatsRef = useRef<Chat[]>([]);
+  useEffect(() => { chatsRef.current = chats; }, [chats]);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const loadingOlderRef = useRef(false);
+  const hasMoreOlderRef = useRef(true);
   const [replyTo, setReplyTo] = useState<{ message_id: string; content: string; senderName: string; role: "user" | "assistant" } | null>(null);
   
   // Estados para busca na conversa
@@ -738,30 +781,7 @@ export function WhatsAppInterface() {
       }
       const rows: any[] = await res.json();
       console.log('[WA] fetchMensagens', phone, '— msgs recebidas:', rows.length);
-      const msgs: Message[] = rows.map((m, i) => ({
-        id: String(m.id || `msg-${i}`),
-        message_id: m.message_id,
-        role: (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant',
-        content: m.content || m.conteudo || '',
-        timestamp: formatTime(m.timestamp_wa || m.created_at),
-        rawTimestamp: m.timestamp_wa || m.created_at || new Date().toISOString(),
-        // sender_name: nome de quem enviou (humano ou IA); push_name: nome do contato recebido
-        senderName: m.from_me
-          ? (m.sender_name || 'IA')
-          : (m.push_name || chatName),
-        tipo: m.tipo || 'text',
-        midia_url: m.midia_url,
-        midia_mime: m.midia_mime,
-        midia_nome: m.midia_nome,
-        status: m.status || m.delivery_status,
-        is_read: m.is_read,
-        reply_to: m.reply_to_message_id ? {
-          message_id: m.reply_to_message_id,
-          content: m.reply_to_content || 'Mensagem original',
-          senderName: m.reply_to_sender === 'assistant' ? 'Você' : (m.push_name || chatName),
-          role: (m.reply_to_sender || 'user') as 'user' | 'assistant'
-        } : undefined
-      }));
+      const msgs: Message[] = mapRowsToMessages(rows, chatName);
       // [AUDITORIA] LÓGICA — Camada 3, ponto que o rastreio pediu pra verificar com atenção: este
       // early-return SÓ dispara se `currentIds` e `newIds` forem EXATAMENTE iguais (mesmo
       // conteúdo, mesma ordem, mesmo tamanho). Uma mensagem nova aumenta `msgs.length` em relação
@@ -773,29 +793,84 @@ export function WhatsAppInterface() {
       // Só atualiza se houver mudança real (evita re-render/flickering)
       setChats(prev => {
         const atual = prev.find(c => c.id === phone);
+        // fetchMensagens só busca a janela recente (limit=100, sem `before`). Mensagens mais
+        // antigas que o usuário já carregou via scroll-up (loadOlderMessages) não vêm nessa
+        // resposta — sem preservá-las aqui, cada poll de 3s (linha ~1099) substituiria
+        // `c.messages` inteiro e apagaria o histórico antigo carregado. Mantém só o que é
+        // estritamente mais antigo que a primeira mensagem da janela nova.
+        const oldestNewTs = msgs[0]?.rawTimestamp;
+        const preservedOlder = oldestNewTs
+          ? (atual?.messages ?? []).filter(m => (m.rawTimestamp ?? '') < oldestNewTs)
+          : [];
+        const merged = [...preservedOlder, ...msgs];
+
         const currentIds = atual?.messages.map(m => m.id + (m.status || '')) ?? [];
-        const newIds     = msgs.map(m => m.id + (m.status || ''));
+        const newIds     = merged.map(m => m.id + (m.status || ''));
         if (JSON.stringify(currentIds) === JSON.stringify(newIds)) return prev;
-        
-        const prevLen = prev.find(c => c.id === phone)?.messages.length ?? 0;
-        if (msgs.length > prevLen) {
+
+        const prevLen = atual?.messages.length ?? 0;
+        // Só força scroll pro fim se for a abertura da conversa (showLoading) ou se o usuário já
+        // estava no fim — senão, mensagem nova chegando via polling "puxa" o usuário pra baixo
+        // enquanto ele tenta subir pra ler histórico antigo (era exatamente esse o bug relatado).
+        if (merged.length > prevLen && (showLoading || isAtBottomRef.current)) {
           setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 80);
         }
 
         const now = new Date().toISOString();
-        return prev.map(c => c.id === phone 
-          ? { 
-              ...c, 
-              messages: msgs, 
-              rawTimestamp: now, 
+        return prev.map(c => c.id === phone
+          ? {
+              ...c,
+              messages: merged,
+              rawTimestamp: now,
               timestamp: formatTime(now),
-              lastMessage: msgs.at(-1)?.content ?? c.lastMessage 
-            } 
+              lastMessage: msgs.at(-1)?.content ?? c.lastMessage
+            }
           : c
         ).sort((a, b) => b.rawTimestamp.localeCompare(a.rawTimestamp));
       });
     } catch {}
     finally { if (showLoading) setLoadingMessages(false); }
+  };
+
+  // Busca mensagens mais antigas que a primeira já carregada (cursor `before`) e as insere no
+  // topo, preservando a posição visual de leitura (ajusta scrollTop pela diferença de altura
+  // depois que o DOM atualiza — sem isso, a lista "pula" porque o topo cresce sob o usuário).
+  const loadOlderMessages = async () => {
+    const phone = activeChatIdRef.current;
+    if (!phone || loadingOlderRef.current || !hasMoreOlderRef.current) return;
+    const chat = chatsRef.current.find(c => c.id === phone);
+    const oldest = chat?.messages[0];
+    if (!oldest?.rawTimestamp) return;
+
+    loadingOlderRef.current = true;
+    setLoadingOlderMessages(true);
+    const viewport = viewportRef.current;
+    const prevScrollHeight = viewport?.scrollHeight ?? 0;
+    const prevScrollTop = viewport?.scrollTop ?? 0;
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/whatsapp/conversas/${encodeURIComponent(phone)}?limit=50&before=${encodeURIComponent(oldest.rawTimestamp)}`,
+        { headers: await apiHeaders() }
+      );
+      if (!res.ok) return;
+      const rows: any[] = await res.json();
+      if (rows.length === 0) { hasMoreOlderRef.current = false; return; }
+      if (rows.length < 50) hasMoreOlderRef.current = false;
+
+      const older = mapRowsToMessages(rows, activeChatNameRef.current);
+      setChats(prev => prev.map(c =>
+        c.id === phone ? { ...c, messages: [...older, ...c.messages] } : c
+      ));
+
+      requestAnimationFrame(() => {
+        if (!viewport) return;
+        viewport.scrollTop = viewport.scrollHeight - prevScrollHeight + prevScrollTop;
+      });
+    } catch {}
+    finally {
+      loadingOlderRef.current = false;
+      setLoadingOlderMessages(false);
+    }
   };
 
   const checkStatus = async (silent = true) => {
@@ -998,29 +1073,45 @@ export function WhatsAppInterface() {
 
   useEffect(() => {
     if (!messagesEndRef.current) return;
-    
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         setIsAtBottom(entry.isIntersecting);
-        if (entry.isIntersecting) {
-          setShowScrollButton(false);
-        }
+        setShowScrollButton(!entry.isIntersecting);
       },
       { threshold: 0.1 }
     );
-    
+
     observer.observe(messagesEndRef.current);
     return () => observer.disconnect();
   }, [activeChatId]);
 
-  const handleScroll = (e: any) => {
-    // Para ScrollArea do Radix, o evento pode ser diferente, 
-    // mas aqui estamos pegando o viewport interno se possível
-    const target = e.target as HTMLDivElement;
-    const isBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 150;
-    setIsAtBottom(isBottom);
-    setShowScrollButton(!isBottom);
-  };
+  // [AUDITORIA] BUG (achado no rastreio de "não consigo subir mensagens antigas", 2026-07-26): o
+  // <ScrollArea> (Radix) recebia `onScroll={handleScroll}` na prop, mas o `ref`/props desse
+  // wrapper caem no elemento Root (`overflow-hidden`, nunca rola de verdade) — quem rola é o
+  // filho interno `[data-radix-scroll-area-viewport]`. Evento nativo `scroll` não borbulha, então
+  // esse onScroll nunca disparava; `isAtBottom`/`showScrollButton` dependiam só do
+  // IntersectionObserver acima (funcionava por coincidência pro botão "ir pro fim", mas não dava
+  // pra detectar "usuário perto do topo" — necessário pra carregar mensagens antigas).
+  // [AUDITORIA] FIX APLICADO: busca o viewport real via querySelector e liga o listener nele
+  // diretamente (DOM API, não JSX), inclusive disparando loadOlderMessages perto do topo.
+  useEffect(() => {
+    const viewport = scrollAreaRef.current?.querySelector<HTMLDivElement>('[data-radix-scroll-area-viewport]');
+    viewportRef.current = viewport ?? null;
+    if (!viewport) return;
+
+    const onViewportScroll = () => {
+      const isBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 150;
+      setIsAtBottom(isBottom);
+      setShowScrollButton(!isBottom);
+      if (viewport.scrollTop < 150) {
+        loadOlderMessages();
+      }
+    };
+
+    viewport.addEventListener('scroll', onViewportScroll, { passive: true });
+    return () => viewport.removeEventListener('scroll', onViewportScroll);
+  }, [activeChatId]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1073,6 +1164,11 @@ export function WhatsAppInterface() {
     recordingStreamRef.current = null;
     setIsRecording(false);
     setRecordingSeconds(0);
+    // Nova conversa = nova janela de paginação; "sem mais mensagens antigas" da conversa anterior
+    // não vale pra esta.
+    hasMoreOlderRef.current = true;
+    loadingOlderRef.current = false;
+    setLoadingOlderMessages(false);
 
     if (!activeChatId) {
       setIsSearchingInChat(false);
@@ -1101,9 +1197,20 @@ export function WhatsAppInterface() {
     return () => clearInterval(tMsgs);
   }, [activeChatId]);
 
+  // [AUDITORIA] BUG (achado 2026-07-27, mesmo sintoma relatado pelo usuário — "ao tentar subir
+  // pra ler mensagem antiga, o chat puxa pra baixo sozinho" — mesmo depois do fix de
+  // loadOlderMessages/isAtBottom acima): este efeito tinha `chats` inteiro nas dependências, então
+  // rodava a CADA poll (fetchConversas/fetchMensagens rodam a cada 2-5s, ver Camada 4 acima) e
+  // forçava scrollIntoView incondicional pro fim — nenhuma checagem de isAtBottom aqui, então
+  // "vencia" por cima do gating já aplicado dentro de fetchMensagens (linha ~815). É esse efeito,
+  // não o de loadOlderMessages, que continuava puxando o usuário pra baixo enquanto ele tentava
+  // subir. [AUDITORIA] FIX APLICADO: dependências reduzidas a `[activeChatId]` — o scroll ao ABRIR
+  // uma conversa já é coberto por fetchMensagens(..., showLoading=true) na troca de chat (mesma
+  // condição `showLoading || isAtBottomRef.current`), então este efeito passa a rodar só na troca
+  // de conversa em si, nunca mais em resposta a um poll de mensagens/lista.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeChatId, chats]);
+  }, [activeChatId]);
 
   const handleSendMessage = async () => {
     // [AUDITORIA] FIX APLICADO (2026-07-08, a pedido do usuário — "tire o uso de tokens da OpenAI,
@@ -1439,6 +1546,15 @@ export function WhatsAppInterface() {
     setContatoResults([]);
   };
 
+  // [AUDITORIA] LÓGICA (achado 2026-07-27, relevante ao pedido do usuário de "navegar/pesquisar"):
+  // esta busca roda só sobre `activeChat.messages` — ou seja, só o que já está carregado no
+  // cliente (janela inicial de 100 + o que `loadOlderMessages` já tiver paginado nesta sessão).
+  // Diferente da busca global (`/api/whatsapp/search`, linha ~1839), que consulta o banco inteiro,
+  // uma mensagem antiga que ainda não foi carregada aparece como "Nenhum resultado" aqui mesmo
+  // existindo na conversa — não é um bug de lógica (a busca em si está correta sobre o que
+  // recebe), é uma limitação de escopo (não busca no servidor). Não implementado como fix nesta
+  // sessão por exigir decisão de produto (vale a pena buscar no servidor por conversa também, com
+  // um endpoint novo, ou o usuário deve usar a busca global pra esse caso?).
   // Lógica de busca na conversa
   const handleChatSearch = (term: string) => {
     setChatSearchTerm(term);
@@ -1515,6 +1631,14 @@ export function WhatsAppInterface() {
     setSelectedMessageIds(new Set());
   };
 
+  // [AUDITORIA] BUG (achado 2026-07-27): "Favoritar" só mexe em `starredMessageIds`, um
+  // `useState<Set<string>>` local (linha ~476) — nenhum fetch/persistência em lugar nenhum, e não
+  // existe coluna `starred`/`is_starred` em `whatsapp_messages` nem rota equivalente ao padrão já
+  // usado por pin/mute/archive (`/api/whatsapp/chat-prefs/:phone`). Diferente de `markAsUnread`
+  // (mesma classe de bug, ver linha ~1944), este não é sobrescrito pelo polling de 2-5s porque não
+  // depende de `chats` — mas é igualmente não-persistente: reload da página, outra aba ou outro
+  // dispositivo perdem toda estrela marcada. [AUDITORIA] FIX PENDENTE (motivo: exige migração de
+  // coluna nova + rota nova, não é fix isolado de frontend).
   const handleToggleStar = () => {
     setStarredMessageIds(prev => {
       const next = new Set(prev);
@@ -1715,9 +1839,20 @@ export function WhatsAppInterface() {
     }
   };
 
+  // [AUDITORIA] BUG (achado 2026-07-27): `term` vem direto do que o usuário digita nas duas
+  // caixas de busca (chatSearchTerm/globalSearchTerm) e ia sem escapar pra dentro de `new RegExp`.
+  // Qualquer caractere especial de regex no termo — muito plausível em busca por telefone, ex:
+  // "(11) 98888-7777" — ou quebra o highlight silenciosamente (parênteses viram grupo de
+  // captura, não caractere literal) ou lança `SyntaxError` em termos com metacaractere
+  // desbalanceado (ex: só "(" ou só "["), derrubando o render desta tela inteira (sem error
+  // boundary acima) a cada tecla digitada. [AUDITORIA] FIX APLICADO: escapa os metacaracteres de
+  // regex antes de montar o padrão — o texto buscado continua batendo literalmente, sem mudar
+  // nenhum comportamento de busca válido.
+  const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
   const highlightText = (text: string, term: string) => {
     if (!term.trim()) return text;
-    const parts = text.split(new RegExp(`(${term})`, 'gi'));
+    const parts = text.split(new RegExp(`(${escapeRegExp(term)})`, 'gi'));
     return (
       <>
         {parts.map((part, i) => 
@@ -1834,6 +1969,15 @@ export function WhatsAppInterface() {
     } catch {}
   };
 
+  // [AUDITORIA] BUG (achado 2026-07-27): bump otimista local, sem persistência nenhuma — ao
+  // contrário de togglePin/toggleMute/toggleArchive logo acima (todos chamam POST
+  // /api/whatsapp/chat-prefs/:phone), este só mexe em `setChats`. `fetchConversas` (linha ~685,
+  // chamada por 3 intervals independentes a cada 2-5s) recalcula `unread` sempre a partir do
+  // servidor (linha ~731, `hasUnread` = ultima_atividade > lastOpenedRef) e sobrescreve esse `+1`
+  // no próximo poll — na prática o botão "Marcar como não lida" reverte sozinho em poucos
+  // segundos. [AUDITORIA] FIX PENDENTE (motivo: chat-prefs não tem coluna pra "forçar não lida"
+  // independente da atividade real — precisa de coluna nova + lógica no cálculo de `hasUnread`
+  // pra respeitar essa flag manual).
   const markAsUnread = (chatId: string) => {
     setChats(prev => prev.map(c => c.id === chatId ? { ...c, unread: (c.unread || 0) + 1 } : c));
     toast.success("Marcada como não lida");
@@ -1915,6 +2059,11 @@ export function WhatsAppInterface() {
                   ? <Loader2 className="h-4 w-4 animate-spin" />
                   : <ImageIcon className="h-4 w-4" />}
               </Button>
+              {/* [AUDITORIA] BUG (achado 2026-07-27): botão sem onClick — não faz nada ao clicar.
+                  Não existe nenhum estado de filtro/ordenação da lista de conversas neste arquivo
+                  pra ligar aqui (diferente do ícone de sync de fotos ao lado, que já tem handler
+                  real). [AUDITORIA] FIX PENDENTE (motivo: precisa de decisão de produto — filtrar
+                  por quê? tag, instância, não-lidas? — e UI de opções nova, não é fix isolado). */}
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
                 <SlidersHorizontal className="h-4 w-4" />
               </Button>
@@ -1940,6 +2089,15 @@ export function WhatsAppInterface() {
             </div>
           )}
 
+          {/* [AUDITORIA] BUG (achado 2026-07-27): os dois "chips" abaixo ("Status Especial" com X
+              pra remover, "Etiqueta" com chevron de dropdown) são só `<div>` com `cursor-pointer`
+              — sem `onClick`, sem estado nenhum ligado (não existe filtro por "status especial"
+              no modelo de dados, e o filtro por etiqueta que existe de verdade é outro, dentro do
+              painel de detalhes de cada contato). Mesma classe do ícone de filtro
+              (`SlidersHorizontal`) logo acima — aparentam ser parte de uma feature de filtros da
+              lista que nunca foi implementada, só desenhada. [AUDITORIA] FIX PENDENTE (motivo:
+              precisa de decisão de produto sobre quais filtros existem de fato, mesma pendência do
+              ícone de filtro). */}
           {/* Filter chip */}
           <div className="flex gap-2">
             <div className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95">
@@ -2020,14 +2178,26 @@ export function WhatsAppInterface() {
                 </div>
               ) : (
                 globalSearchResults.map((res: any) => (
+                  // [AUDITORIA] BUG (achado 2026-07-27): clicar num resultado da busca global só
+                  // faz `setActiveChatId` — abre a conversa e para no fim dela (comportamento
+                  // padrão de troca de chat), nunca rola/destaca a mensagem específica que o
+                  // usuário encontrou e clicou. O comentário original aqui já reconhecia a
+                  // limitação ("requer que a mensagem já esteja carregada") mas nunca implementava
+                  // o scroll de fato — pra mensagens fora da janela recente (fetchMensagens só
+                  // busca as últimas 100), nem estaria carregada sem paginar pra trás repetidas
+                  // vezes via loadOlderMessages até encontrar o id. [AUDITORIA] FIX PENDENTE
+                  // (motivo: exige guardar o `res.id` alvo, um efeito que espera a mensagem
+                  // aparecer em `activeChat.messages` pra chamar `scrollToMessage`, e — só se não
+                  // estiver na janela inicial — um loop de `loadOlderMessages()` com condição de
+                  // parada clara contra `hasMoreOlderRef`; não implementado sem poder testar
+                  // ponta-a-ponta num navegador real primeiro, pra não introduzir um loop que
+                  // nunca termina).
                   <div
                     key={res.id}
                     onClick={() => {
                       setActiveChatId(res.phone);
                       setShowGlobalSearchResults(false);
                       setGlobalSearchTerm("");
-                      // O scroll automático para a mensagem exata na conversa 
-                      // requer que a mensagem já esteja carregada, o que fetchMensagens fará
                     }}
                     className="p-4 hover:bg-primary/[0.04] cursor-pointer border-b border-border/30 last:border-0 group transition-colors"
                   >
@@ -2674,10 +2844,9 @@ export function WhatsAppInterface() {
             )}
 
             {/* Messages */}
-            <ScrollArea 
-              className="flex-1 bg-muted/10 relative" 
+            <ScrollArea
+              className="flex-1 bg-muted/10 relative"
               ref={scrollAreaRef}
-              onScroll={handleScroll}
             >
               {/* Barra de Ferramentas Suspensa (Seleção) */}
               {isSelectMode && (
@@ -2758,6 +2927,11 @@ export function WhatsAppInterface() {
                 {loadingMessages && (
                   <div className="flex items-center justify-center py-12 text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin mr-2" /> Carregando mensagens...
+                  </div>
+                )}
+                {!loadingMessages && loadingOlderMessages && (
+                  <div className="flex items-center justify-center py-3 text-muted-foreground text-xs">
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" /> Carregando mensagens antigas...
                   </div>
                 )}
                 {activeChat.messages.map((m, i) => {

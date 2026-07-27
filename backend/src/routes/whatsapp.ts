@@ -465,13 +465,26 @@ export default function whatsappRouter(pool: Pool): Router {
       if (!phone || phone.length < 8) return res.status(400).json({ message: 'Telefone inválido' });
 
       const limit = Math.min(Number(req.query.limit) || 100, 500);
-      const offset = Number(req.query.offset) || 0;
+      // Cursor de paginação pra "carregar mensagens mais antigas": timestamp da mensagem mais
+      // antiga já carregada no front. Sem isso (e sem `before`), a busca sempre pega as mais
+      // RECENTES `limit` mensagens — ver [AUDITORIA] BUG abaixo sobre o comportamento antigo.
+      const beforeRaw = req.query.before ? new Date(String(req.query.before)) : null;
+      const before = beforeRaw && !isNaN(beforeRaw.getTime()) ? beforeRaw.toISOString() : null;
       const tenantId = await resolveOwnerId(userId);
       // [AUDITORIA] FIX APLICADO (2026-07-21): piloto de RLS em whatsapp_messages, só
       // homologação (ver diagnosticos/AUDITORIA_LOG.md).
       await req.setDbUserId!(tenantId);
       const db = await req.getDb!();
 
+      // [AUDITORIA] BUG (achado no rastreio de "não consigo subir mensagens antigas",
+      // 2026-07-26): esta query ordenava ASC e aplicava LIMIT/OFFSET direto no resultado
+      // ascendente — com offset=0 (o front nunca mandava offset) isso sempre retornava as
+      // `limit` mensagens MAIS ANTIGAS da conversa, não as mais recentes. Numa conversa com mais
+      // de `limit` mensagens, o usuário nunca via as mensagens novas, e não havia como buscar as
+      // que ficaram de fora. [AUDITORIA] FIX APLICADO: busca as `limit` mais recentes (ou mais
+      // recentes anteriores a `before`, pro scroll-up carregar mais antigas) via ORDER BY DESC,
+      // depois reverte pra ordem cronológica (ASC) antes de responder — mantém o formato de
+      // resposta que o front já espera.
       const r = await db.query(
         `SELECT
            m.id, m.message_id, m.from_me, m.message_type, m.content,
@@ -486,12 +499,13 @@ export default function whatsappRouter(pool: Pool): Router {
          WHERE split_part(m.remote_jid, '@', 1) = $1
            AND m.user_id = $2
            AND m.deleted_at IS NULL
-         ORDER BY COALESCE(m.timestamp_wa, m.created_at) ASC
-         LIMIT $3 OFFSET $4`,
-        [phone, tenantId, limit, offset]
+           AND ($4::timestamptz IS NULL OR COALESCE(m.timestamp_wa, m.created_at) < $4::timestamptz)
+         ORDER BY COALESCE(m.timestamp_wa, m.created_at) DESC
+         LIMIT $3`,
+        [phone, tenantId, limit, before]
       );
 
-      const mensagens = r.rows.map(row => ({
+      const mensagens = r.rows.reverse().map(row => ({
         id: row.id,
         message_id: row.message_id,
         role: row.from_me ? 'assistant' : 'user',
