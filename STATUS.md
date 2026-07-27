@@ -1,6 +1,6 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-27 (bug de auto-scroll no chat corrigido localmente, NÃO commitado nem deployado ainda). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-27 (bug de auto-scroll no chat WhatsApp corrigido, validado em homolog pelo usuário, e já em PRODUÇÃO). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Sessão 2026-07-27 — Chat WhatsApp: causa raiz #2 do "puxa pra baixo sozinho" + varredura de botões decorativos
 
@@ -23,7 +23,7 @@
 
 Build (`tsc --noEmit`) limpo após os 4 achados novos.
 
-**Commitado (`5767643`) e deployado em HOMOLOGAÇÃO** (`scripts/deploy.sh homolog`, 2 arquivos: `backend/src/routes/whatsapp.ts`, `src/components/WhatsAppInterface.tsx`) — `crm-api-homolog`/`crm-homolog` rebuildados `--no-cache`, `/health`=200, sem `ERROR` nos logs pós-deploy. **NÃO deployado em produção ainda.** Próximo passo: usuário testar em `homolog.mentoark.com.br` — abrir uma conversa longa, subir pra ler histórico antigo e confirmar que não volta mais sozinho pro fim; testar a busca (global e na conversa) com um termo contendo parênteses (ex: telefone formatado) pra confirmar que não trava a tela. Só depois, produção (`scripts/deploy.sh prod --confirm` com os mesmos 2 arquivos).
+**Commitado (`5767643`, `67d5544`) e deployado em HOMOLOGAÇÃO e depois em PRODUÇÃO** (`scripts/deploy.sh homolog` seguido de `scripts/deploy.sh prod --confirm`, mesmos 2 arquivos: `backend/src/routes/whatsapp.ts`, `src/components/WhatsAppInterface.tsx`) — `crm-api`/`crm` (e antes, `crm-api-homolog`/`crm-homolog`) rebuildados `--no-cache`, `/health`=200 nos dois ambientes, sem `ERROR` nos logs pós-deploy em nenhum dos dois. **Usuário validou em homolog antes do deploy em produção** (subir histórico antigo não volta mais sozinho pro fim; busca com parênteses não trava a tela) — autorizou explicitamente "publicar como nova versão" na sequência. Não foi criada branch nova (repositório sempre usou commit direto na `main`, sem fluxo de PR/branch por feature, e `deploy.sh` copia arquivos específicos do working tree independente de branch — não haveria benefício operacional real aqui).
 
 ## Sessão 2026-07-25 — Bug transversal: `.select()` depois de `.insert()`/`.update()` virava GET silencioso (commit 8e5a42d)
 
