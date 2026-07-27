@@ -312,6 +312,20 @@ class QueryBuilder {
   gt(col: string, val: any)            { this._filters.push({ col, op: 'gt', val }); return this; }
   lt(col: string, val: any)            { this._filters.push({ col, op: 'lt', val }); return this; }
   ilike(col: string, pattern: string)  { this._filters.push({ col, op: 'ilike', val: pattern }); return this; }
+  // [AUDITORIA] BUG (achado 2026-07-27, mesma classe do bug de `.select()` após `.insert()`
+  // corrigido em 2026-07-25 — filtro perdido silenciosamente): `not()` empilha `{ col, op:
+  // 'not_is', val }` em `_filters`, mas `_buildParams()` abaixo só tem branch para
+  // eq/in/gte/lte/gt/lt/ilike — nenhum `else if (f.op === 'not_is')`. `neq()` é ainda mais
+  // direto: retorna `this` sem empilhar filtro nenhum. Nos dois casos, a query executa como se
+  // o filtro nunca tivesse sido chamado — sem erro, sem warning, resultado maior que o esperado
+  // (linhas que deveriam ser excluídas continuam vindo). Confirmado 1 uso real afetado:
+  // `Disparos.tsx` (seletor de instâncias do anti-ban), corrigido lá com filtro client-side
+  // isolado. [AUDITORIA] FIX PENDENTE (motivo: suporte genérico exigiria um parâmetro novo tanto
+  // aqui (`_buildParams`) quanto no backend `crud.ts` — nenhum dos dois tem hoje um equivalente
+  // a "_not_null"/"_ne", e `crud.ts` é usado por muitas rotas simples; mudar o contrato dele sem
+  // pedido explícito é risco maior do que justifica um fix não solicitado): se mais chamadores
+  // passarem a depender de `.not()`/`.neq()`, implementar o parâmetro nos dois lados antes de
+  // usar, não confiar que o filtro "só funciona".
   not(col: string, _op: string, val: any) { this._filters.push({ col, op: 'not_is', val }); return this; }
   neq(_col: string, _val: any)         { return this; }
 

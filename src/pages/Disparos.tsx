@@ -990,8 +990,25 @@ function StepAntiBan({ form, setForm }: any) {
 
   useEffect(() => {
     const fetchInstancias = async () => {
-      const { data } = await api.from("agentes").select("*").not("evolution_instancia", "is", null);
-      setInstancias(data || []);
+      // [AUDITORIA] BUG (achado 2026-07-27): `.not("evolution_instancia", "is", null)` é um
+      // no-op no QueryBuilder (src/integrations/database/client.ts) — `not()` empilha o filtro
+      // em `_filters`, mas `_buildParams()` não tem nenhum branch para o operador `not_is` (só
+      // trata eq/in/gte/lte/gt/lt/ilike), e o backend (`crud.ts`) também não tem um parâmetro de
+      // query equivalente a "_not_null"/"_ne". Resultado real: esta busca sempre trouxe TODOS os
+      // `agentes` do usuário, inclusive linhas sem `evolution_instancia` (nunca conectaram a
+      // Evolution) — apareciam como opção selecionável aqui, no seletor de instâncias do
+      // anti-ban. Se o usuário selecionasse só essas linhas "fantasma", o backend
+      // (`resolverInstanciasCampanha` em disparoProcessor.ts, que SIM filtra
+      // `evolution_instancia IS NOT NULL` corretamente) devolveria uma lista vazia de instâncias
+      // elegíveis, e o round-robin cairia silenciosamente no fallback de uma única instância
+      // padrão — anulando a distribuição multi-instância que o usuário pensava ter configurado,
+      // sem erro nenhum visível. [AUDITORIA] FIX APLICADO: filtro aplicado no cliente, no único
+      // ponto do frontend que usa `.not()` — mudança isolada aqui em vez de implementar suporte
+      // genérico a "not is null" no QueryBuilder/crud.ts (usados por muitas outras telas, maior
+      // risco pra um fix não pedido). `.neq()`/`.not()` continuam sendo no-ops no cliente
+      // compartilhado; comentado lá também para não pegar o próximo desenvolvedor de surpresa.
+      const { data } = await api.from("agentes").select("*");
+      setInstancias((data || []).filter((i: any) => !!i.evolution_instancia));
       setLoading(false);
     };
     fetchInstancias();
