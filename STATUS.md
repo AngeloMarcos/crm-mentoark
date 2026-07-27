@@ -21,7 +21,9 @@
 3. **Limitação documentada — busca dentro da conversa só olha mensagens já carregadas no cliente**, não o histórico completo (diferente da busca global, que consulta o banco inteiro). Não é bug, é escopo — decisão de produto pendente.
 4. **Novo botão decorativo — "chips" de filtro** ("Status Especial", "Etiqueta") na lista de conversas, mesma classe do ícone de filtro já catalogado — sem `onClick`, sem estado.
 
-Build (`tsc --noEmit`) limpo após os 4 achados novos. Nada commitado/deployado ainda desta sessão inteira.
+Build (`tsc --noEmit`) limpo após os 4 achados novos.
+
+**Commitado (`5767643`) e deployado em HOMOLOGAÇÃO** (`scripts/deploy.sh homolog`, 2 arquivos: `backend/src/routes/whatsapp.ts`, `src/components/WhatsAppInterface.tsx`) — `crm-api-homolog`/`crm-homolog` rebuildados `--no-cache`, `/health`=200, sem `ERROR` nos logs pós-deploy. **NÃO deployado em produção ainda.** Próximo passo: usuário testar em `homolog.mentoark.com.br` — abrir uma conversa longa, subir pra ler histórico antigo e confirmar que não volta mais sozinho pro fim; testar a busca (global e na conversa) com um termo contendo parênteses (ex: telefone formatado) pra confirmar que não trava a tela. Só depois, produção (`scripts/deploy.sh prod --confirm` com os mesmos 2 arquivos).
 
 ## Sessão 2026-07-25 — Bug transversal: `.select()` depois de `.insert()`/`.update()` virava GET silencioso (commit 8e5a42d)
 
