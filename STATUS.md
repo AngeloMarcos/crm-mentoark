@@ -1,6 +1,17 @@
 # STATUS — CRM Mentoark
 
-> Atualizado em: 2026-07-28 (client.ts sincronizado em produção — fix de `.select()` de 25/07 + fix novo de `.not()`/`.neq()` — e bug de auto-scroll no chat WhatsApp, ambos deployados e validados). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+> Atualizado em: 2026-07-28 (Disparos: backend/DB de produção sincronizados com homolog — round-robin multi-instância e promoção de agendamento agora ativos em produção também; client.ts e bug de auto-scroll do chat WhatsApp já deployados antes). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+
+## Sessão 2026-07-28 (cont.) — Produção estava rodando o motor de Disparos DESATUALIZADO desde 25/07 — sincronizado
+
+Usuário reportou "importação de arquivos ainda não funciona em produção" e pediu para conferir se produção está na mesma versão que homolog. Comparação arquivo-a-arquivo (via SSH direto na VPS, não só `git log`) de `src/pages/Disparos.tsx`, `backend/src/services/disparoProcessor.ts` e `backend/src/migrations.ts` entre produção e homolog:
+
+- **`Disparos.tsx` (frontend): já estava idêntico** entre os dois ambientes — foi sincronizado no deploy anterior desta mesma sessão (fix de `client.ts`/`.not()`). Import de CSV/XLSX deveria já funcionar; se o usuário via o contrário, provável cache de navegador na hora do teste.
+- **`disparoProcessor.ts` e `migrations.ts` (backend): produção estava rodando a versão de ANTES da Sprint Disparos de 25/07** — nunca deployados em produção desde então (STATUS.md já registrava isso, mas ficou sem ação até agora). Faltava em produção: round-robin real entre instâncias selecionadas (caía num fallback de instância única — não perigoso, só não distribuía), e a promoção automática de campanhas agendadas (`promover_disparos_agendados()` — campanha criada via "Agendar Disparo" ficava presa em `status='rascunho'` para sempre em produção). **Núcleo de segurança anti-ban (delay entre mensagens, teto diário, circuit breaker, janela comercial) já existia em produção antes desta sessão e não fazia parte do gap** — non-issue, só faltava a parte de distribuição/agendamento.
+
+**🔧 Corrigido — deployado em produção** (`scripts/deploy.sh prod --confirm`, 2 arquivos: `backend/src/services/disparoProcessor.ts`, `backend/src/migrations.ts`) — `crm-api` rebuildado, `/health`=200, sem `ERROR` nos logs. **Confirmado por 3 vias, não só health check:** (1) diff direto dos arquivos na VPS agora idêntico ao repo local/homolog; (2) `docker exec postgres psql` na VPS confirmando `promover_disparos_agendados()` e `disparo_logs.instancia` existentes no banco de produção; (3) nenhuma migration falhou nos logs do boot.
+
+**Todos os 3 arquivos da Sprint Disparos (25/07) agora idênticos entre produção e homolog** — nenhum gap de código conhecido restante entre os dois ambientes para o módulo de Disparos.
 
 ## Sessão 2026-07-27/28 — Auditoria pré-Disparos: client.ts sem fix de 25/07 em PRODUÇÃO + bug novo de filtro perdido — DEPLOYADO
 
