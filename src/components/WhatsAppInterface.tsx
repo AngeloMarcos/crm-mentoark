@@ -31,7 +31,7 @@ import {
   BotOff, Bot, ImageIcon, Reply,
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
   Copy, Video, FileText, Trash2, Forward, Star,
-  AlertCircle, Activity,
+  AlertCircle, Activity, ArrowLeft,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -2065,7 +2065,12 @@ export function WhatsAppInterface() {
     <div className="flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border shadow-xl bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
 
       {/* ── LEFT: Conversation List ── */}
-      <div className="w-[340px] shrink-0 border-r flex flex-col bg-card/30 backdrop-blur-sm">
+      {/* [AUDITORIA] FIX APLICADO (Achado 3 — responsividade, achado 2026-07-27, implementado
+          2026-07-28 a pedido do usuário): abaixo de `lg` (~1024px), lista e chat nunca ficam
+          lado a lado — só uma coluna por vez ocupa a tela inteira, alternando por
+          `activeChatId` (padrão comum de app de chat mobile). Em `lg`+, comportamento de 3
+          colunas fixas continua idêntico ao anterior. */}
+      <div className={`${activeChatId ? "hidden lg:flex" : "flex"} w-full lg:w-[340px] shrink-0 border-r flex-col bg-card/30 backdrop-blur-sm`}>
         {/* Header */}
         <div className="px-5 pt-5 pb-3 border-b space-y-4">
           <div className="flex items-center justify-between">
@@ -2386,7 +2391,10 @@ export function WhatsAppInterface() {
       </div>
 
       {/* ── CENTER: Chat Area ── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-background/40">
+      {/* [AUDITORIA] FIX APLICADO: espelha o toggle da lista acima — some abaixo de `lg` quando
+          nenhuma conversa está aberta (lista ocupa a tela inteira), aparece em tela cheia quando
+          uma conversa é aberta. Em `lg`+, sempre visível ao lado da lista, como antes. */}
+      <div className={`${activeChatId ? "flex" : "hidden lg:flex"} flex-1 flex-col min-w-0 overflow-hidden bg-background/40 w-full`}>
         
         {/* Modal Nova Mensagem */}
         <Dialog open={showNewMessageModal} onOpenChange={(o) => {
@@ -2724,8 +2732,18 @@ export function WhatsAppInterface() {
         {activeChat ? (
           <>
             {/* Chat header */}
-            <div className="h-16 shrink-0 border-b flex items-center justify-between px-6 bg-background/60 backdrop-blur-md z-20 shadow-sm">
-              <div className="flex items-center gap-4">
+            <div className="h-16 shrink-0 border-b flex items-center justify-between px-3 sm:px-6 bg-background/60 backdrop-blur-md z-20 shadow-sm">
+              <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+                {/* [AUDITORIA] FIX APLICADO: só existe em telas <lg — abaixo desse ponto a lista
+                    fica escondida quando uma conversa está aberta (ver container acima), então
+                    precisa de um jeito de voltar pra ela sem depender do mouse/hover. */}
+                <button
+                  onClick={() => setActiveChatId(null)}
+                  className="lg:hidden shrink-0 p-2 -ml-1 rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  title="Voltar para a lista"
+                >
+                  <ArrowLeft className="h-5 w-5" />
+                </button>
                 <button
                   onClick={() => activeChat.profile_pic && setPhotoModal(activeChat.profile_pic)}
                   className={activeChat.profile_pic ? 'cursor-zoom-in' : 'cursor-default'}
@@ -2733,10 +2751,10 @@ export function WhatsAppInterface() {
                 >
                   <ChatAvatar name={activeChat.name} url={activeChat.profile_pic} size="md" rounded="2xl" className="border border-primary/20 shadow-inner" />
                 </button>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-base font-bold tracking-tight">{activeChat.name}</p>
-                    <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <p className="text-base font-bold tracking-tight truncate">{activeChat.name}</p>
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
                   </div>
                   {/* [AUDITORIA] BUG: pra conversa de grupo, activeChat.phone é o JID numérico bruto
                       do grupo (ex: "120363401725364845@g.us" sem o sufixo, um número bem longo sem
@@ -2756,12 +2774,12 @@ export function WhatsAppInterface() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                 <button
                   onClick={toggleIA}
                   disabled={togglingIA}
                   title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
                     iaPausada
                       ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
                       : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
@@ -2777,18 +2795,22 @@ export function WhatsAppInterface() {
                   <span className="hidden sm:inline">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
                 </button>
 
+                {/* [AUDITORIA] FIX APLICADO: escondido abaixo de `md` (achado 2026-07-28, chat
+                    "apertado" em tablet/mobile) — cabeçalho já concorre com botão de voltar,
+                    avatar, nome e mais 3 ícones nessa faixa de largura; ação continua disponível
+                    a partir de tablet em paisagem/desktop. */}
                 <Button
                   variant="outline"
-                  className="h-9 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
+                  className="hidden md:flex h-9 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
                   onClick={() => handleCriarTarefaIA(activeChat.id)}
                 >
                   <Sparkles className="h-4 w-4" />
-                  <span className="hidden sm:inline">Criar Tarefa</span>
+                  <span className="hidden lg:inline">Criar Tarefa</span>
                 </Button>
-                
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
+
+                <Button
+                  variant="ghost"
+                  size="icon"
                   className={`h-9 w-9 rounded-xl transition-colors ${isSearchingInChat ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
                   onClick={() => {
                     setIsSearchingInChat(!isSearchingInChat);
@@ -2809,11 +2831,13 @@ export function WhatsAppInterface() {
                     (ex: import.meta.env.DEV) escondendo isso. Não é um bug funcional (não quebra
                     nada, só um recurso de debug), mas é um artefato de dev vazando pra UI real.
                     [AUDITORIA] FIX PENDENTE (motivo: remover/esconder é decisão do usuário — pode
-                    ser proposital manter acessível pra QA em produção). */}
+                    ser proposital manter acessível pra QA em produção). [AUDITORIA] FIX APLICADO
+                    (achado 2026-07-28): escondido abaixo de `md` — reduz clutter no header
+                    apertado de tablet/mobile sem tirar o acesso em telas maiores. */}
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
+                  className="hidden md:flex h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
                   onClick={runUITests}
                   title="Executar Testes de UI"
                 >
@@ -3512,8 +3536,19 @@ export function WhatsAppInterface() {
       )}
 
       {/* ── RIGHT: Contact Profile Panel ── */}
+      {/* [AUDITORIA] FIX APLICADO (Achado 3 — responsividade, achado 2026-07-27, implementado
+          2026-07-28): abaixo de `lg`, o painel de detalhes virava uma 3ª coluna fixa de 300px
+          somada às outras duas — em tablet isso não cabia de jeito nenhum (ver comentário no
+          container raiz do componente). Agora vira um overlay/drawer da largura da tela (capado
+          em 380px) com backdrop clicável pra fechar, sem mudar nada do comportamento em `lg`+
+          (continua 3ª coluna estática de 300px, como sempre foi). */}
       {activeChat && showContactPanel && (
-        <div className="w-[300px] shrink-0 border-l bg-card/20 backdrop-blur-md flex flex-col animate-in slide-in-from-right duration-500">
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+            onClick={() => setShowContactPanel(false)}
+          />
+          <div className="fixed inset-y-0 right-0 z-50 w-full max-w-[380px] lg:static lg:z-auto lg:w-[300px] lg:max-w-none shrink-0 border-l bg-card lg:bg-card/20 backdrop-blur-md flex flex-col animate-in slide-in-from-right duration-300">
           {/* Panel header */}
           <div className="flex items-center justify-between px-5 py-4 border-b bg-background/40">
             <h3 className="text-sm font-bold tracking-tight">Detalhes do Contato</h3>
@@ -3773,7 +3808,8 @@ export function WhatsAppInterface() {
               )}
             </div>
           </ScrollArea>
-        </div>
+          </div>
+        </>
       )}
       {/* Modal de Encaminhar */}
       <Dialog open={showForwardModal} onOpenChange={setShowForwardModal}>

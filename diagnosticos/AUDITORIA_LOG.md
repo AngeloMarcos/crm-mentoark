@@ -1,5 +1,19 @@
 # Auditoria de Código — Log
 
+### 🔧 Responsividade: sidebar não fechava de verdade + chat WhatsApp em telas menores (2026-07-28)
+
+**Contexto:** usuário reportou não conseguir fechar/ocultar a barra lateral de módulos em nenhum lugar do sistema, dificultando o uso em tablets — e pediu uma revisão geral de UX/responsividade do chat, que já tinha essa pendência documentada desde a sessão de 24/07 (Achado 3 — responsividade, `FIX PENDENTE` na época por ser decisão de produto/design).
+
+**🔧 Corrigido — sidebar (`AppSidebar.tsx`).** `<Sidebar collapsible="icon">` fazia o botão de toggle (header) e o atalho `Ctrl+B` só encolherem a barra pra uma régua de ícones de 3rem — nunca some de verdade. Como `useIsMobile()` (`hooks/use-mobile.tsx`) só considera `<768px` como "mobile" (único modo que usa o Sheet/drawer que realmente sai da tela), qualquer tablet em paisagem — e a maioria em retrato — cai no modo desktop e fica permanentemente com essa régua de ícones tomando espaço. Trocado pra `collapsible="offcanvas"` — mesmo botão/atalho já existentes, sem UI nova, mas agora some de vez em qualquer largura de tela.
+
+**🔧 Corrigido — chat WhatsApp (`WhatsAppInterface.tsx`), decisão de produto agora confirmada pelo usuário.** Redesenho responsivo abaixo de `lg` (~1024px, cobre tablet retrato/paisagem e mobile):
+- Lista de conversas e área do chat nunca ficam lado a lado — só uma ocupa a tela inteira por vez, alternando por `activeChatId` (padrão comum de app de chat mobile). Botão de "voltar" novo no cabeçalho do chat (`lg:hidden`) volta pra lista.
+- Painel de detalhes do contato virou overlay/drawer (fixo, capado em 380px, com backdrop clicável pra fechar) em vez de somar como 3ª coluna fixa — em `lg`+ continua exatamente como 3ª coluna estática de 300px, sem mudança nenhuma nesse breakpoint.
+- Cabeçalho do chat: botões "Criar Tarefa" e o botão de auto-teste dev (`runUITests`, já catalogado antes como artefato de dev) escondidos abaixo de `md` — reduz aperto em telas menores sem tirar acesso em desktop/tablet largo. Nome do contato e badge de instância agora truncam corretamente (`min-w-0`/`truncate`) em vez de poder estourar o cabeçalho em telas estreitas.
+- Comportamento em `lg`+ (desktop) inalterado — mesmas 3 colunas fixas de sempre.
+
+**Build:** `vite build` limpo (frontend). Backend não foi tocado nesta mudança. **Não testado visualmente em navegador real nesta sessão** (Playwright indisponível) — deploy em homolog primeiro, usuário validar redimensionando a janela/testando em tablet real antes de produção.
+
 ### 🔴 Envio de mídia do composer do chat (imagem/vídeo) nunca funcionou — causa raiz confirmada e corrigida (2026-07-28)
 
 **Contexto:** usuário reportou não conseguir enviar imagem nem vídeo pelo composer do chat WhatsApp, e também não conseguir colar (`Ctrl+V`) um print da tela.

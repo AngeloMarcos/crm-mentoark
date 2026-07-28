@@ -1,5 +1,11 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-28 (cont.) — Sidebar não fechava de verdade + responsividade do chat WhatsApp em tablet/mobile
+
+Usuário reportou não conseguir ocultar a barra lateral de módulos (dificultava tablet) e pediu revisão de UX/responsividade do chat — pendência já documentada desde 24/07. **Corrigido:** `AppSidebar.tsx` trocado de `collapsible="icon"` (só encolhe pra régua de ícones, nunca some) para `collapsible="offcanvas"` (some de vez, mesmo botão/atalho `Ctrl+B` de sempre) — resolve porque tablets caem no modo "desktop" do sidebar (breakpoint mobile é `<768px`). **Chat WhatsApp:** abaixo de `lg` (~1024px), lista/chat alternam tela cheia (com botão de voltar) em vez de espremer 3 colunas, e o painel de detalhes virou overlay em vez de somar como 3ª coluna — comportamento em desktop (`lg`+) inalterado.
+
+Build (`vite build`) limpo. **Não testado visualmente em navegador** (Playwright indisponível nesta sessão) — deploy em homolog primeiro, usuário validar redimensionando a janela ou em tablet real antes de produção. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
 ## Sessão 2026-07-28 (cont.) — Envio de mídia (imagem/vídeo) e paste de print no chat — deployado em produção, validação real pendente
 
 Usuário reportou não conseguir enviar imagem/vídeo pelo composer do chat WhatsApp, nem colar (`Ctrl+V`) um print da tela. **Causa raiz confirmada:** o composer mandava o arquivo como `data:...;base64,...` direto pro backend, que repassava sem tratamento pro payload da Evolution API — nenhum outro envio de mídia do sistema (campanhas, TTS) faz isso, todos fazem upload prévio e mandam URL estável. **Corrigido:** nova rota `POST /api/whatsapp/upload-media` + composer atualizado pra usar upload real em vez de base64 embutido. **Também corrigido:** paste de imagem da área de transferência não tinha handler nenhum — adicionado.

@@ -391,7 +391,15 @@ export function AppSidebar() {
   };
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-sidebar-border sidebar-gradient">
+    // [AUDITORIA] BUG (achado 2026-07-28): `collapsible="icon"` fazia o toggle (botão no
+    // AppHeader / Ctrl+B) só encolher a sidebar pra uma régua de ícones de 3rem — nunca some de
+    // verdade. Como o breakpoint "mobile" do shadcn (`useIsMobile`, hooks/use-mobile.tsx) só
+    // considera <768px, qualquer tablet em paisagem (e a maioria em retrato) cai no modo desktop
+    // e fica permanentemente com esses 3rem tomando espaço — some com o chat do WhatsApp (que já
+    // tem 3 colunas de largura fixa) sobrando pouquíssimo espaço real de conteúdo. `offcanvas` é
+    // o modo que a própria biblioteca já suporta pra sumir de vez (mesmo botão/atalho, sem UI
+    // nova) — troca mínima e isolada.
+    <Sidebar collapsible="offcanvas" className="border-r border-sidebar-border sidebar-gradient">
       {/* Logo */}
       <div className="relative flex items-center gap-2 px-4 py-4 border-b border-sidebar-border/60">
         <div className="w-9 h-9 rounded-lg gradient-brand flex items-center justify-center shrink-0 animate-breathe overflow-hidden">
