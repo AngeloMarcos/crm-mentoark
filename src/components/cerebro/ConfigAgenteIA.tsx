@@ -31,8 +31,18 @@ interface AgentConfig {
   ativo: boolean;
 }
 
+// [AUDITORIA] BUG GRAVE (achado 2026-07-28, reportado pelo usuário — cliente novo com a IA
+// ativa e respondendo com a persona configurada pra OUTRO cliente real, "Cris"): este objeto
+// tinha `nome_agente: "Cris"` — nome de uma cliente real de verdade, hardcoded como "default"
+// — e `ativo: true`. Combinado com o bug de roteamento logo abaixo (`carregarConfig`/`salvar`
+// chamavam uma rota que nunca existiu, então SEMPRE falhavam e a tela ficava presa neste
+// estado "default", sem o operador nunca perceber que nada tinha sido carregado/salvo de
+// verdade), qualquer cliente novo cuja tela de configuração nunca tivesse sido preenchida
+// exibia — e, se salva sem querer, persistia — o nome de outra cliente com o agente já
+// marcado como ativo. [AUDITORIA] FIX APLICADO: nome vazio (força o operador a definir o
+// nome de verdade do agente) e `ativo: false` (ativar é ação explícita, nunca default).
 const defaultConfig: AgentConfig = {
-  nome_agente: "Cris",
+  nome_agente: "",
   prompt_sistema: "",
   saudacao_inicial: "",
   bloco_qualificacao: "",
@@ -45,7 +55,7 @@ const defaultConfig: AgentConfig = {
   modelo_llm: "gpt-4o",
   modelo_parser: "gpt-4o-mini",
   grupo_notificacao: "",
-  ativo: true,
+  ativo: false,
 };
 
 export function ConfigAgenteIA() {
@@ -69,18 +79,22 @@ export function ConfigAgenteIA() {
     if (user) carregarConfig();
   }, [user]);
 
+  // [AUDITORIA] BUG GRAVE (achado 2026-07-28, mesmo achado do comentário em defaultConfig
+  // acima): `api.from("agent_configs")` monta a URL a partir do nome da TABELA
+  // (`/api/agent_configs`, com underscore) — essa rota nunca existiu no backend, só
+  // `/api/agent-config` (singular, hífen — rota própria em `agent-config.ts`, que já filtra
+  // corretamente por `req.userId`, não precisa nem deve receber `.eq("user_id", ...)` do
+  // cliente). Toda chamada desta tela sempre voltava 404. Em `carregarConfig`, o `error` nem
+  // era checado — a tela silenciosamente nunca carregava a config real de ninguém e ficava
+  // presa no `defaultConfig` (ver bug acima) sem avisar o operador. Em `salvar`, o formato de
+  // resposta da rota certa (objeto único, não lista) também não bate com o que
+  // `.insert().select().single()` do QueryBuilder genérico espera. [AUDITORIA] FIX APLICADO:
+  // chama `/api/agent-config` direto via `api.get`/`api.post` (helpers simples do client.ts,
+  // não o QueryBuilder de tabela) — rota real, já com UPSERT por `user_id` no backend.
   const carregarConfig = async () => {
     try {
-      const { data, error } = await api
-        .from("agent_configs")
-        .select("*")
-        .eq("user_id", user?.id)
-        .eq("ativo", true)
-        .maybeSingle();
-
-      if (data) {
-        setConfig(data);
-      }
+      const { data } = await api.get("/api/agent-config");
+      if (data) setConfig(data);
     } catch (e) {
       toast.error("Erro ao carregar configurações do agente");
     } finally {
@@ -95,30 +109,8 @@ export function ConfigAgenteIA() {
     if (!user) return;
     setSalvando(true);
     try {
-      const payload = {
-        ...config,
-        user_id: user.id,
-        updated_at: new Date().toISOString(),
-      };
-
-      let error;
-      if (config.id) {
-        const { error: err } = await api
-          .from("agent_configs")
-          .update(payload)
-          .eq("id", config.id);
-        error = err;
-      } else {
-        const { data, error: err } = await api
-          .from("agent_configs")
-          .insert([payload])
-          .select()
-          .single();
-        if (data) setConfig(data);
-        error = err;
-      }
-
-      if (error) throw error;
+      const { data } = await api.post("/api/agent-config", config);
+      if (data) setConfig(data);
       toast.success("Configurações do agente salvas!");
     } catch (e: any) {
       toast.error(`Erro ao salvar: ${e.message}`);
@@ -181,7 +173,7 @@ export function ConfigAgenteIA() {
                   value={config.saudacao_inicial} 
                   onChange={(e) => update("saudacao_inicial", e.target.value)} 
                   rows={4}
-                  placeholder="Ex: Olá! Sou a Cris, assistente virtual da Mentoark. Como posso te ajudar hoje?"
+                  placeholder="Ex: Olá! Sou a Sofia, assistente virtual da Mentoark. Como posso te ajudar hoje?"
                 />
               </div>
 
@@ -246,7 +238,7 @@ export function ConfigAgenteIA() {
                   <Input 
                     value={config.nome_agente} 
                     onChange={(e) => update("nome_agente", e.target.value)} 
-                    placeholder="Ex: Cris"
+                    placeholder="Ex: Sofia"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">

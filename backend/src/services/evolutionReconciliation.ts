@@ -113,9 +113,17 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
     if (atual && abertas.some(a => a.instancia === atual)) continue;
 
     const alvo = abertas[0];
+    // [AUDITORIA] BUG (achado 2026-07-28 — "IA não pode vir ativada sem antes estar
+    // configurada"): este INSERT ligava `ativo=true` na hora em que a instância era
+    // reconciliada, mesmo sem prompt/persona configurados ainda — cliente novo passava a
+    // responder mensagens reais com um prompt genérico (ou, em outro achado da mesma sessão,
+    // um prompt de outro tenant, via bug separado em `agent-config.ts`/ConfigAgenteIA.tsx).
+    // [AUDITORIA] FIX APLICADO: nasce `false`; ON CONFLICT não toca `ativo` (só nos campos de
+    // conexão), então isso só afeta a criação inicial da linha — nunca desliga um agente que o
+    // usuário já ativou de propósito.
     await pool.query(
       `INSERT INTO agent_configs (user_id, evolution_instancia, evolution_server_url, evolution_api_key, ativo)
-       VALUES ($1, $2, $3, $4, true)
+       VALUES ($1, $2, $3, $4, false)
        ON CONFLICT (user_id) DO UPDATE SET
          evolution_instancia  = EXCLUDED.evolution_instancia,
          evolution_server_url = EXCLUDED.evolution_server_url,

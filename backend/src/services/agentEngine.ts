@@ -513,9 +513,24 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   const agentConfig = configRes.rows[0] ?? null;
 
+  // [AUDITORIA] BUG (achado 2026-07-28, reportado pelo usuário — cliente novo com IA
+  // respondendo e usando o prompt configurado pra OUTRO cliente já existente): antes, sem
+  // `agent_configs.prompt_sistema` nem `agent_prompts` real, o motor caía num prompt genérico
+  // hardcoded ("Você é um assistente prestativo.") e RESPONDIA mesmo assim — violando a regra
+  // "a IA não pode responder sem antes estar configurada". Isso, somado a `agent_configs`
+  // nascendo `ativo=true` por padrão em pelo menos 3 pontos do sistema (agent-config.ts,
+  // integracoes.ts, evolutionReconciliation.ts — todos corrigidos na mesma sessão) e ao bug
+  // separado de roteamento em `ConfigAgenteIA.tsx`/`agent-config.ts` (rota `/api/agent_configs`
+  // usada pelo frontend nunca existiu — `/api/agent-config`, singular/hífen, é a rota real —
+  // fazendo a tela de configuração falhar silenciosamente ao carregar/salvar, então o operador
+  // nunca via se a config realmente tinha sido salva pro cliente certo), formava exatamente o
+  // cenário reportado. [AUDITORIA] FIX APLICADO: prompt do sistema só é considerado "real" com
+  // conteúdo genuíno vindo de `agent_configs`/`agent_prompts` — sem isso, a IA NÃO responde
+  // (mesmo comportamento de "agente não encontrado" já usado linhas acima), em vez de
+  // silenciosamente assumir uma persona genérica que não é a do cliente.
   // Prompt do sistema: usa agent_configs.prompt_sistema como fonte principal.
   // Fallback para agent_prompts apenas para compatibilidade com contas antigas sem migração.
-  let systemPromptBase: string;
+  let systemPromptBase: string | null = null;
   if (agentConfig?.prompt_sistema) {
     systemPromptBase = agentConfig.prompt_sistema;
   } else {
@@ -523,7 +538,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       `SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`,
       [userIdFinal]
     );
-    systemPromptBase = legacyRes.rows[0]?.conteudo ?? 'Você é um assistente prestativo.';
+    systemPromptBase = legacyRes.rows[0]?.conteudo || null;
+  }
+  if (!systemPromptBase) {
+    log.warn('ENGINE', 'Agente sem prompt configurado — IA não vai responder', { userId: userIdFinal, instancia: entrada.instancia });
+    return;
   }
 
   const nomeAgente = agentConfig?.nome_agente || agente.nome || 'Assistente';

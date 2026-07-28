@@ -99,7 +99,12 @@ export default function agentConfigRouter(pool: Pool): Router {
         evolution_instancia ?? null,
         operation_mode ?? null,
         distribution_mode ?? null,
-        ativo ?? true,
+        // [AUDITORIA] BUG (achado 2026-07-28 — "IA não pode vir ativada sem antes estar
+        // configurada"): `ativo ?? true` fazia qualquer criação de linha (inclusive uma
+        // chamada parcial que não mande o campo) nascer ativa por padrão. [AUDITORIA] FIX
+        // APLICADO: nasce `false` — ativar é ação explícita do usuário (toggle na tela),
+        // nunca um default silencioso.
+        ativo ?? false,
       ]
     );
     return res.json(r.rows[0]);

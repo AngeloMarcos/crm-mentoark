@@ -51,10 +51,17 @@ export default function integracoesRouter(pool: Pool): Router {
       return;
     }
     // [AUDITORIA] LÓGICA: UPSERT em `agent_configs` para registrar/atualizar os dados de conexão de saída da Evolution API.
+    // [AUDITORIA] BUG (achado 2026-07-28 — "IA não pode vir ativada sem antes estar
+    // configurada"): conectar o WhatsApp aqui já ligava `ativo=true` — cliente novo conecta o
+    // número e a IA já sai respondendo com prompt genérico (ou, achado separado nesta mesma
+    // sessão, o prompt de outro tenant — ver ConfigAgenteIA.tsx/agent-config.ts), antes mesmo
+    // de configurar persona/prompt. [AUDITORIA] FIX APLICADO: nasce `false`; ON CONFLICT não
+    // toca `ativo`, então só afeta a criação inicial — nunca desativa um agente que o usuário
+    // já ligou de propósito depois de configurar.
     await pool.query(
       `INSERT INTO agent_configs
          (user_id, evolution_instancia, evolution_server_url, evolution_api_key, ativo)
-       VALUES ($1, $2, $3, $4, true)
+       VALUES ($1, $2, $3, $4, false)
        ON CONFLICT (user_id) DO UPDATE SET
          evolution_instancia  = EXCLUDED.evolution_instancia,
          evolution_server_url = EXCLUDED.evolution_server_url,
