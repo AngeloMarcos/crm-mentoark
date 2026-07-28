@@ -1,5 +1,12 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-28 (cont.) — Backlog inteiro de homolog sincronizado com produção
+
+Usuário pediu deploy + checagem de pendências pra prod. **Achado real:** desde o fix de densidade do chat, 4 rodadas inteiras de fixes tinham ficado só em homolog, nunca chegando em produção — densidade do chat/shell, responsividade do ChatEquipe/Disparos, Catálogo/Agentes/Kanban, e o fix de nome/foto de grupo + contato herdando nome do usuário. Confirmado por diff direto na VPS (não só memória) antes de agir.
+
+**Deployado em produção** (`scripts/deploy.sh prod --confirm`, 11 arquivos: `src/components/WhatsAppInterface.tsx`, `CRMLayout.tsx`, `src/pages/ChatEquipe.tsx`, `Disparos.tsx`, `CatalogoDetalhe.tsx`, `CatalogoEnvios.tsx`, `Agentes.tsx`, `src/components/kanban/ModalTarefa.tsx`, `backend/src/routes/webhook.ts`, `whatsapp.ts`, `backend/src/utils/whatsappMediaStorage.ts`) — `crm-api` e `crm` rebuildados, `/health`=200 nos dois, sem `ERROR` nos logs. **Confirmado por leitura direta do arquivo na VPS** (não só health check) que `webhook.ts` e `Disparos.tsx` batem exatamente com o repo agora.
+
+Produção e homolog estão sincronizados neste momento — nenhum gap de código conhecido restando entre os dois ambientes. Pendências reais (não são gap de deploy): validação visual do usuário em dispositivo real (responsividade), teste com grupo/contato novo real (nome/foto), e decisão sobre correção em lote de contatos já contaminados com o nome do próprio usuário (ver achado em `diagnosticos/AUDITORIA_LOG.md`).
 ## Sessão 2026-07-28 (cont.) — Nome/foto de grupo nunca existiam de verdade + contato podia herdar nome do próprio usuário
 
 Usuário reportou fotos de perfil ainda faltando e quase todos os grupos aparecendo como número. **Achado 1 (grupos):** nenhum lugar do sistema jamais buscava o nome/foto real de um grupo (3 pontos excluíam grupo explicitamente) — `whatsapp.ts` sempre sintetizava "Grupo XXXX", 100% dos grupos, sempre. **Corrigido:** nova busca via `GET /group/findGroupInfos` da Evolution API, aplicada tanto organicamente (mensagem nova de grupo) quanto no botão "Sincronizar fotos de perfil" (backfill de grupos existentes).
