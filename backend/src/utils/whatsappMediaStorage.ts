@@ -33,7 +33,10 @@ const EXT_POR_MIME: Record<string, string> = {
   'application/pdf': 'pdf',
 };
 
-function extensaoParaArquivo(fileName: string | undefined, mimetype: string | undefined, tipo: string): string {
+// [AUDITORIA] LÓGICA: exportada (achado 2026-07-28) pra ser reaproveitada por
+// `POST /api/whatsapp/upload-media` (whatsapp.ts) — mesma necessidade de resolver uma extensão
+// de arquivo válida a partir de nome/mimetype/categoria, sem duplicar a lógica.
+export function extensaoParaArquivo(fileName: string | undefined, mimetype: string | undefined, tipo: string): string {
   if (fileName && fileName.includes('.')) {
     const ext = fileName.split('.').pop();
     if (ext && /^[a-zA-Z0-9]{1,8}$/.test(ext)) return ext.toLowerCase();

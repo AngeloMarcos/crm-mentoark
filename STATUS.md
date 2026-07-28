@@ -1,5 +1,11 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-28 (cont.) — Envio de mídia (imagem/vídeo) e paste de print no chat — causa raiz corrigida, aguardando validação em homolog
+
+Usuário reportou não conseguir enviar imagem/vídeo pelo composer do chat WhatsApp, nem colar (`Ctrl+V`) um print da tela. **Causa raiz confirmada:** o composer mandava o arquivo como `data:...;base64,...` direto pro backend, que repassava sem tratamento pro payload da Evolution API — nenhum outro envio de mídia do sistema (campanhas, TTS) faz isso, todos fazem upload prévio e mandam URL estável. **Corrigido:** nova rota `POST /api/whatsapp/upload-media` + composer atualizado pra usar upload real em vez de base64 embutido. **Também corrigido:** paste de imagem da área de transferência não tinha handler nenhum — adicionado.
+
+Build (`vite build` + `swc`) limpo nos dois projetos. **Não testado com WhatsApp real ainda** (sem acesso a navegador/Evolution conectada nesta sessão) — deploy pendente, começar por homolog e o usuário validar enviando uma foto/vídeo de verdade antes de produção. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
 > Atualizado em: 2026-07-28 (Disparos: backend/DB de produção sincronizados com homolog — round-robin multi-instância e promoção de agendamento agora ativos em produção também; client.ts e bug de auto-scroll do chat WhatsApp já deployados antes). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
 
 ## Sessão 2026-07-28 (cont.) — Produção estava rodando o motor de Disparos DESATUALIZADO desde 25/07 — sincronizado

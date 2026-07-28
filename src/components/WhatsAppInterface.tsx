@@ -9,7 +9,7 @@
  * contato (tags, mídia, documentos, notas do CRM). Não faz polling via WebSocket/SSE — tudo é
  * feito com setInterval + fetch (ver comentário "substitui Supabase Realtime").
  */
-import { useState, useMemo, useEffect, useRef, useCallback, type ChangeEvent } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, type ChangeEvent, type ClipboardEvent } from "react";
 import { Label } from "@/components/ui/label";
 import {
   ContextMenu,
@@ -1325,6 +1325,15 @@ export function WhatsAppInterface() {
   // mídia — mesmo padrão (atualização otimista, POST /api/whatsapp/send, reaproveita
   // apiHeaders()/getFreshToken()), usado tanto pelo anexo de arquivo quanto pela gravação de
   // áudio abaixo.
+  // [AUDITORIA] BUG (achado 2026-07-28 — "não consigo enviar imagem nem vídeo"): esta função
+  // mandava o `data:<mime>;base64,...` inteiro como `mediaUrl` pro backend, que repassava sem
+  // alteração pro campo `media` da Evolution — sem stripar o prefixo (não é base64 válido) nem
+  // informar `mimetype`. Nenhum outro envio de mídia do sistema (campanhas em
+  // `disparoProcessor.ts`, resposta em voz em `agentEngine.ts`) manda base64 cru — todos fazem
+  // upload prévio e mandam uma URL http(s) estável. [AUDITORIA] FIX APLICADO: upload real via
+  // `POST /api/whatsapp/upload-media` (novo, mesmo padrão de catalogo.ts/galeria.ts) antes de
+  // chamar `/send` — `dataUrl` continua sendo usado só para o preview otimista local (não muda,
+  // `<img>`/`<video>` renderizam `data:` direto sem precisar do proxy autenticado).
   const enviarMidia = async (file: Blob, mediaType: 'image' | 'video' | 'audio' | 'document', filename?: string) => {
     if (!activeChatId) return;
     if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
@@ -1363,12 +1372,30 @@ export function WhatsAppInterface() {
           : c
       ));
 
+      // Sem Content-Type manual aqui — o navegador monta o boundary de multipart sozinho.
+      // `tipo` ajuda o backend a resolver uma extensão válida quando o arquivo não tem nome
+      // real (ex: print colado via Ctrl+V vira um File genérico do navegador).
+      const uploadForm = new FormData();
+      uploadForm.append('arquivo', file, filename || `media_${Date.now()}`);
+      uploadForm.append('tipo', mediaType);
+      const uploadToken = await getFreshToken();
+      const uploadRes = await fetch(`${API_BASE}/api/whatsapp/upload-media`, {
+        method: 'POST',
+        headers: uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {},
+        body: uploadForm,
+      });
+      if (!uploadRes.ok) {
+        const errUpload = await uploadRes.json().catch(() => ({ message: 'Falha no upload do arquivo' }));
+        throw new Error(errUpload.message || 'Falha no upload do arquivo');
+      }
+      const { url: mediaUrlEstavel } = await uploadRes.json();
+
       const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
         method: 'POST',
         headers: await apiHeaders(),
         body: JSON.stringify({
           phone: activeChatId,
-          mediaUrl: dataUrl,
+          mediaUrl: mediaUrlEstavel,
           mediaType,
           mediaFilename: filename,
           instancia: chat?.source,
@@ -1396,10 +1423,10 @@ export function WhatsAppInterface() {
     }
   };
 
-  const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ''; // permite selecionar o mesmo arquivo de novo depois
-    if (!file) return;
+  // [AUDITORIA] LÓGICA: extraído de handleFileSelected (achado 2026-07-28) pra ser reaproveitado
+  // por handlePasteImage abaixo — mesma validação de tamanho e troca de preview blob URL,
+  // independente de vir do input de arquivo ou de um Ctrl+V.
+  const attachFile = (file: File) => {
     if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
       toast.error(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)}MB excede o limite de ${(MAX_OUTBOUND_MEDIA_BYTES / 1024 / 1024).toFixed(0)}MB para envio via WhatsApp.`);
       return;
@@ -1409,6 +1436,35 @@ export function WhatsAppInterface() {
     if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
     setAttachedFile(file);
     setAttachedPreviewUrl(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
+  };
+
+  const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // permite selecionar o mesmo arquivo de novo depois
+    if (!file) return;
+    attachFile(file);
+  };
+
+  // [AUDITORIA] BUG (achado 2026-07-28 — "tentei colar um print e não consegui"): não existia
+  // nenhum handler de paste no composer — colar uma imagem da área de transferência (print de
+  // tela, `Ctrl+V`) não fazia nada, único jeito de anexar mídia era o seletor de arquivo do SO.
+  // [AUDITORIA] FIX APLICADO: `onPaste` no textarea (abaixo, no JSX) chama isto — procura o
+  // primeiro item de imagem em `clipboardData.items` (é isso que o SO expõe pra um print
+  // copiado, não um "arquivo" de verdade) e reaproveita o mesmo `attachFile()`/preview/cancelar
+  // já usado pelo botão de anexo, sem duplicar a validação de tamanho nem o envio.
+  const handlePasteImage = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          attachFile(file);
+        }
+        return;
+      }
+    }
   };
 
   const cancelAttachment = () => {
@@ -3312,6 +3368,7 @@ export function WhatsAppInterface() {
                           className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-transparent border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
                           value={messageInput}
                           onChange={e => handleInputChange(e.target.value)}
+                          onPaste={handlePasteImage}
                           onKeyDown={e => {
                             if (e.key === 'Escape') { setShowQR(false); return; }
                             if (e.key === 'Enter' && !e.shiftKey && !showQR) {

@@ -1,5 +1,17 @@
 # Auditoria de Código — Log
 
+### 🔴 Envio de mídia do composer do chat (imagem/vídeo) nunca funcionou — causa raiz confirmada e corrigida (2026-07-28)
+
+**Contexto:** usuário reportou não conseguir enviar imagem nem vídeo pelo composer do chat WhatsApp, e também não conseguir colar (`Ctrl+V`) um print da tela.
+
+**Causa raiz (envio de mídia):** `enviarMidia()` (`WhatsAppInterface.tsx`) mandava o arquivo anexado como `data:<mime>;base64,<payload>` inteiro no campo `mediaUrl`, e `POST /api/whatsapp/send` (`whatsapp.ts`) repassava essa string sem alteração pro campo `media` do payload da Evolution API — sem stripar o prefixo `data:...;base64,` (que contém caracteres fora do alfabeto base64, corrompendo a decodificação) nem informar `mimetype` separado. Levantamento em todo o repositório: **nenhum outro envio de mídia do sistema manda base64 cru pra Evolution** — `disparoProcessor.ts` (imagem/áudio/documento de campanha) e `agentEngine.ts` (resposta em voz TTS) sempre fazem upload prévio do arquivo e mandam uma URL http(s) estável. Ou seja, o composer do chat era o único caminho tentando um padrão sem nenhum precedente comprovado de funcionar contra essa API.
+
+**🔧 Corrigido:** nova rota `POST /api/whatsapp/upload-media` (mesmo padrão multer+`UPLOADS_DIR`+`/uploads` já usado por `catalogo.ts`/`galeria.ts`) — recebe o arquivo via multipart, resolve extensão via `extensaoParaArquivo()` (agora exportada de `whatsappMediaStorage.ts`, usa nome→mimetype→categoria como fallback, importante porque um print colado via paste não tem nome de arquivo real) e salva em `UPLOADS_DIR`, devolvendo uma URL estável. `enviarMidia()` agora faz esse upload primeiro e manda a URL resultante pro `/send`, em vez do data URI — `dataUrl` continua existindo só pro preview otimista local (`<img>`/`<video>` renderizam direto sem precisar do proxy autenticado).
+
+**Também corrigido — "não consigo colar um print":** não existia handler de paste no composer nenhum — colar uma imagem da área de transferência não fazia nada, único jeito de anexar era o seletor de arquivo do SO. Extraído `attachFile()` de `handleFileSelected` (mesma validação de tamanho/preview) e adicionado `handlePasteImage` (novo) no `onPaste` do textarea principal — procura o primeiro item de imagem em `clipboardData.items` e reaproveita o mesmo `attachFile()`, sem duplicar lógica.
+
+**Build:** frontend (`vite build`) e backend (`swc`) limpos. `tsc --noEmit` (checagem estrita, separada do build real) não completou nesta sessão por falta de memória do Node na máquina local (heap OOM em ambos os projetos, mesmo sem tocar neles) — não é um sinal de erro no código, é limitação do ambiente; `npm run build` (o mesmo gate que `scripts/deploy.sh` usa) passou limpo nos dois. **Nada testado com Evolution real ainda** — sem acesso a WhatsApp conectado nesta sessão; precisa de validação manual em homolog antes de produção.
+
 ### 🔴 Auditoria pré-Disparos: client.ts sem o fix de 25/07 em PRODUÇÃO + segundo bug de filtro perdido (2026-07-27)
 
 **Contexto:** usuário ia rodar disparos de verdade em homologação (listas já importadas) e pediu para confirmar que o motor não manda tudo de uma vez (risco de bloqueio do WhatsApp) antes de prosseguir.

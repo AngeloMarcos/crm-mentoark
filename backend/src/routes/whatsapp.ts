@@ -11,10 +11,23 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import fs from 'fs/promises';
+import path from 'path';
+import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest } from '../middleware';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
-import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, garantirMidiaEstavel, MAX_OUTBOUND_MEDIA_BYTES } from '../utils/whatsappMediaStorage';
+import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, garantirMidiaEstavel, MAX_OUTBOUND_MEDIA_BYTES, extensaoParaArquivo } from '../utils/whatsappMediaStorage';
 import { log } from '../logger';
+
+// [AUDITORIA] LÓGICA: mesmo diretório/rota estática (`/uploads`, montado em index.ts) e mesmo
+// padrão multer já usados por catalogo.ts/galeria.ts — reaproveitado abaixo pelo upload de
+// mídia de saída do composer do chat (ver [AUDITORIA] BUG em `/upload-media`).
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
+const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
+const uploadMediaSaida = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_OUTBOUND_MEDIA_BYTES },
+});
 
 const DEFAULT_EVO_URL = process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
 const DEFAULT_EVO_KEY = process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
@@ -1612,6 +1625,38 @@ export default function whatsappRouter(pool: Pool): Router {
       return res.json({ ok: true, messageId });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // [AUDITORIA] BUG (achado 2026-07-28 — "não consigo enviar imagem nem vídeo no chat"):
+  // `enviarMidia()` (WhatsAppInterface.tsx) mandava o arquivo anexado como `data:<mime>;base64,
+  // <payload>` inteiro em `mediaUrl`, e `/send` acima repassava essa string sem alteração pro
+  // campo `media` do payload da Evolution — sem stripar o prefixo `data:...;base64,` (que não é
+  // base64 válido) nem informar `mimetype` separado. É o ÚNICO ponto do sistema que tentava
+  // mandar mídia como base64 cru pra Evolution: `disparoProcessor.ts` (imagem/áudio/documento de
+  // campanha) e `agentEngine.ts` (resposta em voz) sempre fazem upload prévio e mandam uma URL
+  // http(s) estável — nenhum dos dois tem precedente de base64 funcionando de verdade contra
+  // essa API. [AUDITORIA] FIX APLICADO: rota nova de upload (mesmo padrão multer+diskless de
+  // catalogo.ts/galeria.ts, salvando em `UPLOADS_DIR`/`/uploads`, já servido publicamente) — o
+  // composer agora faz upload real do arquivo aqui primeiro e manda a URL resultante pra `/send`,
+  // em vez de base64 embutido. Consistente com o único caminho já comprovado de funcionar.
+  router.post('/upload-media', uploadMediaSaida.single('arquivo'), async (req: AuthRequest, res: Response) => {
+    if (!req.file) return res.status(400).json({ message: 'Nenhum arquivo enviado' });
+    try {
+      await fs.mkdir(UPLOADS_DIR, { recursive: true });
+      // [AUDITORIA] LÓGICA: nome original nem sempre tem extensão de verdade (ex: print colado
+      // via Ctrl+V vira um File genérico do navegador) — extensaoParaArquivo() (mesma função já
+      // usada pra mídia recebida, agora exportada) resolve por nome -> mimetype -> categoria
+      // (`tipo`, enviado pelo frontend junto do arquivo). Extensão certa importa porque
+      // `express.static` (rota /uploads) decide o Content-Type servido pela extensão do arquivo.
+      const tipoHint = String(req.body?.tipo || 'document');
+      const ext = extensaoParaArquivo(req.file.originalname, req.file.mimetype, tipoHint);
+      const filename = `wa_out_${uuidv4()}.${ext}`;
+      await fs.writeFile(path.join(UPLOADS_DIR, filename), req.file.buffer);
+      return res.json({ url: `${API_BASE_URL}/uploads/${filename}` });
+    } catch (err: any) {
+      log.error('WA_MEDIA_OUT', 'Falha ao salvar upload de mídia de saída', { err: err?.message });
+      return res.status(500).json({ message: 'Falha ao salvar arquivo' });
     }
   });
 
