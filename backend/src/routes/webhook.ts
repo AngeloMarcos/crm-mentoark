@@ -65,7 +65,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
 import { withTenantContext } from '../db';
-import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada } from '../utils/whatsappMediaStorage';
+import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
 import { analisarImagem } from '../utils/vision';
 import { log } from '../logger';
@@ -853,8 +853,23 @@ export default function webhookRouter(pool: Pool): Router {
       // exatamente o mesmo WHERE. `telefone` já é garantidamente não-nulo aqui (vem de
       // remoteJid.split('@')[0], com remoteJid já validado acima), então o predicado é sempre
       // verdadeiro na prática — só precisa estar escrito pra o Postgres casar com o índice.
+      // [AUDITORIA] BUG (achado 2026-07-28 — "algumas pessoas ainda estão com meu nome"):
+      // `pushName` (linha ~732) reflete quem MANDOU aquele evento específico de mensagem —
+      // pra `fromMe:true` (o próprio usuário/CRM/IA enviando), a Evolution pode devolver o
+      // nome de perfil do DONO da instância nesse campo, nunca o nome do contato de destino.
+      // Este bloco roda ANTES do branch `if (fromMe)` (linha ~871) e não checava `fromMe` —
+      // se o PRIMEIRO evento associado a um contato novo fosse uma mensagem enviada (ex:
+      // atendente inicia conversa nova, ou uma campanha/disparo), `nome`/`push_name` do
+      // contato eram gravados com o nome do PRÓPRIO USUÁRIO da conta, permanentemente (a
+      // guarda "só sobrescreve se nome==telefone" nunca desfaz isso depois — uma vez errado,
+      // fica errado até o contato responder de verdade, e mesmo assim só corrige `nome`, não
+      // `push_name`). [AUDITORIA] FIX APLICADO: `pushName` só é usado pra identidade de
+      // CONTATO quando `!fromMe` — pra mensagem enviada, cai no mesmo placeholder seguro
+      // (`telefone`/`null`) já usado em outros pontos deste arquivo pra "ainda não sabemos o
+      // nome de verdade".
       if (userId && !isGroup && remoteJid) {
-        const nomeEarly = pushName || telefone;
+        const pushNameContato = fromMe ? null : pushName;
+        const nomeEarly = pushNameContato || telefone;
         pool.query(
           `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, ultima_mensagem_em, atendente_pausou_ia)
            VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', NOW(), false)
@@ -862,7 +877,7 @@ export default function webhookRouter(pool: Pool): Router {
              SET push_name = COALESCE(EXCLUDED.push_name, contatos.push_name),
                  nome = CASE WHEN contatos.nome = contatos.telefone THEN EXCLUDED.nome ELSE contatos.nome END,
                  ultima_mensagem_em = NOW()`,
-          [userId, nomeEarly, telefone, pushName || null]
+          [userId, nomeEarly, telefone, pushNameContato || null]
         ).catch(err => log.warn('WEBHOOK', 'Erro ao upsert contato antecipado', { traceId, err: err.message }));
       }
 
@@ -929,10 +944,15 @@ export default function webhookRouter(pool: Pool): Router {
               [userId, `%${telefone.slice(-11)}`]
             ).then(async (r: any) => {
               if (!r.rowCount) {
+                // [AUDITORIA] FIX APLICADO (mesmo achado 2026-07-28 de "meu nome" — ver
+                // comentário completo no upsert antecipado acima): já estamos dentro de
+                // `if (fromMe)` aqui, então `pushName` é garantidamente não-confiável pra
+                // identidade do contato — nunca usar, `push_name` fica null (placeholder
+                // seguro, mesmo já usado em outros pontos deste arquivo).
                 await pool.query(
                   `INSERT INTO contatos (user_id, nome, telefone, push_name, origem, status, atendente_pausou_ia)
                    VALUES ($1, $2, $3, $4, 'WhatsApp', 'novo', true)`,
-                  [userId, telefone, telefone, pushName || null]
+                  [userId, telefone, telefone, null]
                 ).catch(() => {});
               }
             }).catch(() => {});
@@ -1336,6 +1356,56 @@ export default function webhookRouter(pool: Pool): Router {
               }
             } catch (e: any) {
               log.warn('WEBHOOK', 'Falha ao upsert contato', { traceId, err: e.message });
+            }
+          })();
+        }
+
+        // [AUDITORIA] BUG (achado 2026-07-28 — "grupos aparecem como número, sem foto"): não
+        // existia NENHUM caminho no sistema que buscasse o nome/foto reais de um grupo — ver
+        // comentário completo em `buscarInfoGrupo()` (whatsappMediaStorage.ts). Espelha o
+        // bloco de contato individual acima (mesmo padrão de IIFE não-bloqueante, mesmo timeout
+        // guard, mesma checagem "já tem dado, não bate na Evolution de novo"), mas com match
+        // EXATO de `telefone` (não `ILIKE` por sufixo de 11 dígitos) — JID de grupo é um ID
+        // arbitrário longo, não um telefone brasileiro, então a normalização de DDI/9º dígito
+        // que o sufixo de 11 dígitos resolve pra contato pessoal não se aplica e criaria risco
+        // real de colisão entre grupos diferentes.
+        if (isGroup && userId) {
+          void (async () => {
+            try {
+              const existing = await pool.query(
+                `SELECT nome, profile_pic_url FROM contatos WHERE user_id = $1 AND telefone = $2`,
+                [userId, telefone]
+              ).catch(() => ({ rows: [] as any[] }));
+              const jaTemNome = !!existing.rows[0]?.nome && existing.rows[0].nome !== telefone;
+              const jaTemFoto = !!existing.rows[0]?.profile_pic_url;
+              if (jaTemNome && jaTemFoto) return; // já resolvido, não bate na Evolution de novo
+
+              const cfgGrupo = await pool.query(
+                `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+                 FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+                [userId]
+              ).catch(() => ({ rows: [] as any[] }));
+              const evoUrlGrupo = cfgGrupo.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
+              const evoKeyGrupo = cfgGrupo.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+
+              const { subject, pictureUrl } = await buscarInfoGrupo(evoUrlGrupo, evoKeyGrupo, instancia, remoteJid);
+              if (!subject && !pictureUrl) return; // Evolution não devolveu nada — mantém "Grupo XXXX"
+
+              const localUrl = pictureUrl ? await salvarFotoPerfilLocal(pictureUrl, userId as string, telefone) : null;
+
+              await pool.query(
+                `INSERT INTO contatos (user_id, nome, telefone, origem, status, ultima_mensagem_em)
+                 VALUES ($1, $2, $3, 'WhatsApp', 'novo', NOW())
+                 ON CONFLICT (user_id, telefone) DO UPDATE
+                   SET nome = CASE WHEN $2 IS NOT NULL AND $2 <> contatos.telefone THEN $2 ELSE contatos.nome END,
+                       profile_pic_url = COALESCE($4, contatos.profile_pic_url),
+                       foto_perfil = COALESCE($4, contatos.foto_perfil),
+                       ultima_mensagem_em = NOW()`,
+                [userId, subject || telefone, telefone, localUrl || pictureUrl]
+              ).catch(err => log.warn('WEBHOOK', 'Falha ao salvar info do grupo', { traceId, err: err?.message }));
+              log.info('WEBHOOK', 'Info do grupo atualizada', { traceId, telefone, temNome: !!subject, temFoto: !!pictureUrl });
+            } catch (e: any) {
+              log.warn('WEBHOOK', 'Falha ao buscar/salvar info do grupo', { traceId, err: e.message });
             }
           })();
         }

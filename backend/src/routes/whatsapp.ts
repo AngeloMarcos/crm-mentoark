@@ -16,7 +16,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest } from '../middleware';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
-import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, garantirMidiaEstavel, MAX_OUTBOUND_MEDIA_BYTES, extensaoParaArquivo } from '../utils/whatsappMediaStorage';
+import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, garantirMidiaEstavel, MAX_OUTBOUND_MEDIA_BYTES, extensaoParaArquivo, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { log } from '../logger';
 
 // [AUDITORIA] LÓGICA: mesmo diretório/rota estática (`/uploads`, montado em index.ts) e mesmo
@@ -366,7 +366,47 @@ export default function whatsappRouter(pool: Pool): Router {
         await new Promise(r => setTimeout(r, 150));
       }
 
-      return res.json({ sincronizados, total: phonesRes.rows.length });
+      // [AUDITORIA] BUG (achado 2026-07-28 — "quase todos os grupos aparecem como número, sem
+      // foto"): este endpoint (botão "Sincronizar fotos de perfil") excluía grupos
+      // explicitamente (`remote_jid NOT LIKE '%@g.us'` acima) — mesmo achado do webhook (ver
+      // buscarInfoGrupo() em whatsappMediaStorage.ts). [AUDITORIA] FIX APLICADO: backfill de
+      // grupos já existentes aqui, pra não depender de esperar uma mensagem nova em cada grupo
+      // (ver também o fix orgânico em webhook.ts, que cobre grupos novos/mensagens futuras).
+      const gruposRes = await db.query(
+        `SELECT DISTINCT remote_jid
+         FROM whatsapp_messages
+         WHERE user_id = $1 AND remote_jid LIKE '%@g.us' AND deleted_at IS NULL
+         LIMIT 100`,
+        [userId]
+      );
+      let gruposSincronizados = 0;
+      for (const row of gruposRes.rows) {
+        const groupJid: string = row.remote_jid;
+        const groupId = groupJid.split('@')[0];
+        try {
+          const { subject, pictureUrl } = await buscarInfoGrupo(base, cfg.api_key, cfg.instancia, groupJid);
+          if (subject || pictureUrl) {
+            const localUrl = pictureUrl ? await salvarFotoPerfilLocal(pictureUrl, userId, groupId) : null;
+            await pool.query(
+              `INSERT INTO contatos (user_id, nome, telefone, origem, status, ultima_mensagem_em)
+               VALUES ($1, $2, $3, 'WhatsApp', 'novo', NOW())
+               ON CONFLICT (user_id, telefone) DO UPDATE
+                 SET nome = CASE WHEN $2 IS NOT NULL AND $2 <> contatos.telefone THEN $2 ELSE contatos.nome END,
+                     profile_pic_url = COALESCE($4, contatos.profile_pic_url),
+                     foto_perfil = COALESCE($4, contatos.foto_perfil),
+                     ultima_mensagem_em = NOW()`,
+              [userId, subject || groupId, groupId, localUrl || pictureUrl]
+            ).catch(() => {});
+            gruposSincronizados++;
+          }
+        } catch {}
+        await new Promise(r => setTimeout(r, 150));
+      }
+
+      return res.json({
+        sincronizados: sincronizados + gruposSincronizados,
+        total: phonesRes.rows.length + gruposRes.rows.length,
+      });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -415,6 +455,19 @@ export default function whatsappRouter(pool: Pool): Router {
            FROM contatos
            WHERE user_id = $1 AND telefone IS NOT NULL
            ORDER BY RIGHT(telefone, 11), updated_at DESC NULLS LAST
+         ),
+         -- [AUDITORIA] BUG (achado 2026-07-28, "quase todos os grupos aparecem como numero, sem
+         -- foto"): este JOIN sempre excluiu grupos (AND NOT r.is_group) e nunca existiu
+         -- caminho nenhum que buscasse nome/foto reais de grupo (ver buscarInfoGrupo em
+         -- whatsappMediaStorage.ts para o achado completo) - resultado: nome sintetizado
+         -- (Grupo XXXX) e foto nula pra 100% dos grupos, sempre, nao uma falha intermitente.
+         -- [AUDITORIA] FIX APLICADO: CTE separada com match EXATO de telefone (JID de grupo e
+         -- um ID arbitrario longo, nao um telefone BR - o sufixo de 11 digitos usado acima pra
+         -- contato pessoal criaria risco real de colisao entre grupos diferentes).
+         grupo_unico AS (
+           SELECT telefone AS grupo_id, nome AS nome_grupo, profile_pic_url AS grupo_pic
+           FROM contatos
+           WHERE user_id = $1 AND telefone IS NOT NULL
          )
          SELECT
            r.phone AS session_id,
@@ -428,11 +481,14 @@ export default function whatsappRouter(pool: Pool): Router {
            cu.push_name,
            cu.nome_contato,
            cu.profile_pic_url,
+           gu.nome_grupo,
+           gu.grupo_pic,
            COALESCE(cu.is_pinned, false) AS is_pinned,
            COALESCE(cu.is_archived, false) AS is_archived,
            cu.muted_until
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
+         LEFT JOIN grupo_unico gu ON gu.grupo_id = r.phone AND r.is_group
          WHERE r.rn = 1
            AND COALESCE(cu.is_archived, false) = $2
          ORDER BY cu.is_pinned DESC NULLS LAST, r.created_at DESC
@@ -442,8 +498,13 @@ export default function whatsappRouter(pool: Pool): Router {
 
       const conversas = r.rows.map(row => {
         const isGroup = row.is_group;
+        // [AUDITORIA] FIX APLICADO: nome/foto reais de grupo (quando já sincronizados via
+        // buscarInfoGrupo, webhook.ts) têm prioridade; "Grupo XXXX" e foto nula continuam como
+        // fallback pros grupos ainda não sincronizados (nenhuma mensagem nova desde o fix, ou
+        // a minoria de grupos que a Evolution não devolve subject/foto — ver comentário em
+        // buscarInfoGrupo).
         const nomeFormatado = isGroup
-          ? `Grupo ${row.session_id.split('-')[0]?.slice(-4) ?? row.session_id.slice(-8)}`
+          ? (row.nome_grupo || `Grupo ${row.session_id.split('-')[0]?.slice(-4) ?? row.session_id.slice(-8)}`)
           : (row.nome_contato || row.push_name || row.session_id.replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3'));
         return {
           session_id: row.session_id,
@@ -451,7 +512,7 @@ export default function whatsappRouter(pool: Pool): Router {
           is_group: isGroup,
           nome: nomeFormatado,
           push_name: isGroup ? (row.last_sender || null) : (row.push_name || null),
-          profile_pic_url: row.profile_pic_url || null,
+          profile_pic_url: (isGroup ? row.grupo_pic : row.profile_pic_url) || null,
           ultima_atividade: row.ultima_atividade,
           ultima_mensagem: row.ultima_mensagem || '',
           ultimo_role: row.ultimo_role,

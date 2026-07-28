@@ -1,5 +1,12 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-28 (cont.) — Nome/foto de grupo nunca existiam de verdade + contato podia herdar nome do próprio usuário
+
+Usuário reportou fotos de perfil ainda faltando e quase todos os grupos aparecendo como número. **Achado 1 (grupos):** nenhum lugar do sistema jamais buscava o nome/foto real de um grupo (3 pontos excluíam grupo explicitamente) — `whatsapp.ts` sempre sintetizava "Grupo XXXX", 100% dos grupos, sempre. **Corrigido:** nova busca via `GET /group/findGroupInfos` da Evolution API, aplicada tanto organicamente (mensagem nova de grupo) quanto no botão "Sincronizar fotos de perfil" (backfill de grupos existentes).
+
+**Achado 2 (nome trocado):** contato novo podia ficar com o nome do PRÓPRIO usuário da conta gravado, quando a primeira mensagem associada a ele era uma mensagem enviada (não recebida) e a Evolution devolvia o nome de perfil do dono da instância no campo usado pra identidade do contato. **Corrigido daqui pra frente** (nunca mais usa esse campo pra identidade de contato em mensagem enviada). **Contatos já contaminados no banco não foram corrigidos** — precisa de decisão do usuário pra uma correção em lote (compararia `contatos.nome` contra o `profileName` real da instância e resetaria só bate exato — escrita em produção, não feita sem confirmação).
+
+Build (`swc`) limpo. **Não testado com Evolution real** — deploy em homolog, usuário validar com grupo e contato novo reais antes de produção. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
 ## Sessão 2026-07-28 (cont.) — Fecha pendências da auditoria de responsividade (Catálogo, Agentes, Kanban)
 
 Continuação da rodada anterior (ChatEquipe/Disparos) — itens de menor prioridade que tinham ficado de fora:

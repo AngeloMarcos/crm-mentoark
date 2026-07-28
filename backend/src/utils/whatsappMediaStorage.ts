@@ -193,6 +193,48 @@ export async function salvarFotoPerfilLocal(picUrl: string, userId: string, tele
   }
 }
 
+// [AUDITORIA] BUG (achado 2026-07-28 — "quase todos os grupos aparecem como número, fotos de
+// grupo nunca aparecem"): NENHUM lugar do sistema jamais buscava o nome/subject real de um
+// grupo — `webhook.ts` usa `payload.data?.pushName` tanto pra contato individual quanto pra
+// grupo, mas esse campo é sempre o pushName de quem MANDOU a mensagem (uma pessoa), nunca o
+// nome do grupo; pra grupo, cai no fallback `senderPhone` (o telefone de quem mandou, não o
+// grupo). Confirmado também que os 3 lugares que tocam nisso excluem grupo explicitamente:
+// upsert de contato em `webhook.ts` (`if (!isGroup) {...}`, 2x), o JOIN da query
+// `GET /conversas` (`AND NOT r.is_group`), e o botão "Sincronizar fotos de perfil"
+// (`remote_jid NOT LIKE '%@g.us'`). Resultado: `whatsapp.ts` (`GET /conversas`) sempre
+// sintetiza `Grupo ${últimos dígitos do JID}` como nome, e nunca tem foto — não é uma falha
+// intermitente, é comportamento garantido pra 100% dos grupos, sempre. [AUDITORIA] FIX
+// APLICADO: esta função busca nome (`subject`) e foto (`pictureUrl`) reais via
+// `GET /group/findGroupInfos` (Evolution API v2 — confirmado documentação oficial e
+// evolution-api#2124 no GitHub, que também documenta que uma minoria de grupos pode voltar
+// sem subject/foto mesmo assim — tratado como falha suave abaixo, cai no fallback "Grupo
+// XXXX" já existente, sem regressão). Usada tanto no webhook (achado orgânico a cada
+// mensagem nova de grupo) quanto no botão de sincronização manual (backfill de grupos já
+// existentes, sem precisar esperar mensagem nova).
+export async function buscarInfoGrupo(
+  evoUrl: string, apiKey: string, instancia: string, groupJid: string,
+): Promise<{ subject: string | null; pictureUrl: string | null }> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const url = `${evoUrl.replace(/\/$/, '')}/group/findGroupInfos/${instancia}?groupJid=${encodeURIComponent(groupJid)}`;
+      const r = await fetch(url, { headers: { apikey: apiKey }, signal: controller.signal });
+      if (!r.ok) return { subject: null, pictureUrl: null };
+      const d: any = await r.json().catch(() => ({}));
+      return {
+        subject: (typeof d?.subject === 'string' && d.subject.trim()) ? d.subject.trim() : null,
+        pictureUrl: d?.pictureUrl || null,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err: any) {
+    log.warn('WA_GROUP', 'Falha ao buscar info do grupo', { groupJid, err: err?.message });
+    return { subject: null, pictureUrl: null };
+  }
+}
+
 /** Resolve o caminho absoluto em disco a partir de um marcador `local-pic://userId/arquivo`. */
 export function resolverCaminhoLocalFoto(url: string): { userId: string; caminho: string } | null {
   if (!url.startsWith('local-pic://')) return null;
