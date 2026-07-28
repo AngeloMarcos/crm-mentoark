@@ -1,6 +1,8 @@
 # STATUS — CRM Mentoark
 
-## Sessão 2026-07-27 (cont.) — Auditoria pré-Disparos: client.ts sem fix de 25/07 em PRODUÇÃO + bug novo de filtro perdido
+> Atualizado em: 2026-07-28 (client.ts sincronizado em produção — fix de `.select()` de 25/07 + fix novo de `.not()`/`.neq()` — e bug de auto-scroll no chat WhatsApp, ambos deployados e validados). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+
+## Sessão 2026-07-27/28 — Auditoria pré-Disparos: client.ts sem fix de 25/07 em PRODUÇÃO + bug novo de filtro perdido — DEPLOYADO
 
 Usuário ia rodar disparos reais em homologação (listas já importadas) e pediu confirmação de que o motor não manda tudo de uma vez. Motor (`disparoProcessor.ts`) revisado a fundo — **sem bug novo**, já tem lote de 5 sequencial (nunca paralelo), delay aleatório por mensagem (30-60s/15-30s/5-15s conforme perfil), trava singleflight contra sobreposição, teto diário auto-pausável, circuit breaker de erros consecutivos, janela comercial + pausa de fim de semana, round-robin real entre instâncias. Endpoint legado `POST /disparos/enviar` (rate limit mais fraco) confirmado sem uso — código morto.
 
@@ -8,9 +10,9 @@ Usuário ia rodar disparos reais em homologação (listas já importadas) e pedi
 
 **🔴 Achado novo, mesma classe — `.not()`/`.neq()` são no-ops no `QueryBuilder`** (`client.ts`) — filtro chamado mas nunca aplicado, sem erro. Uso real afetado: seletor de instâncias do anti-ban em `Disparos.tsx` trazia TODOS os agentes do usuário (inclusive sem instância Evolution conectada) como opção selecionável — se o usuário escolhesse só essas linhas fantasma, o round-robin cairia silenciosamente pra uma única instância. **🔧 Corrigido** com filtro client-side isolado no único ponto de uso; `client.ts` comentado para não confiar nesses métodos em código futuro.
 
-Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`. Build (`tsc --noEmit`) limpo. **Deploy:** ver linha logo abaixo desta, atualizada após rodar `scripts/deploy.sh`.
+**Commitado (`612bd36`), deployado em HOMOLOGAÇÃO e depois em PRODUÇÃO** (`scripts/deploy.sh homolog` seguido de `scripts/deploy.sh prod --confirm`, 2 arquivos: `src/integrations/database/client.ts`, `src/pages/Disparos.tsx`) — `crm-homolog`/`crm` rebuildados `--no-cache`, ambos validados no ar (`/`=200 nos dois ambientes). **Confirmado por leitura direta do arquivo na VPS de produção** (via SSH, não só pelo health check) que a versão corrigida está de fato ativa: `_op !== 'insert'` presente em `/opt/crm/src/integrations/database/client.ts`. Próximo passo: usuário testar "Iniciar Disparo" com uma campanha real em homolog e confirmar que a campanha nova aparece corretamente na lista (não anexada a uma antiga).
 
-> Atualizado em: 2026-07-27 (bug de auto-scroll no chat WhatsApp corrigido, validado em homolog pelo usuário, e já em PRODUÇÃO). Este arquivo é o ponto de partida de qualquer sessão nova — ler antes de qualquer outro arquivo em `diagnosticos/`.
+Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`. Build (`tsc --noEmit`) limpo.
 
 ## Sessão 2026-07-27 — Chat WhatsApp: causa raiz #2 do "puxa pra baixo sozinho" + varredura de botões decorativos
 
