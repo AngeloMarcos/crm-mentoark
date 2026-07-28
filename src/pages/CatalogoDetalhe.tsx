@@ -364,7 +364,10 @@ export default function CatalogoDetalhePage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade): sem
+                fallback mobile, diferente do grid de campos logo acima nesta mesma modal (que já
+                tinha `grid-cols-2 lg:grid-cols-4`). */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="space-y-1">
                 <label className="text-xs font-medium">Preço (R$)</label>
                 <Input type="number" placeholder="0.00" value={form.preco} onChange={(e) => setForm({...form, preco: Number(e.target.value)})} />
@@ -432,7 +435,9 @@ export default function CatalogoDetalhePage() {
               />
             </div>
             <ScrollArea className="h-[400px]">
-              <div className="grid grid-cols-4 gap-2">
+              {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28): 4 colunas fixas sem fallback —
+                  miniaturas ficavam minúsculas numa dialog em tela de celular. */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {galeriaImagens.map(img => (
                   <div 
                     key={img.id} 

@@ -532,7 +532,10 @@ export default function AgentesPage() {
                   rows={4}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade):
+                  2 colunas fixas ficavam apertadas pros rótulos dos Select num celular
+                  (dialog já é `w-[95vw]`, sobra pouco por coluna); empilha abaixo de `sm`. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label>Tom de Voz</Label>
                   <Select

@@ -221,7 +221,9 @@ const ModalTarefa = ({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade): 2
+                Selects lado a lado ficavam apertados num celular; empilha abaixo de `sm`. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Coluna */}
               <div className="space-y-2">
                 <Label>Coluna</Label>
@@ -278,7 +280,7 @@ const ModalTarefa = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Atribuir */}
               <div className="space-y-2">
                 <Label>Atribuir para</Label>

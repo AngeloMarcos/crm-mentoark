@@ -125,7 +125,9 @@ export default function CatalogoEnviosPage() {
         </div>
 
         {/* Totais */}
-        <div className="grid grid-cols-3 gap-3">
+        {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade): 3
+            colunas fixas espremiam os 3 cards de total num celular; empilha abaixo de `sm`. */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Card><CardContent className="p-4">
             <p className="text-xs text-muted-foreground">Total filtrado</p>
             <p className="text-2xl font-bold">{totais.total}</p>

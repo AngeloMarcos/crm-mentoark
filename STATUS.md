@@ -1,5 +1,17 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-28 (cont.) — Fecha pendências da auditoria de responsividade (Catálogo, Agentes, Kanban)
+
+Continuação da rodada anterior (ChatEquipe/Disparos) — itens de menor prioridade que tinham ficado de fora:
+- `CatalogoDetalhe.tsx`: grid de preço/preço-promo/estoque (3 campos) e grid da galeria de imagens (4 colunas) sem fallback mobile — corrigidos.
+- `CatalogoEnvios.tsx`: 3 cards de totais sem fallback — corrigido.
+- `Agentes.tsx`: par de Selects (Tom de Voz + outro) apertado em `w-[95vw]` num celular — corrigido. Par de Switch+label (RAG) avaliado e deixado como está — conteúdo curto o suficiente pra não precisar.
+- `ModalTarefa.tsx` (Kanban): dois pares de Select (Coluna/Prioridade, Atribuir/Data) — mesma correção do padrão Agentes.
+- `ContatoDetalhe.tsx`: par de Badge (Setor/Status IA) avaliado e deixado como está — mesmo motivo (conteúdo curto).
+
+Critério usado: só ajustei grids onde o conteúdo de fato ficaria apertado (Select com texto real, imagens, cards com números grandes) — badges/switches curtos ficam bem em 2 colunas mesmo em celular, não mexi neles pra não arriscar regressão sem necessidade.
+
+Build (`vite build`) limpo. Deploy em homolog em andamento — usuário validar antes de produção.
 ## Sessão 2026-07-28 (cont.) — Auditoria de responsividade além do chat: ChatEquipe + Disparos
 
 Após o chat do WhatsApp, usuário pediu recomendação de próximos passos pra cobrir "todos os dispositivos". Levantamento (agente de pesquisa) nas outras telas do sistema — resumo:
