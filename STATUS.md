@@ -1,5 +1,15 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-28 (cont.) — Auditoria de responsividade além do chat: ChatEquipe + Disparos
+
+Após o chat do WhatsApp, usuário pediu recomendação de próximos passos pra cobrir "todos os dispositivos". Levantamento (agente de pesquisa) nas outras telas do sistema — resumo:
+
+- **Dashboard e Kanban já estavam bem** (grids já responsivos, Kanban usa scroll horizontal como padrão aceitável de board). Nenhuma ação necessária.
+- **`ChatEquipe.tsx` (Chat da Equipe) tinha o mesmo bug do WhatsApp** — sidebar de 300px fixos sem breakpoint nenhum, deixando ~75px pro conteúdo num celular de 375px. **Corrigido:** sidebar escondida abaixo de `md` (a tela hoje é só um placeholder estático — "Nenhuma conversa", sem dado real — então não fazia sentido replicar o padrão completo de esconder-lista-ao-abrir-chat do WhatsApp; revisar quando ganhar conversas de verdade).
+- **`Disparos.tsx`**: 3 grids com colunas fixas sem fallback mobile (stats 4 colunas, perfis de velocidade 3 colunas, revisão da campanha 3 colunas com card ocupando 2) — todos ganharam breakpoints (`grid-cols-1`/`2` em telas pequenas). Também uma tabela (preview de importação CSV/XLSX) sem `overflow-x-auto` — única do sistema sem essa proteção, corrigida.
+- **Achados de menor prioridade, não corrigidos ainda:** tabelas em `Cargos.tsx`/`Integracoes.tsx`/`Usuarios.tsx` sem wrapper visual de scroll (já funcionalmente protegidas pelo componente `Table` base, só falta consistência de estilo); grids `grid-cols-3`/`4` em `CatalogoDetalhe.tsx`/`CatalogoEnvios.tsx`; vários `grid-cols-2` sem fallback em modais (`Agentes.tsx`, `ContatoDetalhe.tsx`, `ModalTarefa.tsx`, etc. — telas de menor tráfego, campos pareados que já ficam aceitáveis em 2 colunas mesmo em mobile).
+
+Build (`vite build`) limpo. **Não testado visualmente** — deploy em homolog, usuário validar antes de produção.
 ## Sessão 2026-07-28 (cont.) — Densidade geral do chat WhatsApp e do shell do CRM reduzida
 
 Após validar o fix de responsividade anterior, usuário reportou que o chat e o sistema em geral ainda "sentiam grandes", dificultando navegar entre conversas. Reduzido em conjunto (não é reestruturação de layout, é densidade — paddings/alturas/avatares menores, mais conteúdo cabendo por tela):

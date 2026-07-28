@@ -869,7 +869,10 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
               className="h-8 max-w-xs"
             />
           </div>
-          <div className="max-h-72 overflow-y-auto border rounded">
+          {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28): faltava overflow-x-auto — só a tabela
+              de importação de CSV/XLSX do sistema sem essa proteção (achado na auditoria de
+              responsividade, todas as outras já tinham). */}
+          <div className="max-h-72 overflow-y-auto overflow-x-auto border rounded">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 sticky top-0">
                 <tr className="text-left">
@@ -1087,7 +1090,9 @@ function StepAntiBan({ form, setForm }: any) {
       </Card>
 
       {/* Velocity Profiles */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28): recolhe pra 1 coluna em telas pequenas
+          (cards de perfil têm bastante texto, ficavam ilegíveis espremidos em 3 num celular). */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {profiles.map(p => (
           <Card 
             key={p.id} 
@@ -1241,12 +1246,15 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
     }
   };
 
+  // [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade): 3 colunas fixas
+  // (com um card ocupando 2 delas) espremiam tudo numa tela pequena — abaixo de `lg` agora
+  // empilha em coluna única; a partir de `lg`, layout idêntico ao anterior.
   return (
-    <div className="grid grid-cols-3 gap-6">
-      <Card className="col-span-2 p-6 space-y-6">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <Card className="lg:col-span-2 p-6 space-y-6">
         <h3 className="text-lg font-bold">Revisão da Configuração</h3>
-        
-        <div className="grid grid-cols-2 gap-8">
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
           <div className="space-y-4">
             <div>
               <p className="text-[10px] font-bold uppercase text-muted-foreground">Destinatários</p>
@@ -1416,7 +1424,10 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
         </Alert>
       )}
 
-      <div className="grid grid-cols-4 gap-4">
+      {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade): 4 colunas
+          fixas espremiam os cards de estatística abaixo de ~768px; grid agora recolhe pra 2
+          colunas em telas pequenas/médias antes de abrir pra 4 em desktop. */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map(s => (
           <Card key={s.label} className="p-5 border-none shadow-sm overflow-hidden relative group">
             <div className={`absolute top-0 right-0 p-4 transition-transform group-hover:scale-110`}>

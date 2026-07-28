@@ -23,9 +23,18 @@ export default function ChatEquipePage() {
 
   return (
     <CRMLayout>
+      {/* [AUDITORIA] BUG (achado 2026-07-28 — auditoria de responsividade pós-WhatsApp): mesma
+          classe de bug já corrigida no chat do WhatsApp — sidebar de 300px fixos sem nenhum
+          breakpoint, deixando ~75px pro conteúdo principal num celular de 375px. Diferente do
+          WhatsApp, esta tela é hoje um placeholder estático (sem dado real — "Nenhuma conversa"
+          é o único estado, não existe seleção de conversa nem lista de fato), então não faz
+          sentido replicar o padrão de "esconder lista ao abrir o chat" (não há chat pra abrir
+          ainda). [AUDITORIA] FIX APLICADO: sidebar escondida abaixo de `md` — mobile vê só o
+          painel principal (que já é só um estado vazio mesmo em desktop); a partir de `md`,
+          layout idêntico ao anterior. Revisar quando esta tela ganhar conversas de verdade. */}
       <div className="h-[calc(100vh-8rem)] rounded-2xl border border-border bg-card overflow-hidden flex">
         {/* Sidebar de conversas */}
-        <aside className="w-[300px] border-r border-border bg-muted/30 flex flex-col">
+        <aside className="hidden md:flex md:w-[300px] border-r border-border bg-muted/30 flex-col">
           <div className="flex items-center justify-between px-4 py-4 border-b border-border">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl gradient-brand flex items-center justify-center">
@@ -80,7 +89,7 @@ export default function ChatEquipePage() {
         </aside>
 
         {/* Área principal */}
-        <main className="flex-1 flex flex-col items-center justify-center text-center px-8">
+        <main className="flex-1 flex flex-col items-center justify-center text-center px-4 sm:px-8">
           <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mb-5">
             <Briefcase className="h-7 w-7 text-foreground" />
           </div>
