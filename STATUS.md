@@ -1,8 +1,10 @@
 # STATUS — CRM Mentoark
 
-## Sessão 2026-07-28 (cont.) — Envio de mídia (imagem/vídeo) e paste de print no chat — causa raiz corrigida, aguardando validação em homolog
+## Sessão 2026-07-28 (cont.) — Envio de mídia (imagem/vídeo) e paste de print no chat — deployado em produção, validação real pendente
 
 Usuário reportou não conseguir enviar imagem/vídeo pelo composer do chat WhatsApp, nem colar (`Ctrl+V`) um print da tela. **Causa raiz confirmada:** o composer mandava o arquivo como `data:...;base64,...` direto pro backend, que repassava sem tratamento pro payload da Evolution API — nenhum outro envio de mídia do sistema (campanhas, TTS) faz isso, todos fazem upload prévio e mandam URL estável. **Corrigido:** nova rota `POST /api/whatsapp/upload-media` + composer atualizado pra usar upload real em vez de base64 embutido. **Também corrigido:** paste de imagem da área de transferência não tinha handler nenhum — adicionado.
+
+**Commitado (`4bd3ecf`) e deployado em HOMOLOGAÇÃO e depois em PRODUÇÃO** (`scripts/deploy.sh homolog` seguido de `scripts/deploy.sh prod --confirm`, a pedido explícito do usuário, sem esperar validação manual em homolog primeiro — 3 arquivos: `backend/src/routes/whatsapp.ts`, `backend/src/utils/whatsappMediaStorage.ts`, `src/components/WhatsAppInterface.tsx`) — `crm-api`/`crm` rebuildados `--no-cache`, `/health`=200 nos dois ambientes, sem `ERROR` nos logs. **Ainda não testado com envio real de mídia pra um WhatsApp de verdade** (sem acesso a navegador/Evolution conectada nesta sessão) — usuário vai validar agora em produção.
 
 Build (`vite build` + `swc`) limpo nos dois projetos. **Não testado com WhatsApp real ainda** (sem acesso a navegador/Evolution conectada nesta sessão) — deploy pendente, começar por homolog e o usuário validar enviando uma foto/vídeo de verdade antes de produção. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
 
