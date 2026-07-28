@@ -20,7 +20,11 @@ export function CRMLayout({ children }: { children: React.ReactNode }) {
 
         <div className="flex-1 flex flex-col min-w-0 relative z-10">
           <AppHeader />
-          <main className="flex-1 overflow-auto p-4 md:p-6">
+          {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — "sistema todo muito grande"): padding
+              reduzido em telas menores — soma com o padding interno de cada página (ex: chat do
+              WhatsApp), então cada rem a menos aqui libera espaço real de conteúdo em tablet/
+              mobile sem afetar desktop (`lg:p-6` preserva o valor original a partir daí). */}
+          <main className="flex-1 overflow-auto p-2 sm:p-3 md:p-4 lg:p-6">
             <ErrorBoundary>{children}</ErrorBoundary>
           </main>
           <HealthCheck />

@@ -263,7 +263,11 @@ function ChatAvatar({
   const resolvedUrl = useAuthedMediaUrl(url);
   const color = getAvatarColor(name);
   const initial = (name[0] || '?').toUpperCase();
-  const sizeClass = size === 'sm' ? 'w-8 h-8 text-xs' : size === 'lg' ? 'w-24 h-24 text-3xl' : 'w-12 h-12 text-sm';
+  // [AUDITORIA] FIX APLICADO (achado 2026-07-28 — "sistema todo muito grande"): 'md' reduzido de
+  // 48px pra 40px — usado na linha da lista de conversas e no cabeçalho do chat, os dois pontos
+  // mais repetidos na tela; 4px a menos por avatar some rápido quando multiplicado pela lista
+  // inteira. 'lg' (painel de detalhes, ocorre 1x por tela) e 'sm' mantidos como estavam.
+  const sizeClass = size === 'sm' ? 'w-8 h-8 text-xs' : size === 'lg' ? 'w-24 h-24 text-3xl' : 'w-10 h-10 text-sm';
 
   return (
     <div
@@ -2072,13 +2076,16 @@ export function WhatsAppInterface() {
           colunas fixas continua idêntico ao anterior. */}
       <div className={`${activeChatId ? "hidden lg:flex" : "flex"} w-full lg:w-[340px] shrink-0 border-r flex-col bg-card/30 backdrop-blur-sm`}>
         {/* Header */}
-        <div className="px-5 pt-5 pb-3 border-b space-y-4">
+        {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — densidade geral): paddings reduzidos em
+            todo o cabeçalho/lista abaixo (aqui e nos itens de conversa) — objetivo é caber mais
+            informação por tela e facilitar navegar entre conversas, não só telas pequenas. */}
+        <div className="px-3.5 sm:px-5 pt-3.5 sm:pt-5 pb-2.5 sm:pb-3 border-b space-y-3 sm:space-y-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                <MessageSquare className="h-4.5 w-4.5 text-primary" />
+            <div className="flex items-center gap-2 sm:gap-2.5">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                <MessageSquare className="h-4 w-4 sm:h-4.5 sm:w-4.5 text-primary" />
               </div>
-              <h2 className="text-lg font-bold tracking-tight">Conversas</h2>
+              <h2 className="text-base sm:text-lg font-bold tracking-tight">Conversas</h2>
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
@@ -2205,12 +2212,12 @@ export function WhatsAppInterface() {
         </div>
 
         {/* Search */}
-        <div className="px-4 py-3 border-b bg-card/20 relative">
+        <div className="px-3 sm:px-4 py-2 sm:py-3 border-b bg-card/20 relative">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
             <Input
               placeholder="Buscar em todas as mensagens..."
-              className="pl-9 h-10 bg-background/50 border-muted focus:bg-background focus:ring-primary/20 transition-all text-sm rounded-xl"
+              className="pl-9 h-9 sm:h-10 bg-background/50 border-muted focus:bg-background focus:ring-primary/20 transition-all text-sm rounded-xl"
               value={globalSearchTerm}
               onChange={e => handleGlobalSearch(e.target.value)}
               onFocus={() => globalSearchTerm.length >= 2 && setShowGlobalSearchResults(true)}
@@ -2309,7 +2316,7 @@ export function WhatsAppInterface() {
                         setActiveChatId(chat.id);
                         lastOpenedRef.current.set(chat.phone, new Date().toISOString());
                       }}
-                      className={`flex items-start gap-4 px-5 py-4 cursor-pointer transition-all relative group ${
+                      className={`flex items-start gap-3 px-3.5 sm:px-4 py-2.5 sm:py-3 cursor-pointer transition-all relative group ${
                         isActive
                           ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary z-10"
                           : chat.unread
@@ -2732,7 +2739,7 @@ export function WhatsAppInterface() {
         {activeChat ? (
           <>
             {/* Chat header */}
-            <div className="h-16 shrink-0 border-b flex items-center justify-between px-3 sm:px-6 bg-background/60 backdrop-blur-md z-20 shadow-sm">
+            <div className="h-14 sm:h-16 shrink-0 border-b flex items-center justify-between px-3 sm:px-6 bg-background/60 backdrop-blur-md z-20 shadow-sm">
               <div className="flex items-center gap-2 sm:gap-4 min-w-0">
                 {/* [AUDITORIA] FIX APLICADO: só existe em telas <lg — abaixo desse ponto a lista
                     fica escondida quando uma conversa está aberta (ver container acima), então
@@ -3003,7 +3010,7 @@ export function WhatsAppInterface() {
                 </div>
               )}
 
-              <div className="px-8 py-6 space-y-1 relative z-1">
+              <div className="px-3 sm:px-5 lg:px-8 py-3 sm:py-4 lg:py-6 space-y-1 relative z-1">
                 {loadingMessages && (
                   <div className="flex items-center justify-center py-12 text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin mr-2" /> Carregando mensagens...
@@ -3114,7 +3121,7 @@ export function WhatsAppInterface() {
                             if (!isNote) toggleMessageSelection(m.id);
                           }}
                         >
-                          <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
+                          <div className={`max-w-[88%] sm:max-w-[85%] rounded-2xl px-3 sm:px-4 py-2 sm:py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
                             isOut
                               ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
                               : isNote
@@ -3257,38 +3264,43 @@ export function WhatsAppInterface() {
             </ScrollArea>
 
             {/* Input */}
-            <div className="border-t bg-background/50 backdrop-blur-lg shrink-0 p-4">
-              <div className="flex gap-4 p-1 bg-muted/40 rounded-xl mb-3 w-fit">
+            {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — densidade geral): composer inteiro
+                comprimido — era o maior consumidor de altura vertical da tela em mobile/tablet
+                (tabs + barra "Enviando como Agente..." + textarea de 80px mínimos somavam bem
+                mais que o necessário pra uma única linha de texto). `max-h-[200px]` continua
+                igual — ainda cresce normalmente conforme o usuário digita mais. */}
+            <div className="border-t bg-background/50 backdrop-blur-lg shrink-0 p-2 sm:p-3 lg:p-4">
+              <div className="flex gap-2 sm:gap-4 p-1 bg-muted/40 rounded-xl mb-2 sm:mb-3 w-fit">
                 <button
                   onClick={() => setInputMode("responder")}
-                  className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${inputMode === "responder" ? "bg-background shadow-sm text-primary ring-1 ring-black/5" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`px-3 sm:px-4 py-1 sm:py-1.5 text-xs font-bold rounded-lg transition-all ${inputMode === "responder" ? "bg-background shadow-sm text-primary ring-1 ring-black/5" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   Responder
                 </button>
                 <button
                   onClick={() => setInputMode("nota")}
-                  className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${inputMode === "nota" ? "bg-amber-500 shadow-sm text-white ring-1 ring-black/5" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`flex items-center gap-1.5 px-3 sm:px-4 py-1 sm:py-1.5 text-xs font-bold rounded-lg transition-all ${inputMode === "nota" ? "bg-amber-500 shadow-sm text-white ring-1 ring-black/5" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   <Info className="h-3 w-3" /> Nota Privada
                 </button>
               </div>
-              
+
               <div className="bg-background rounded-2xl border border-border/50 shadow-sm overflow-hidden focus-within:ring-2 focus-within:ring-primary/20 transition-all">
-                <div className="px-4 py-3 bg-muted/20 border-b border-border/30 flex items-center justify-between">
+                <div className="px-3 sm:px-4 py-1.5 sm:py-2 bg-muted/20 border-b border-border/30 flex items-center justify-between">
                   <p className="text-[11px] font-bold text-muted-foreground/70 uppercase tracking-widest">
                     {isAiProcessing ? "IA Processando resposta..." : (inputMode === "nota" ? "Anotando privadamente..." : "Enviando como Agente...")}
                   </p>
-                  <p className="text-[10px] font-medium text-muted-foreground/50 italic">
+                  <p className="hidden sm:block text-[10px] font-medium text-muted-foreground/50 italic">
                     Shift + Enter para nova linha
                   </p>
                 </div>
-                
+
                 <div className="p-2 flex items-end gap-2">
                   <div className="flex-1 relative">
                     {inputMode === "nota" ? (
                       <textarea
                         placeholder="Adicione uma nota privada sobre esta conversa..."
-                        className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-amber-50/50 border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
+                        className="w-full min-h-[44px] sm:min-h-[56px] lg:min-h-[72px] max-h-[200px] p-3 text-sm bg-amber-50/50 border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
                         value={noteInput}
                         onChange={e => setNoteInput(e.target.value)}
                         onKeyDown={e => {
@@ -3302,7 +3314,7 @@ export function WhatsAppInterface() {
                       /* [AUDITORIA] FIX APLICADO (Achado A): indicador de gravação em andamento
                          substitui a textarea — duração ao vivo, cancelar (X) ou enviar (Send) no
                          mesmo lugar dos botões de sempre, ver coluna de botões abaixo. */
-                      <div className="w-full min-h-[80px] flex items-center gap-3 px-4">
+                      <div className="w-full min-h-[44px] sm:min-h-[56px] lg:min-h-[72px] flex items-center gap-3 px-4">
                         <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
                         <span className="text-sm font-bold text-red-600">
                           Gravando áudio... {formatRecordingTime(recordingSeconds)}
@@ -3389,7 +3401,7 @@ export function WhatsAppInterface() {
                         <textarea
                           ref={textareaRef}
                           placeholder="Escreva sua mensagem aqui... (/ para respostas rápidas)"
-                          className="w-full min-h-[80px] max-h-[200px] p-3 text-sm bg-transparent border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
+                          className="w-full min-h-[44px] sm:min-h-[56px] lg:min-h-[72px] max-h-[200px] p-3 text-sm bg-transparent border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
                           value={messageInput}
                           onChange={e => handleInputChange(e.target.value)}
                           onPaste={handlePasteImage}
@@ -3415,7 +3427,7 @@ export function WhatsAppInterface() {
                     accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
                     className="hidden"
                   />
-                  <div className="grid grid-cols-2 gap-1.5 p-1">
+                  <div className="grid grid-cols-2 gap-1 p-0.5">
                     <Button
                       variant="ghost" size="icon"
                       className="h-9 w-9 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-colors"

@@ -1,5 +1,15 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-28 (cont.) — Densidade geral do chat WhatsApp e do shell do CRM reduzida
+
+Após validar o fix de responsividade anterior, usuário reportou que o chat e o sistema em geral ainda "sentiam grandes", dificultando navegar entre conversas. Reduzido em conjunto (não é reestruturação de layout, é densidade — paddings/alturas/avatares menores, mais conteúdo cabendo por tela):
+- Lista de conversas: padding de cada item reduzido (mais conversas visíveis por tela, facilita navegação), avatar 'md' de 48px→40px, cabeçalho/busca mais compactos.
+- Cabeçalho do chat: altura 64px→56px em mobile/tablet.
+- Área de mensagens: padding lateral/vertical reduzido em telas menores; bolhas de mensagem um pouco mais compactas.
+- Composer: era o maior consumidor de altura vertical (tabs + barra informativa + textarea de 80px mínimos) — comprimido pra 44-56px mínimos em mobile/tablet (`max-h-[200px]` continua crescendo normalmente conforme o usuário digita).
+- `CRMLayout.tsx` (shell de toda página do sistema, não só o chat): padding externo reduzido em telas menores.
+
+Desktop (`lg`+) preserva praticamente os mesmos tamanhos de antes — a redução é mais agressiva quanto menor a tela. Build (`vite build`) limpo. **Não testado visualmente** (Playwright indisponível nesta sessão) — deploy em homolog, usuário validar antes de produção.
 ## Sessão 2026-07-28 (cont.) — Sidebar não fechava de verdade + responsividade do chat WhatsApp em tablet/mobile
 
 Usuário reportou não conseguir ocultar a barra lateral de módulos (dificultava tablet) e pediu revisão de UX/responsividade do chat — pendência já documentada desde 24/07. **Corrigido:** `AppSidebar.tsx` trocado de `collapsible="icon"` (só encolhe pra régua de ícones, nunca some) para `collapsible="offcanvas"` (some de vez, mesmo botão/atalho `Ctrl+B` de sempre) — resolve porque tablets caem no modo "desktop" do sidebar (breakpoint mobile é `<768px`). **Chat WhatsApp:** abaixo de `lg` (~1024px), lista/chat alternam tela cheia (com botão de voltar) em vez de espremer 3 colunas, e o painel de detalhes virou overlay em vez de somar como 3ª coluna — comportamento em desktop (`lg`+) inalterado.
