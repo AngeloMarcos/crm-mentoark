@@ -163,6 +163,19 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
       sql += ` ORDER BY ${orderCol} ${dir}`;
     }
 
+    // [AUDITORIA] LÓGICA (2026-07-29): default de 100/teto de 500 por página — comportamento
+    // intencional deste GET genérico (payload previsível pra qualquer tabela), mas silencioso:
+    // nenhum erro/aviso quando um caller não pagina e a tabela tem mais linhas que o default.
+    // Achado real: `Disparos.tsx` montava `targetContacts` (quem recebe a campanha) chamando
+    // `.from("contatos")...in("lista_id"/"funil_estagio_id", ...)` sem paginar — qualquer lista/
+    // tag/estágio com mais de 100 contatos truncava pra 100, e o disparo em massa real
+    // (handleStart em StepReview) enfileirava só esses 100. FIX APLICADO no caller (2026-07-29):
+    // `fetchAllContatos()` em Disparos.tsx agora pagina em lotes de 500 (`.limit()`+`.page()`,
+    // suporte novo em `src/integrations/database/client.ts`) até esgotar os resultados. O
+    // default deste endpoint continua o mesmo de propósito — outras rotas que dependem dele
+    // continuam pagináveis do mesmo jeito; qualquer novo caller que precise de tudo sem paginar
+    // manualmente deve seguir o mesmo padrão de `fetchAllContatos`, não assumir que o GET sem
+    // `?limit=`/`?page=` já devolve tudo. Ver diagnosticos/AUDITORIA_LOG.md, entrada 2026-07-29.
     const limit = Math.min(parseInt(String(req.query.limit || '100'), 10) || 100, 500);
     const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
     const offset = (page - 1) * limit;

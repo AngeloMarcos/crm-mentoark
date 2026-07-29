@@ -1,5 +1,17 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-29 (cont.) — 🟠 Blindagem anti-ban do motor de disparos: teto diário por instância + UI — corrigido, aguardando deploy
+
+Revisão pedida pelo usuário sobre risco de banimento no motor de disparos. Confirmado por leitura direta do código (não memória): envio sequencial (nunca paralelo), delay com jitter real, lote fixo em 5 com dequeue atômico — nenhum bug nesses 3 pontos. Duas lacunas reais fechadas: (1) teto diário de segurança (`disparoProcessor.ts`) agora conta mensagens enviadas por **instância** separadamente, não mais por conta inteira — campanha só pausa quando TODAS as instâncias elegíveis baterem o teto; (2) novo campo "Limite Diário de Mensagens por Instância" no step Anti-ban de `Disparos.tsx` (default 200, antes só existia no banco com default 500 e nenhuma UI). Build (`swc` + `vite build`) limpo. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`. **Não deployado ainda** — aguardando decisão do usuário.
+
+## Sessão 2026-07-29 — 🔴 Teto de 100 contatos em Disparos (importação/seleção de alvo) — corrigido
+
+Usuário reportou que "salvar a lista" em Disparos não levava a lugar nenhum (badge de 107 contatos na lista vs. preview mostrando "100 de 100 totais"). Causa raiz: `GET /api/:tabela` genérico (`backend/src/crud.ts`) aplica default silencioso de `limit=100` — as 3 buscas de alvo em `Disparos.tsx` (por tag/estágio/lista) não paginavam, então qualquer lista/tag/estágio com mais de 100 contatos truncava, e `handleStart` (StepReview) enfileirava só esses 100 pro disparo real, sem erro/aviso nenhum. A importação de arquivo (CSV/XLSX) em si nunca teve esse teto — o `INSERT` em lote já gravava todos os contatos; o gargalo era só na leitura de volta pra selecionar quem recebe a campanha.
+
+**Corrigido:** novo método `.page(n)` no `QueryBuilder` (`src/integrations/database/client.ts`) + nova função `fetchAllContatos()` em `Disparos.tsx` que pagina em lotes de 500 até esgotar os resultados — usada nas 3 buscas de alvo (tag/estágio/lista, inclusive "todas"). Único ponto de fix cobre tanto o preview/contagem quanto o disparo real, já que `handleStart` consome o mesmo estado `targetContacts`.
+
+Build (`vite build` + `swc`) limpo. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`. **Deployado em homolog e, após validação do usuário, também em produção** nesta mesma sessão (`scripts/deploy.sh homolog`/`prod --confirm`, 3 arquivos: `backend/src/crud.ts`, `src/integrations/database/client.ts`, `src/pages/Disparos.tsx`) — `/health`=200 e sem `ERROR` nos dois ambientes. Produção e homolog sincronizados para este fix.
+
 ## Sessão 2026-07-28 (cont.) — 🔴 GRAVE: IA respondia sem estar configurada, com prompt de OUTRO cliente ("Cris") — corrigido, aguardando deploy
 
 Usuário reportou achado grave: em um cliente novo, a IA já estava ativa e respondendo com o prompt/persona da "Cris" (cliente real da Mentoark) — vazamento de configuração entre tenants. Investigação encontrou uma cadeia de 3 causas somadas, não uma só:

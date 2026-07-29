@@ -102,8 +102,20 @@ interface TelefoneImportado {
 // propósito, pra não perder contatos importados por um filtro rígido demais. Não é duplicação por
 // descuido: é uma política de validação diferente para este fluxo específico de importação.
 function sanitizarTelefoneImportacao(raw: string): TelefoneImportado {
-  const d = (raw || "").replace(/\D/g, "");
+  // [AUDITORIA] FIX APLICADO (2026-07-29): coluna de origem pode trazer mais de um telefone na
+  // mesma célula (ex: campo "telefones" plural de exportação de CNPJ, um por sócio/filial/contato).
+  // Sem isolar o primeiro valor antes de tirar os separadores, `replace(/\D/g,'')` colava os
+  // números um no outro (ex: "11 2222-2222, 11 98765-4321" virava "112222222211987654321", 21
+  // dígitos) — que passava pelo único critério de descarte anterior (<10 dígitos) como um
+  // telefone "válido" gigante, e ia pro disparo real como lixo. Pega só o primeiro valor quando
+  // há mais de um separado por vírgula, ponto e vírgula, barra, pipe ou quebra de linha.
+  const primeiro = (raw || "").split(/[,;/|\n]+/)[0] || "";
+  const d = primeiro.replace(/\D/g, "");
   if (d.length < 10) return { telefone: null, corrigido: false };
+  // Acima de 13 dígitos não existe telefone brasileiro válido (55 + DDD + 9 dígitos). Mesmo após
+  // isolar o primeiro valor acima, um separador fora da lista (ex: só espaço) ainda pode ter
+  // colado dois números — descarta em vez de importar um valor que só vai falhar no envio.
+  if (d.length > 13) return { telefone: null, corrigido: false };
 
   // Já tem DDI 55 (12 ou 13 dígitos) — mantém como está.
   if ((d.length === 12 || d.length === 13) && d.startsWith("55")) {
@@ -121,8 +133,8 @@ function sanitizarTelefoneImportacao(raw: string): TelefoneImportado {
     return { telefone: "55" + ddd + resto, corrigido: true };
   }
 
-  // Comprimento fora do esperado (ex: 12/13 dígitos sem começar com 55) — não descarta (único
-  // critério de descarte é <10 dígitos), mantém os dígitos como vieram.
+  // Comprimento fora do esperado mas dentro do teto de 13 (ex: 12/13 dígitos sem começar com 55)
+  // — não descarta, mantém os dígitos como vieram.
   return { telefone: d, corrigido: false };
 }
 
@@ -147,7 +159,17 @@ interface AnaliseImportacao {
 // o número mostrado no resumo bate exatamente com o que será importado de fato.
 function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
   const headers = rows[0].map(h => (h || "").toLowerCase().trim());
+  // [AUDITORIA] FIX APLICADO (2026-07-29): antes só existia o passo de "contém" — numa planilha
+  // com colunas qualificadas (ex: exportação de CNPJ com "porte_empresa" e sem nenhuma coluna
+  // literal "empresa"), a chave genérica "empresa" batia em "porte_empresa" por substring e trazia
+  // o porte (ME/EPP/...) pro campo empresa em vez do nome de verdade. Passo extra de match EXATO
+  // primeiro — só cai pro "contém" (mantido por compatibilidade com arquivos que já funcionavam)
+  // quando nenhuma coluna bate igual à chave.
   const getPorSubstring = (cols: string[], ...keys: string[]) => {
+    for (const key of keys) {
+      const idx = headers.findIndex(h => h === key);
+      if (idx >= 0 && cols[idx]) return cols[idx];
+    }
     for (const key of keys) {
       const idx = headers.findIndex(h => h.includes(key));
       if (idx >= 0 && cols[idx]) return cols[idx];
@@ -179,17 +201,69 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
     // migrations.ts) — CPF, quando presente na planilha, é preservado em `notas` em vez de
     // descartado, sem exigir migração de schema pra este sprint.
     const cpf = getPorSubstring(cols, "cpf", "documento");
+    // [AUDITORIA] FIX APLICADO (2026-07-29): usuário reportou que planilhas de empresas/CNPJ
+    // (ex: import "cnpj_biz") perdiam profissão/atividade e várias outras colunas relevantes —
+    // `contatos` só tem campos pra nome/telefone/email/empresa/cargo/notas, então qualquer coisa
+    // sem chave reconhecida era descartada em silêncio. Amplia as chaves de "cargo" pra cobrir
+    // ramo/atividade de negócio (planilha de empresa não tem "cargo" de pessoa, mas atividade
+    // principal cumpre um papel parecido pra segmentar a campanha) e captura CNPJ/sócios/
+    // atividade/endereço/natureza jurídica/porte em `notas` quando existirem — mesmo padrão já
+    // usado pro CPF, sem exigir migração de schema.
+    const cnpj = getPorSubstring(cols, "cnpj");
+    const socios = getPorSubstring(cols, "socios", "sócios", "socio", "sócio");
+    const atividade = getPorSubstring(cols, "atividades_principal", "atividade principal", "atividade", "cnae", "segmento", "ramo");
+    const naturezaJuridica = getPorSubstring(cols, "natureza_juridica", "natureza jurídica");
+    const porte = getPorSubstring(cols, "porte_empresa", "porte");
+    const endereco = [
+      getPorSubstring(cols, "logradouro"),
+      getPorSubstring(cols, "numero", "número"),
+      getPorSubstring(cols, "bairro"),
+      getPorSubstring(cols, "municipio", "município"),
+      getPorSubstring(cols, "estado", "uf"),
+    ].filter(Boolean).join(", ");
+
+    const notasExtra: string[] = [];
+    if (cpf) notasExtra.push(`CPF: ${cpf}`);
+    if (cnpj) notasExtra.push(`CNPJ: ${cnpj}`);
+    if (socios) notasExtra.push(`Sócios: ${socios}`);
+    if (naturezaJuridica) notasExtra.push(`Natureza jurídica: ${naturezaJuridica}`);
+    if (porte) notasExtra.push(`Porte: ${porte}`);
+    if (endereco) notasExtra.push(`Endereço: ${endereco}`);
+
     novos.push({
       nome: nome || telefone,
       telefone,
       email: getPorSubstring(cols, "e-mail", "email", "mail"),
-      empresa: getPorSubstring(cols, "empresa", "company"),
-      cargo: getPorSubstring(cols, "cargo", "função", "role"),
-      notas: cpf ? `CPF: ${cpf}` : "",
+      // "razão social"/"nome_fantasia" checados antes da chave genérica "empresa"/"company" —
+      // evita a colisão com "porte_empresa" descrita acima quando a planilha não tem uma coluna
+      // literalmente chamada "empresa".
+      empresa: getPorSubstring(cols, "razão social", "razao_social", "nome fantasia", "nome_fantasia", "empresa", "company"),
+      cargo: getPorSubstring(cols, "cargo", "função", "role", "profissão", "profissao") || atividade,
+      notas: notasExtra.join(" | "),
     });
   }
 
   return { novos, totalLinhas, corrigidos, descartados };
+}
+
+// [AUDITORIA] FIX APLICADO (2026-07-29): busca de contatos-alvo (por tag/estágio/lista) caía no
+// default silencioso de `limit=100` do GET genérico (`backend/src/crud.ts`) — qualquer lista/tag/
+// estágio com mais de 100 contatos era truncada sem erro nenhum, e `handleStart` (StepReview)
+// enfileirava só os 100 primeiros pro disparo real. Fix: pagina em lotes de 500 (teto máximo
+// aceito por `crud.ts`) até a página vir incompleta, concatenando tudo — cobre qualquer tamanho
+// de lista sem precisar de endpoint novo. `build` deve retornar uma QueryBuilder fresca (sem
+// `.limit()`/`.page()` ainda aplicados) a cada chamada, já que o builder não é reutilizável após
+// `_exec()`.
+async function fetchAllContatos(build: () => any): Promise<any[]> {
+  const PAGE_SIZE = 500;
+  const all: any[] = [];
+  for (let page = 1; ; page++) {
+    const { data } = await build().limit(PAGE_SIZE).page(page);
+    if (!data || !data.length) break;
+    all.push(...data);
+    if (data.length < PAGE_SIZE) break;
+  }
+  return all;
 }
 
 const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
@@ -211,6 +285,13 @@ export default function DisparosPage() {
     pausa_fins_semana: true,
     pausa_erros_consecutivos: true,
     limite_erros_consecutivos: 5,
+    // [AUDITORIA] FIX APLICADO (2026-07-29): campo existia na tabela `disparos`
+    // (`limite_diario_mensagens`, default 500 no banco) mas não tinha nenhum controle na UI —
+    // toda campanha nascia fixa em 500/dia sem o operador conseguir configurar algo mais
+    // conservador pra chip novo/em aquecimento. Default aqui é mais baixo que o do banco de
+    // propósito (200 vs. 500) — evita que quem nunca mexer neste campo herde o teto mais
+    // permissivo sem perceber.
+    limite_diario_mensagens: 200,
     pausa_bloqueios_detectados: true,
     instancias_ids: [] as string[],
     contatos: [] as any[],
@@ -235,35 +316,43 @@ export default function DisparosPage() {
       }
       setLoadingCount(true);
       let list: any[] = [];
+      // [AUDITORIA] FIX APLICADO (2026-07-29): as 3 buscas abaixo (tag/estágio/lista) agora usam
+      // `fetchAllContatos` (pagina em lotes de 500 até esgotar) em vez de uma chamada única sem
+      // `.limit()` — antes, qualquer lista/tag/estágio com mais de 100 contatos era truncada
+      // silenciosamente pelo default do GET genérico (`backend/src/crud.ts`), e `targetContacts`
+      // (usado por handleStart em StepReview pra criar os disparo_logs reais) nunca via o resto.
+      // Ver causa raiz completa em diagnosticos/AUDITORIA_LOG.md, entrada 2026-07-29.
       // [AUDITORIA] LÓGICA: `opt_out` incluído no select das 3 fontes de alvo (tag/estágio/lista)
       // pra dar pro filtro final abaixo o que precisa — sem isso, contato que pediu remoção
       // entrava na campanha do mesmo jeito (ver diagnosticos/AUDITORIA_LOG.md).
       if (form.tags_selecionadas.length > 0) {
-        const { data } = await api.from("contatos").select("id, nome, telefone, tags, opt_out");
-        if (data) {
-          const filtered = data.filter((c: any) =>
-            Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
-          );
-          list = [...list, ...filtered];
-        }
+        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, tags, opt_out"));
+        const filtered = data.filter((c: any) =>
+          Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
+        );
+        list = [...list, ...filtered];
       }
       if (form.estagios_selecionados.length > 0) {
-        const { data } = await api
-          .from("contatos")
-          .select("id, nome, telefone, opt_out")
-          .in("funil_estagio_id", form.estagios_selecionados);
-        if (data) list = [...list, ...data];
+        const data = await fetchAllContatos(() =>
+          api
+            .from("contatos")
+            .select("id, nome, telefone, opt_out")
+            .in("funil_estagio_id", form.estagios_selecionados)
+        );
+        list = [...list, ...data];
       }
       if (form.listas_selecionadas.length > 0) {
         if (form.listas_selecionadas.includes("__all__")) {
-          const { data } = await api.from("contatos").select("id, nome, telefone, lista_id, opt_out");
-          if (data) list = [...list, ...data];
+          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, lista_id, opt_out"));
+          list = [...list, ...data];
         } else {
-          const { data } = await api
-            .from("contatos")
-            .select("id, nome, telefone, lista_id, opt_out")
-            .in("lista_id", form.listas_selecionadas);
-          if (data) list = [...list, ...data];
+          const data = await fetchAllContatos(() =>
+            api
+              .from("contatos")
+              .select("id, nome, telefone, lista_id, opt_out")
+              .in("lista_id", form.listas_selecionadas)
+          );
+          list = [...list, ...data];
         }
       }
       // [AUDITORIA] FIX APLICADO (2026-07-23): contato com opt_out=true nunca entra na lista de
@@ -517,7 +606,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
 
       if (!novos.length) {
         toast.error("Nenhum contato válido encontrado", {
-          description: `${totalLinhas} linha(s) lida(s), todas com telefone inválido ou em branco (menos de 10 dígitos).`,
+          description: `${totalLinhas} linha(s) lida(s), todas com telefone inválido ou em branco (fora do padrão de 10 a 13 dígitos).`,
         });
         return;
       }
@@ -834,7 +923,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                   </p>
                   {preAnalise.descartados > 0 && (
                     <p className="text-muted-foreground">
-                      <span className="font-bold text-destructive">{preAnalise.descartados}</span> linha(s) serão descartadas por telefone vazio ou inválido (menos de 10 dígitos) — a preview acima mostra o arquivo cru, essas linhas não geram contato.
+                      <span className="font-bold text-destructive">{preAnalise.descartados}</span> linha(s) serão descartadas por telefone vazio ou inválido (fora do padrão de 10 a 13 dígitos, ou mais de um telefone colado na mesma célula) — a preview acima mostra o arquivo cru, essas linhas não geram contato.
                     </p>
                   )}
                 </div>
@@ -1146,6 +1235,18 @@ function StepAntiBan({ form, setForm }: any) {
               <span className="text-[10px] uppercase text-muted-foreground">Falhas seguidas para pausar</span>
               <Input type="number" value={form.limite_erros_consecutivos} onChange={e => setForm({...form, limite_erros_consecutivos: parseInt(e.target.value)})} className="h-8" />
             </div>
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase text-muted-foreground">Limite Diário de Mensagens por Instância</span>
+              <Input
+                type="number"
+                value={form.limite_diario_mensagens}
+                onChange={e => setForm({ ...form, limite_diario_mensagens: parseInt(e.target.value) })}
+                className="h-8"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Recomendado: 150 a 200 para chips novos/em aquecimento; até 500 para chips antigos.
+              </p>
+            </div>
           </div>
         </Card>
 
@@ -1211,6 +1312,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         pausa_fins_semana: form.pausa_fins_semana,
         pausa_erros_consecutivos: form.pausa_erros_consecutivos,
         limite_erros_consecutivos: form.limite_erros_consecutivos,
+        limite_diario_mensagens: form.limite_diario_mensagens,
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
         humanizar_ia: form.humanizar_ia,
       };

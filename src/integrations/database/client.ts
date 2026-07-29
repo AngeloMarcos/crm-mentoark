@@ -273,6 +273,7 @@ class QueryBuilder {
   private _orderCol: string | null = null;
   private _orderAsc = true;
   private _limit: number | null = null;
+  private _page: number | null = null;
   private _single = false;
   private _maybeSingle = false;
   private _insertData: any = null;
@@ -331,6 +332,12 @@ class QueryBuilder {
 
   order(col: string, opts: { ascending?: boolean } = {}) { this._orderCol = col; this._orderAsc = opts.ascending !== false; return this; }
   limit(n: number)   { this._limit = n; return this; }
+  // [AUDITORIA] FIX APLICADO (2026-07-29): `.page()` não existia — nenhum caller conseguia
+  // paginar pra além do default de 100/teto de 500 do GET genérico (`backend/src/crud.ts`),
+  // que já suporta `?page=` mas nunca era exercitado pelo frontend. Adicionado pra permitir
+  // buscar todas as páginas em loop (ver `fetchAllContatos` em Disparos.tsx, causa raiz
+  // documentada em diagnosticos/AUDITORIA_LOG.md, entrada 2026-07-29).
+  page(n: number)    { this._page = n; return this; }
   single()           { this._single = true; return this; }
   maybeSingle()      { this._maybeSingle = true; return this; }
 
@@ -357,6 +364,7 @@ class QueryBuilder {
     }
     if (this._orderCol) { p.set('order', this._orderCol); p.set('asc', String(this._orderAsc)); }
     if (this._limit)    p.set('limit', String(this._limit));
+    if (this._page)     p.set('page', String(this._page));
     return p;
   }
 

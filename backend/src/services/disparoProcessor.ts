@@ -29,16 +29,18 @@ async function deveHumanizar(pool: Pool, disparoId: string): Promise<boolean> {
 // mesmo resultado: tudo saindo por um único número. Isso anulava o propósito anti-ban da tela
 // (distribuir volume entre chips). [AUDITORIA] FIX APLICADO: cache por campanha (mesmo padrão
 // de `humanizarCache`/`urlMidiaEstavelPorCampanha`) resolve `instancias_ids` -> linhas de
-// `agentes` uma vez, e `proximaInstanciaRoundRobin` alterna entre elas a cada mensagem enviada
-// da campanha. Campanhas sem `instancias_ids` (vazias, ou criadas antes deste fix) caem no
-// fallback original (`integracoes_config` -> `agentes` ativo -> defaults de env), sem quebrar
-// nada existente.
+// `agentes` uma vez. A partir de 2026-07-29, o round-robin em si roda sobre
+// `instanciasDisponiveisHojeCache`/`proximaInstanciaDisponivel` (abaixo) em vez de rodar direto
+// sobre esta lista — a lista aqui é só "quais instâncias a campanha pode usar", filtrada de novo
+// pelo teto diário por instância antes de rotacionar. Campanhas sem `instancias_ids` (vazias, ou
+// criadas antes deste fix) caem no fallback original (`integracoes_config` -> `agentes` ativo ->
+// defaults de env, ver `resolverInstanciaFallback`), sem quebrar nada existente.
 interface InstanciaElegivel {
   url: string;
   api_key: string;
   instancia: string;
 }
-const instanciasCampanhaCache = new Map<string, { instancias: InstanciaElegivel[]; proximoIndex: number }>();
+const instanciasCampanhaCache = new Map<string, { instancias: InstanciaElegivel[] }>();
 
 async function resolverInstanciasCampanha(pool: Pool, disparoId: string, userId: string): Promise<InstanciaElegivel[]> {
   const cache = instanciasCampanhaCache.get(disparoId);
@@ -60,14 +62,53 @@ async function resolverInstanciasCampanha(pool: Pool, disparoId: string, userId:
     instancias = agentesRes.rows.filter((r: any) => r.url && r.instancia);
   }
 
-  instanciasCampanhaCache.set(disparoId, { instancias, proximoIndex: 0 });
+  instanciasCampanhaCache.set(disparoId, { instancias });
   return instancias;
 }
 
-function proximaInstanciaRoundRobin(disparoId: string): InstanciaElegivel | null {
-  const cache = instanciasCampanhaCache.get(disparoId);
-  if (!cache || !cache.instancias.length) return null;
-  const escolhida = cache.instancias[cache.proximoIndex % cache.instancias.length];
+// [AUDITORIA] LÓGICA (2026-07-29): mesmo fallback que antes vivia inline na resolução de
+// `config` (integracoes_config -> agentes ativo) — extraído pra função porque agora é usado em
+// dois pontos: no bloco de transição de campanha (checagem de teto diário POR instância, que
+// precisa saber o nome da instância candidata ANTES de decidir se pode enviar por ela) e na
+// resolução final de `config`, pra campanhas sem `instancias_ids` selecionado na tela.
+async function resolverInstanciaFallback(pool: Pool, userId: string): Promise<InstanciaElegivel | null> {
+  const integracaoRes = await pool.query(
+    `SELECT url, api_key, instancia FROM integracoes_config
+     WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado')
+     LIMIT 1`,
+    [userId]
+  ).catch(() => ({ rows: [] as any[] }));
+  if (integracaoRes.rows.length) return integracaoRes.rows[0];
+
+  const agenteRes = await pool.query(
+    `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
+     FROM agentes
+     WHERE user_id = $1 AND ativo = true
+     ORDER BY updated_at DESC LIMIT 1`,
+    [userId]
+  ).catch(() => ({ rows: [] as any[] }));
+  if (agenteRes.rows.length && agenteRes.rows[0].url) return agenteRes.rows[0];
+
+  return null;
+}
+
+// [AUDITORIA] FIX APLICADO (2026-07-29 — teto diário passa a ser POR INSTÂNCIA, não mais por
+// conta inteira): antes, o teto diário somava TODAS as mensagens enviadas pelo `user_id`, não
+// importa qual número Evolution as mandou — uma campanha multi-instância (round-robin entre
+// vários chips, ver `resolverInstanciasCampanha` acima) esgotava o mesmo teto mesmo tendo vários
+// números saudáveis disponíveis, e o inverso também era possível: um chip sobrecarregado não
+// pausava sozinho se outros chips da mesma conta ainda estivessem com folga. Esta cache guarda,
+// por campanha, quais das instâncias candidatas (seleção manual da tela, ou o único fallback
+// pra campanhas sem seleção) ainda estão ABAIXO do teto diário — recalculada a cada transição de
+// campanha dentro do lote (ver bloco abaixo), mesma cadência que o teto antigo já usava.
+// Round-robin passa a rodar só sobre essa lista já filtrada, substituindo
+// `proximaInstanciaRoundRobin` (removida — nenhum caller restante).
+const instanciasDisponiveisHojeCache = new Map<string, { disponiveis: InstanciaElegivel[]; proximoIndex: number }>();
+
+function proximaInstanciaDisponivel(disparoId: string): InstanciaElegivel | null {
+  const cache = instanciasDisponiveisHojeCache.get(disparoId);
+  if (!cache || !cache.disponiveis.length) return null;
+  const escolhida = cache.disponiveis[cache.proximoIndex % cache.disponiveis.length];
   cache.proximoIndex++;
   return escolhida;
 }
@@ -135,19 +176,16 @@ export async function processarDisparos(pool: Pool) {
         errosConsecutivos = 0;
         ultimaCampanhaId = disparo_id;
 
-        // [AUDITORIA] FIX APLICADO (Sprint 5 — salvaguarda antiban de teto diário, 2026-07-23):
-        // antes de processar a primeira mensagem de uma campanha neste lote, conta quantas
-        // mensagens já foram efetivamente ENVIADAS (status='sent') pelo dono da campanha nas
-        // últimas 24h corridas, em TODAS as campanhas dele — não só nesta. Escopo é por
-        // user_id (não por instância/chip individual). [AUDITORIA] FIX PENDENTE (motivo:
-        // decisão de produto — teto por conta inteira vs. por número/chip, mais uma 2ª query de
-        // contagem por instância a cada transição de campanha): `disparo_logs.instancia` já
-        // existe desde a Sprint Disparos/Multi-instância (2026-07-25, preenchido no UPDATE de
-        // envio abaixo) — o bloqueio de schema que motivou este pendente original não existe
-        // mais, mas a query de contagem logo abaixo continua somando por user_id, não por
-        // instancia. Ainda não fechado porque não estava no escopo daquela sprint (só criou a
-        // coluna) e falta decidir se o teto passa a ser por instância ou continua por conta.
-        // Teto configurável por campanha (`disparos.limite_diario_mensagens`, default 500) —
+        // [AUDITORIA] FIX APLICADO (Sprint 5, 2026-07-23 — teto diário; revisado 2026-07-29 pra
+        // ser POR INSTÂNCIA): antes de processar a primeira mensagem de uma campanha neste
+        // lote, resolve as instâncias candidatas (seleção manual da tela via
+        // `resolverInstanciasCampanha`, ou o único fallback pra campanhas sem seleção) e conta,
+        // pra CADA uma delas separadamente, quantas mensagens já foram efetivamente ENVIADAS
+        // (status='sent') nas últimas 24h corridas — não mais uma soma única por `user_id`
+        // (ver `disparo_logs.instancia`, preenchida no UPDATE de envio abaixo). Instâncias que já
+        // bateram o teto saem da lista de disponíveis; a campanha só pausa de vez quando TODAS
+        // as candidatas estiverem no teto. Teto configurável por campanha
+        // (`disparos.limite_diario_mensagens`, default 500 no banco / 200 sugerido na UI) —
         // mesmo padrão já usado por `limite_erros_consecutivos`.
         try {
           const capMetaRes = await pool.query(
@@ -158,18 +196,37 @@ export async function processarDisparos(pool: Pool) {
           if (capMetaRes.rows.length) {
             const donoCampanha = capMetaRes.rows[0].user_id;
             const limiteDiario = Number(capMetaRes.rows[0].limite_diario_mensagens) || 500;
-            const contagemRes = await pool.query(
-              `SELECT COUNT(*) AS total FROM disparo_logs
-               WHERE user_id = $1 AND status = 'sent' AND enviado_at >= NOW() - INTERVAL '24 hours'`,
-              [donoCampanha]
-            );
-            const enviados24h = Number(contagemRes.rows[0]?.total || 0);
 
-            if (enviados24h >= limiteDiario) {
-              log.warn('DISPARO', 'Teto diário de segurança atingido — pausando campanha automaticamente', {
-                disparo_id, donoCampanha, enviados24h, limiteDiario,
+            const instanciasSelecionadas = await resolverInstanciasCampanha(pool, disparo_id, donoCampanha);
+            let candidatos: InstanciaElegivel[] = instanciasSelecionadas;
+            if (!candidatos.length) {
+              const fallback = await resolverInstanciaFallback(pool, donoCampanha);
+              candidatos = fallback ? [fallback] : [{
+                url: process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br',
+                api_key: process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey',
+                instancia: `crm_${String(donoCampanha).slice(0, 8)}`,
+              }];
+            }
+
+            const nomesInstancias = candidatos.map(c => c.instancia);
+            const contagemRes = await pool.query(
+              `SELECT instancia, COUNT(*) AS total FROM disparo_logs
+               WHERE user_id = $1 AND instancia = ANY($2::text[]) AND status = 'sent'
+                 AND enviado_at >= NOW() - INTERVAL '24 hours'
+               GROUP BY instancia`,
+              [donoCampanha, nomesInstancias]
+            );
+            const contagemPorInstancia = new Map<string, number>(
+              contagemRes.rows.map((r: any) => [r.instancia, Number(r.total)])
+            );
+            const disponiveisHoje = candidatos.filter(c => (contagemPorInstancia.get(c.instancia) || 0) < limiteDiario);
+            instanciasDisponiveisHojeCache.set(disparo_id, { disponiveis: disponiveisHoje, proximoIndex: 0 });
+
+            if (!disponiveisHoje.length) {
+              log.warn('DISPARO', 'Teto diário de segurança atingido em todas as instâncias elegíveis — pausando campanha automaticamente', {
+                disparo_id, donoCampanha, limiteDiario, instancias: nomesInstancias,
               });
-              const aviso = 'Limite diário de segurança atingido. Retomando automaticamente amanhã.';
+              const aviso = 'Limite diário de segurança atingido em todas as instâncias disponíveis. Retomando automaticamente amanhã.';
               await pool.query(
                 `UPDATE disparos
                  SET status = 'pausado', aviso = $2, pausado_em = NOW(), pausado_motivo = 'limite_diario', updated_at = NOW()
@@ -182,7 +239,7 @@ export async function processarDisparos(pool: Pool) {
             }
           }
         } catch (errCap: any) {
-          log.warn('DISPARO', 'Erro ao verificar teto diário de segurança, continuando por precaução', { disparo_id, err: errCap.message });
+          log.warn('DISPARO', 'Erro ao verificar teto diário de segurança por instância, continuando por precaução', { disparo_id, err: errCap.message });
         }
 
         // [AUDITORIA] FIX APLICADO (Sprint 6, item 1): ver comentário completo na declaração de
@@ -261,39 +318,11 @@ export async function processarDisparos(pool: Pool) {
           continue;
         }
 
-        // 2. Buscar config da Evolution API. Prioridade: instâncias selecionadas na campanha
-        //    (round-robin, ver resolverInstanciasCampanha/proximaInstanciaRoundRobin acima) ->
-        //    integracoes_config -> agentes ativo -> defaults de env.
-        let config: { url: string; api_key: string; instancia: string } | null = null;
-
-        const instanciasElegiveis = await resolverInstanciasCampanha(pool, disparo_id, user_id);
-        if (instanciasElegiveis.length) {
-          config = proximaInstanciaRoundRobin(disparo_id);
-        }
-
-        if (!config) {
-          const integracaoRes = await pool.query(
-            `SELECT url, api_key, instancia FROM integracoes_config
-             WHERE user_id = $1 AND tipo = 'evolution' AND status IN ('ativo','conectado')
-             LIMIT 1`,
-            [user_id]
-          );
-
-          if (integracaoRes.rows.length) {
-            config = integracaoRes.rows[0];
-          } else {
-            const agenteRes = await pool.query(
-              `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
-               FROM agentes
-               WHERE user_id = $1 AND ativo = true
-               ORDER BY updated_at DESC LIMIT 1`,
-              [user_id]
-            );
-            if (agenteRes.rows.length && agenteRes.rows[0].url) {
-              config = agenteRes.rows[0];
-            }
-          }
-        }
+        // 2. Buscar config da Evolution API para esta mensagem. `instanciasDisponiveisHojeCache`
+        //    já foi calculada no bloco de transição de campanha acima — candidatos elegíveis
+        //    (seleção manual da tela, ou fallback integracoes_config/agentes/env) MENOS os que já
+        //    estouraram o próprio teto diário. Round-robin roda só sobre essa lista filtrada.
+        const config: InstanciaElegivel | null = proximaInstanciaDisponivel(disparo_id);
 
         // [AUDITORIA] FIX PENDENTE (motivo: decisão de produto sobre robustez vs. simplicidade
         // — Sprint Disparos/Multi-instância, 2026-07-25): se a instância escolhida pelo
