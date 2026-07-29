@@ -42,10 +42,23 @@ export interface MensagemEntrada {
 }
 
 // ── Buffer de mensagens picotadas ────────────────────────────────────────────
+// [AUDITORIA] BUG (auditoria 2026-07-29 — rajada mista de texto+mídia dentro da janela de
+// debounce): campo `entrada` era sobrescrito incondicionalmente a cada mensagem nova
+// (`existente.entrada = entrada`), guardando sempre os metadados só da ÚLTIMA mensagem da
+// rajada. Cenário concreto: cliente manda um áudio e, menos de 3s depois, manda um texto (ou
+// vice-versa) — `mensagens: string[]` só acumula `entrada.texto`, que vem vazio pra mensagens de
+// mídia; e o `tipo`/`midiaUrl` de quem veio primeiro se perdia porque a segunda mensagem
+// sobrescrevia `entrada` por completo. Resultado: uma das duas mensagens do cliente desaparecia
+// silenciosamente — nem virava texto no histórico, nem áudio transcrito, nem imagem analisada.
+// [AUDITORIA] FIX APLICADO: `entradaBase` (renomeado de `entrada`) só é substituída quando a
+// mensagem nova É a portadora de mídia real (`tipo !== 'text' && midiaUrl`) — texto puro nunca
+// mais apaga o áudio/imagem já capturado na rajada. Ver `processarComDebounce` abaixo e o ajuste
+// correspondente no passo 5 (resolução de mídia) de `processarMensagem`, que agora funde o texto
+// puro mesclado com a transcrição/legenda em vez de descartá-lo.
 const bufferMensagens = new Map<string, {
   timeout: ReturnType<typeof setTimeout>;
   mensagens: string[];
-  entrada: MensagemEntrada;
+  entradaBase: MensagemEntrada;
 }>();
 
 // ── Lock de concorrência — impede duas respostas simultâneas ao mesmo número ─
@@ -354,6 +367,69 @@ async function upsertContato(
   return pos.rows[0];
 }
 
+// [AUDITORIA] BUG CRÍTICO (auditoria 2026-07-29 — falha de LLM deixava o cliente no vácuo):
+// antes, quando `provider.complete()` falhava (401/429 tratados por `withAiFallback` → `resp`
+// vem `null`; qualquer outro erro — rede, 5xx, timeout — não é tratado por `withAiFallback` e
+// escapa como exceção) o motor só logava o erro e retornava (ou relançava a exceção, que a
+// própria `processarComDebounce` só loga de novo) — NADA pausava a IA pro contato, NADA
+// avisava um atendente. O cliente ficava esperando uma resposta que nunca viria, sem que
+// ninguém do lado humano soubesse que a IA quebrou pra aquele número. [AUDITORIA] FIX
+// APLICADO: nos dois pontos de falha (ver `processarMensagem`, loop agêntico), chama esta
+// função — marca `contatos.atendente_pausou_ia=true` E `dados_cliente.atendimento_ia='pause'`
+// (mesmos 2 campos que `pausaRes` já verifica no início do motor pra decidir se a IA deve
+// responder), registra em `ia_pausa_log` (mesma tabela de auditoria já usada pelo endpoint
+// manual de pausa em `routes/contatos.ts`) e dispara o mesmo webhook de card no Kanban já usado
+// pela pausa "normal" (seção 14 de `processarMensagem`), com prioridade alta e título
+// diferenciado, pra um atendente ver que precisa assumir. Pausa fica sem `pausa_duracao_min`
+// de propósito — não deve reativar sozinha depois de N minutos como a pausa "IA decidiu
+// encerrar" normal, porque o motivo aqui é uma falha real (chave sem crédito, rate limit, erro
+// de rede) que só um humano deve resolver e reativar manualmente.
+async function pausarPorFalhaLLM(
+  pool: Pool, userId: string, entrada: MensagemEntrada, motivo: string,
+): Promise<void> {
+  const telefoneSuffix = `%${entrada.telefone.slice(-11)}`;
+  try {
+    await pool.query(
+      `UPDATE contatos SET atendente_pausou_ia = true, updated_at = NOW()
+       WHERE user_id = $1 AND telefone ILIKE $2`,
+      [userId, telefoneSuffix]
+    );
+    await pool.query(
+      `UPDATE dados_cliente SET atendimento_ia = 'pause', pausa_timestamp = NOW()
+       WHERE user_id = $1 AND telefone ILIKE $2`,
+      [userId, telefoneSuffix]
+    );
+    await pool.query(
+      `INSERT INTO ia_pausa_log (user_id, telefone, acao, observacao)
+       VALUES ($1, $2, 'pause', $3)`,
+      [userId, entrada.telefone, `Pausa automática — falha na chamada à LLM: ${motivo}`.slice(0, 500)]
+    );
+  } catch (errDb: any) {
+    log.error('ENGINE', 'Falha ao registrar pausa automática por erro de LLM', { err: errDb?.message, stack: errDb?.stack });
+  }
+
+  const backendUrl = process.env.BACKEND_URL || 'https://api.mentoark.com.br';
+  const kanbanSecret = process.env.N8N_WEBHOOK_SECRET || 'mentoark-kanban-secret-2025';
+  fetch(`${backendUrl}/api/kanban/webhook/n8n`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-webhook-secret': kanbanSecret },
+    body: JSON.stringify({
+      user_id: userId,
+      titulo: `⚠️ IA falhou: ${entrada.pushName} (${entrada.telefone})`,
+      resumo: `A IA não conseguiu responder este contato (falha na chamada à LLM) e foi pausada automaticamente. Motivo técnico: ${motivo}`.slice(0, 800),
+      contato_nome: entrada.pushName,
+      contato_telefone: entrada.telefone,
+      remote_jid: `${entrada.telefone}@s.whatsapp.net`,
+      instance_name: entrada.instancia,
+      prioridade: 'alta',
+    }),
+  }).catch(err => log.warn('ENGINE', 'Falha ao criar card Kanban de falha de LLM', { err: err?.message, stack: err?.stack }));
+
+  log.error('ENGINE', 'IA pausada automaticamente por falha na LLM — aguardando atendente humano', {
+    telefone: entrada.telefone, userId, motivo,
+  });
+}
+
 // ── MOTOR PRINCIPAL ───────────────────────────────────────────────────────────
 async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<void> {
   // Higienizar e validar telefone antes de qualquer operação
@@ -489,8 +565,14 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // 5. Resolver mídia (usa apiKey do provider para Whisper/Vision)
   let textoFinal = entrada.texto;
   if (entrada.tipo === 'audio' && entrada.midiaUrl) {
-    textoFinal = await transcreverAudio(entrada.midiaUrl, openaiApiKey);
-    if (!textoFinal) { log.warn('ENGINE', 'Falha na transcrição'); return; }
+    const transcrito = await transcreverAudio(entrada.midiaUrl, openaiApiKey);
+    if (!transcrito) { log.warn('ENGINE', 'Falha na transcrição'); return; }
+    // [AUDITORIA] FIX APLICADO (2026-07-29): antes, `textoFinal = transcrito` descartava
+    // `entrada.texto` incondicionalmente — inofensivo pra um áudio isolado (normalmente vem sem
+    // texto), mas destruía silenciosamente uma mensagem de texto puro que o debounce mesclou
+    // aqui na mesma rajada (ex: cliente manda um áudio e, <3s depois, um texto — ver fix em
+    // `processarComDebounce`/`bufferMensagens` acima). Agora concatena em vez de sobrescrever.
+    textoFinal = entrada.texto ? `${entrada.texto}\n${transcrito}` : transcrito;
     log.info('ENGINE', 'Áudio transcrito', { textoTranscrito: textoFinal.slice(0, 60) });
   } else if (entrada.tipo === 'image' && entrada.midiaUrl) {
     textoFinal = await analisarImagem(entrada.midiaUrl, entrada.texto || undefined, openaiApiKey);
@@ -647,7 +729,12 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         err: err?.message,
         stack: err?.stack,
       });
-      throw err; // propaga para o caller registrar e liberar o lock
+      // [AUDITORIA] FIX APLICADO (2026-07-29): antes só relançava (`throw err`) — o único
+      // efeito prático era `processarComDebounce` logar o mesmo erro de novo antes de o
+      // `finally` de `processarMensagem` liberar o lock. Cliente ficava sem resposta e sem
+      // ninguém do lado humano ser avisado. Ver `pausarPorFalhaLLM` (declarada acima).
+      await pausarPorFalhaLLM(pool, userIdFinal, entrada, err?.message || 'erro desconhecido na chamada à LLM');
+      return;
     }
 
     if (!resp) {
@@ -656,6 +743,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         provider: providerSlug + '/' + modelo,
         diagnostico: 'verifique OPENAI_API_KEY no .env do servidor',
       });
+      // [AUDITORIA] FIX APLICADO (2026-07-29): `withAiFallback` devolve `null` aqui
+      // especificamente pra 401 (chave inválida) e 429 (sem créditos/rate limit) — os dois
+      // cenários citados explicitamente na auditoria ("chave de API sem saldo, limite de
+      // requisições excedido"). Antes só retornava em silêncio; ver `pausarPorFalhaLLM`.
+      await pausarPorFalhaLLM(pool, userIdFinal, entrada, 'Provider retornou null — chave inválida (401) ou sem créditos/rate limit (429)');
       return;
     }
 
@@ -922,20 +1014,28 @@ export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada)
   if (existente) {
     clearTimeout(existente.timeout);
     if (entrada.texto) existente.mensagens.push(entrada.texto);
-    existente.entrada = entrada;
+    // Só troca a entrada-base (tipo/midiaUrl) quando a mensagem nova É a portadora de mídia
+    // real — texto puro chegando depois de um áudio/imagem na mesma rajada NUNCA mais apaga a
+    // mídia já capturada (ver comentário completo na declaração de `bufferMensagens` acima).
+    // Duas mensagens de mídia na mesma rajada (ex: dois áudios em sequência) continuam sendo
+    // uma limitação residual conhecida — a mais recente vence, a anterior é descartada; caso
+    // não coberto por este fix (raro: exigiria processar múltiplas mídias em série).
+    if (entrada.tipo !== 'text' && entrada.midiaUrl) {
+      existente.entradaBase = entrada;
+    }
   } else {
     bufferMensagens.set(chave, {
       timeout: null as any,
       mensagens: entrada.texto ? [entrada.texto] : [],
-      entrada,
+      entradaBase: entrada,
     });
   }
 
   const buf = bufferMensagens.get(chave)!;
   buf.timeout = setTimeout(async () => {
     bufferMensagens.delete(chave);
-    const entradaFinal = { ...buf.entrada };
-    if (buf.mensagens.length > 1) entradaFinal.texto = buf.mensagens.join(' ');
+    const entradaFinal = { ...buf.entradaBase };
+    if (buf.mensagens.length) entradaFinal.texto = buf.mensagens.join(' ');
     await processarMensagem(pool, entradaFinal).catch(err =>
       log.error('ENGINE', 'Erro', { err: err?.message, stack: err?.stack })
     );
