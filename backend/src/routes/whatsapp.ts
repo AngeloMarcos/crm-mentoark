@@ -387,17 +387,27 @@ export default function whatsappRouter(pool: Pool): Router {
           const { subject, pictureUrl } = await buscarInfoGrupo(base, cfg.api_key, cfg.instancia, groupJid);
           if (subject || pictureUrl) {
             const localUrl = pictureUrl ? await salvarFotoPerfilLocal(pictureUrl, userId, groupId) : null;
-            await pool.query(
+            // [AUDITORIA] BUG (achado 2026-07-29, mesmo padrão do fix em webhook.ts): `ON
+            // CONFLICT (user_id, telefone)` sem repetir o `WHERE telefone IS NOT NULL` do índice
+            // parcial `idx_contatos_user_tel_unique` (migrations.ts) faz o Postgres rejeitar todo
+            // INSERT — confirmado em produção, 0 grupos gravados apesar do botão reportar
+            // "sincronizados". [AUDITORIA] FIX APLICADO: `WHERE` adicionado; `gruposSincronizados`
+            // só incrementa quando o INSERT de fato retorna (antes contava tentativas, não
+            // sucessos — o `.catch(() => {})` escondia falhas tanto do log quanto da contagem).
+            const upsertResult = await pool.query(
               `INSERT INTO contatos (user_id, nome, telefone, origem, status, ultima_mensagem_em)
                VALUES ($1, $2, $3, 'WhatsApp', 'novo', NOW())
-               ON CONFLICT (user_id, telefone) DO UPDATE
+               ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO UPDATE
                  SET nome = CASE WHEN $2 IS NOT NULL AND $2 <> contatos.telefone THEN $2 ELSE contatos.nome END,
                      profile_pic_url = COALESCE($4, contatos.profile_pic_url),
                      foto_perfil = COALESCE($4, contatos.foto_perfil),
                      ultima_mensagem_em = NOW()`,
               [userId, subject || groupId, groupId, localUrl || pictureUrl]
-            ).catch(() => {});
-            gruposSincronizados++;
+            ).catch(err => {
+              log.warn('WHATSAPP sync-profiles', 'Falha ao salvar info do grupo', { groupId, err: err?.message });
+              return null;
+            });
+            if (upsertResult) gruposSincronizados++;
           }
         } catch {}
         await new Promise(r => setTimeout(r, 150));

@@ -1,6 +1,8 @@
 # STATUS — CRM Mentoark
 
-## Sessão 2026-07-29 (cont.) — 🔴 Coluna `pausa_bloqueios_detectados` faltando em produção E homologação — causa raiz real não era deploy pendente
+## Sessão 2026-07-29 (cont.) — 🔴 Grupos sem nome/foto: fix de 2026-07-28 já deployado, mas `ON CONFLICT` quebrado zerava 100% das gravações
+
+Usuário achava que a busca de nome/foto de grupo via Evolution não existia — na real já existia e já estava deployada em prod/homolog (confirmado por `sha256sum`), só que **nunca conseguia gravar**: `ON CONFLICT (user_id, telefone)` não repetia o `WHERE telefone IS NOT NULL` do índice parcial real, e o Postgres rejeitava todo INSERT ("no unique or exclusion constraint matching..."). Confirmado em produção: 0 grupos em `contatos` apesar de milhares de mensagens de grupo recentes em `whatsapp_messages`. Corrigido em `webhook.ts` (achado orgânico) e `whatsapp.ts` (botão de sincronização manual) — mesmo predicado do índice adicionado ao `ON CONFLICT`, e logs de sucesso/contagem corrigidos pra não mascarar falha. Build (`swc` + `vite build`) limpo. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`. **Não deployado ainda.**
 
 Usuário suspeitou de falha de banco em produção, hipótese inicial: "motor de disparos não deployado em prod". Verificado via `psql` direto na VPS: `pausa_bloqueios_detectados` de fato não existe em nenhum dos dois bancos (`crm` produção, `crm_hml` homolog) — não é divergência entre ambientes, é lacuna de migração (coluna só existia dentro do `CREATE TABLE IF NOT EXISTS`, sem `ALTER TABLE` de retrofit, então nunca foi criada em nenhuma tabela já existente). Redeployar os arquivos sem editar nada não teria corrigido nada. Fix real: nova linha `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` em `migrations.ts`. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
 

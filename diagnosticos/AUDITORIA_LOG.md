@@ -1,5 +1,20 @@
 # Auditoria de Código — Log
 
+### 🔴 Grupos ainda sem nome/foto real, apesar do fix de 2026-07-28 já deployado — causa raiz real era um `ON CONFLICT` quebrado, não ausência de código (2026-07-29)
+
+**Contexto:** usuário pediu pra investigar e "implementar" a busca de nome/foto de grupo via `GET /group/findGroupInfos`, achando que o recurso não existia. Antes de escrever qualquer código, confirmei o estado real: o fix inteiro (`buscarInfoGrupo()` em `whatsappMediaStorage.ts`, chamado organicamente em `webhook.ts` e no backfill manual em `whatsapp.ts`, mais a CTE `grupo_unico` em `GET /conversas`) **já existe** desde 2026-07-28 e **já está deployado** — confirmei via `sha256sum` que os 3 arquivos (`whatsapp.ts`, `webhook.ts`, `whatsappMediaStorage.ts`) são byte-a-byte idênticos entre local, homolog e produção.
+
+**Só que os grupos continuavam sem dado nenhum.** Query direta em produção (`docker exec postgres psql`) confirmou **0 linhas** em `contatos` com `telefone LIKE '%@g.us'`... só que `whatsapp_messages` tem MILHARES de mensagens de grupo recentes (grupos ativos, mensagens de hoje mesmo). Ou seja: há tráfego de grupo de sobra pra disparar o fix orgânico, mas nada nunca era salvo.
+
+**🔴 Causa raiz real:** `docker logs crm-api` mostrou o erro exato, repetido: `there is no unique or exclusion constraint matching the ON CONFLICT specification`. O `INSERT INTO contatos ... ON CONFLICT (user_id, telefone) DO UPDATE` (tanto em `webhook.ts` quanto no backfill de `whatsapp.ts`) não repete o predicado `WHERE telefone IS NOT NULL` do índice real (`idx_contatos_user_tel_unique`, um índice único PARCIAL — `migrations.ts`) — sem bater exatamente esse predicado, o Postgres rejeita o INSERT inteiro, sempre, não só em conflitos de verdade. Mesma classe de bug já documentada e corrigida em `upsertContato()` (`agentEngine.ts`), mas que passou batido nestes dois pontos novos da Sprint de grupos. Agravante: `buscarInfoGrupo()` funcionava perfeitamente (confirmado nos logs: `temNome:true, temFoto:true` — a Evolution devolvia os dados certos), e o `.catch()` que devia capturar o erro só logava um `warn` e deixava o código seguir pro `log.info('Info do grupo atualizada')` **incondicionalmente** — mascarando a falha real com um log de sucesso logo em seguida.
+
+**🔧 FIX APLICADO:**
+- `webhook.ts` (achado orgânico, a cada mensagem nova de grupo): `ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO UPDATE` — predicado agora bate o índice. Log de sucesso só dispara quando o INSERT de fato retorna (antes disparava sempre, mascarando falha).
+- `whatsapp.ts` (botão "Sincronizar fotos de perfil", backfill de grupos já existentes): mesmo fix de `WHERE`. Também corrigido: `.catch(() => {})` era totalmente silencioso (nem log) e `gruposSincronizados++` incrementava mesmo em falha (contava tentativas, não sucessos) — agora loga a falha e só conta sucesso real.
+- Confirmado que o formato da chave (`telefone` = parte numérica do JID antes do `@`, sem `@g.us`) já é consistente entre os 3 pontos (escrita em `webhook.ts`/`whatsapp.ts`, leitura na CTE `grupo_unico`) — não precisou de mudança aí, ao contrário do que a request original sugeria.
+
+**Build:** backend (`swc`) e frontend (`vite build`, sem mudanças de fato) limpos. **Não deployado ainda** — aguardando decisão do usuário. Validação real (grupo específico voltando a aparecer com nome/foto) só é possível após deploy + nova mensagem de grupo ou rodar o botão de sincronização manual.
+
 ### 🔴 Coluna `pausa_bloqueios_detectados` nunca existia em produção NEM homologação — causa raiz real diferente da suposta (2026-07-29)
 
 **Contexto:** usuário reportou suspeita de falha de banco em produção e pediu para verificar a migration de `pausa_bloqueios_detectados`/`limite_diario_mensagens`, com a hipótese de que a causa seria "o motor de disparos ainda não ter sido deployado em produção" — e pediu para redeployar `disparoProcessor.ts`/`migrations.ts`/`Disparos.tsx` pra produção como correção.

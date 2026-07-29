@@ -1393,17 +1393,37 @@ export default function webhookRouter(pool: Pool): Router {
 
               const localUrl = pictureUrl ? await salvarFotoPerfilLocal(pictureUrl, userId as string, telefone) : null;
 
-              await pool.query(
+              // [AUDITORIA] BUG (achado 2026-07-29 — grupos ainda sem nome/foto real mesmo com o
+              // fix de 2026-07-28 já deployado): `idx_contatos_user_tel_unique` (migrations.ts) é
+              // um índice único PARCIAL (`UNIQUE (user_id, telefone) WHERE telefone IS NOT NULL`)
+              // — `ON CONFLICT (user_id, telefone)` sozinho, sem repetir esse `WHERE`, faz o
+              // Postgres rejeitar TODO INSERT com "no unique or exclusion constraint matching the
+              // ON CONFLICT specification" (mesmo padrão de bug já documentado em
+              // `upsertContato()`, agentEngine.ts). Confirmado em produção via `docker logs`: o
+              // `buscarInfoGrupo()` acima funcionava perfeitamente (Evolution devolvia nome/foto
+              // reais), mas 100% das tentativas de gravar falhavam nesta linha — resultado:
+              // `contatos` nunca teve UMA linha de grupo sequer, apesar de milhares de mensagens
+              // de grupo reais no `whatsapp_messages`. [AUDITORIA] FIX APLICADO: `WHERE telefone
+              // IS NOT NULL` adicionado ao `ON CONFLICT`, batendo o predicado exato do índice.
+              // Também corrigido: o log de sucesso abaixo disparava incondicionalmente mesmo
+              // quando o `.catch()` já tinha capturado uma falha — agora só loga sucesso quando o
+              // INSERT de fato retornou.
+              const upsertResult = await pool.query(
                 `INSERT INTO contatos (user_id, nome, telefone, origem, status, ultima_mensagem_em)
                  VALUES ($1, $2, $3, 'WhatsApp', 'novo', NOW())
-                 ON CONFLICT (user_id, telefone) DO UPDATE
+                 ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO UPDATE
                    SET nome = CASE WHEN $2 IS NOT NULL AND $2 <> contatos.telefone THEN $2 ELSE contatos.nome END,
                        profile_pic_url = COALESCE($4, contatos.profile_pic_url),
                        foto_perfil = COALESCE($4, contatos.foto_perfil),
                        ultima_mensagem_em = NOW()`,
                 [userId, subject || telefone, telefone, localUrl || pictureUrl]
-              ).catch(err => log.warn('WEBHOOK', 'Falha ao salvar info do grupo', { traceId, err: err?.message }));
-              log.info('WEBHOOK', 'Info do grupo atualizada', { traceId, telefone, temNome: !!subject, temFoto: !!pictureUrl });
+              ).catch(err => {
+                log.warn('WEBHOOK', 'Falha ao salvar info do grupo', { traceId, err: err?.message });
+                return null;
+              });
+              if (upsertResult) {
+                log.info('WEBHOOK', 'Info do grupo atualizada', { traceId, telefone, temNome: !!subject, temFoto: !!pictureUrl });
+              }
             } catch (e: any) {
               log.warn('WEBHOOK', 'Falha ao buscar/salvar info do grupo', { traceId, err: e.message });
             }
