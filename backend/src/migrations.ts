@@ -525,6 +525,22 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausado_em TIMESTAMPTZ`).catch(() => {});
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausado_motivo TEXT`).catch(() => {});
 
+  // [AUDITORIA] BUG (achado 2026-07-29 — investigando relato de falha de banco em produção):
+  // `pausa_bloqueios_detectados` só existia dentro do `CREATE TABLE IF NOT EXISTS disparos` lá
+  // em cima (linha ~465) — nunca teve um `ALTER TABLE ... ADD COLUMN` de retrofit separado.
+  // `CREATE TABLE IF NOT EXISTS` é no-op numa tabela que já existe, então qualquer ambiente cuja
+  // tabela `disparos` já existisse ANTES dessa coluna entrar no texto do CREATE TABLE nunca a
+  // recebeu. Confirmado via `psql` direto: FALTAVA tanto em produção (`crm`) quanto em
+  // homologação (`crm_hml`) — não é uma divergência entre os dois ambientes, é uma lacuna de
+  // migração que afeta os dois igualmente. `Disparos.tsx` (StepReview.handleStart) já manda
+  // `pausa_bloqueios_detectados` no payload de criação de campanha há tempo — toda tentativa de
+  // "Disparar Agora"/"Agendar Disparo" quebraria no INSERT com "column ... does not exist"
+  // assim que alguém tentasse. Existe uma coluna antiga `pausa_bloqueios` (sem `_detectados`) já
+  // na tabela — confirmado por grep que não é referenciada em nenhum lugar do código atual
+  // (backend nem frontend), então é lixo de um schema anterior; não removida aqui (fora do
+  // escopo, exigiria confirmação por ser uma escrita destrutiva de schema em produção).
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausa_bloqueios_detectados BOOLEAN DEFAULT true`).catch(() => {});
+
   // [AUDITORIA] BUG (Sprint Disparos/Agendamento, 2026-07-25): campanha criada com "Agendar
   // Disparo" nasce com status='rascunho' (Disparos.tsx, StepReview.handleStart) — mas
   // get_next_disparo_batch() só enfileira linhas com d.status='em_andamento'. Não existia, em

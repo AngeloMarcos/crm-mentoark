@@ -1,5 +1,21 @@
 # Auditoria de Código — Log
 
+### 🔴 Coluna `pausa_bloqueios_detectados` nunca existia em produção NEM homologação — causa raiz real diferente da suposta (2026-07-29)
+
+**Contexto:** usuário reportou suspeita de falha de banco em produção e pediu para verificar a migration de `pausa_bloqueios_detectados`/`limite_diario_mensagens`, com a hipótese de que a causa seria "o motor de disparos ainda não ter sido deployado em produção" — e pediu para redeployar `disparoProcessor.ts`/`migrations.ts`/`Disparos.tsx` pra produção como correção.
+
+**Verificação antes de agir (protocolo de auditoria: checar antes de marcar como bug):** busquei nos logs reais de produção (`docker logs crm-api`, últimas 5000 linhas) por qualquer erro de coluna/`disparos` — nenhum encontrado, ou seja, não havia (ainda) uma falha *ativa* visível nos logs no momento da checagem. Consultei o schema real via `psql` direto (`docker exec postgres psql -U mentoark -d crm`) em vez de confiar só no código: `limite_diario_mensagens` **existe** em produção (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, migration de verdade, já rodou). `pausa_bloqueios_detectados` **NÃO existe** — nem em produção (`crm`) nem em homologação (`crm_hml`), confirmado nos dois bancos.
+
+**🔴 Causa raiz real (diferente da hipótese original):** `pausa_bloqueios_detectados` só era declarada dentro do `CREATE TABLE IF NOT EXISTS disparos` (`migrations.ts`, linha ~465) — nunca teve um `ALTER TABLE ADD COLUMN` de retrofit separado, ao contrário de toda outra coluna adicionada depois da criação inicial da tabela (`limite_diario_mensagens`, `aviso`, `pausado_em`, etc., todas com seu próprio `ALTER TABLE`). `CREATE TABLE IF NOT EXISTS` é *no-op* numa tabela que já existe — como `disparos` já existia em ambos os ambientes antes dessa coluna entrar no texto do CREATE TABLE, nenhum dos dois a recebeu. **Isso não é uma divergência entre homolog e produção** (a hipótese do usuário) — é uma lacuna de migração que sempre afetou os dois igualmente, desde que essa linha foi escrita. Redeployar `disparoProcessor.ts`/`migrations.ts`/`Disparos.tsx` sem editar nada não teria corrigido nada, porque o `migrations.ts` de origem já estava (e continuaria) sem o `ALTER TABLE` necessário.
+
+Achado colateral: existe uma coluna antiga `pausa_bloqueios` (sem `_detectados`) já presente na tabela em produção — confirmado por grep que não é referenciada em lugar nenhum do código atual (backend nem frontend), lixo de uma versão anterior do schema. Não removida (fora do escopo — remoção de coluna é escrita destrutiva, exige confirmação explícita do usuário).
+
+**Impacto real:** `Disparos.tsx` (`StepReview.handleStart`) já manda `pausa_bloqueios_detectados` no payload de criação de campanha — como o `crud.ts` genérico monta o INSERT a partir das chaves do payload sem validar contra o schema real, toda tentativa de "Disparar Agora"/"Agendar Disparo" em QUALQUER dos dois ambientes quebraria com "column ... does not exist" assim que alguém tentasse — não achei o erro nos logs porque, aparentemente, ninguém tentou criar uma campanha recentemente o suficiente pra aparecer na janela de log consultada, não porque o bug não existisse.
+
+**🔧 FIX APLICADO:** nova linha `ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausa_bloqueios_detectados BOOLEAN DEFAULT true` em `migrations.ts`, junto das outras colunas de pausa automática da Sprint 5. Idempotente e seguro de rodar em qualquer ambiente (já é o padrão usado por todas as outras ~30 colunas do arquivo).
+
+**Build:** backend (`swc`) limpo.
+
 ### 🔴 Motor de IA (`agentEngine.ts`) — cliente ficava no vácuo quando a LLM falhava + rajada mista texto/mídia perdia mensagem (2026-07-29)
 
 **Contexto:** auditoria pedida pelo usuário sobre o motor de IA (debounce, custo de histórico, fallback humano, vazamento de memória nos Sets antiloop). Leitura direta de `agentEngine.ts` (não memória de sessões antigas).
