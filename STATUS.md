@@ -1,5 +1,17 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-31 (cont.) — ✅ Cooldown entre campanhas — deployado em PRODUÇÃO
+
+Usuário pediu deploy imediato pra produção ("é lá que estou fazendo o disparo"). Commitado o trabalho da sessão (`27d0d9c`: Templates + Placeholders/Upload + Cooldown, todos em `Disparos.tsx`) e confirmado por `sha256sum`/`diff` direto contra `/opt/crm` que só 3 arquivos ainda divergiam de produção (Templates/Placeholders já tinham sido deployados numa sessão anterior): `backend/src/migrations.ts`, `backend/src/services/disparoProcessor.ts`, `src/pages/Disparos.tsx` — diff de `migrations.ts` confirmado como só as adições de cooldown, nada inesperado.
+
+**Antes do deploy**, a instância de WhatsApp de homolog (que tinha caído no meio do teste anterior) foi reconectada pelo usuário — aproveitado pra completar a validação da camada 2 (defensiva) que tinha ficado pendente: recriado o cenário de corrida (duas campanhas, mesmo contato, ambas `'pending'` antes de qualquer processamento) — confirmado que a **camada 1 realmente não bloqueia de antemão** nesse cenário (as duas entram no mesmo lote), e que a **camada 2 bloqueia em tempo real dentro do loop**: mensagem E enviada de verdade (`status='sent'`), mensagem F (mesmo contato, mesmo lote, campanha diferente) bloqueada (`status='cooldown'`) — sem precisar de outra rodada de "aguardar queda de instância". **As duas camadas de proteção agora comprovadas com envio real, não só revisão de código.**
+
+**Deployado em produção** (`scripts/deploy.sh prod --confirm`, 3 arquivos) — `crm-api` rebuildado, `/health`→200, sem `ERROR`, `crm.mentoark.com.br`→200. Migração confirmada aplicada: `contatos.ultimo_disparo_em` e `disparos.cooldown_horas` (default 24) presentes, `get_next_disparo_batch()` com a lógica de cooldown confirmada no corpo da função via `pg_get_functiondef`.
+
+**Não foi criada campanha de teste em produção desta vez** — usuário está rodando disparos reais lá agora, evitado poluir o ambiente com dados de teste nesse momento. A lógica já foi validada de ponta a ponta (as duas camadas, com envio real) em homolog nesta mesma sessão.
+
+**Produção e homolog sincronizados** para todo o módulo de Disparos trabalhado nesta sessão (Templates, Placeholders/Upload de mídia, Cooldown entre campanhas).
+
 ## Sessão 2026-07-31 — 🔴 CRÍTICO: cooldown entre campanhas — bloqueia reenvio pro mesmo número em campanhas diferentes, testado em homolog
 
 Usuário reportou que o mesmo contato de teste recebeu a mesma mensagem ("Bom dia, tudo bem?") mais de uma vez, em campanhas de teste diferentes criadas em sequência — a dedupe existente só evita duplicata **dentro** de uma mesma seleção de alvo, nada impedia campanhas **diferentes** de recontatar o mesmo número pouco tempo depois.
