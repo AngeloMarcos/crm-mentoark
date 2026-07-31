@@ -28,6 +28,12 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // Colunas de controle de IA — necessárias para o toggle de pausa manual
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS atendente_pausou_ia BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
+  // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): marca a última vez que o
+  // contato recebeu uma mensagem de CAMPANHA (não confundir com `ultima_mensagem_em`, que é
+  // qualquer mensagem do chat/IA) — usada por `get_next_disparo_batch` pra bloquear reenvio pro
+  // mesmo número em campanhas diferentes dentro da janela de cooldown. Ver
+  // `disparoProcessor.ts` (grava aqui a cada envio real) e a função abaixo.
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ultimo_disparo_em TIMESTAMPTZ`).catch(() => {});
   // Remove duplicatas de contatos antes de criar índice ÚNICO
   // (mantém o registro mais antigo de cada par user_id+telefone)
   await pool.query(`
@@ -492,6 +498,27 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // user_id inteiro, porque não havia como somar por instância/chip individual).
   await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS instancia TEXT`).catch(() => {});
 
+  // [AUDITORIA] LÓGICA (Sprint Cooldown de Disparos, 2026-07-30): backfill BEST-EFFORT de
+  // `ultimo_disparo_em` a partir do histórico já existente em `disparo_logs` — NÃO é uma garantia
+  // de precisão (campanhas antigas já apagadas, ou telefone em formato divergente, não entram
+  // aqui), só evita que TODO contato já contatado antes desta coluna existir fique com cooldown
+  // "zerado" logo após o deploy. Guardado por `ultimo_disparo_em IS NULL` — roda em todo boot
+  // (idempotente), mas só afeta contatos que a coluna ainda não gravou via envio real (ver
+  // disparoProcessor.ts); nunca sobrescreve um valor real já gravado.
+  await pool.query(`
+    UPDATE contatos c
+    SET ultimo_disparo_em = sub.max_enviado
+    FROM (
+      SELECT user_id, telefone, MAX(enviado_at) AS max_enviado
+      FROM disparo_logs
+      WHERE status = 'sent' AND enviado_at IS NOT NULL
+      GROUP BY user_id, telefone
+    ) sub
+    WHERE c.user_id = sub.user_id
+      AND RIGHT(c.telefone, 11) = RIGHT(sub.telefone, 11)
+      AND c.ultimo_disparo_em IS NULL
+  `).catch(err => log.warn('MIGRATIONS', 'Backfill best-effort de ultimo_disparo_em falhou', { err: err.message }));
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_disparo_logs_status
     ON disparo_logs (status) WHERE status = 'pending'
@@ -524,6 +551,12 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS aviso TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausado_em TIMESTAMPTZ`).catch(() => {});
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS pausado_motivo TEXT`).catch(() => {});
+  // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): janela de cooldown
+  // configurável POR CAMPANHA (mesmo padrão já usado por `limite_erros_consecutivos`/
+  // `limite_diario_mensagens` — campo na tabela, exposto na UI em StepAntiBan, sem exigir env var
+  // global). Default 24h — usuário pode configurar mais espaçado (ex: 7 dias/168h) pra campanhas
+  // de marketing menos urgentes.
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS cooldown_horas INTEGER DEFAULT 24`).catch(() => {});
 
   // [AUDITORIA] BUG (achado 2026-07-29 — investigando relato de falha de banco em produção):
   // `pausa_bloqueios_detectados` só existia dentro do `CREATE TABLE IF NOT EXISTS disparos` lá
@@ -644,6 +677,28 @@ export async function runMigrations(pool: Pool): Promise<void> {
       legenda_midia TEXT
     ) AS $$
     BEGIN
+      -- [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): bloqueia reenvio pro
+      -- mesmo número em campanhas DIFERENTES dentro da janela de cooldown (disparos.cooldown_horas,
+      -- configurável por campanha). Roda ANTES do dequeue principal (camada 1 - SQL, proativa):
+      -- qualquer log 'pending' cujo contato já recebeu disparo dentro da janela vira 'cooldown'
+      -- (status distinto de 'failed' - não conta como erro pro circuit breaker de erros
+      -- consecutivos em disparoProcessor.ts, já que não é uma falha real de envio). Mesma
+      -- filosofia de dupla camada já usada pro opt-out: camada 2 (defensiva, dentro do loop JS de
+      -- disparoProcessor.ts) cobre a corrida estreita de duas mensagens pro mesmo telefone caindo
+      -- no MESMO lote (nenhuma das duas ainda tem ultimo_disparo_em atualizado no momento deste
+      -- UPDATE, já que essa coluna só é gravada depois do envio real ter acontecido de fato).
+      UPDATE disparo_logs l
+      SET status = 'cooldown',
+          erro = 'Bloqueado por cooldown: contato já recebeu mensagem de campanha dentro da janela configurada'
+      FROM disparos d, contatos c
+      WHERE l.disparo_id = d.id
+        AND l.status = 'pending'
+        AND d.status = 'em_andamento'
+        AND c.user_id = l.user_id
+        AND RIGHT(c.telefone, 11) = RIGHT(l.telefone, 11)
+        AND c.ultimo_disparo_em IS NOT NULL
+        AND c.ultimo_disparo_em > NOW() - (COALESCE(d.cooldown_horas, 24) || ' hours')::interval;
+
       RETURN QUERY
       WITH next_msgs AS (
         SELECT l.id, l.disparo_id, l.user_id, l.telefone, l.mensagem_enviada,
@@ -1576,6 +1631,32 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS resposta_voz_id         TEXT`).catch(() => {});
 
   log.info('MIGRATIONS', 'agent_configs resposta_voz columns OK');
+
+  // ── Templates de mensagem para Disparos — reaproveitáveis entre campanhas ──
+  // Mesmo padrão de respostas_rapidas: CRUD genérico via makeCrud, sem rota própria.
+  // Campos batem 1:1 com o que StepMessage/StepReview.handleStart (Disparos.tsx) usam
+  // pra montar uma campanha — carregar um template é cópia direta de campo por campo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS disparo_templates (
+      id             UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id        UUID NOT NULL,
+      nome           TEXT NOT NULL,
+      tipo_midia     TEXT NOT NULL DEFAULT 'texto',
+      mensagem       TEXT NOT NULL DEFAULT '',
+      url_midia      TEXT,
+      legenda_midia  TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_disparo_templates_user
+    ON disparo_templates (user_id, created_at DESC)
+  `).catch(() => {});
+  await pool.query(`
+    ALTER TABLE disparo_templates ADD CONSTRAINT fk_disparo_templates_user
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  `).catch(() => {});
 
   log.info('MIGRATIONS', 'OK');
 }

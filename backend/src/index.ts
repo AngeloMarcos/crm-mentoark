@@ -280,6 +280,7 @@ const SIMPLE_TABLES = [
   'chat_messages',
   'chats',
   'respostas_rapidas',
+  'disparo_templates',
   'tags',
   'funil_estagios',
   'follow_ups',

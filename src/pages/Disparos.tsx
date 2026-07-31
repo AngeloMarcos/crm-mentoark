@@ -10,17 +10,26 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { 
+import {
   ShieldCheck, ShieldAlert, Shield, Play, Pause, Square,
-  Settings2, AlertOctagon, RefreshCw, Users, Upload, 
-  Clock, Calendar, MessageSquare, Image as ImageIcon, 
+  Settings2, AlertOctagon, RefreshCw, Users, Upload,
+  Clock, Calendar, MessageSquare, Image as ImageIcon,
   FileText, Headphones, AlertTriangle, CheckCircle2,
-  Table as TableIcon, Send, XCircle, Activity, AlertCircle
+  Table as TableIcon, Send, XCircle, Activity, AlertCircle,
+  LayoutTemplate, Loader2, Save
 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/integrations/database/client";
+import { api, getFreshToken } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 // [AUDITORIA] BUG (Sprint Disparos/Importação, revisão 2026-07-25): usuário reportou nomes
 // corrompidos na importação real (ex: "GraÃ§a" em vez de "Graça", "JosÃ©" em vez de "José") —
@@ -266,6 +275,29 @@ async function fetchAllContatos(build: () => any): Promise<any[]> {
   return all;
 }
 
+// [AUDITORIA] BUG (achado na Sprint Placeholders/Upload, 2026-07-30): dos 5 atalhos de
+// personalização oferecidos em StepMessage ({{nome}}, {{primeiro_nome}}, {{telefone}}, {{data}},
+// {{empresa}}), só {{nome}}/{{primeiro_nome}} eram de fato substituídos (em StepReview.handleStart,
+// via `.replace()` simples) — {{telefone}}/{{data}}/{{empresa}} chegavam LITERALMENTE escritos
+// (com as chaves) na mensagem real recebida pelo cliente, sem nenhum erro visível pro operador.
+// Confirmado que `disparoProcessor.ts` não faz nenhuma substituição adicional — ele só lê
+// `disparo_logs.mensagem_enviada` já pronta (preenchida por `handleStart` abaixo). [AUDITORIA] FIX
+// APLICADO: função única compartilhada entre a prévia (StepMessage) e o envio real
+// (StepReview.handleStart) — evita que a prévia prometa uma substituição que o envio real não
+// cumpre (ou vice-versa). `.replaceAll()` em vez de `.replace()` cobre múltiplas ocorrências do
+// mesmo placeholder na mesma mensagem (antes, só a 1ª ocorrência era trocada).
+function substituirPlaceholders(mensagem: string, contato: { nome?: string; telefone?: string; empresa?: string }): string {
+  const nome = contato.nome || "cliente";
+  const primeiroNome = nome.split(" ")[0];
+  const dataHoje = new Date().toLocaleDateString("pt-BR");
+  return mensagem
+    .replaceAll("{{nome}}", nome)
+    .replaceAll("{{primeiro_nome}}", primeiroNome)
+    .replaceAll("{{telefone}}", contato.telefone || "")
+    .replaceAll("{{data}}", dataHoje)
+    .replaceAll("{{empresa}}", contato.empresa || "");
+}
+
 const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
 
 export default function DisparosPage() {
@@ -292,6 +324,11 @@ export default function DisparosPage() {
     // propósito (200 vs. 500) — evita que quem nunca mexer neste campo herde o teto mais
     // permissivo sem perceber.
     limite_diario_mensagens: 200,
+    // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): janela (em horas) que
+    // um contato precisa esperar antes de poder receber outra campanha — bloqueia reenvio pro
+    // mesmo número em campanhas DIFERENTES (não confundir com a dedupe já existente, que só evita
+    // duplicata DENTRO da mesma seleção de alvo). Configurável por campanha, default 24h.
+    cooldown_horas: 24,
     pausa_bloqueios_detectados: true,
     instancias_ids: [] as string[],
     contatos: [] as any[],
@@ -325,8 +362,17 @@ export default function DisparosPage() {
       // [AUDITORIA] LÓGICA: `opt_out` incluído no select das 3 fontes de alvo (tag/estágio/lista)
       // pra dar pro filtro final abaixo o que precisa — sem isso, contato que pediu remoção
       // entrava na campanha do mesmo jeito (ver diagnosticos/AUDITORIA_LOG.md).
+      // [AUDITORIA] FIX APLICADO (Sprint Placeholders/Upload, 2026-07-30): `empresa` adicionado
+      // ao select das 3 fontes — necessário pro atalho {{empresa}} (ver substituirPlaceholders
+      // acima) ter o dado disponível em `c.empresa` no momento de montar `disparo_logs`. Coluna já
+      // existe em `contatos` (confirmado via information_schema antes deste fix), sem precisar de
+      // migração.
+      // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): `ultimo_disparo_em`
+      // adicionado ao select das 3 fontes — usado por StepReview pra avisar o operador antes de
+      // disparar quando algum contato selecionado já recebeu campanha dentro da janela de
+      // cooldown (aviso no frontend; o bloqueio de verdade é no backend, ver disparoProcessor.ts).
       if (form.tags_selecionadas.length > 0) {
-        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, tags, opt_out"));
+        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, tags, opt_out, ultimo_disparo_em"));
         const filtered = data.filter((c: any) =>
           Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
         );
@@ -336,20 +382,20 @@ export default function DisparosPage() {
         const data = await fetchAllContatos(() =>
           api
             .from("contatos")
-            .select("id, nome, telefone, opt_out")
+            .select("id, nome, telefone, empresa, opt_out, ultimo_disparo_em")
             .in("funil_estagio_id", form.estagios_selecionados)
         );
         list = [...list, ...data];
       }
       if (form.listas_selecionadas.length > 0) {
         if (form.listas_selecionadas.includes("__all__")) {
-          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, lista_id, opt_out"));
+          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em"));
           list = [...list, ...data];
         } else {
           const data = await fetchAllContatos(() =>
             api
               .from("contatos")
-              .select("id, nome, telefone, lista_id, opt_out")
+              .select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em")
               .in("lista_id", form.listas_selecionadas)
           );
           list = [...list, ...data];
@@ -803,9 +849,14 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
               >
                 {allTagsSelected ? "Limpar" : "Selecionar todas"}
               </Button>
-              <div className="flex items-center gap-2">
-                <Switch checked />
-                <span className="text-xs">Excluir Opt-outs</span>
+              {/* [AUDITORIA] BUG (achado na Sprint Placeholders/Upload, 2026-07-30): `<Switch checked />`
+                  sem `onCheckedChange` — não é editável, mas parecia um controle de verdade.
+                  Funcionalmente não era um bug (opt-out já é sempre filtrado, ver `fetchCount` no
+                  componente pai), só um controle enganoso. [AUDITORIA] FIX APLICADO: trocado por
+                  um indicador estático — comunica a mesma informação sem fingir ser clicável. */}
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+                Opt-outs sempre excluídos
               </div>
             </div>
           </div>
@@ -992,7 +1043,16 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
 }
 
 
+// [AUDITORIA] LÓGICA (Sprint Placeholders/Upload, 2026-07-30): mesmo teto usado pelo composer do
+// chat (`WhatsAppInterface.tsx`) — precisa bater com `MAX_OUTBOUND_MEDIA_BYTES` do backend
+// (`whatsapp.ts`, usado pelo `multer` da rota `/upload-media`), senão o aviso amigável aqui não
+// bate com o que o servidor de fato aceita.
+const MAX_OUTBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
+const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
+const TIPO_MIDIA_PARA_UPLOAD: Record<string, string> = { imagem: "image", audio: "audio", documento: "document" };
+
 function StepMessage({ form, setForm }: any) {
+  const { user } = useAuth();
   const mediaTypes = [
     { id: "texto", label: "Texto", icon: MessageSquare },
     { id: "imagem", label: "Imagem", icon: ImageIcon },
@@ -1000,21 +1060,154 @@ function StepMessage({ form, setForm }: any) {
     { id: "documento", label: "Documento", icon: FileText },
   ];
 
+  // [AUDITORIA] LÓGICA (Sprint Templates de Disparo, 2026-07-30): carregar/salvar template
+  // reaproveita a mesma tabela genérica (`disparo_templates`, CRUD via makeCrud) usada pela tela
+  // dedicada `DisparoTemplates.tsx`. `loadedTemplateId` rastreia se a mensagem atual veio de um
+  // template salvo — permite diferenciar "Salvar alterações" (UPDATE) de "Salvar como novo"
+  // (INSERT) no modal de salvar.
+  const [templatesModalOpen, setTemplatesModalOpen] = useState(false);
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [loadedTemplateId, setLoadedTemplateId] = useState<string | null>(null);
+  const [loadedTemplateNome, setLoadedTemplateNome] = useState("");
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [saveNome, setSaveNome] = useState("");
+  const [salvandoTemplate, setSalvandoTemplate] = useState(false);
+
+  const abrirCarregarTemplate = async () => {
+    setTemplatesModalOpen(true);
+    setTemplatesLoading(true);
+    const { data, error } = await api.from("disparo_templates").select("*").order("created_at", { ascending: false });
+    if (error) toast.error(error.message);
+    setTemplates(data || []);
+    setTemplatesLoading(false);
+  };
+
+  // [AUDITORIA] LÓGICA: `form.mensagem` é o único campo que a UI desta tela de fato edita (o
+  // Textarea abaixo é reaproveitado tanto pra "Mensagem" quanto pra "Legenda", sem alternar pra
+  // `form.legenda_midia`) — carregar um template espelha esse mesmo comportamento (usa
+  // `legenda_midia` do template como fallback só se `mensagem` vier vazio), em vez de tentar
+  // corrigir esse comportamento aqui (fora do escopo desta sprint, só templates).
+  const carregarTemplate = (tpl: any) => {
+    setForm({
+      ...form,
+      tipo_midia: tpl.tipo_midia,
+      mensagem: tpl.tipo_midia === "texto" ? tpl.mensagem : (tpl.legenda_midia || tpl.mensagem || ""),
+      url_midia: tpl.url_midia || "",
+      legenda_midia: tpl.legenda_midia || "",
+    });
+    setLoadedTemplateId(tpl.id);
+    setLoadedTemplateNome(tpl.nome);
+    setTemplatesModalOpen(false);
+    toast.success(`Template "${tpl.nome}" carregado`);
+  };
+
+  const abrirSalvarTemplate = () => {
+    setSaveNome(loadedTemplateId ? loadedTemplateNome : "");
+    setSaveModalOpen(true);
+  };
+
+  // [AUDITORIA] BUG (achado na Sprint Placeholders/Upload, 2026-07-30): o botão de upload ao lado
+  // do campo de URL de mídia não tinha nenhum `onClick` — puramente decorativo, o único jeito real
+  // de anexar mídia era colar uma URL já hospedada em outro lugar. [AUDITORIA] FIX APLICADO:
+  // reaproveita a mesma rota `POST /api/whatsapp/upload-media` já usada pelo composer do chat
+  // (`WhatsAppInterface.tsx`) em vez de reinventar upload — devolve uma URL http(s) estável,
+  // gravada em `UPLOADS_DIR` no backend, servida via `/uploads` (não expira, não depende de base64).
+  // Essa mesma URL é a que `disparoProcessor.ts` usa pra todos os envios da campanha (via
+  // `garantirMidiaEstavel()`, que já roda uma vez por campanha) — não precisa de lógica extra aqui
+  // pra "subir uma vez, reaproveitar em massa": o upload em si já é o "subir uma vez".
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+
+  const handleUploadMedia = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
+      toast.error(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)}MB excede o limite de ${(MAX_OUTBOUND_MEDIA_BYTES / 1024 / 1024).toFixed(0)}MB.`);
+      e.target.value = "";
+      return;
+    }
+    setUploadingMedia(true);
+    try {
+      const uploadForm = new FormData();
+      uploadForm.append("arquivo", file, file.name);
+      uploadForm.append("tipo", TIPO_MIDIA_PARA_UPLOAD[form.tipo_midia] || "document");
+      const token = await getFreshToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/upload-media`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: uploadForm,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Falha no upload do arquivo" }));
+        throw new Error(err.message || "Falha no upload do arquivo");
+      }
+      const { url } = await res.json();
+      setForm({ ...form, url_midia: url });
+      toast.success("Arquivo enviado com sucesso");
+    } catch (err: any) {
+      toast.error("Erro ao enviar arquivo", { description: err?.message });
+    } finally {
+      setUploadingMedia(false);
+      e.target.value = "";
+    }
+  };
+
+  const confirmarSalvarTemplate = async (comoNovo: boolean) => {
+    if (!user) return;
+    if (!saveNome.trim()) { toast.error("Informe um nome para o template"); return; }
+    setSalvandoTemplate(true);
+    // Espelha o texto em `legenda_midia` também quando não é texto puro — garante que a tela
+    // dedicada de templates (que lê `legenda_midia` pra mídia) e o próprio carregamento aqui
+    // mostrem a legenda certa, mesmo o wizard só editando `form.mensagem` na prática.
+    const payload = {
+      user_id: user.id,
+      nome: saveNome.trim(),
+      tipo_midia: form.tipo_midia,
+      mensagem: form.mensagem,
+      url_midia: form.url_midia || null,
+      legenda_midia: form.tipo_midia === "texto" ? null : form.mensagem,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = (!comoNovo && loadedTemplateId)
+      ? await api.from("disparo_templates").update(payload).eq("id", loadedTemplateId).select().single()
+      : await api.from("disparo_templates").insert(payload).select().single();
+    setSalvandoTemplate(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(!comoNovo && loadedTemplateId ? "Alterações salvas no template!" : "Template salvo!");
+    if (data) { setLoadedTemplateId(data.id); setLoadedTemplateNome(data.nome); }
+    setSaveModalOpen(false);
+  };
+
   return (
     <Card className="p-6">
       <div className="space-y-6">
-        <div className="flex gap-2 p-1 bg-muted rounded-lg w-fit">
-          {mediaTypes.map(t => (
-            <Button 
-              key={t.id} 
-              variant={form.tipo_midia === t.id ? "default" : "ghost"} 
-              size="sm" 
-              className="h-8 gap-2"
-              onClick={() => setForm({...form, tipo_midia: t.id})}
-            >
-              <t.icon className="h-4 w-4" /> {t.label}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex gap-2 p-1 bg-muted rounded-lg w-fit">
+            {mediaTypes.map(t => (
+              <Button
+                key={t.id}
+                variant={form.tipo_midia === t.id ? "default" : "ghost"}
+                size="sm"
+                className="h-8 gap-2"
+                onClick={() => setForm({...form, tipo_midia: t.id})}
+              >
+                <t.icon className="h-4 w-4" /> {t.label}
+              </Button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            {loadedTemplateNome && (
+              <Badge variant="outline" className="text-[10px] gap-1">
+                <LayoutTemplate className="h-2.5 w-2.5" /> {loadedTemplateNome}
+              </Badge>
+            )}
+            <Button variant="outline" size="sm" className="h-8 gap-2" onClick={abrirCarregarTemplate}>
+              <LayoutTemplate className="h-4 w-4" /> Carregar template
             </Button>
-          ))}
+            <Button variant="outline" size="sm" className="h-8 gap-2" onClick={abrirSalvarTemplate}>
+              <Save className="h-4 w-4" /> Salvar como template
+            </Button>
+          </div>
         </div>
 
         {form.tipo_midia !== 'texto' && (
@@ -1022,21 +1215,47 @@ function StepMessage({ form, setForm }: any) {
             <Label>Arquivo de Mídia</Label>
             <div className="flex gap-2">
               <Input placeholder="URL do arquivo (ou faça upload)" value={form.url_midia} onChange={e => setForm({...form, url_midia: e.target.value})} />
-              <Button variant="outline"><Upload className="h-4 w-4" /></Button>
+              <input
+                type="file"
+                className="hidden"
+                id="disparo-media-upload"
+                accept={form.tipo_midia === "imagem" ? "image/*" : form.tipo_midia === "audio" ? "audio/*" : undefined}
+                onChange={handleUploadMedia}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={uploadingMedia}
+                onClick={() => document.getElementById("disparo-media-upload")?.click()}
+              >
+                {uploadingMedia ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              </Button>
             </div>
           </div>
         )}
 
+        {/* [AUDITORIA] BUG (achado na Sprint Templates de Disparo, 2026-07-30): este Textarea é
+            reaproveitado tanto pra "Mensagem" (tipo_midia='texto') quanto pra "Legenda" (demais
+            tipos), mas SEMPRE escreve em `form.mensagem` — nunca em `form.legenda_midia`, mesmo
+            quando o label mostrado é "Legenda". `StepReview.handleStart` envia os dois campos
+            separados pro backend (`mensagem_template` e `legenda_midia`), então toda campanha de
+            mídia criada por este wizard grava `legenda_midia` vazio de verdade, sempre. [AUDITORIA]
+            FIX PENDENTE (motivo: fora do escopo desta sprint — usuário pediu explicitamente só a
+            tela de templates agora, prévia/passo 2 fica pra próxima sprint de propósito): trocar
+            o `value`/`onChange` abaixo pra usar `form.legenda_midia` quando `tipo_midia !== 'texto'`
+            resolve. O fluxo de templates (carregar/salvar, acima) já contorna isso espelhando o
+            texto em `legenda_midia` no save/load, pra não perder a legenda nesse ciclo específico —
+            mas não corrige a causa raiz aqui. */}
         <div className="space-y-2">
           <div className="flex justify-between items-end">
             <Label>{form.tipo_midia === 'texto' ? 'Mensagem' : 'Legenda (opcional)'}</Label>
             <span className={`text-[10px] ${form.mensagem.length > 4096 ? "text-destructive font-bold" : "text-muted-foreground"}`}>{form.mensagem.length}/4096</span>
           </div>
-          <Textarea 
-            className="min-h-[150px] font-mono text-sm" 
-            value={form.mensagem} 
-            onChange={e => setForm({...form, mensagem: e.target.value})} 
-            placeholder={form.tipo_midia === 'texto' ? "Olá {{primeiro_nome}}, tudo bem?" : "Legenda do arquivo..."} 
+          <Textarea
+            className="min-h-[150px] font-mono text-sm"
+            value={form.mensagem}
+            onChange={e => setForm({...form, mensagem: e.target.value})}
+            placeholder={form.tipo_midia === 'texto' ? "Olá {{primeiro_nome}}, tudo bem?" : "Legenda do arquivo..."}
           />
           <div className="flex gap-2 flex-wrap">
             {["{{nome}}", "{{primeiro_nome}}", "{{telefone}}", "{{data}}", "{{empresa}}"].map(v => (
@@ -1056,13 +1275,89 @@ function StepMessage({ form, setForm }: any) {
                 <ImageIcon className="h-8 w-8 opacity-20" />
               </div>
             )}
+            {/* [AUDITORIA] FIX APLICADO (Sprint Placeholders/Upload, 2026-07-30): prévia agora usa
+                a MESMA função de substituição do envio real (substituirPlaceholders, topo do
+                arquivo) com um contato de exemplo completo — antes só {{nome}}/{{primeiro_nome}}
+                eram trocados aqui, então a prévia nunca alertava que {{telefone}}/{{data}}/
+                {{empresa}} ficavam literais na mensagem de verdade. */}
             <p className="text-sm whitespace-pre-wrap">
-              {form.mensagem.replace('{{nome}}', 'João Silva').replace('{{primeiro_nome}}', 'João')}
+              {substituirPlaceholders(form.mensagem, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" })}
             </p>
             <span className="text-[10px] text-muted-foreground float-right">10:45</span>
           </div>
         </div>
       </div>
+
+      {/* Modal: Carregar template */}
+      <Dialog open={templatesModalOpen} onOpenChange={setTemplatesModalOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Carregar template</DialogTitle>
+            <DialogDescription>Escolha um template salvo para preencher a mensagem deste passo.</DialogDescription>
+          </DialogHeader>
+          {templatesLoading ? (
+            <div className="flex justify-center py-10">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : templates.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">
+              Nenhum template salvo ainda. Escreva uma mensagem e use "Salvar como template" para criar o primeiro.
+            </p>
+          ) : (
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {templates.map(tpl => (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  onClick={() => carregarTemplate(tpl)}
+                  className="w-full text-left p-3 border rounded-lg hover:bg-muted/50 hover:border-primary/40 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold truncate">{tpl.nome}</span>
+                    <Badge variant="outline" className="text-[10px] capitalize flex-shrink-0">{tpl.tipo_midia}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground line-clamp-2 mt-1">
+                    {tpl.tipo_midia === "texto" ? tpl.mensagem : (tpl.legenda_midia || tpl.mensagem || "(sem legenda)")}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal: Salvar como template */}
+      <Dialog open={saveModalOpen} onOpenChange={setSaveModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{loadedTemplateId ? "Salvar template" : "Salvar como novo template"}</DialogTitle>
+            <DialogDescription>
+              Grava a mensagem e o tipo de mídia atuais deste passo em Templates, pra reaproveitar em outra campanha depois.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Nome do template</Label>
+            <Input
+              value={saveNome}
+              onChange={e => setSaveNome(e.target.value)}
+              placeholder="Ex: Promoção mensal"
+              autoFocus
+            />
+          </div>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={() => setSaveModalOpen(false)}>Cancelar</Button>
+            {loadedTemplateId && (
+              <Button variant="secondary" disabled={salvandoTemplate} onClick={() => confirmarSalvarTemplate(true)}>
+                Salvar como novo
+              </Button>
+            )}
+            <Button disabled={salvandoTemplate} onClick={() => confirmarSalvarTemplate(false)}>
+              {salvandoTemplate && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              {loadedTemplateId ? "Salvar alterações" : "Criar template"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -1247,6 +1542,23 @@ function StepAntiBan({ form, setForm }: any) {
                 Recomendado: 150 a 200 para chips novos/em aquecimento; até 500 para chips antigos.
               </p>
             </div>
+            {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): campo novo —
+                sem ele, nada impedia o mesmo contato de receber duas campanhas diferentes em
+                sequência rápida (achado real do usuário: mesmo contato de teste recebendo "Bom
+                dia, tudo bem?" mais de uma vez). Bloqueio de verdade acontece no backend
+                (disparoProcessor.ts/get_next_disparo_batch); este campo só configura a janela. */}
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase text-muted-foreground">Cooldown Entre Campanhas (horas)</span>
+              <Input
+                type="number"
+                value={form.cooldown_horas}
+                onChange={e => setForm({ ...form, cooldown_horas: parseInt(e.target.value) })}
+                className="h-8"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Contato que já recebeu uma campanha dentro dessa janela não recebe outra. Padrão: 24h. Para campanhas de marketing mais espaçadas, considere 168h (7 dias).
+              </p>
+            </div>
           </div>
         </Card>
 
@@ -1272,9 +1584,18 @@ function StepAntiBan({ form, setForm }: any) {
 
 
 function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
+  // [AUDITORIA] BUG (achado na Sprint Placeholders/Upload, 2026-07-30): 60/120/240 msgs/hora
+  // assumiam um delay fixo (60s/30s/15s) que nunca bateu com o real. O delay de verdade
+  // (`FAIXAS_DELAY_MS` em `backend/src/services/disparoProcessor.ts`) é sorteado aleatoriamente
+  // dentro de uma faixa — 30-60s/15-30s/5-15s pros perfis safe/moderate/fast — média de
+  // ~45s/22.5s/10s por mensagem. A estimativa ficava ~25-33% mais lenta que a campanha real.
+  // [AUDITORIA] FIX APLICADO: constantes recalculadas a partir da média real de cada faixa
+  // (3600/45≈80, 3600/22.5≈160, 3600/10=360). Frontend e backend são bases de código separadas
+  // (sem módulo compartilhado) — se `FAIXAS_DELAY_MS` mudar em `disparoProcessor.ts`, estes 3
+  // números precisam ser atualizados manualmente junto.
   const estimate = useMemo(() => {
     const total = targetContacts.length || 0;
-    const msgsPerHour = form.perfil_velocidade === 'safe' ? 60 : form.perfil_velocidade === 'moderate' ? 120 : 240;
+    const msgsPerHour = form.perfil_velocidade === 'safe' ? 80 : form.perfil_velocidade === 'moderate' ? 160 : 360;
     const totalMinutes = Math.ceil((total / msgsPerHour) * 60);
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
@@ -1284,6 +1605,25 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
   }, [targetContacts.length, form.perfil_velocidade]);
 
   const [agendarAt, setAgendarAt] = useState("");
+
+  // [AUDITORIA] BUG (achado real do usuário, Sprint Cooldown de Disparos, 2026-07-30): mesmo
+  // contato de teste recebendo a mesma mensagem mais de uma vez, em campanhas diferentes criadas
+  // em sequência — a dedupe existente (`Array.from(new Map(...))` por telefone, componente pai)
+  // só evita duplicata DENTRO da mesma seleção de alvo; nada avisava sobre contatos que já tinham
+  // recebido OUTRA campanha recentemente. [AUDITORIA] FIX APLICADO: aviso aqui (camada 1, UI) —
+  // não bloqueia sozinho, só avisa e exige confirmação explícita antes de habilitar os botões de
+  // disparo (pode ser um follow-up legítimo). O bloqueio de verdade é no backend
+  // (disparoProcessor.ts + get_next_disparo_batch, migrations.ts) — funciona mesmo se este aviso
+  // for ignorado ou contornado (ex: log inserido direto no banco).
+  const [confirmarCooldown, setConfirmarCooldown] = useState(false);
+  const contatosCooldown = useMemo(() => {
+    const cooldownMs = (Number(form.cooldown_horas) || 0) * 60 * 60 * 1000;
+    if (cooldownMs <= 0) return [];
+    return targetContacts.filter((c: any) =>
+      c.ultimo_disparo_em && (Date.now() - new Date(c.ultimo_disparo_em).getTime()) < cooldownMs
+    );
+  }, [targetContacts, form.cooldown_horas]);
+  const bloqueadoPorCooldown = contatosCooldown.length > 0 && !confirmarCooldown;
 
   const handleStart = async (now = true) => {
     try {
@@ -1315,6 +1655,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         limite_diario_mensagens: form.limite_diario_mensagens,
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
         humanizar_ia: form.humanizar_ia,
+        cooldown_horas: form.cooldown_horas,
       };
 
 
@@ -1327,13 +1668,16 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       if (campaignError) throw campaignError;
 
       // 2. Criar logs individuais (mensagens pendentes)
+      // [AUDITORIA] FIX APLICADO (Sprint Placeholders/Upload, 2026-07-30): usa substituirPlaceholders
+      // (topo do arquivo) em vez do `.replace()` duplo que só cobria 2 dos 5 atalhos oferecidos na
+      // tela — ver comentário completo na declaração da função.
       const logs = targetContacts.map(c => ({
         disparo_id: campaignData.id,
         user_id: user?.id,
         contato_id: c.id,
         telefone: c.telefone,
         nome: c.nome,
-        mensagem_enviada: form.mensagem.replace('{{nome}}', c.nome || 'cliente').replace('{{primeiro_nome}}', (c.nome || 'cliente').split(' ')[0]),
+        mensagem_enviada: substituirPlaceholders(form.mensagem, c),
         status: 'pending'
       }));
 
@@ -1403,15 +1747,38 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           <p className="text-xs font-bold mb-2">Resumo da Mensagem:</p>
           <p className="text-xs italic text-muted-foreground line-clamp-3">"{form.mensagem}"</p>
         </div>
+
+        {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): aviso não-bloqueante
+            — mostra quantos contatos já receberam campanha recentemente, exige confirmação
+            explícita antes de habilitar os botões de disparo (ver bloqueadoPorCooldown acima). */}
+        {contatosCooldown.length > 0 && (
+          <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-500/30 rounded-lg space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-800 dark:text-amber-400">
+                <span className="font-bold">{contatosCooldown.length} de {targetContacts.length}</span> contatos selecionados já receberam uma mensagem de campanha nas últimas {form.cooldown_horas}h — enviar mesmo assim?
+              </p>
+            </div>
+            <label className="flex items-center gap-2 pl-6 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={confirmarCooldown}
+                onChange={e => setConfirmarCooldown(e.target.checked)}
+                className="h-4 w-4"
+              />
+              <span className="text-xs text-amber-800 dark:text-amber-400">Sim, quero enviar mesmo assim (ex: follow-up legítimo)</span>
+            </label>
+          </div>
+        )}
       </Card>
 
       <Card className="p-6 flex flex-col justify-between">
         <div className="space-y-4">
           <h3 className="font-bold">Ações</h3>
-          <Button className="w-full gap-2 h-12 text-lg font-bold" onClick={() => handleStart(true)}>
+          <Button className="w-full gap-2 h-12 text-lg font-bold" disabled={bloqueadoPorCooldown} onClick={() => handleStart(true)}>
             <Play className="h-5 w-5 fill-current" /> Disparar Agora
           </Button>
-          
+
           <div className="relative py-2">
             <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
             <div className="relative flex justify-center text-[10px] uppercase"><span className="bg-background px-2 text-muted-foreground">OU</span></div>
@@ -1420,7 +1787,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           <div className="space-y-2">
             <Label className="text-xs">Agendar para:</Label>
             <Input type="datetime-local" value={agendarAt} onChange={e => setAgendarAt(e.target.value)} />
-            <Button variant="outline" className="w-full gap-2" disabled={!agendarAt} onClick={() => handleStart(false)}>
+            <Button variant="outline" className="w-full gap-2" disabled={!agendarAt || bloqueadoPorCooldown} onClick={() => handleStart(false)}>
               <Calendar className="h-4 w-4" /> Agendar Disparo
             </Button>
           </div>
@@ -1572,13 +1939,19 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
                   <td className="p-3 font-medium">{log.nome || "Contato"}</td>
                   <td className="p-3 text-xs font-mono">{log.telefone}</td>
                   <td className="p-3">
+                    {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): sem um
+                        case explícito, 'cooldown' caía no fallback 'outline'/"Pendente" — enganoso,
+                        já que um log em cooldown nunca vai ser processado (não é "pendente" de
+                        verdade, foi bloqueado por design). */}
                     <Badge variant={
-                      log.status === 'sent' ? 'secondary' : 
+                      log.status === 'sent' ? 'secondary' :
                       log.status === 'failed' ? 'destructive' :
+                      log.status === 'cooldown' ? 'outline' :
                       log.status === 'sending' ? 'default' : 'outline'
-                    } className="text-[10px] px-2 py-0">
-                      {log.status === 'sent' ? 'Enviado' : 
+                    } className={`text-[10px] px-2 py-0 ${log.status === 'cooldown' ? 'border-amber-500 text-amber-600' : ''}`}>
+                      {log.status === 'sent' ? 'Enviado' :
                        log.status === 'failed' ? 'Falha' :
+                       log.status === 'cooldown' ? 'Bloqueado (cooldown)' :
                        log.status === 'sending' ? 'Enviando...' : 'Pendente'}
                     </Badge>
                   </td>

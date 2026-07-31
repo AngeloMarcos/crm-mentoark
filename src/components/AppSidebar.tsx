@@ -5,7 +5,7 @@ import {
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut, ShieldOff,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
-  Activity, Webhook, Database, Sparkles,
+  Activity, Webhook, Database, Sparkles, LayoutTemplate,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -125,6 +125,7 @@ const navGroups: NavGroup[] = [
         color: "text-rose-500",
         items: [
           { title: "Disparos", url: "/disparos", icon: Send, modulo: "disparos", color: "text-sky-500" },
+          { title: "Templates", url: "/disparos/templates", icon: LayoutTemplate, modulo: "disparos", color: "text-indigo-500" },
           { title: "Campanhas", url: "/campanhas", icon: Megaphone, modulo: "campanhas", color: "text-rose-500" },
           { title: "Marketing Digital", url: "/marketing-digital", icon: Rocket, modulo: "campanhas", color: "text-blue-600" },
         ],

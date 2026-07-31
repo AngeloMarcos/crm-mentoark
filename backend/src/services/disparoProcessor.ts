@@ -22,6 +22,20 @@ async function deveHumanizar(pool: Pool, disparoId: string): Promise<boolean> {
   return flag;
 }
 
+// Cache cooldown_horas por disparo_id (evita query por mensagem) — mesmo padrão de humanizarCache.
+const cooldownHorasCache = new Map<string, number>();
+
+async function obterCooldownHoras(pool: Pool, disparoId: string): Promise<number> {
+  if (cooldownHorasCache.has(disparoId)) return cooldownHorasCache.get(disparoId)!;
+  const r = await pool.query(
+    `SELECT COALESCE(cooldown_horas, 24) AS h FROM disparos WHERE id = $1`,
+    [disparoId]
+  ).catch(() => ({ rows: [] as any[] }));
+  const horas = Number(r.rows[0]?.h) || 24;
+  cooldownHorasCache.set(disparoId, horas);
+  return horas;
+}
+
 // [AUDITORIA] BUG (Sprint Disparos/Multi-instância, 2026-07-25): `disparos.instancias_ids` é
 // preenchido pela tela (StepAntiBan) mas nunca era lido aqui — a resolução de config abaixo
 // sempre pegava UMA linha arbitrária de `integracoes_config`/`agentes` (sem ORDER BY
@@ -318,6 +332,29 @@ export async function processarDisparos(pool: Pool) {
           continue;
         }
 
+        // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): checagem defensiva
+        // (camada 2) contra reenvio pro mesmo número em campanhas diferentes — `get_next_disparo_batch`
+        // já bloqueia proativamente (camada 1, SQL, ver migrations.ts), mas duas mensagens pro
+        // mesmo telefone em campanhas diferentes podem cair no MESMO lote antes de
+        // `ultimo_disparo_em` ser atualizado (só acontece depois do envio real ter concluído,
+        // abaixo) — mesma filosofia de dupla camada já usada pro opt-out acima.
+        const cooldownHoras = await obterCooldownHoras(pool, disparo_id);
+        if (cooldownHoras > 0) {
+          const cooldownRes = await pool.query(
+            `SELECT ultimo_disparo_em FROM contatos WHERE user_id = $1 AND RIGHT(telefone, 11) = RIGHT($2, 11) LIMIT 1`,
+            [user_id, telefone]
+          ).catch(() => ({ rows: [] as any[] }));
+          const ultimoDisparo = cooldownRes.rows[0]?.ultimo_disparo_em;
+          if (ultimoDisparo && Date.now() - new Date(ultimoDisparo).getTime() < cooldownHoras * 60 * 60 * 1000) {
+            await pool.query(
+              `UPDATE disparo_logs SET status = 'cooldown', erro = 'Bloqueado por cooldown: contato já recebeu mensagem de campanha dentro da janela configurada' WHERE id = $1`,
+              [log_id]
+            ).catch(err => log.error('DISPARO', 'Falha ao marcar log como cooldown', { err: err?.message }));
+            log.info('DISPARO', 'Mensagem pulada — contato em cooldown (camada defensiva)', { disparo_id, telefone, cooldownHoras });
+            continue;
+          }
+        }
+
         // 2. Buscar config da Evolution API para esta mensagem. `instanciasDisponiveisHojeCache`
         //    já foi calculada no bloco de transição de campanha acima — candidatos elegíveis
         //    (seleção manual da tela, ou fallback integracoes_config/agentes/env) MENOS os que já
@@ -481,6 +518,16 @@ export async function processarDisparos(pool: Pool) {
           `UPDATE disparos SET enviados = enviados + 1 WHERE id = $1`,
           [disparo_id]
         );
+
+        // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): marca o momento do
+        // envio real em `contatos.ultimo_disparo_em` — é essa coluna que `get_next_disparo_batch`
+        // (camada 1) e a checagem defensiva acima (camada 2) usam pra bloquear reenvio pro mesmo
+        // número em campanhas diferentes dentro da janela de cooldown. RIGHT(...,11) mesmo padrão
+        // de comparação por sufixo já usado pro resto do arquivo (telefone não normalizado).
+        await pool.query(
+          `UPDATE contatos SET ultimo_disparo_em = NOW() WHERE user_id = $1 AND RIGHT(telefone, 11) = RIGHT($2, 11)`,
+          [user_id, telefone]
+        ).catch(err => log.warn('DISPARO', 'Falha ao atualizar ultimo_disparo_em (não bloqueia o envio já concluído)', { err: err?.message }));
 
       } catch (err: any) {
         log.error('DISPARO', 'Erro no log', { logId: log_id, err: err?.message, stack: err?.stack });
