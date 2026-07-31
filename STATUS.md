@@ -1,5 +1,21 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-31 (cont.) — 🆕 Agente de prospecção "Stella" configurado em `agent_configs` — conta `angelobispofilho@gmail.com`, produção
+
+Escrita de dados (não é mudança de código) — script de prospecção da Mentoark gravado só pra esta conta, com confirmação explícita antes de cada passo sensível (ambiente, nome do agente, ativação), seguindo o cuidado extra pedido dado o incidente histórico de config vazando entre contas ("Cris").
+
+**Confirmado antes de escrever:** exatamente 1 usuário com esse e-mail, mesmo `user_id` (`5319f0ed-61b3-4232-80e1-f236bb751e49`) em produção e homolog. Conta não tinha nenhuma linha em `agent_configs` (nem em produção, nem em homolog) — INSERT novo, não UPDATE. **Achado relevante:** esta conta não tem nenhuma instância de WhatsApp conectada em produção hoje (0 linhas em `integracoes_config`/`agentes`) — só uma linha em homolog (`crm_5319f0ed61b3`, `inativo`, a mesma instância órfã cujo `evolution_server_url` eu já tinha corrigido numa sessão anterior desta mesma série). **Configurar o prompt não faz a IA responder de verdade até o usuário conectar um número de WhatsApp nesta conta.**
+
+Gravado em produção (confirmado pelo usuário nesta sessão): `nome_agente='Stella'`, `prompt_sistema` (script completo de qualificação pras 4 frentes da Mentoark — CRM, Disparos, IA de atendimento, Tráfego pago), `saudacao_inicial`, `ativo=true` (confirmação explícita do usuário nesta mesma sessão, não assumido). `evolution_instancia`/`evolution_server_url`/`evolution_api_key` deixados vazios de propósito — não fazia sentido preencher sem uma instância real conectada.
+
+**Achado colateral corrigido durante a escrita:** o arquivo local usado pra montar o `INSERT` tinha final de linha CRLF (Windows) — o `\r` de cada linha vazou pro `prompt_sistema` gravado como caractere literal. Corrigido com `UPDATE ... SET prompt_sistema = replace(prompt_sistema, chr(13), '')` logo em seguida, confirmado limpo por leitura de volta.
+
+**Confirmado por leitura direta (`psql -x`) que o conteúdo final bate exatamente com o script pedido**, sem `\r` residual, acentuação correta. **Confirmado que a conta `mentoark@gmail.com` (usada nos testes desta sessão) permanece intocada** — mesmo `updated_at` de antes desta sprint.
+
+RAG/FAQ (Passo 3): usuário optou por não cadastrar agora — só o prompt principal, sem `conhecimento` adicional pra esta conta.
+
+**Não deployado nada** (não houve mudança de código nesta sprint, só dado de configuração). Ambiente: só produção, a pedido do usuário.
+
 ## Sessão 2026-07-31 (cont.) — 📋 Diagnóstico: conta `mentoark@gmail.com` pronta pra prospecção real com IA + Disparo
 
 Usuário quer deixar a conta pronta pra prospectar de verdade e pediu varredura de configurações erradas. Sprint primariamente diagnóstica — reconfirmou 5 achados antigos de sessões de julho contra o código ATUAL (não assumiu que ainda procediam) e checou o estado real da conta em produção e homolog.

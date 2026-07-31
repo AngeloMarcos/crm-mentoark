@@ -1,5 +1,23 @@
 # Auditoria de Código — Log
 
+### 🆕 Configuração do agente de prospecção "Stella" — `agent_configs`, conta `angelobispofilho@gmail.com`, produção (2026-07-31)
+
+**Contexto:** escrita de dados de configuração (não é código), pedida explicitamente pelo usuário — script de prospecção da Mentoark, só pra sua própria conta. Cuidado extra dado o incidente histórico já documentado neste log ("IA respondia com prompt de outro cliente — Cris") — objetivo explícito de não repetir o mesmo padrão de erro na direção contrária (configuração vazando ENTRE contas).
+
+**Passo 1 — identificação da conta, confirmado antes de escrever:** `SELECT id FROM users WHERE email='angelobispofilho@gmail.com'` retornou exatamente 1 linha em produção e 1 em homolog, mesmo `user_id` (`5319f0ed-61b3-4232-80e1-f236bb751e49`, `role=admin`) — sem ambiguidade. Rodada a Parte 2 do diagnóstico da sprint anterior pra esta conta específica: **0 linhas em `agent_configs` em ambos os ambientes** (INSERT, não UPDATE) — **0 linhas em `integracoes_config`/`agentes` em produção** (nenhuma instância de WhatsApp conectada nesta conta hoje); em homolog existe 1 linha (`agentes.id=958e34f7...`, instância `crm_5319f0ed61b3`, `integracoes_config.status='inativo'`) — a mesma instância órfã cujo `evolution_server_url` já tinha sido corrigido (apontava pra produção por engano) numa sessão anterior desta mesma série. Usuário confirmou: gravar só em produção.
+
+**Passo 2 — schema confirmado antes de escrever (`information_schema.columns`):** `agent_configs.nome_agente` tem `DEFAULT 'Cris'` e `ativo` tem `DEFAULT true` — literalmente os valores do incidente histórico. Por isso o `INSERT` definiu esses dois campos explicitamente (`nome_agente='Stella'`, `ativo` só após confirmação), nunca contando com o default da coluna.
+
+Usuário confirmou nesta sessão: nome do agente "Stella" (sugestão original da sprint era "Sofia"), ativar `ativo=true` já nesta sessão (não deixado pendente). Gravado: `prompt_sistema` (script completo de qualificação cobrindo as 4 frentes da Mentoark — CRM, Disparos em massa, IA de atendimento, Tráfego pago — com regras de tom/segurança e objetivo de conduzir pra reunião humana, não fechar venda no chat), `saudacao_inicial`. Campos de Evolution (`evolution_instancia`/`evolution_server_url`/`evolution_api_key`) deixados vazios — não havia instância real pra preencher, e preencher um valor fictício seria pior que deixar vazio.
+
+**Achado colateral, corrigido na hora:** o arquivo local usado pra montar o `INSERT` (criado com final de linha CRLF, padrão Windows) vazou o caractere `\r` literal pra dentro do `prompt_sistema` gravado (visível na leitura de volta, um `+\r` ao final de cada linha). Corrigido com `UPDATE agent_configs SET prompt_sistema = replace(prompt_sistema, chr(13), '')` — confirmado limpo (`prompt_sistema LIKE '%'||chr(13)||'%'` → `false`) na releitura seguinte.
+
+**Verificação final (leitura de volta, `psql -x`, pedida explicitamente no processo):** conteúdo bate exatamente com o script pedido, acentuação/emoji corretos, sem `\r` residual. `SELECT count(*) FROM agent_configs WHERE user_id='5319f0ed...'` → 1 (confirma não duplicou). `agent_configs` da conta `mentoark@gmail.com` (`435ee472-...`, usada em todos os testes desta sessão) confirmado **intocada** — `updated_at` permanece anterior a esta escrita.
+
+**Passo 3 (RAG/FAQ):** usuário optou por não cadastrar agora — sem conteúdo real de preço/prazo fornecido, nada foi inventado, `conhecimento` desta conta segue com 0 linhas.
+
+**Nenhuma outra conta foi tocada.** Não houve mudança de código nesta sprint — só dado de configuração, só em produção, só para `user_id=5319f0ed-61b3-4232-80e1-f236bb751e49`.
+
 ### 📋 Diagnóstico completo: conta pronta pra prospecção real com IA + Disparo (2026-07-31)
 
 **Contexto:** usuário quer prospectar de verdade e pediu varredura de configurações erradas/quebradas. Sprint diagnóstica — reconfirmar 5 achados antigos (não redigitar como novo sem checar) + checar estado real da conta `mentoark@gmail.com` (produção, onde o usuário confirmou que vai prospectar) e homolog.
