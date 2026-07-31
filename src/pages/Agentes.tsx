@@ -327,16 +327,18 @@ export default function AgentesPage() {
   // /api/whatsapp/status não recebe instancia como parâmetro, então o backend
   // resolve e retorna o status de QUALQUER instância que ele conseguir achar pro
   // userId (via a mesma cadeia de fallback agent_configs → agentes →
-  // integracoes_config documentada em webhook.ts). Se este agente específico tiver
-  // um evolution_instancia diferente do que o backend resolve (cenário real: usuário
-  // com 2 agentes/instâncias, ou a divergência agent_configs já documentada), o botão
-  // mostra "✅ Evolution conectada" mesmo que A INSTÂNCIA DESTE AGENTE não esteja
-  // pareada — falso positivo. FIX PENDENTE (motivo: corrigir direito exige o backend
-  // aceitar um parâmetro de instância em /api/whatsapp/status e testar
-  // especificamente ela contra a Evolution API — mudança de contrato de rota usada
-  // por outras telas, e depende de decisão de produto sobre se agentes devem
-  // realmente suportar instâncias diferentes entre si ou se é sempre uma instância
-  // global por usuário).
+  // [AUDITORIA] BUG (achado na Sprint Diagnóstico Config Conta IA+Disparo, 2026-07-31):
+  // confirmado ao vivo (curl) que esta função sempre falhava — mandava `fetch()` sem
+  // `method`, ou seja GET, mas `/api/whatsapp/status` só existe como `router.post(...)`
+  // no backend (whatsapp.ts). Resultado: 404 GARANTIDO em toda chamada, então o botão
+  // SEMPRE mostrava "❌ Falha na conexão", mesmo com a instância genuinamente conectada
+  // — o oposto do falso positivo que a nota antiga (abaixo) descrevia, e pior: falso
+  // negativo permanente. [AUDITORIA] FIX APLICADO: troca pra POST + Content-Type, e
+  // aproveita que o backend JÁ aceita `instancia` no body com checagem de ownership
+  // (whatsapp.ts, achado 2026-07-22) pra resolver de vez a nota antiga também — testa a
+  // instância ESPECÍFICA deste agente, não mais "qualquer instância que o backend
+  // resolver primeiro pro usuário". Sucesso agora é decidido por `data.state === 'open'`
+  // (a rota sempre responde 200 com o estado real, não só pelo HTTP status).
   const testarEvolution = async () => {
     if (!form.evolution_instancia) {
       toast.error("Informe o nome da instância antes de testar.");
@@ -344,17 +346,18 @@ export default function AgentesPage() {
     }
     setTestando(true);
     try {
-      // Usa a config global de Conectores (integracoes_config) via backend
       const token = localStorage.getItem("crm_access_token");
       const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
       const res = await fetch(`${API_URL}/api/whatsapp/status`, {
-        headers: { Authorization: `Bearer ${token}` },
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ instancia: form.evolution_instancia }),
       });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.state === "open") {
         toast.success(`✅ Evolution conectada — instância: ${data.instancia ?? form.evolution_instancia}`);
       } else {
-        toast.error("❌ Falha na conexão — configure a Evolution em Conectores");
+        toast.error(`❌ Instância desconectada (${data.state ?? "erro"}) — ${data.message ?? "reconecte em Conectores"}`);
       }
     } catch (e: any) {
       toast.error(`❌ Erro: ${e?.message ?? "sem resposta do servidor"}`);

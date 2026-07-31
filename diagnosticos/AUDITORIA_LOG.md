@@ -1,5 +1,52 @@
 # Auditoria de Código — Log
 
+### 📋 Diagnóstico completo: conta pronta pra prospecção real com IA + Disparo (2026-07-31)
+
+**Contexto:** usuário quer prospectar de verdade e pediu varredura de configurações erradas/quebradas. Sprint diagnóstica — reconfirmar 5 achados antigos (não redigitar como novo sem checar) + checar estado real da conta `mentoark@gmail.com` (produção, onde o usuário confirmou que vai prospectar) e homolog.
+
+**Parte 1 — Achados antigos reconfirmados contra o código atual:**
+
+| # | Achado (sessões de julho) | Veredito | Evidência |
+|---|---|---|---|
+| 1 | `whatsapp.ts`: `getEvolutionConfig`/`saveEvolutionConfig` nunca leem/escrevem `agent_configs` | **Arquitetura mudou (Sprint 1 multi-instância, 2026-07-23)** | `getEvolutionConfig()` hoje não lê NENHUMA tabela pra resolver config de saída — calcula `stableInstancia = crm_${tenantId...}` deterministicamente e usa `DEFAULT_EVO_URL`/`DEFAULT_EVO_KEY` globais. `agent_configs` agora só é escrito por `syncEvolution()` (integracoes.ts) como espelho pro lookup INBOUND do webhook — papéis diferentes, não é mais o mesmo risco de "ler tabela errada" descrito originalmente |
+| 2 | `agentEngine.ts`: check `agentConfig?.motor_ia` nunca `true` | **RESOLVIDO** | `grep -r motor_ia backend/src` → zero ocorrências. Código morto do OpenClaw foi removido por completo em alguma sessão não documentada individualmente neste log |
+| 3 | `Agentes.tsx`: `testarEvolution()` risco de falso positivo (não manda `evolution_instancia`) | **AINDA PROCEDE, E PIOROU** — ver fix abaixo | Testado ao vivo (`curl`): `GET /api/whatsapp/status` (o que o frontend mandava) → **404 garantido**, rota só existe como `POST`. O botão sempre mostrava "❌ Falha na conexão", mesmo com a instância genuinamente aberta — falso NEGATIVO permanente, pior que o falso positivo teorizado originalmente |
+| 4 | `integracoes.ts`: `syncEvolution()` sem validação server-side (só confiava no frontend) | **RESOLVIDO (2026-07-21)** | Código atual chama `verificarInstanciaAberta()` (`evolutionReconciliation.ts`) e só grava em `agent_configs` se `connectionStatus:'open'` de verdade — confirmado lendo o corpo da função |
+| 5 | `TesteConversas.tsx`: painel "Comparação de Fontes" sempre "consistente", sem comparar nada | **AINDA PROCEDE** | Confirmado inalterado — já documentado inline como `FIX PENDENTE` com o motivo (não está claro qual seria a segunda fonte real). Baixa prioridade, ferramenta DEV |
+
+**Parte 2 — Estado real da conta `mentoark@gmail.com` (`user_id=435ee472-0fc3-4015-995a-ae6e1c80606d`), dados de hoje:**
+
+*Produção:*
+- `agent_configs`: 1 linha, `ativo=true`, `nome_agente='Stella'` (nome real, não placeholder), `prompt_sistema` preenchido (3053 caracteres), `evolution_instancia='crm_435ee4720fc3'`.
+- `integracoes_config` (tipo evolution): 3 linhas — `crm_5319f0ed61b3` (`inativo`, instância órfã já documentada em sessão anterior), `crm_435ee4720fc3` (`conectado`), `crm_435ee4720fc3_2` (`inativo`).
+- `agentes`: 3 linhas — "Agente Teste 2" (`ativo`, `evolution_instancia=crm_435ee4720fc3`, `score=55`), "Conexão WhatsApp" #1 (`ativo=true` mas **sem** `evolution_instancia` — linha fantasma, inofensiva pois a tela de Disparos já filtra `!!evolution_instancia`), "Conexão WhatsApp" #2 (`evolution_instancia=crm_435ee4720fc3_2`, `score=100`).
+- **Checado contra a Evolution real** (`GET /instance/connectionState`, não só o banco): `crm_435ee4720fc3` → `state:"open"` (bate com `integracoes_config`); `crm_435ee4720fc3_2` → `state:"close"` (bate com `integracoes_config='inativo'`, mas **diverge do `whatsapp_score=100`** em `agentes` — score é métrica de reputação/anti-ban, não conectividade, confirmado lendo `InstanceManagementPanel.tsx`, que mostra os dois separadamente; `StepAntiBan` em `Disparos.tsx` só mostra o score, sem indicador de conexão real, então essa instância desconectada aparece "saudável" no wizard de Disparos — risco real se o usuário selecionar sem saber. Aprofundado no achado da Parte 3 abaixo).
+- `conhecimento`: 5 linhas, tipos `{negocio, personalidade}` — sem `faq`/`objecao`/`script`.
+- `documents` (embeddings pgvector): 0 linhas — ferramenta RAG `buscar_documentos` não teria nenhum chunk pra retornar se fosse usada.
+- `IA_TEST_MODE`: não definida em produção. Whitelist de teste (`webhook.ts`, gated por `process.env.DATABASE_URL_MIGRATIONS`): essa env var **não existe em produção** (só em homolog) — confirmado via `docker exec crm-api printenv`. Ou seja, em produção a IA responde a **qualquer** contato real, sem filtro de teste.
+
+*Homolog (para contraste):* `agent_configs.evolution_instancia` aponta pra `crm_435ee4720fc3_2` (diferente de produção, que aponta pra `crm_435ee4720fc3`) — divergência real entre ambientes, mas ambas as instâncias de homolog estão genuinamente `open` (confirmado via Evolution), então não causa falha prática hoje. `agentes` também difere (linha "Agente Teste 2" sem `evolution_instancia` em homolog, com em produção) — reflete que os dois bancos divergiram organicamente ao longo das sessões de teste, não um bug de código.
+
+**Checklist de prontidão pra prospecção real (produção):**
+- ✅ Prompt do agente configurado e substancial
+- ✅ IA ativa, instância principal conectada de verdade, consistente nas 3 fontes
+- ✅ Sem modo de teste/whitelist bloqueando respostas em produção
+- ⚠️ RAG incompleto (só negócio/personalidade) — decisão do usuário se completa antes de prospectar em volume
+- ⚠️ Segunda instância desconectada — só relevante se pretende usar 2 números
+- 🔧 Bug real corrigido nesta sessão: `testarEvolution()` sempre mentia "desconectado"
+
+**Parte 3 — Fix aplicado:**
+
+`src/pages/Agentes.tsx`, `testarEvolution()`: trocado `fetch()` sem `method` (GET implícito) para `POST` com `Content-Type` e body `{ instancia: form.evolution_instancia }` — o backend (`whatsapp.ts`, achado 2026-07-22) já aceitava esse parâmetro com checagem de ownership, só o frontend nunca foi atualizado pra usá-lo. Resolve os dois achados (3 acima) de uma vez: a rota certa é chamada (não 404 mais) E a instância testada é a específica deste agente (não "qualquer uma que o backend resolver primeiro pro usuário"). Critério de sucesso agora é `data.state === 'open'` (a rota sempre responde 200 com o estado real, não só o HTTP status).
+
+**Testado ao vivo** (POST direto via `curl`, simulando o novo contrato do frontend) em homolog e produção: instância principal → `state:"open"`; segunda instância → `state:"close"` — cada uma corretamente distinguida, confirmando que o falso-sempre-negativo foi eliminado e que agora reflete a realidade por instância.
+
+**Sprint já redigida sobre round-robin/toggle "saudáveis" (`diagnosticos/SPRINT_DISPAROS_MULTIINSTANCIA_NAO_APLICADA.md`) verificada e confirmada STALE:** ambos os achados dela — (1) `disparos.instancias_ids` nunca lido pelo motor de envio, (2) toggle "Apenas saudáveis (>70)" sem lógica — já estão resolvidos no código atual. Confirmado: `resolverInstanciasCampanha()`/`proximaInstanciaDisponivel()` (`disparoProcessor.ts`) leem `instancias_ids` e fazem round-robin de verdade, ativamente usado no loop principal de envio; `disparo_logs.instancia` já existe e é populada (usada extensivamente nas verificações de cooldown desta mesma sessão); `StepAntiBan` (`Disparos.tsx`) já tem o `Switch` do toggle plenamente conectado (`checked`/`onCheckedChange`) e "Selecionar todas" já usa o mesmo limiar condicional (70 com toggle ativo, 40 sem) — tudo isso resolvido pelas sprints de multi-instância (2026-07-25) e teto diário por instância (2026-07-29), datadas DEPOIS de quando este arquivo de sprint foi escrito. Nenhuma ação necessária; arquivo removido do repositório após confirmação (já absorvido, nada a executar).
+
+**Achado residual, não corrigido nesta sessão (baixa prioridade, decisão de produto):** `StepAntiBan` no wizard de Disparos mostra só `whatsapp_score` (reputação/anti-ban), sem indicador de conexão real por instância — diferente de `InstanceManagementPanel.tsx`, que já mostra os dois separadamente. Uma instância desconectada pode aparecer "saudável" (score alto) no wizard de campanha. Não corrigido agora (fora do escopo desta sprint diagnóstica, que já fechou os itens de maior prioridade) — documentado aqui como candidato a uma sprint futura pequena e isolada, se o usuário quiser.
+
+Build (`vite build`) limpo. **Deployado em homolog e produção** (`src/pages/Agentes.tsx`).
+
 ### 🔴 CRÍTICO: cooldown entre campanhas em Disparos — bloqueia reenvio pro mesmo número em campanhas diferentes (2026-07-31)
 
 **Contexto:** usuário reportou, testando de verdade, que o mesmo contato de teste recebeu a mesma mensagem ("Bom dia, tudo bem?") mais de uma vez em campanhas diferentes criadas em sequência. Causa raiz confirmada por leitura de código: `disparo_logs` só tem uma linha por contato **dentro de uma campanha específica** — a dedupe existente (`Array.from(new Map(...))` por telefone, componente `DisparosPage`) só evita duplicata **dentro da mesma seleção de alvo, na mesma criação de campanha**. Não existia nenhum controle entre campanhas diferentes.

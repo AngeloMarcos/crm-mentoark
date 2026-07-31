@@ -1,5 +1,27 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-31 (cont.) — 📋 Diagnóstico: conta `mentoark@gmail.com` pronta pra prospecção real com IA + Disparo
+
+Usuário quer deixar a conta pronta pra prospectar de verdade e pediu varredura de configurações erradas. Sprint primariamente diagnóstica — reconfirmou 5 achados antigos de sessões de julho contra o código ATUAL (não assumiu que ainda procediam) e checou o estado real da conta em produção e homolog.
+
+**Achados antigos reconfirmados:**
+- `getEvolutionConfig`/`saveEvolutionConfig` sem ler `agent_configs` → **arquitetura mudou (Sprint 1 multi-instância, 2026-07-23)**: hoje calcula instância determinística por tenant, não lê tabela nenhuma pra resolver config de saída; `agent_configs` virou só espelho pro lookup INBOUND do webhook. Risco original não se aplica mais do mesmo jeito.
+- `agentEngine.ts` check `motor_ia` nunca `true` → **RESOLVIDO**, zero ocorrências no código (limpo em alguma sessão não documentada individualmente).
+- `syncEvolution()` sem validação server-side → **RESOLVIDO (2026-07-21)**, já chama `verificarInstanciaAberta()`.
+- `TesteConversas.tsx` "Comparação de Fontes" fake → **AINDA PROCEDE**, já documentado inline, baixa prioridade (ferramenta DEV).
+- `Agentes.tsx testarEvolution()` risco de falso positivo → **AINDA PROCEDE, E PIOROU**: confirmado ao vivo que a função sempre 404ava (GET num endpoint que só existe como POST) — o botão sempre mostrava "desconectado", mesmo com a instância genuinamente aberta. **🔧 Corrigido** — troca pra POST + `instancia` no body (backend já aceitava esse parâmetro desde 2026-07-22, só o frontend nunca foi atualizado). Testado ao vivo em homolog e produção: instância aberta retorna `state:"open"`, instância fechada retorna `state:"close"` — cada uma corretamente, não mais "qualquer uma que o backend resolver primeiro".
+
+**Estado real da conta (produção, `435ee472-0fc3-4015-995a-ae6e1c80606d`) — checklist pra prospecção:**
+- ✅ Agente "Stella" ativo, prompt configurado (3053 caracteres)
+- ✅ Instância principal `crm_435ee4720fc3` conectada de verdade (`state:"open"`, confirmado direto na Evolution), consistente nas 3 fontes de config
+- ✅ Sem `IA_TEST_MODE`/whitelist de teste ativos em produção (essas env vars só existem em homolog) — IA responde a qualquer contato real
+- ⚠️ RAG (`conhecimento`) só tem `negocio`/`personalidade`, sem FAQ/objeções/scripts — usuário decide se completa antes de prospectar em volume
+- ⚠️ Segunda instância `crm_435ee4720fc3_2` genuinamente desconectada (`state:"close"`) — só importa se pretende usar 2 números
+
+**Sprint já redigida sobre round-robin/multi-instância (`SPRINT_DISPAROS_MULTIINSTANCIA_NAO_APLICADA.md`) confirmada STALE** — ambos os achados dela (round-robin não aplicado, toggle "saudáveis" decorativo) já foram resolvidos pelas sprints de 2026-07-25/07-29, antes mesmo desta sessão. Nenhuma ação necessária.
+
+Build (`vite build`) limpo. **Deployado em homolog e produção** (`src/pages/Agentes.tsx`, 1 arquivo).
+
 ## Sessão 2026-07-31 (cont.) — ✅ Cooldown entre campanhas — deployado em PRODUÇÃO
 
 Usuário pediu deploy imediato pra produção ("é lá que estou fazendo o disparo"). Commitado o trabalho da sessão (`27d0d9c`: Templates + Placeholders/Upload + Cooldown, todos em `Disparos.tsx`) e confirmado por `sha256sum`/`diff` direto contra `/opt/crm` que só 3 arquivos ainda divergiam de produção (Templates/Placeholders já tinham sido deployados numa sessão anterior): `backend/src/migrations.ts`, `backend/src/services/disparoProcessor.ts`, `src/pages/Disparos.tsx` — diff de `migrations.ts` confirmado como só as adições de cooldown, nada inesperado.
