@@ -558,6 +558,16 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // de marketing menos urgentes.
   await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS cooldown_horas INTEGER DEFAULT 24`).catch(() => {});
 
+  // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): intervalo anti-ban
+  // configurável em segundos (a UI converte pra minutos) — antes só existiam os 3 perfis fixos
+  // (5-60s no máximo). NULO de propósito (sem DEFAULT): campanhas criadas antes deste fix não
+  // têm essas colunas preenchidas, então `disparoProcessor.ts` cai no comportamento antigo por
+  // `perfil_velocidade` — nada quebra retroativamente. Campanhas novas (StepAntiBan/StepReview,
+  // Disparos.tsx) passam a preencher sempre os dois, mesmo quando o usuário só clica um dos
+  // atalhos de perfil (que agora só preenchem estes campos, não travam o valor).
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS delay_min_segundos INTEGER`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS delay_max_segundos INTEGER`).catch(() => {});
+
   // [AUDITORIA] BUG (achado 2026-07-29 — investigando relato de falha de banco em produção):
   // `pausa_bloqueios_detectados` só existia dentro do `CREATE TABLE IF NOT EXISTS disparos` lá
   // em cima (linha ~465) — nunca teve um `ALTER TABLE ... ADD COLUMN` de retrofit separado.

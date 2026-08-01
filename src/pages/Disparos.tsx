@@ -329,6 +329,14 @@ export default function DisparosPage() {
     // mesmo número em campanhas DIFERENTES (não confundir com a dedupe já existente, que só evita
     // duplicata DENTRO da mesma seleção de alvo). Configurável por campanha, default 24h.
     cooldown_horas: 24,
+    // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): antes o intervalo entre
+    // mensagens só vinha dos 3 perfis fixos (5-60s no máximo). Agora editável livremente em
+    // minutos (guardado em segundos no banco, ver migrations.ts) — os cards de perfil abaixo só
+    // preenchem estes 2 campos como atalho, não travam mais o valor. Default aqui já nasce
+    // preenchido com o equivalente do perfil "safe" (30-60s = 0.5-1min), mesmo perfil default de
+    // `perfil_velocidade` acima, pra abrir a tela com os dois em sincronia.
+    delay_min_minutos: 0.5,
+    delay_max_minutos: 1,
     pausa_bloqueios_detectados: true,
     instancias_ids: [] as string[],
     contatos: [] as any[],
@@ -420,7 +428,16 @@ export default function DisparosPage() {
       if (form.tipo_midia === "texto") return form.mensagem.trim().length > 0;
       return form.url_midia.trim().length > 0;
     }
-    if (step === 2) return form.instancias_ids.length > 0;
+    if (step === 2) {
+      // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): antes só checava
+      // instâncias selecionadas — intervalo customizado inválido (mín > máx, ou abaixo do piso
+      // de segurança) agora também bloqueia "Próximo", mesma checagem usada dentro de
+      // StepAntiBan pra mostrar o aviso em vermelho.
+      const intervaloValido = form.delay_min_minutos >= DELAY_MIN_ABSOLUTO_MINUTOS
+        && form.delay_max_minutos >= DELAY_MIN_ABSOLUTO_MINUTOS
+        && form.delay_min_minutos <= form.delay_max_minutos;
+      return form.instancias_ids.length > 0 && intervaloValido;
+    }
     return true;
   }, [step, form, targetContacts.length]);
 
@@ -431,7 +448,10 @@ export default function DisparosPage() {
       return "Selecione ao menos uma tag, lista, estágio ou importe um CSV";
     }
     if (step === 1) return form.tipo_midia === "texto" ? "Escreva a mensagem" : "Informe a URL do arquivo";
-    if (step === 2) return "Selecione ao menos uma instância";
+    if (step === 2) {
+      if (form.instancias_ids.length === 0) return "Selecione ao menos uma instância";
+      return "Corrija o intervalo customizado (mínimo não pode ser maior que o máximo, nem menor que o piso de segurança)";
+    }
     return null;
   }, [stepValid, step, form]);
 
@@ -1050,6 +1070,12 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
 const MAX_OUTBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const TIPO_MIDIA_PARA_UPLOAD: Record<string, string> = { imagem: "image", audio: "audio", documento: "document" };
+// [AUDITORIA] LÓGICA (Sprint Intervalo em Minutos, 2026-07-31): piso absoluto de 5s (mesmo mínimo
+// já usado pelo perfil "Rápido") — compartilhado entre a validação do passo Anti-ban (StepAntiBan)
+// e o gate de "Próximo" (DisparosPage.stepValid), pra não duplicar o número mágico em dois lugares
+// que precisariam ser atualizados juntos. O backend (disparoProcessor.ts) aplica o mesmo piso de
+// novo, independente desta validação de UI.
+const DELAY_MIN_ABSOLUTO_MINUTOS = 5 / 60;
 
 function StepMessage({ form, setForm }: any) {
   const { user } = useAuth();
@@ -1405,11 +1431,25 @@ function StepAntiBan({ form, setForm }: any) {
     ? instancias.filter(i => (i.whatsapp_score || 0) > LIMIAR_SAUDAVEL)
     : instancias;
 
+  // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): cada perfil agora carrega
+  // seu equivalente em minutos (minMin/maxMin) — clicar no card só preenche os campos de
+  // intervalo customizado abaixo (atalho de preenchimento), não trava mais o valor em segundos
+  // fixos. "Ultra Seguro" é novo, cobre o caso de uso citado pelo usuário ("pelo menos 8-10
+  // minutos de diferença") sem precisar digitar do zero.
   const profiles = [
-    { id: "safe", label: "SEGURO", icon: ShieldCheck, color: "text-emerald-500", delay: "30-60s", limit: "50", desc: "Recomendado para novos números" },
-    { id: "moderate", label: "MODERADO", icon: Shield, color: "text-yellow-500", delay: "15-30s", limit: "100", desc: "Equilíbrio entre velocidade e segurança" },
-    { id: "fast", label: "RÁPIDO", icon: ShieldAlert, color: "text-red-500", delay: "5-15s", limit: "200", desc: "Risco aumentado de banimento", alert: true },
+    { id: "safe", label: "SEGURO", icon: ShieldCheck, color: "text-emerald-500", delay: "30-60s", minMin: 0.5, maxMin: 1, limit: "50", desc: "Recomendado para novos números" },
+    { id: "moderate", label: "MODERADO", icon: Shield, color: "text-yellow-500", delay: "15-30s", minMin: 0.25, maxMin: 0.5, limit: "100", desc: "Equilíbrio entre velocidade e segurança" },
+    { id: "fast", label: "RÁPIDO", icon: ShieldAlert, color: "text-red-500", delay: "5-15s", minMin: 5 / 60, maxMin: 15 / 60, limit: "200", desc: "Risco aumentado de banimento", alert: true },
+    { id: "ultra_safe", label: "ULTRA SEGURO", icon: ShieldCheck, color: "text-blue-600", delay: "8-12min", minMin: 8, maxMin: 12, limit: "20", desc: "Máxima cautela — campanhas grandes demoram muito mais" },
   ];
+
+  // Piso absoluto (DELAY_MIN_ABSOLUTO_MINUTOS, módulo-level) — decisão de segurança pra não deixar
+  // o operador configurar, por engano, um intervalo perigosamente baixo digitando direto no campo
+  // de minutos. O backend (disparoProcessor.ts) aplica o mesmo piso de novo, independente desta
+  // validação de UI.
+  const intervaloInvalido = form.delay_min_minutos < DELAY_MIN_ABSOLUTO_MINUTOS
+    || form.delay_max_minutos < DELAY_MIN_ABSOLUTO_MINUTOS
+    || form.delay_min_minutos > form.delay_max_minutos;
 
   return (
     <div className="space-y-6">
@@ -1475,13 +1515,15 @@ function StepAntiBan({ form, setForm }: any) {
 
       {/* Velocity Profiles */}
       {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28): recolhe pra 1 coluna em telas pequenas
-          (cards de perfil têm bastante texto, ficavam ilegíveis espremidos em 3 num celular). */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          (cards de perfil têm bastante texto, ficavam ilegíveis espremidos em 3 num celular).
+          [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): grid ganhou uma 4ª
+          coluna (Ultra Seguro) — 1 coluna em mobile, 2 em tablet, 4 em desktop. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {profiles.map(p => (
-          <Card 
-            key={p.id} 
+          <Card
+            key={p.id}
             className={`p-4 cursor-pointer transition-all border-2 ${form.perfil_velocidade === p.id ? 'border-primary shadow-md' : 'border-transparent'}`}
-            onClick={() => setForm({...form, perfil_velocidade: p.id})}
+            onClick={() => setForm({...form, perfil_velocidade: p.id, delay_min_minutos: p.minMin, delay_max_minutos: p.maxMin})}
           >
             <p.icon className={`h-8 w-8 mb-2 ${p.color}`} />
             <h3 className="font-bold text-sm">{p.label}</h3>
@@ -1493,6 +1535,48 @@ function StepAntiBan({ form, setForm }: any) {
           </Card>
         ))}
       </div>
+
+      {/* [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): intervalo customizado
+          em minutos — os cards acima só preenchem estes campos como atalho, o valor real que vai
+          pra campanha é sempre este daqui (StepReview.handleStart manda `delay_min_minutos`/
+          `delay_max_minutos` convertidos pra segundos, ver payload). Editável livremente, incluindo
+          os 8-10+ minutos pedidos pelo usuário sem precisar clicar em "Ultra Seguro". */}
+      <Card className="p-4 space-y-3">
+        <Label className="font-bold flex items-center gap-2"><Clock className="h-4 w-4" /> Intervalo Customizado Entre Mensagens</Label>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase text-muted-foreground">Intervalo mínimo (minutos)</span>
+            <Input
+              type="number"
+              step="0.1"
+              min={DELAY_MIN_ABSOLUTO_MINUTOS}
+              value={form.delay_min_minutos}
+              onChange={e => setForm({ ...form, delay_min_minutos: parseFloat(e.target.value) })}
+              className="h-8"
+            />
+          </div>
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase text-muted-foreground">Intervalo máximo (minutos)</span>
+            <Input
+              type="number"
+              step="0.1"
+              min={DELAY_MIN_ABSOLUTO_MINUTOS}
+              value={form.delay_max_minutos}
+              onChange={e => setForm({ ...form, delay_max_minutos: parseFloat(e.target.value) })}
+              className="h-8"
+            />
+          </div>
+        </div>
+        {intervaloInvalido ? (
+          <p className="text-[10px] text-destructive font-medium">
+            O mínimo não pode ser maior que o máximo, e nenhum dos dois pode ser menor que {DELAY_MIN_ABSOLUTO_MINUTOS.toFixed(2)} min (5s) — piso de segurança do sistema.
+          </p>
+        ) : (
+          <p className="text-[10px] text-muted-foreground">
+            Cada mensagem espera um tempo aleatório dentro dessa faixa antes da próxima — os cards acima só preenchem estes campos, você pode digitar qualquer valor (ex: 8 a 10 minutos).
+          </p>
+        )}
+      </Card>
 
       <div className="grid grid-cols-2 gap-4">
         {/* Sending Window */}
@@ -1585,24 +1669,34 @@ function StepAntiBan({ form, setForm }: any) {
 
 function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
   // [AUDITORIA] BUG (achado na Sprint Placeholders/Upload, 2026-07-30): 60/120/240 msgs/hora
-  // assumiam um delay fixo (60s/30s/15s) que nunca bateu com o real. O delay de verdade
-  // (`FAIXAS_DELAY_MS` em `backend/src/services/disparoProcessor.ts`) é sorteado aleatoriamente
-  // dentro de uma faixa — 30-60s/15-30s/5-15s pros perfis safe/moderate/fast — média de
-  // ~45s/22.5s/10s por mensagem. A estimativa ficava ~25-33% mais lenta que a campanha real.
-  // [AUDITORIA] FIX APLICADO: constantes recalculadas a partir da média real de cada faixa
-  // (3600/45≈80, 3600/22.5≈160, 3600/10=360). Frontend e backend são bases de código separadas
-  // (sem módulo compartilhado) — se `FAIXAS_DELAY_MS` mudar em `disparoProcessor.ts`, estes 3
-  // números precisam ser atualizados manualmente junto.
+  // assumiam um delay fixo (60s/30s/15s) que nunca bateu com o real. Corrigido pra uma média real
+  // por perfil (80/160/360 msgs/hora), mas ainda hardcoded pros 3 perfis antigos.
+  // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): agora que o intervalo é
+  // sempre customizável em minutos (`form.delay_min_minutos`/`delay_max_minutos`, preenchido pelos
+  // cards de perfil OU digitado livremente — ver StepAntiBan), a estimativa usa a MÉDIA real do
+  // intervalo configurado em vez de uma tabela fixa — funciona igual pra um perfil de atalho
+  // (30-60s) ou um valor customizado (8-10min), sem precisar manter 2 sistemas de cálculo em
+  // paralelo nem sincronizar manualmente com `disparoProcessor.ts` a cada mudança de perfil.
   const estimate = useMemo(() => {
     const total = targetContacts.length || 0;
-    const msgsPerHour = form.perfil_velocidade === 'safe' ? 80 : form.perfil_velocidade === 'moderate' ? 160 : 360;
-    const totalMinutes = Math.ceil((total / msgsPerHour) * 60);
+    const mediaSegundos = ((Number(form.delay_min_minutos) || 0) + (Number(form.delay_max_minutos) || 0)) / 2 * 60;
+    const msgsPerHour = mediaSegundos > 0 ? 3600 / mediaSegundos : 0;
+    const totalMinutes = msgsPerHour > 0 ? Math.ceil((total / msgsPerHour) * 60) : 0;
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
+    const dias = Math.floor(h / 24);
     const endDate = new Date(Date.now() + totalMinutes * 60_000);
     const endStr = endDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    return { label: total === 0 ? "—" : `${h}h ${m}m`, end: total === 0 ? "—" : endStr };
-  }, [targetContacts.length, form.perfil_velocidade]);
+    return {
+      label: total === 0 ? "—" : `${h}h ${m}m`,
+      end: total === 0 ? "—" : endStr,
+      // [AUDITORIA] LÓGICA: aviso explícito quando a campanha vai durar mais de 1 dia corrido —
+      // consequência esperada de um intervalo grande (ex: 8-10min) com muitos contatos, não é bug
+      // a corrigir, mas o usuário precisa decidir com essa informação visível, não descobrir depois.
+      longaDuracao: dias >= 1,
+      dias,
+    };
+  }, [targetContacts.length, form.delay_min_minutos, form.delay_max_minutos]);
 
   const [agendarAt, setAgendarAt] = useState("");
 
@@ -1656,6 +1750,15 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
         humanizar_ia: form.humanizar_ia,
         cooldown_horas: form.cooldown_horas,
+        // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): sempre preenchido
+        // pra campanhas novas (arredondado pra segundo inteiro) — `disparoProcessor.ts` usa estes
+        // 2 campos com prioridade sobre `perfil_velocidade` quando ambos vêm não-nulos. Campanhas
+        // criadas ANTES deste fix (já em produção) não têm essas colunas, então continuam caindo
+        // no comportamento antigo por perfil — não é preciso fazer nada especial aqui pra isso,
+        // só não sobrescrever campanhas antigas (o que este INSERT, sendo sempre uma linha nova,
+        // nunca faria de qualquer forma).
+        delay_min_segundos: Math.round((Number(form.delay_min_minutos) || 0) * 60),
+        delay_max_segundos: Math.round((Number(form.delay_max_minutos) || 0) * 60),
       };
 
 
@@ -1732,6 +1835,14 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
                 <span className="text-xl font-bold">{estimate.label}</span>
               </div>
               <p className="text-[10px] text-muted-foreground mt-1">Término previsto: {estimate.end}</p>
+              {/* [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): consequência
+                  esperada de um intervalo grande (ex: 8-10min) com muitos contatos — não é bug,
+                  mas o usuário precisa ver isso ANTES de disparar, não descobrir horas depois. */}
+              {estimate.longaDuracao && (
+                <p className="text-[10px] text-amber-600 font-medium mt-1 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" /> Campanha vai durar {estimate.dias}+ dia(s) corrido(s) com o intervalo atual
+                </p>
+              )}
             </div>
 
             <div>

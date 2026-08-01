@@ -31,7 +31,14 @@ async function obterCooldownHoras(pool: Pool, disparoId: string): Promise<number
     `SELECT COALESCE(cooldown_horas, 24) AS h FROM disparos WHERE id = $1`,
     [disparoId]
   ).catch(() => ({ rows: [] as any[] }));
-  const horas = Number(r.rows[0]?.h) || 24;
+  // [AUDITORIA] BUG (achado na Sprint Intervalo em Minutos, 2026-07-31, testando o intervalo
+  // customizado): `Number(h) || 24` trata `cooldown_horas=0` (valor legítimo, significa "sem
+  // cooldown pra esta campanha") como se fosse ausente — `0 || 24` avalia pra `24` em JS (zero é
+  // falsy). Confirmado ao vivo: campanha com `cooldown_horas=0` teve a 2ª/3ª mensagem bloqueadas
+  // pela camada defensiva com `cooldownHoras:24` no log, mesmo tendo sido criada com 0 explícito.
+  // [AUDITORIA] FIX APLICADO: só cai no default quando a linha realmente não veio (`disparo_id`
+  // não encontrado) — `0` é um valor válido e é respeitado.
+  const horas = r.rows.length ? Number(r.rows[0].h) : 24;
   cooldownHorasCache.set(disparoId, horas);
   return horas;
 }
@@ -641,6 +648,13 @@ export async function processarDisparos(pool: Pool) {
         safe: [30000, 60000],
         moderate: [15000, 30000],
         fast: [5000, 15000],
+        // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): atalho novo da tela
+        // (StepAntiBan) pro caso de uso citado pelo usuário ("pelo menos 8-10 minutos de
+        // diferença") — só existe aqui como rede de segurança: campanhas novas sempre preenchem
+        // `delay_min_segundos`/`delay_max_segundos` explicitamente (ver bloco abaixo), então este
+        // valor só entraria em jogo se as colunas custom viessem nulas por algum motivo mesmo com
+        // `perfil_velocidade='ultra_safe'` gravado.
+        ultra_safe: [480000, 720000],
       };
       const ALIAS_PERFIL: Record<string, string> = {
         seguro: 'safe', slow: 'safe',
@@ -648,18 +662,41 @@ export async function processarDisparos(pool: Pool) {
         rapido: 'fast',
       };
 
+      // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): antes o delay vinha
+      // só do perfil fixo (teto de 60s). Agora, se a campanha tiver um intervalo customizado
+      // (`delay_min_segundos`/`delay_max_segundos`, preenchido pela tela em minutos e convertido
+      // pra segundos), ele tem prioridade — permite qualquer intervalo, incluindo os 8-10+ min
+      // pedidos. NULO nas duas colunas (campanha criada antes deste fix) cai no comportamento
+      // antigo por `perfil_velocidade`, sem quebrar nada existente. Piso absoluto de 5000ms
+      // (mesmo mínimo já usado pelo perfil "Rápido") aplicado aqui de novo, mesmo que o frontend
+      // já valide — segunda camada de segurança pro backend nunca aceitar um valor
+      // perigosamente baixo, mesmo que a validação do frontend seja contornada. `min > max`
+      // (dado corrompido/editado direto no banco) é corrigido trocando os dois em vez de travar
+      // o envio inteiro.
+      const DELAY_MINIMO_ABSOLUTO_MS = 5000;
       let delayMs: number;
       try {
         const campanhaRes = await pool.query(
-          `SELECT perfil_velocidade FROM disparos WHERE id = $1 LIMIT 1`,
+          `SELECT perfil_velocidade, delay_min_segundos, delay_max_segundos FROM disparos WHERE id = $1 LIMIT 1`,
           [disparo_id]
         );
-        const perfilBruto = String(campanhaRes.rows[0]?.perfil_velocidade || '').toLowerCase();
-        const perfil = FAIXAS_DELAY_MS[perfilBruto] ? perfilBruto : (ALIAS_PERFIL[perfilBruto] || 'safe');
-        const [min, max] = FAIXAS_DELAY_MS[perfil];
-        delayMs = Math.floor(Math.random() * (max - min) + min);
+        const row = campanhaRes.rows[0];
+        const customMin = row?.delay_min_segundos;
+        const customMax = row?.delay_max_segundos;
+
+        if (customMin != null && customMax != null) {
+          let minMs = Math.max(Number(customMin) * 1000, DELAY_MINIMO_ABSOLUTO_MS);
+          let maxMs = Math.max(Number(customMax) * 1000, DELAY_MINIMO_ABSOLUTO_MS);
+          if (minMs > maxMs) [minMs, maxMs] = [maxMs, minMs];
+          delayMs = Math.floor(Math.random() * (maxMs - minMs) + minMs);
+        } else {
+          const perfilBruto = String(row?.perfil_velocidade || '').toLowerCase();
+          const perfil = FAIXAS_DELAY_MS[perfilBruto] ? perfilBruto : (ALIAS_PERFIL[perfilBruto] || 'safe');
+          const [min, max] = FAIXAS_DELAY_MS[perfil];
+          delayMs = Math.floor(Math.random() * (max - min) + min);
+        }
       } catch (errDb: any) {
-        log.warn('DISPARO', 'Falha ao buscar perfil_velocidade para delay, usando faixa segura', { err: errDb.message });
+        log.warn('DISPARO', 'Falha ao buscar configuração de delay, usando faixa segura', { err: errDb.message });
         const [min, max] = FAIXAS_DELAY_MS.safe;
         delayMs = Math.floor(Math.random() * (max - min) + min);
       }

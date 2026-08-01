@@ -1,5 +1,17 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-07-31 (cont.) — 🆕 Intervalo anti-ban configurável em minutos (deployado em homolog e produção)
+
+Usuário revisou a tela de Proteção Anti-ban e quis um intervalo mínimo bem maior entre mensagens (citou "pelo menos 8-10 minutos") — antes só existiam os 3 perfis fixos (5-60s no máximo, sem opção de minutos).
+
+**Implementado:** `disparos.delay_min_segundos`/`delay_max_segundos` (nulas — campanhas antigas continuam pelo comportamento antigo por `perfil_velocidade`, sem regressão). `StepAntiBan` ganhou 2 campos livres "Intervalo mínimo/máximo (minutos)" — os 3 cards de perfil viram atalhos de preenchimento (incluindo um 4º novo, "Ultra Seguro", 8-12min), não travam mais o valor. Piso de segurança: 5s absoluto (mesmo mínimo já usado pelo perfil "Rápido"), aplicado em duas camadas (frontend bloqueia "Próximo"; backend clampa de novo, independente da validação de UI). `StepReview`: estimativa de tempo agora calcula a partir da média real do intervalo configurado (não mais uma tabela fixa por perfil) — e mostra aviso quando a campanha vai durar 1+ dia corrido.
+
+**🔴 Achado real durante o teste, corrigido:** `cooldown_horas=0` (campanha configurada pra "sem cooldown") estava sendo silenciosamente tratado como 24h por causa de `Number(0) || 24` (zero é falsy em JS) na função que já estava em produção desde a sprint de Cooldown. Só descoberto porque o teste real desta sprint usou `cooldown_horas=0` de propósito (pra isolar o teste de intervalo) e a 2ª/3ª mensagem foram bloqueadas por engano. **Corrigido e deployado em homolog e produção** (era um bug já ativo em produção, não só nesta sprint).
+
+**Testado em homolog com envio real:** campanha com intervalo customizado 60-120s (1-2min), 3 mensagens reais pro mesmo contato de teste — intervalos reais entre envios: 119.8s e 102.5s, ambos dentro da faixa configurada.
+
+Build (`vite build` + `swc`) limpo. **Deployado em homolog e produção** (`backend/src/migrations.ts`, `backend/src/services/disparoProcessor.ts`, `src/pages/Disparos.tsx`) — diff confirmado contra `/opt/crm` antes de copiar, `/health`→200 nos dois ambientes, sem `ERROR`.
+
 ## Sessão 2026-07-31 (cont.) — 🆕 Agente de prospecção "Stella" configurado em `agent_configs` — conta `angelobispofilho@gmail.com`, produção
 
 Escrita de dados (não é mudança de código) — script de prospecção da Mentoark gravado só pra esta conta, com confirmação explícita antes de cada passo sensível (ambiente, nome do agente, ativação), seguindo o cuidado extra pedido dado o incidente histórico de config vazando entre contas ("Cris").
