@@ -1,5 +1,25 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-08-04 (cont.) — 🆕 Quadro Kanban reestruturado estilo Jira (touch/iPad, drag-drop, cores, seleção múltipla) — deployado em produção
+
+**Dedup real (achado no caminho):** `Kanban.tsx` (rota `/kanban`) tinha ~450 linhas de lógica duplicada de `KanbanBoard.tsx`, que por sua vez era **código morto** (comentário dizia "usado em /kanban e na aba Tarefas de Equipe" — falso, zero imports confirmados via grep). `Kanban.tsx` agora só renderiza `KanbanBoard`; qualquer mudança futura no quadro vive num lugar só.
+
+**Usabilidade em toque/iPad:** só existia `PointerSensor` com ativação por distância (5px) — em touch, qualquer gesto de rolar a coluna já passa de 5px quase instantaneamente e o dnd-kit sequestra o gesto como drag, bloqueando o scroll nativo do iPadOS. Adicionado `TouchSensor` dedicado (`delay: 250ms, tolerance: 5`) — mesmo padrão Trello/Jira mobile, dá tempo do navegador decidir se é scroll ou drag de propósito.
+
+**Visual estilo Jira:** `DragOverlay` com rotação 1.5°, opacidade 90%, `shadow-2xl`, cursor grabbing. Drop placeholder novo: durante o arrasto, o slot do card mostra um box tracejado limpo com a altura EXATA do card (conteúdo `invisible`, não `hidden` — preserva o layout real em vez de uma altura fixa que erraria pra cards de tamanho diferente).
+
+**Filtros rápidos na barra principal:** "Minhas tarefas" (`atribuido_a === user.id`) e "Alta prioridade" — reaproveitam o filtro por membro/prioridade já existente (mesmo estado, sem duplicar lógica). Busca por texto e o filtro completo (Popover) já existiam.
+
+**Quick-create inline no rodapé da coluna:** já existia (clique "+" → input → Enter → cria), verificado funcionando — não precisou de mudança.
+
+**Mais cores nas colunas (pedido do usuário):** paleta de 8 para 24 presets + `<input type="color">` nativo estilizado como swatch, pra qualquer cor fora da lista.
+
+**Seleção múltipla + arrastar em grupo (pedido do usuário):** checkbox em cada card (nunca interfere no clique normal que abre o modal de edição). Arrastar um card selecionado leva o resto da seleção junto pra mesma coluna — badge "+N" no card fantasma durante o arrasto, barra de status ("N tarefas selecionadas... Limpar seleção") só aparece com seleção ativa. Reaproveita a rota `PATCH /tarefas/:id/mover` já existente via chamadas sequenciais (uma por card) — nenhuma mudança de backend. Cards em grupo entram no fim da coluna de destino, em sequência (decisão deliberada: reordenar vários cards numa posição exata entre outros complicaria bastante sem ganho real pra uma ação em lote).
+
+**Build:** `npm run build` (vite) limpo em todas as rodadas — só os warnings pré-existentes de chunk size.
+
+**Commit e deploy:** commit `88fd2da`, push pra `origin/main` confirmado. Deploy em produção via `scripts/deploy.sh prod --confirm` (só frontend — `crm` recriado, `crm-api` confirmado intocado/mesmo `StartedAt`). `/health` 200 em produção antes/depois, sem `ERROR`. Confirmado por leitura direta no servidor (`grep TouchSensor`) que o código está no ar. **Não testado em homolog nem em dispositivo touch real antes deste deploy** — decisão explícita do usuário de ir direto pra produção; recomendo validar o gesto de toque num iPad/tablet real na primeira oportunidade.
+
 ## Sessão 2026-08-04 (cont.) — 🆕 Importar contatos de grupo de WhatsApp + 🔧 fix de persistência de mídia/Galeria + integração Templates↔Galeria (+ bundle Status de Envio/Corridas/Grupos IA deployado em produção)
 
 **Parte 1 — Importar contatos de grupo (feature nova):** `buscarInfoGrupo()` (`whatsappMediaStorage.ts`) já chamava `GET /group/findGroupInfos` mas só aproveitava `subject`/`pictureUrl` — o resto (`desc`, `size`, `creation`, `participants`) era descartado. Expandida pra aproveitar tudo, sem nenhuma chamada nova à Evolution. Dois endpoints novos em `whatsapp.ts`: `GET /grupos/:jid/info` (info fresca pro painel — descrição/qtd. participantes/data de criação) e `POST /grupos/:jid/importar-contatos` (importa participantes reais, sempre frescos, nunca cacheados). UI: botão "Baixar contatos do grupo" no painel de detalhes (`WhatsAppInterface.tsx`), só visível para conversa de grupo, com modal de confirmação explícita mostrando quantos participantes antes de importar.
