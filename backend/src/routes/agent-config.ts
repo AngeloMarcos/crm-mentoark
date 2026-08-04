@@ -107,7 +107,27 @@ export default function agentConfigRouter(pool: Pool): Router {
         ativo ?? false,
       ]
     );
-    return res.json(r.rows[0]);
+
+    // [AUDITORIA] BUG (achado 2026-08-04 — investigação do prompt vazio de fmakonee03/
+    // stefanocatedral): nada aqui impedia salvar `ativo=true` com `prompt_sistema` vazio — o
+    // gate que bloqueia a IA de responder sem prompt real (agentEngine.ts, fix de 2026-07-28)
+    // já evita o pior efeito (responder com persona genérica), mas a config fica "ativa" na
+    // tela/banco sem nenhum aviso, e ninguém percebe que a IA nunca vai responder de verdade.
+    // Rota nunca existiu — a rota real (/api/agent-config, esta) já funciona corretamente hoje
+    // (testado em homolog: POST → GET → leitura direta no banco, tudo consistente); o problema
+    // real é a ausência desta validação, não roteamento.
+    // [AUDITORIA] FIX APLICADO: se o resultado salvo ficaria `ativo=true` com prompt vazio/nulo,
+    // força `ativo=false` de volta (nunca ativa sem prompt real) e devolve o valor corrigido —
+    // vale pra qualquer conta, não só as duas que motivaram o achado.
+    let configSalva = r.rows[0];
+    if (configSalva.ativo && !configSalva.prompt_sistema?.trim()) {
+      const corrigido = await pool.query(
+        `UPDATE agent_configs SET ativo = false, updated_at = NOW() WHERE user_id = $1 RETURNING *`,
+        [req.userId]
+      );
+      configSalva = corrigido.rows[0];
+    }
+    return res.json(configSalva);
   }));
 
   // PUT /api/agent-config — alias do POST (compatibilidade com clientes que usam PUT)
@@ -135,7 +155,18 @@ export default function agentConfigRouter(pool: Pool): Router {
       vals
     );
     if (!r.rows.length) return res.status(404).json({ message: 'Config não encontrada' });
-    return res.json(r.rows[0]);
+
+    // [AUDITORIA] FIX APLICADO: mesmo guard do POST acima — um PATCH que só manda `{ativo:true}`
+    // sem tocar em prompt_sistema não pode deixar a config "ativa" com prompt vazio/nulo.
+    let configSalva = r.rows[0];
+    if (configSalva.ativo && !configSalva.prompt_sistema?.trim()) {
+      const corrigido = await pool.query(
+        `UPDATE agent_configs SET ativo = false, updated_at = NOW() WHERE user_id = $1 RETURNING *`,
+        [req.userId]
+      );
+      configSalva = corrigido.rows[0];
+    }
+    return res.json(configSalva);
   }));
 
   return router;

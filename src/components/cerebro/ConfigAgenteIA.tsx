@@ -105,8 +105,18 @@ export function ConfigAgenteIA() {
   const update = <K extends keyof AgentConfig>(k: K, v: AgentConfig[K]) =>
     setConfig((c) => ({ ...c, [k]: v }));
 
+  // [AUDITORIA] BUG (achado 2026-08-04 — investigação do prompt vazio de fmakonee03/
+  // stefanocatedral): nada aqui impedia ligar "Agente Ativo" e salvar sem nenhum texto no
+  // prompt do sistema — o backend agora recusa persistir esse estado (ver agent-config.ts), mas
+  // sem aviso aqui o operador só descobriria ao ver o toggle voltar sozinho pra "desativado" no
+  // próximo carregamento, sem entender por quê. [AUDITORIA] FIX APLICADO: bloqueia o salvar
+  // com uma mensagem clara, antes mesmo de chamar a API.
   const salvar = async () => {
     if (!user) return;
+    if (config.ativo && !config.prompt_sistema?.trim()) {
+      toast.error("Configure o prompt do sistema antes de ativar o agente.");
+      return;
+    }
     setSalvando(true);
     try {
       const { data } = await api.post("/api/agent-config", config);
