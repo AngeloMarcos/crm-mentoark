@@ -27,7 +27,9 @@
 
 Dados de teste revertidos ao final (contato de controle restaurado ao estado `atendente_pausou_ia=true` em que foi encontrado; o contato-alvo do loop simulado ficou `true` como resultado esperado do próprio teste).
 
-**Validação de build:** `npm run build` (swc, transpile-only) e `npx tsc --noEmit` (typecheck completo do projeto) limpos, sem erros, antes do deploy. Deploy feito via `scripts/deploy.sh homolog` (6 arquivos) — produção (`crm-api`) confirmada com o mesmo `StartedAt` antes/depois, nunca reiniciada.
+**Validação de build:** `npm run build` (swc, transpile-only) e `npx tsc --noEmit` (typecheck completo do projeto) limpos, sem erros, antes do deploy. Deploy de teste feito via `scripts/deploy.sh homolog` (6 arquivos) — produção (`crm-api`) confirmada com o mesmo `StartedAt` antes/depois, nunca reiniciada durante a fase de teste.
+
+**Commit e deploy em produção** (mesmo dia, a pedido do usuário, após teste em homolog validado): `git commit 296951f` (8 arquivos — os 6 de backend acima + `STATUS.md` + `AUDITORIA_LOG.md`); `scripts/deploy.sh prod --confirm` (mesmos 6 arquivos de backend). Pós-deploy: `/health` → 200, sem `ERROR` nas últimas linhas de log, e os 7 pontos `maxRetries: 1` + o circuit breaker confirmados presentes por leitura direta do código já em `/opt/crm/backend/src/` no servidor (não só pela cópia local).
 
 **Pendente, fora do escopo desta sprint:** 0 contas com `ai_providers` próprio; duplicação Vision/Whisper (`webhook.ts`/`agentEngine.ts`); `agent_configs.prompt_sistema` vazio pra `fmakonee03`/`stefanocatedral` (achado na sprint de investigação anterior, não corrigido — precisa decisão do usuário); os 2 arquivos duplicados `suporte.ts` (routes/services) e o arquivo órfão `services/index.ts` não foram consolidados/removidos (fora do escopo desta correção pontual, "arquivo morto/duplicado" exige confirmação do usuário antes de deletar).
 
