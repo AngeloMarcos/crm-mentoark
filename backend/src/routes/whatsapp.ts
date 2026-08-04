@@ -422,6 +422,145 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
+  // [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): resolve a config
+  // Evolution REAL do agente ativo do tenant (agent_configs, com fallback pra `agentes`) — não
+  // usa `getEvolutionConfig()` acima de propósito. Aquele helper devolve sempre a instância
+  // "padrão" sem sufixo (`crm_<prefixo>`), mas o suporte a multi-instância (Sprint 1, comentário
+  // em `getEvolutionConfig` acima) permite que a instância REALMENTE conectada de um tenant seja
+  // uma secundária (`crm_<prefixo>_2`, `_3`...) — confirmado em homolog: `getEvolutionConfig()`
+  // apontaria pra `crm_435ee4720fc3` (instância padrão, não necessariamente a conectada),
+  // enquanto o agente ativo de verdade usa `crm_435ee4720fc3_2`. Ações de grupo (que dependem de
+  // uma sessão WhatsApp real e conectada) usam a mesma fonte que `grupoTarefaEngine.ts`/
+  // `webhook.ts` já usam pra esse fim.
+  async function resolverConfigGrupoAtivo(userId: string): Promise<{ url: string; api_key: string; instancia: string } | null> {
+    const tenantId = await resolveOwnerId(userId);
+    const cfgRes = await pool.query(
+      `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
+       FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+      [tenantId]
+    );
+    let cfg = cfgRes.rows[0];
+    if (!cfg?.url || !cfg?.api_key || !cfg?.instancia) {
+      const agtRes = await pool.query(
+        `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
+         FROM agentes WHERE user_id = $1 AND ativo = true AND evolution_instancia IS NOT NULL ORDER BY updated_at DESC LIMIT 1`,
+        [tenantId]
+      );
+      cfg = agtRes.rows[0];
+    }
+    if (!cfg?.url || !cfg?.api_key || !cfg?.instancia) return null;
+    return { url: cfg.url, api_key: cfg.api_key, instancia: cfg.instancia };
+  }
+
+  // GET /api/whatsapp/grupos/:groupJid/info — info fresca do grupo direto na Evolution (nunca
+  // cacheada) pro painel de detalhes: descrição, quantidade de participantes, data de criação —
+  // tudo que `buscarInfoGrupo()` já buscava e ficava descartado. Não expõe a lista de
+  // participantes aqui (só o resumo) — a lista completa só sai no POST de importação abaixo.
+  router.get('/grupos/:groupJid/info', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const groupJid = req.params.groupJid;
+      if (!groupJid.endsWith('@g.us')) {
+        return res.status(400).json({ message: 'groupJid inválido — precisa terminar em @g.us' });
+      }
+      const cfg = await resolverConfigGrupoAtivo(userId);
+      if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
+
+      const info = await buscarInfoGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
+      return res.json({
+        subject: info.subject,
+        pictureUrl: info.pictureUrl,
+        desc: info.desc,
+        size: info.size,
+        creation: info.creation,
+        totalParticipantes: info.participantes.length,
+      });
+    } catch (err: any) {
+      log.error('WA_GROUP_INFO', 'Erro ao buscar info do grupo', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/whatsapp/grupos/:groupJid/importar-contatos — importa os participantes reais do
+  // grupo (sempre buscados frescos, nunca cacheados — cada chamada bate na Evolution de novo) como
+  // contatos novos. [AUDITORIA] LÓGICA: contato que já existe (mesmo telefone, mesmo user_id)
+  // NUNCA é sobrescrito — nem nome, nem qualquer outro campo. É dado de terceiro sem relação
+  // comercial direta (participante de grupo, não lead orgânico nem importação intencional do
+  // operador), então `origem = 'Grupo WhatsApp'` (valor novo, distinto de 'WhatsApp'/'Importado
+  // (Disparos)') marca a procedência — usado por StepContacts/Disparos.tsx pra excluir esses
+  // contatos por padrão da opção "Todas as listas" (ver fix em Disparos.tsx), sem impedir que o
+  // operador inclua explicitamente via tag/lista/estágio manual, que já exige ação deliberada.
+  // Evolution não devolve nome de participante (só telefone) — nome nasce igual ao telefone,
+  // mesma convenção já usada em `upsertContato()`/importação CSV quando não há nome disponível.
+  router.post('/grupos/:groupJid/importar-contatos', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const tenantId = await resolveOwnerId(userId);
+      const groupJid = req.params.groupJid;
+      if (!groupJid.endsWith('@g.us')) {
+        return res.status(400).json({ message: 'groupJid inválido — precisa terminar em @g.us' });
+      }
+      const cfg = await resolverConfigGrupoAtivo(userId);
+      if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
+
+      const info = await buscarInfoGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
+      // [AUDITORIA] LÓGICA (achado do teste real em homolog, 2026-08-04): `info.participantes`
+      // já vem filtrado só pra quem tem `phoneNumber` resolvido (ver buscarInfoGrupo) — pode ser
+      // bem menor que `info.size` (total real do grupo) em grupos com "Linked ID"/privacidade
+      // ativa. `semNumeroResolvido` comunica essa diferença pro operador em vez de deixar
+      // parecer que a importação "perdeu" gente sem explicação.
+      const totalNoGrupo = info.size ?? info.participantes.length;
+      const semNumeroResolvido = Math.max(0, totalNoGrupo - info.participantes.length);
+      if (!info.participantes.length) {
+        return res.status(502).json({
+          message: totalNoGrupo > 0
+            ? `O grupo tem ${totalNoGrupo} participantes, mas nenhum teve o telefone resolvido pela Evolution (privacidade "Linked ID" ativa) — nada foi importado.`
+            : 'A Evolution não retornou participantes para este grupo — nada foi importado.',
+        });
+      }
+
+      let novos = 0;
+      let jaExistiam = 0;
+      let descartados = 0;
+      for (const p of info.participantes) {
+        if (p.telefone.length < 10 || p.telefone.length > 13) { descartados++; continue; }
+
+        const existente = await pool.query(
+          `SELECT id FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+          [tenantId, `%${p.telefone.slice(-11)}`]
+        );
+        if (existente.rows.length) { jaExistiam++; continue; }
+
+        const notas = p.admin ? `Admin do grupo "${info.subject || groupJid}"` : '';
+        const inserted = await pool.query(
+          `INSERT INTO contatos (user_id, nome, telefone, origem, status, notas)
+           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4)
+           ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
+           RETURNING id`,
+          [tenantId, p.telefone, p.telefone, notas]
+        ).catch(err => {
+          log.warn('WA_GROUP_IMPORT', 'Falha ao inserir participante', { telefone: p.telefone, err: err?.message });
+          return { rows: [] as any[] };
+        });
+        if (inserted.rows.length) novos++; else jaExistiam++; // corrida com outro insert concorrente — trata como "já existia"
+      }
+
+      log.info('WA_GROUP_IMPORT', 'Importação de contatos de grupo concluída', {
+        userId: tenantId, groupJid, novos, jaExistiam, descartados, semNumeroResolvido, totalNoGrupo,
+      });
+
+      return res.json({
+        novos, jaExistiam, descartados, semNumeroResolvido,
+        totalParticipantes: info.participantes.length,
+        totalNoGrupo,
+        grupoNome: info.subject,
+      });
+    } catch (err: any) {
+      log.error('WA_GROUP_IMPORT', 'Erro ao importar contatos do grupo', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   router.get('/conversas', async (req: AuthRequest, res: Response) => {
     log.info('WHATSAPP', 'request recebida', { method: req.method, path: req.path, userId: req.userId, query: req.query });
     try {

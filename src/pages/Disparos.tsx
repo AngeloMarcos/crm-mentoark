@@ -22,6 +22,8 @@ import { toast } from "sonner";
 import { api, getFreshToken } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
+import { useStatusEnvio, chaveTelefone } from "@/hooks/useStatusEnvio";
+import { TagStatusEnvio } from "@/components/TagStatusEnvio";
 import {
   Dialog,
   DialogContent,
@@ -379,8 +381,11 @@ export default function DisparosPage() {
       // adicionado ao select das 3 fontes — usado por StepReview pra avisar o operador antes de
       // disparar quando algum contato selecionado já recebeu campanha dentro da janela de
       // cooldown (aviso no frontend; o bloqueio de verdade é no backend, ver disparoProcessor.ts).
+      // [AUDITORIA] FIX APLICADO (Sprint Colunas de Status de Envio, 2026-07-31): `funil_estagio_id`
+      // adicionado ao select das 3 fontes — usado pela coluna nova "Situação no CRM" na prévia de
+      // contatos (StepContacts), mesma fonte já usada na aba "Por Estágio" desta mesma tela.
       if (form.tags_selecionadas.length > 0) {
-        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, tags, opt_out, ultimo_disparo_em"));
+        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, tags, opt_out, ultimo_disparo_em, funil_estagio_id"));
         const filtered = data.filter((c: any) =>
           Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
         );
@@ -390,20 +395,33 @@ export default function DisparosPage() {
         const data = await fetchAllContatos(() =>
           api
             .from("contatos")
-            .select("id, nome, telefone, empresa, opt_out, ultimo_disparo_em")
+            .select("id, nome, telefone, empresa, opt_out, ultimo_disparo_em, funil_estagio_id")
             .in("funil_estagio_id", form.estagios_selecionados)
         );
         list = [...list, ...data];
       }
       if (form.listas_selecionadas.length > 0) {
         if (form.listas_selecionadas.includes("__all__")) {
-          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em"));
-          list = [...list, ...data];
+          // [AUDITORIA] BUG (achado 2026-08-04 — Sprint Importar Contatos de Grupo): "Todas as
+          // listas" busca contatos sem filtro nenhum além de opt_out — é o ÚNICO dos 3 modos de
+          // seleção (tag/estágio/lista) que varreria participante de grupo importado
+          // (`origem = 'Grupo WhatsApp'`, ver rota de importação em whatsapp.ts) sem o operador
+          // ter feito nada explícito com aquele contato. Os outros dois modos (tag/estágio) já
+          // exigem uma atribuição manual prévia por contato — não precisam do mesmo filtro.
+          // [AUDITORIA] FIX APLICADO: `origem` incluído no select e filtrado no cliente (não
+          // `.neq()` do QueryBuilder — é um no-op documentado em client.ts, nunca chega a filtrar
+          // nada no backend; mesma classe de bug e mesma solução já usada no seletor de
+          // instâncias do anti-ban nesta mesma tela). Operador ainda pode incluir esses contatos
+          // de propósito atribuindo tag/lista/estágio manualmente — os outros 2 modos continuam
+          // trazendo qualquer contato, sem essa exclusão.
+          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem"));
+          const semGrupo = data.filter((c: any) => c.origem !== "Grupo WhatsApp");
+          list = [...list, ...semGrupo];
         } else {
           const data = await fetchAllContatos(() =>
             api
               .from("contatos")
-              .select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em")
+              .select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id")
               .in("lista_id", form.listas_selecionadas)
           );
           list = [...list, ...data];
@@ -549,6 +567,23 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
   const [totalContatos, setTotalContatos] = useState<number>(0);
   const [csvPreview, setCsvPreview] = useState<string[][]>([]);
   const [tagSearch, setTagSearch] = useState("");
+
+  // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): mapa funil_estagio_id ->
+  // {nome, cor} pra coluna "Situação no CRM" na prévia — mesma fonte (`estagios`, já buscada em
+  // fetchTargets abaixo) já usada na aba "Por Estágio" desta mesma tela, sem query nova.
+  const estagioPorId = useMemo(() => {
+    const mapa: Record<string, any> = {};
+    for (const e of estagios) mapa[e.id] = e;
+    return mapa;
+  }, [estagios]);
+
+  // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): busca "última campanha"
+  // só pros contatos REALMENTE VISÍVEIS na prévia (até 500, já limitado abaixo) — não pra
+  // `targetContacts` inteiro, que pode ter milhares de linhas numa lista grande. `ultimo_disparo_em`
+  // (pra "Nunca enviado"/"Já enviado" e a data) já vem direto em `c.ultimo_disparo_em` (mesmo select
+  // usado pelo cooldown), sem custo extra — só o NOME da campanha precisa desta busca em lote.
+  const telefonesVisiveis = filteredPreview.slice(0, 500).map((c: any) => c.telefone).filter(Boolean);
+  const statusEnvioPorTelefone = useStatusEnvio(telefonesVisiveis);
 
   // [AUDITORIA] FIX APLICADO (Sprint Disparos/Importação, 2026-07-25): extraída pra fora do
   // useEffect (era uma função anônima só chamada no mount) pra poder ser rechamada depois de uma
@@ -1032,23 +1067,54 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
           {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28): faltava overflow-x-auto — só a tabela
               de importação de CSV/XLSX do sistema sem essa proteção (achado na auditoria de
               responsividade, todas as outras já tinham). */}
+          {/* [AUDITORIA] FIX APLICADO (Sprint Colunas de Status de Envio, 2026-07-31): 4 colunas
+              novas (Situação no CRM, Status de envio, Data do último envio, Nome da última
+              campanha) — usuário revisou este passo e quis mais contexto antes de decidir quem
+              entra na campanha. "Nome da última campanha" vem de `statusEnvioPorTelefone`
+              (busca em lote só pros contatos visíveis, ver useStatusEnvio acima); o resto já
+              está no próprio `c` (mesmo select usado pelo cooldown/empresa). */}
           <div className="max-h-72 overflow-y-auto overflow-x-auto border rounded">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 sticky top-0">
                 <tr className="text-left">
                   <th className="px-3 py-2 font-medium text-xs">Nome</th>
                   <th className="px-3 py-2 font-medium text-xs">Telefone</th>
+                  <th className="px-3 py-2 font-medium text-xs">Situação no CRM</th>
+                  <th className="px-3 py-2 font-medium text-xs">Status de envio</th>
+                  <th className="px-3 py-2 font-medium text-xs">Último envio</th>
+                  <th className="px-3 py-2 font-medium text-xs">Última campanha</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredPreview.slice(0, 500).map((c: any, i: number) => (
-                  <tr key={c.id || c.telefone || i} className="border-t hover:bg-muted/30">
-                    <td className="px-3 py-1.5 truncate max-w-[200px]">{c.nome || "—"}</td>
-                    <td className="px-3 py-1.5 font-mono text-xs">{c.telefone || "—"}</td>
-                  </tr>
-                ))}
+                {filteredPreview.slice(0, 500).map((c: any, i: number) => {
+                  const estagio = c.funil_estagio_id ? estagioPorId[c.funil_estagio_id] : null;
+                  const statusEnvio = statusEnvioPorTelefone[chaveTelefone(c.telefone)];
+                  return (
+                    <tr key={c.id || c.telefone || i} className="border-t hover:bg-muted/30">
+                      <td className="px-3 py-1.5 truncate max-w-[200px]">{c.nome || "—"}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs">{c.telefone || "—"}</td>
+                      <td className="px-3 py-1.5">
+                        {estagio ? (
+                          <Badge variant="outline" className="text-[10px] gap-1">
+                            <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: estagio.cor }} />
+                            {estagio.nome}
+                          </Badge>
+                        ) : <span className="text-xs text-muted-foreground">—</span>}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <TagStatusEnvio ultimoDisparoEm={c.ultimo_disparo_em} compact />
+                      </td>
+                      <td className="px-3 py-1.5 text-xs text-muted-foreground">
+                        {c.ultimo_disparo_em ? new Date(c.ultimo_disparo_em).toLocaleDateString("pt-BR") : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-xs text-muted-foreground truncate max-w-[160px]">
+                        {statusEnvio?.campanha_nome || "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
                 {filteredPreview.length === 0 && (
-                  <tr><td colSpan={2} className="px-3 py-4 text-center text-xs text-muted-foreground">Nenhum contato corresponde à busca.</td></tr>
+                  <tr><td colSpan={6} className="px-3 py-4 text-center text-xs text-muted-foreground">Nenhum contato corresponde à busca.</td></tr>
                 )}
               </tbody>
             </table>
@@ -1086,6 +1152,15 @@ function StepMessage({ form, setForm }: any) {
     { id: "documento", label: "Documento", icon: FileText },
   ];
 
+  // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): campo ativo do Textarea
+  // compartilhado — "Mensagem" (`form.mensagem`) para tipo_midia='texto', "Legenda" (`form.legenda_midia`)
+  // para os demais tipos. Único ponto de leitura/escrita usado pelo Textarea, contador de
+  // caracteres, botões de placeholder e pela prévia abaixo — evita repetir a mesma ternária em 5
+  // lugares e garante que os 4 usos nunca fiquem dessincronizados entre si.
+  const campoAtivo: "mensagem" | "legenda_midia" = form.tipo_midia === "texto" ? "mensagem" : "legenda_midia";
+  const textoAtivo: string = form[campoAtivo] || "";
+  const setTextoAtivo = (valor: string) => setForm({ ...form, [campoAtivo]: valor });
+
   // [AUDITORIA] LÓGICA (Sprint Templates de Disparo, 2026-07-30): carregar/salvar template
   // reaproveita a mesma tabela genérica (`disparo_templates`, CRUD via makeCrud) usada pela tela
   // dedicada `DisparoTemplates.tsx`. `loadedTemplateId` rastreia se a mensagem atual veio de um
@@ -1109,18 +1184,18 @@ function StepMessage({ form, setForm }: any) {
     setTemplatesLoading(false);
   };
 
-  // [AUDITORIA] LÓGICA: `form.mensagem` é o único campo que a UI desta tela de fato edita (o
-  // Textarea abaixo é reaproveitado tanto pra "Mensagem" quanto pra "Legenda", sem alternar pra
-  // `form.legenda_midia`) — carregar um template espelha esse mesmo comportamento (usa
-  // `legenda_midia` do template como fallback só se `mensagem` vier vazio), em vez de tentar
-  // corrigir esse comportamento aqui (fora do escopo desta sprint, só templates).
+  // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): agora que o Textarea lê
+  // `form.mensagem`/`form.legenda_midia` diretamente conforme o tipo (ver `campoAtivo` acima), não
+  // precisa mais espelhar os dois campos pra exibição — só popular o campo que o tipo do template
+  // realmente usa. Fallback `tpl.legenda_midia || tpl.mensagem` mantido por compatibilidade com
+  // templates antigos (salvos antes deste fix, que gravavam o mesmo texto nos dois campos).
   const carregarTemplate = (tpl: any) => {
     setForm({
       ...form,
       tipo_midia: tpl.tipo_midia,
-      mensagem: tpl.tipo_midia === "texto" ? tpl.mensagem : (tpl.legenda_midia || tpl.mensagem || ""),
+      mensagem: tpl.tipo_midia === "texto" ? tpl.mensagem : "",
+      legenda_midia: tpl.tipo_midia === "texto" ? "" : (tpl.legenda_midia || tpl.mensagem || ""),
       url_midia: tpl.url_midia || "",
-      legenda_midia: tpl.legenda_midia || "",
     });
     setLoadedTemplateId(tpl.id);
     setLoadedTemplateNome(tpl.nome);
@@ -1182,16 +1257,18 @@ function StepMessage({ form, setForm }: any) {
     if (!user) return;
     if (!saveNome.trim()) { toast.error("Informe um nome para o template"); return; }
     setSalvandoTemplate(true);
-    // Espelha o texto em `legenda_midia` também quando não é texto puro — garante que a tela
-    // dedicada de templates (que lê `legenda_midia` pra mídia) e o próprio carregamento aqui
-    // mostrem a legenda certa, mesmo o wizard só editando `form.mensagem` na prática.
+    // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): antes espelhava
+    // `form.mensagem` em `legenda_midia` pra contornar o Textarea escrevendo sempre em `mensagem`
+    // — não precisa mais, cada campo já vem preenchido pelo tipo certo (ver `campoAtivo` acima).
+    // Mesmo padrão de `mensagem`/`legenda_midia` já usado pela tela dedicada `DisparoTemplates.tsx`
+    // (mensagem só populado pra texto puro, legenda_midia só pros demais tipos).
     const payload = {
       user_id: user.id,
       nome: saveNome.trim(),
       tipo_midia: form.tipo_midia,
-      mensagem: form.mensagem,
+      mensagem: form.tipo_midia === "texto" ? form.mensagem : "",
       url_midia: form.url_midia || null,
-      legenda_midia: form.tipo_midia === "texto" ? null : form.mensagem,
+      legenda_midia: form.tipo_midia === "texto" ? null : form.legenda_midia,
       updated_at: new Date().toISOString(),
     };
     const { data, error } = (!comoNovo && loadedTemplateId)
@@ -1260,33 +1337,31 @@ function StepMessage({ form, setForm }: any) {
           </div>
         )}
 
-        {/* [AUDITORIA] BUG (achado na Sprint Templates de Disparo, 2026-07-30): este Textarea é
+        {/* [AUDITORIA] BUG (achado na Sprint Templates de Disparo, 2026-07-30): este Textarea era
             reaproveitado tanto pra "Mensagem" (tipo_midia='texto') quanto pra "Legenda" (demais
-            tipos), mas SEMPRE escreve em `form.mensagem` — nunca em `form.legenda_midia`, mesmo
-            quando o label mostrado é "Legenda". `StepReview.handleStart` envia os dois campos
+            tipos), mas SEMPRE escrevia em `form.mensagem` — nunca em `form.legenda_midia`, mesmo
+            quando o label mostrado era "Legenda". `StepReview.handleStart` envia os dois campos
             separados pro backend (`mensagem_template` e `legenda_midia`), então toda campanha de
-            mídia criada por este wizard grava `legenda_midia` vazio de verdade, sempre. [AUDITORIA]
-            FIX PENDENTE (motivo: fora do escopo desta sprint — usuário pediu explicitamente só a
-            tela de templates agora, prévia/passo 2 fica pra próxima sprint de propósito): trocar
-            o `value`/`onChange` abaixo pra usar `form.legenda_midia` quando `tipo_midia !== 'texto'`
-            resolve. O fluxo de templates (carregar/salvar, acima) já contorna isso espelhando o
-            texto em `legenda_midia` no save/load, pra não perder a legenda nesse ciclo específico —
-            mas não corrige a causa raiz aqui. */}
+            mídia criada do zero (sem carregar template) gravava `legenda_midia` vazio de verdade.
+            [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): Textarea, contador
+            de caracteres e botões de placeholder abaixo passam a usar `textoAtivo`/`setTextoAtivo`
+            (ver `campoAtivo` no topo do componente) — leem/escrevem em `form.mensagem` OU
+            `form.legenda_midia` conforme `tipo_midia`, nunca mais sempre no mesmo campo. */}
         <div className="space-y-2">
           <div className="flex justify-between items-end">
             <Label>{form.tipo_midia === 'texto' ? 'Mensagem' : 'Legenda (opcional)'}</Label>
-            <span className={`text-[10px] ${form.mensagem.length > 4096 ? "text-destructive font-bold" : "text-muted-foreground"}`}>{form.mensagem.length}/4096</span>
+            <span className={`text-[10px] ${textoAtivo.length > 4096 ? "text-destructive font-bold" : "text-muted-foreground"}`}>{textoAtivo.length}/4096</span>
           </div>
           <Textarea
             className="min-h-[150px] font-mono text-sm"
-            value={form.mensagem}
-            onChange={e => setForm({...form, mensagem: e.target.value})}
+            value={textoAtivo}
+            onChange={e => setTextoAtivo(e.target.value)}
             placeholder={form.tipo_midia === 'texto' ? "Olá {{primeiro_nome}}, tudo bem?" : "Legenda do arquivo..."}
           />
           <div className="flex gap-2 flex-wrap">
             {["{{nome}}", "{{primeiro_nome}}", "{{telefone}}", "{{data}}", "{{empresa}}"].map(v => (
               <Button key={v} size="sm" variant="secondary" className="text-[10px] h-7" onClick={() => {
-                setForm({...form, mensagem: form.mensagem + v});
+                setTextoAtivo(textoAtivo + v);
               }}>+{v}</Button>
             ))}
           </div>
@@ -1305,9 +1380,13 @@ function StepMessage({ form, setForm }: any) {
                 a MESMA função de substituição do envio real (substituirPlaceholders, topo do
                 arquivo) com um contato de exemplo completo — antes só {{nome}}/{{primeiro_nome}}
                 eram trocados aqui, então a prévia nunca alertava que {{telefone}}/{{data}}/
-                {{empresa}} ficavam literais na mensagem de verdade. */}
+                {{empresa}} ficavam literais na mensagem de verdade.
+                [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): usa `textoAtivo`
+                (mensagem OU legenda, conforme tipo_midia) em vez de `form.mensagem` sempre — pra
+                mídia, a prévia agora mostra de fato o que vai virar `mensagem_enviada` (legenda
+                personalizada) e não o campo errado (que ficava vazio). */}
             <p className="text-sm whitespace-pre-wrap">
-              {substituirPlaceholders(form.mensagem, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" })}
+              {substituirPlaceholders(textoAtivo, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" })}
             </p>
             <span className="text-[10px] text-muted-foreground float-right">10:45</span>
           </div>
@@ -1738,7 +1817,12 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         horario_fim: form.janela_fim,
         instancias_ids: form.instancias_ids,
         total_leads: targetContacts.length,
-        mensagem_template: form.mensagem,
+        // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): `form.mensagem` fica
+        // vazio para campanhas de mídia agora que o Textarea escreve em `form.legenda_midia` pra
+        // esses tipos (ver `campoAtivo` em StepMessage) — usa o campo certo pra `mensagem_template`
+        // não gravar em branco. Coluna é só informativa/auditoria (não lida por `disparoProcessor.ts`
+        // nem por `get_next_disparo_batch`, confirmado por grep), sem impacto no envio real.
+        mensagem_template: form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia,
         tipo_midia: form.tipo_midia,
         url_midia: form.url_midia,
         legenda_midia: form.legenda_midia,
@@ -1774,13 +1858,21 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       // [AUDITORIA] FIX APLICADO (Sprint Placeholders/Upload, 2026-07-30): usa substituirPlaceholders
       // (topo do arquivo) em vez do `.replace()` duplo que só cobria 2 dos 5 atalhos oferecidos na
       // tela — ver comentário completo na declaração da função.
+      // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): `disparo_logs` não tem
+      // coluna própria de legenda — `mensagem_enviada` é o único lugar onde a personalização POR
+      // CONTATO (substituirPlaceholders) sobrevive; `disparos.legenda_midia` é compartilhado pela
+      // campanha inteira (sem personalização possível). Pra campanha de mídia, a fonte tem que ser
+      // `form.legenda_midia` (não `form.mensagem`, que fica vazio pra esses tipos) — sem isso,
+      // `mensagem_enviada` viraria "" pra cada contato e `disparoProcessor.ts` usaria a legenda
+      // crua (com `{{placeholders}}` literais) da campanha, nunca a versão personalizada. Ver fix
+      // relacionado em `disparoProcessor.ts` (prioridade de `legendaFinal` invertida pro mesmo motivo).
       const logs = targetContacts.map(c => ({
         disparo_id: campaignData.id,
         user_id: user?.id,
         contato_id: c.id,
         telefone: c.telefone,
         nome: c.nome,
-        mensagem_enviada: substituirPlaceholders(form.mensagem, c),
+        mensagem_enviada: substituirPlaceholders(form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia, c),
         status: 'pending'
       }));
 
@@ -1856,7 +1948,11 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
 
         <div className="p-4 bg-muted/50 rounded-lg border">
           <p className="text-xs font-bold mb-2">Resumo da Mensagem:</p>
-          <p className="text-xs italic text-muted-foreground line-clamp-3">"{form.mensagem}"</p>
+          {/* [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): `form.mensagem`
+              fica vazio para campanhas de mídia (Textarea escreve em `form.legenda_midia` pra
+              esses tipos, ver StepMessage) — sem este fix, o resumo mostrava sempre "" pra
+              qualquer campanha de imagem/áudio/documento. */}
+          <p className="text-xs italic text-muted-foreground line-clamp-3">"{form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia}"</p>
         </div>
 
         {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): aviso não-bloqueante

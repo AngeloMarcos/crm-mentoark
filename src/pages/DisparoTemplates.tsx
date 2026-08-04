@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, type ChangeEvent } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,10 +36,37 @@ import {
   Image as ImageIcon,
   Headphones,
   FileText,
+  Upload,
+  Link as LinkIcon,
+  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
+import { getAuthToken } from "@/lib/api-token";
+
+// [AUDITORIA] LÓGICA (Sprint Integração Galeria↔Templates, 2026-08-04): mesmo padrão de
+// fetch cru + token síncrono já usado em Galeria.tsx pra upload multipart — o QueryBuilder
+// genérico (`api.from(...)`) não faz upload de arquivo, só CRUD de linha.
+const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
+const token = () => getAuthToken();
+
+// tipo_midia (disparo_templates, pt-BR) → media_type (galeria_midias, en) — a Galeria não
+// distingue "imagem" com legenda de outra coisa, e não tem tipo próprio pra vídeo hoje.
+const TIPO_MIDIA_PARA_GALERIA: Record<string, string | null> = {
+  imagem: "image",
+  documento: "pdf",
+  audio: "audio",
+  texto: null,
+};
+
+interface MidiaGaleria {
+  id: string;
+  url: string;
+  titulo: string | null;
+  filename: string;
+  media_type: string;
+}
 
 interface DisparoTemplate {
   id: string;
@@ -73,6 +100,17 @@ export default function DisparoTemplatesPage() {
     url_midia: "",
     legenda_midia: "",
   });
+  // [AUDITORIA] LÓGICA (Sprint Integração Galeria↔Templates, 2026-08-04): antes disto, o campo
+  // "URL do Arquivo" era um <input type="text"> cru — o operador precisava ter hospedado a
+  // imagem em outro lugar e colar o link manualmente, sem nenhuma ligação com a Galeria de
+  // Mídias que o próprio CRM já tem. Agora busca as mídias já cadastradas (filtradas pelo tipo
+  // escolhido) pra seleção com um clique, e permite subir um arquivo novo direto por aqui —
+  // ambos preenchem `url_midia` automaticamente. O input manual continua disponível (link
+  // externo é um caso de uso legítimo), só não é mais o único caminho.
+  const [galeriaItens, setGaleriaItens] = useState<MidiaGaleria[]>([]);
+  const [loadingGaleria, setLoadingGaleria] = useState(false);
+  const [uploadingGaleria, setUploadingGaleria] = useState(false);
+  const [mostrarUrlManual, setMostrarUrlManual] = useState(false);
 
   const carregar = async () => {
     if (!user) return;
@@ -88,6 +126,58 @@ export default function DisparoTemplatesPage() {
 
   useEffect(() => { carregar(); }, [user?.id]);
 
+  // Busca as mídias da Galeria já filtradas pelo media_type equivalente ao tipo_midia atual —
+  // roda de novo sempre que o modal abre ou o operador troca o tipo de mídia dentro dele.
+  const carregarGaleria = useCallback(async (tipoMidia: string) => {
+    const tipoGaleria = TIPO_MIDIA_PARA_GALERIA[tipoMidia];
+    if (!tipoGaleria) { setGaleriaItens([]); return; }
+    setLoadingGaleria(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/galeria?tipo=${tipoGaleria}&limit=24`, {
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setGaleriaItens(d.images ?? []);
+      }
+    } catch {
+      // Falha ao carregar a galeria não deve travar o modal — operador ainda pode colar uma
+      // URL manual (ver mostrarUrlManual) ou tentar de novo.
+    } finally {
+      setLoadingGaleria(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (modal && form.tipo_midia !== "texto") carregarGaleria(form.tipo_midia);
+  }, [modal, form.tipo_midia, carregarGaleria]);
+
+  const handleUploadGaleria = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadingGaleria(true);
+    try {
+      const formData = new FormData();
+      formData.append("imagens", file); // campo aceito pelo backend pra qualquer tipo, ver galeria.ts
+      const r = await fetch(`${API_BASE}/api/galeria/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token()}` },
+        body: formData,
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || "Erro no upload");
+      const novo = await r.json();
+      const item: MidiaGaleria = Array.isArray(novo) ? novo[0] : novo;
+      setGaleriaItens(prev => [item, ...prev]);
+      setForm(f => ({ ...f, url_midia: item.url }));
+      toast.success("Arquivo enviado e selecionado para o template");
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao enviar arquivo");
+    } finally {
+      setUploadingGaleria(false);
+    }
+  };
+
   const filtrados = useMemo(() => {
     const t = searchTerm.toLowerCase();
     if (!t) return templates;
@@ -100,6 +190,7 @@ export default function DisparoTemplatesPage() {
   const abrirNovo = () => {
     setEditando(null);
     setForm({ nome: "", tipo_midia: "texto", mensagem: "", url_midia: "", legenda_midia: "" });
+    setMostrarUrlManual(false);
     setModal(true);
   };
 
@@ -112,6 +203,10 @@ export default function DisparoTemplatesPage() {
       url_midia: tpl.url_midia ?? "",
       legenda_midia: tpl.legenda_midia ?? "",
     });
+    // [AUDITORIA] LÓGICA: se o template já tem uma URL (caso comum pra templates criados antes
+    // desta sprint, só com o input manual antigo), abre o campo manual já visível — evita que o
+    // operador ache que perdeu o valor só porque agora o seletor de galeria é o destaque.
+    setMostrarUrlManual(!!tpl.url_midia);
     setModal(true);
   };
 
@@ -291,13 +386,69 @@ export default function DisparoTemplatesPage() {
             </div>
 
             {form.tipo_midia !== "texto" && (
-              <div className="space-y-1.5">
-                <Label>URL do Arquivo</Label>
-                <Input
-                  value={form.url_midia}
-                  onChange={e => setForm(f => ({ ...f, url_midia: e.target.value }))}
-                  placeholder="https://..."
-                />
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Arquivo</Label>
+                  <label className="inline-flex items-center gap-1.5 text-xs font-medium text-primary cursor-pointer hover:underline">
+                    {uploadingGaleria ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                    Fazer upload
+                    <input type="file" accept="image/*,application/pdf,audio/*" className="hidden" disabled={uploadingGaleria} onChange={handleUploadGaleria} />
+                  </label>
+                </div>
+
+                {loadingGaleria ? (
+                  <div className="flex justify-center py-6"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
+                ) : galeriaItens.length > 0 ? (
+                  <div className="grid grid-cols-6 gap-2 max-h-40 overflow-y-auto p-1 border rounded-lg">
+                    {galeriaItens.map(item => {
+                      const selecionado = form.url_midia === item.url;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          title={item.titulo || item.filename}
+                          onClick={() => setForm(f => ({ ...f, url_midia: item.url }))}
+                          className={`relative aspect-square rounded-md overflow-hidden border-2 transition-all ${
+                            selecionado ? "border-primary ring-2 ring-primary/30" : "border-transparent hover:border-muted-foreground/30"
+                          }`}
+                        >
+                          {item.media_type === "image" ? (
+                            <img src={item.url} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-muted">
+                              {item.media_type === "audio" ? <Headphones className="h-4 w-4 text-muted-foreground" /> : <FileText className="h-4 w-4 text-muted-foreground" />}
+                            </div>
+                          )}
+                          {selecionado && (
+                            <div className="absolute top-0.5 right-0.5 bg-primary text-primary-foreground rounded-full p-0.5">
+                              <Check className="h-2.5 w-2.5" />
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/70 py-1">
+                    Nenhuma mídia deste tipo na Galeria ainda — faça upload acima.
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setMostrarUrlManual(v => !v)}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <LinkIcon className="h-3 w-3" />
+                  {mostrarUrlManual ? "Ocultar link manual" : "Ou colar um link externo"}
+                </button>
+                {mostrarUrlManual && (
+                  <Input
+                    value={form.url_midia}
+                    onChange={e => setForm(f => ({ ...f, url_midia: e.target.value }))}
+                    placeholder="https://..."
+                  />
+                )}
               </div>
             )}
 

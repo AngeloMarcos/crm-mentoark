@@ -34,6 +34,15 @@ services:
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-Mentoark@2025}
     volumes:
       - ./wa-media:/app/wa-media
+      # [AUDITORIA] BUG (achado 2026-08-04 — "imagens da Galeria aparecem quebradas"): /app/uploads
+      # (onde galeria.ts salva upload manual via multer, UPLOADS_DIR) nunca teve volume montado —
+      # só /app/wa-media (mídia de chat/fotos de perfil, whatsappMediaStorage.ts) tinha. Todo
+      # arquivo em /app/uploads era apagado a cada rebuild de imagem (camada gravável do
+      # container, sem persistência), mesmo com a URL absoluta correta gravada em
+      # galeria_midias.url — confirmado ao vivo: /app/uploads vazio logo após deploy, sem
+      # contrapartida em /opt/crm/backend/uploads no host. [AUDITORIA] FIX APLICADO: mesmo padrão
+      # já usado por wa-media — bind mount simples, sobrevive a rebuild/restart do container.
+      - ./uploads:/app/uploads
     expose:
       - "3000"
     networks:

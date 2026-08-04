@@ -100,6 +100,47 @@ export default function contatos(pool: Pool): Router {
     }
   });
 
+  // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): endpoint único e em lote
+  // pra 3 telas diferentes (seleção de contatos em Disparos, painel de contato no chat,
+  // ContatoDetalhe) mostrarem a mesma tag "Já enviado (campanha, data)"/"Nunca enviado" sem
+  // duplicar a query em cada uma. Chave é TELEFONE, não `contato_id` — decisão deliberada:
+  // `WhatsAppInterface.tsx` só tem o telefone da conversa ativa (sem `contatos.id` disponível),
+  // e `ContatoDetalhe.tsx` busca de `dados_cliente` (id BIGINT, espaço de identidade DIFERENTE de
+  // `contatos.id` UUID) — telefone é a única chave universal às 3 telas, mesmo padrão de
+  // comparação por sufixo (RIGHT(...,11)) já usado no resto do sistema (telefone não normalizado
+  // pro mesmo formato em todo lugar). Aceita 1 ou N telefones — telas de contato único mandam um
+  // array de 1; a tela de seleção de Disparos manda todos os telefones VISÍVEIS na prévia (até
+  // 500, já limitado lá) numa chamada só, evitando N+1. `DISTINCT ON` + índice de expressão
+  // parcial (idx_disparo_logs_telefone_enviado, ver migrations.ts) resolve "última campanha por
+  // telefone" com uma única query, mesmo pra centenas de telefones de uma vez. `dl.user_id = $2`
+  // é a checagem de tenant — sem isso, um cliente malicioso poderia passar telefones de outro
+  // usuário pra tentar descobrir nomes de campanha alheios.
+  router.post('/status-envio', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const telefones = Array.isArray(req.body?.telefones)
+      ? Array.from(new Set(req.body.telefones.filter((t: any) => typeof t === 'string' && t.trim()).map((t: string) => t.slice(-11))))
+      : [];
+    if (!telefones.length) return res.json({});
+    try {
+      const r = await pool.query(
+        `SELECT DISTINCT ON (RIGHT(dl.telefone, 11)) RIGHT(dl.telefone, 11) AS telefone_norm, dl.enviado_at, d.nome AS campanha_nome
+         FROM disparo_logs dl
+         JOIN disparos d ON d.id = dl.disparo_id
+         WHERE dl.user_id = $1 AND dl.status = 'sent' AND RIGHT(dl.telefone, 11) = ANY($2::text[])
+         ORDER BY RIGHT(dl.telefone, 11), dl.enviado_at DESC`,
+        [userId, telefones]
+      );
+      const porTelefone: Record<string, { ultimo_disparo_em: string; campanha_nome: string }> = {};
+      for (const row of r.rows) {
+        porTelefone[row.telefone_norm] = { ultimo_disparo_em: row.enviado_at, campanha_nome: row.campanha_nome };
+      }
+      return res.json(porTelefone);
+    } catch (err: any) {
+      log.error('CONTATOS', 'Erro em status-envio', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // PATCH /:id/pausa-ia — ativa ou desativa pausa de atendimento humano
   // Body: { ativo: boolean, duracao_min?: number }
   router.patch('/:id/pausa-ia', async (req: AuthRequest, res: Response) => {

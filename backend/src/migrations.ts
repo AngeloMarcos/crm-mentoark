@@ -524,6 +524,22 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ON disparo_logs (status) WHERE status = 'pending'
   `).catch(() => {});
 
+  // [AUDITORIA] FIX APLICADO (Sprint Colunas de Status de Envio, 2026-07-31): índice de EXPRESSÃO
+  // parcial (só linhas `status='sent'`) pra suportar com eficiência a busca de "última campanha
+  // por telefone" (DISTINCT ON RIGHT(telefone,11) ORDER BY enviado_at DESC, ver
+  // POST /api/contatos/status-envio em contatos.ts). Chave é TELEFONE, não `contato_id` — decisão
+  // deliberada: das 3 telas que precisam desta informação (StepContacts/Disparos.tsx,
+  // WhatsAppInterface.tsx, ContatoDetalhe.tsx), só as duas primeiras têm um `contatos.id` (uuid)
+  // disponível de cara; WhatsAppInterface só tem o telefone da conversa ativa, e
+  // ContatoDetalhe.tsx busca de `dados_cliente` (id BIGINT, espaço de identidade DIFERENTE de
+  // `contatos.id` UUID) — telefone é a única chave universal às 3 telas. RIGHT(...,11) mesmo
+  // padrão de comparação por sufixo já usado em todo o resto do sistema (telefone não
+  // normalizado pro mesmo formato em todo lugar).
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_disparo_logs_telefone_enviado
+    ON disparo_logs ((RIGHT(telefone, 11)), enviado_at DESC) WHERE status = 'sent'
+  `).catch(() => {});
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS disparo_rate_limit (
       user_id         UUID PRIMARY KEY,
@@ -1667,6 +1683,80 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ALTER TABLE disparo_templates ADD CONSTRAINT fk_disparo_templates_user
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   `).catch(() => {});
+
+  // ── Corridas via WhatsApp — integração com sistema de gestão de corridas do cliente ──
+  // [AUDITORIA] LÓGICA: registra todo pedido de corrida identificado numa conversa de
+  // WhatsApp (via ferramenta de IA `criar_corrida`, mcp/tools.ts) ou criado manualmente pela
+  // tela "Corridas Pendentes" (routes/corridas.ts). `status` e `confianca_ia` são TEXT livres
+  // por decisão deliberada (mesmo padrão de `disparo_logs.status`) — sem CHECK constraint,
+  // os valores usados pelo código são: status = pendente_confirmacao|confirmada|enviada|
+  // falha_envio|cancelada; confianca_ia = alta|baixa. `horario_solicitado` é TEXT livre de
+  // propósito (não força parse de data rígido nesta fase — pedidos chegam em texto livre e
+  // variado). A URL/token da API do cliente ficam em `integracoes_config` (tipo
+  // 'corridas_cliente'), reaproveitando o padrão já existente em vez de tabela de config nova.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS corridas (
+      id                 UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id            UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      contato_id         UUID,
+      telefone           TEXT NOT NULL,
+      nome_passageiro    TEXT,
+      origem             TEXT,
+      destino            TEXT,
+      horario_solicitado TEXT,
+      observacoes        TEXT,
+      status             TEXT NOT NULL DEFAULT 'pendente_confirmacao',
+      origem_extracao    TEXT NOT NULL DEFAULT 'ia',
+      confianca_ia       TEXT,
+      payload_enviado    JSONB,
+      resposta_api       JSONB,
+      enviado_at         TIMESTAMPTZ,
+      created_at         TIMESTAMPTZ DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_corridas_user_status
+    ON corridas (user_id, status, created_at DESC)
+  `).catch(() => {});
+
+  log.info('MIGRATIONS', 'corridas OK');
+
+  // ── Grupos de WhatsApp autorizados para a IA criar tarefa (roleta de time) ──
+  // [AUDITORIA] LÓGICA (Sprint Tarefa por Grupo, 2026-08-02): portão único — a IA ignora todo
+  // grupo por padrão (`if (isGroup) return`, webhook.ts) e essa tabela é a ÚNICA exceção
+  // controlada: só processa mensagem de grupo pra criar tarefa quando o JID bate com uma linha
+  // `ativo=true` aqui. `participantes_ids` é um SNAPSHOT (array de `users.id`), não um JOIN
+  // dinâmico com `team_members` — decisão deliberada (mais simples; trade-off aceito: se alguém
+  // sair do time, precisa reconfigurar manualmente). `proximo_indice` é o estado do round-robin,
+  // persistente em banco de propósito (precisa sobreviver a restart do backend, diferente do
+  // round-robin de instâncias de Disparos, que vive só em memória por execução de lote).
+  // `ultima_tarefa_em` sustenta o cooldown de 2min entre tarefas do mesmo grupo (evita que uma
+  // rajada de mensagens sobre o mesmo assunto vire várias tarefas duplicadas). Cadastro de
+  // `group_jid`/`participantes_ids` é manual via SQL por enquanto (sem tela ainda) — a feature
+  // fica inofensiva com `participantes_ids='{}'` (sem participante, não cria tarefa nenhuma, só
+  // loga aviso) até o usuário cadastrar time e ativar um grupo real.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS grupos_ia_permitidos (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      group_jid         TEXT NOT NULL,
+      finalidade        TEXT,
+      ativo             BOOLEAN NOT NULL DEFAULT true,
+      participantes_ids UUID[] NOT NULL DEFAULT '{}',
+      proximo_indice    INTEGER NOT NULL DEFAULT 0,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW(),
+      ultima_tarefa_em  TIMESTAMPTZ,
+      UNIQUE (user_id, group_jid)
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_grupos_ia_permitidos_lookup
+    ON grupos_ia_permitidos (user_id, group_jid) WHERE ativo = true
+  `).catch(() => {});
+
+  log.info('MIGRATIONS', 'grupos_ia_permitidos OK');
 
   log.info('MIGRATIONS', 'OK');
 }

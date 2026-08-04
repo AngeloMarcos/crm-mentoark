@@ -211,27 +211,74 @@ export async function salvarFotoPerfilLocal(picUrl: string, userId: string, tele
 // XXXX" já existente, sem regressão). Usada tanto no webhook (achado orgânico a cada
 // mensagem nova de grupo) quanto no botão de sincronização manual (backfill de grupos já
 // existentes, sem precisar esperar mensagem nova).
+export interface ParticipanteGrupo {
+  telefone: string;
+  admin: 'admin' | 'superadmin' | null;
+}
+
+export interface InfoGrupo {
+  subject: string | null;
+  pictureUrl: string | null;
+  // [AUDITORIA] LÓGICA (achado 2026-08-04 — pedido de importar contatos de grupo): a mesma
+  // resposta de `findGroupInfos` já trazia `desc`/`size`/`creation`/`participants` e tudo isso
+  // era descartado — só `subject`/`pictureUrl` chegavam a ser lidos. Nenhuma chamada nova à
+  // Evolution, só aproveitar o que já vinha.
+  desc: string | null;
+  size: number | null;
+  creation: number | null; // unix timestamp (segundos), como a Evolution devolve
+  participantes: ParticipanteGrupo[];
+}
+
 export async function buscarInfoGrupo(
   evoUrl: string, apiKey: string, instancia: string, groupJid: string,
-): Promise<{ subject: string | null; pictureUrl: string | null }> {
+): Promise<InfoGrupo> {
+  const vazio: InfoGrupo = { subject: null, pictureUrl: null, desc: null, size: null, creation: null, participantes: [] };
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
       const url = `${evoUrl.replace(/\/$/, '')}/group/findGroupInfos/${instancia}?groupJid=${encodeURIComponent(groupJid)}`;
       const r = await fetch(url, { headers: { apikey: apiKey }, signal: controller.signal });
-      if (!r.ok) return { subject: null, pictureUrl: null };
+      if (!r.ok) return vazio;
       const d: any = await r.json().catch(() => ({}));
+      // [AUDITORIA] LÓGICA (corrigido após teste real em homolog, 2026-08-04): cada participante
+      // vem como `{ id, phoneNumber?, admin }` — `id` é sempre um `@lid` (Linked ID interno da
+      // Evolution/WhatsApp), NUNCA um telefone de verdade. `phoneNumber` é o número real
+      // (`@s.whatsapp.net`), mas só vem preenchido quando o WhatsApp já resolveu aquele lid pra
+      // um contato conhecido — em grupos com "Linked ID"/privacidade ativa, a MAIORIA dos
+      // participantes não tem `phoneNumber` nenhum (confirmado num grupo real de teste: de 79
+      // participantes, só o admin tinha `phoneNumber` — os outros 78 só tinham `id`/lid). A
+      // primeira versão desta função caía pros dígitos do `id` quando `phoneNumber` faltava —
+      // ERRADO: isso importava o lid como se fosse telefone (número que não existe de verdade,
+      // não dá pra mandar mensagem nenhuma pra ele). [AUDITORIA] FIX APLICADO: só inclui
+      // participante que tenha `phoneNumber` genuíno — sem fallback pro `id`. Reduz quantos
+      // participantes ficam disponíveis pra importar em grupos com essa privacidade ativa, mas
+      // importar um "telefone" que na verdade é um lid seria pior (contato fantasma,
+      // inutilizável, poluindo a base). `admin` vem `null` (membro comum), `"admin"` ou
+      // `"superadmin"`.
+      const participantes: ParticipanteGrupo[] = Array.isArray(d?.participants)
+        ? d.participants
+            .filter((p: any) => typeof p?.phoneNumber === 'string' && p.phoneNumber)
+            .map((p: any) => ({
+              telefone: p.phoneNumber.split('@')[0].replace(/\D/g, ''),
+              admin: (p?.admin === 'admin' || p?.admin === 'superadmin') ? p.admin : null,
+            }))
+            .filter((p: ParticipanteGrupo) => p.telefone.length >= 8)
+        : [];
       return {
         subject: (typeof d?.subject === 'string' && d.subject.trim()) ? d.subject.trim() : null,
         pictureUrl: d?.pictureUrl || null,
+        desc: (typeof d?.desc === 'string' && d.desc.trim()) ? d.desc.trim() : null,
+        size: typeof d?.size === 'number' ? d.size : (participantes.length || null),
+        creation: typeof d?.creation === 'number' ? d.creation : null,
+        participantes,
       };
     } finally {
       clearTimeout(timer);
     }
   } catch (err: any) {
     log.warn('WA_GROUP', 'Falha ao buscar info do grupo', { groupJid, err: err?.message });
-    return { subject: null, pictureUrl: null };
+    return vazio;
   }
 }
 

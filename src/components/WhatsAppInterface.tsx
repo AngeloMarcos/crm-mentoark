@@ -31,7 +31,7 @@ import {
   BotOff, Bot, ImageIcon, Reply,
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
   Copy, Video, FileText, Trash2, Forward, Star,
-  AlertCircle, Activity, ArrowLeft,
+  AlertCircle, Activity, ArrowLeft, Users,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -55,6 +55,8 @@ import {
 import { getAuthToken } from "@/lib/api-token";
 import { getFreshToken } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useStatusEnvio, chaveTelefone } from "@/hooks/useStatusEnvio";
+import { TagStatusEnvio } from "@/components/TagStatusEnvio";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 // [AUDITORIA] FIX APLICADO (2026-07-10): apiHeaders() lia o token cru do localStorage sem checar
@@ -431,6 +433,14 @@ export function WhatsAppInterface() {
   const [savingName, setSavingName] = useState(false);
   // Sincronização de fotos
   const [syncingProfiles, setSyncingProfiles] = useState(false);
+  // [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): info fresca do grupo
+  // (descrição/qtd. participantes/data de criação) — buscada sob demanda quando o painel abre
+  // pra uma conversa de grupo, nunca cacheada em disco (ver GET /grupos/:jid/info). `null`
+  // enquanto carrega ou fora de um grupo.
+  const [grupoInfoExtra, setGrupoInfoExtra] = useState<{ desc: string | null; size: number | null; creation: number | null } | null>(null);
+  const [showImportarGrupoModal, setShowImportarGrupoModal] = useState(false);
+  const [importandoGrupo, setImportandoGrupo] = useState(false);
+  const [resultadoImportacaoGrupo, setResultadoImportacaoGrupo] = useState<{ novos: number; jaExistiam: number; descartados: number; semNumeroResolvido: number } | null>(null);
   // Cache de sessão: phone → foto_perfil buscada (evita repetir chamadas)
   const prevConversasRef = useRef<Map<string, { ts: string; role: string }>>(new Map());
   const prevUltimaAtividadeRef = useRef<Map<string, string>>(new Map());
@@ -527,6 +537,22 @@ export function WhatsAppInterface() {
     } catch {}
   }, []);
 
+  // [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): busca info fresca do
+  // grupo (descrição/tamanho/criação) ao abrir uma conversa de grupo — mesma cadência de
+  // `fetchIaStatus` acima (uma vez por troca de chat, não fica em polling). `groupJid` já vem
+  // com `@g.us` (é `activeChatId`/`chat.id` pra grupo). Nunca cacheada — sempre bate na
+  // Evolution de novo (rota GET /grupos/:jid/info não persiste nada).
+  const fetchGrupoInfoExtra = useCallback(async (groupJid: string) => {
+    setGrupoInfoExtra(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(groupJid)}/info`, { headers: await apiHeaders() });
+      if (res.ok) {
+        const d = await res.json();
+        setGrupoInfoExtra({ desc: d.desc, size: d.size, creation: d.creation });
+      }
+    } catch {}
+  }, []);
+
   const toggleIA = async () => {
     if (!activeChatId) return;
     setTogglingIA(true);
@@ -603,6 +629,35 @@ export function WhatsAppInterface() {
     }
   };
 
+  // [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): chamado só depois da
+  // confirmação explícita no modal (ver DialogContent mais abaixo) — nunca dispara sozinho ao
+  // abrir o painel do grupo. Busca participantes SEMPRE frescos no backend (rota nunca cacheia),
+  // nunca sobrescreve contato existente — ver comentário completo na rota
+  // POST /grupos/:jid/importar-contatos (whatsapp.ts).
+  const importarContatosDoGrupo = async () => {
+    if (!activeChatId) return;
+    setImportandoGrupo(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/importar-contatos`, {
+        method: 'POST',
+        headers: await apiHeaders(),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.message || 'Erro ao importar contatos do grupo');
+        return;
+      }
+      const { novos, jaExistiam, descartados, semNumeroResolvido } = await res.json();
+      setResultadoImportacaoGrupo({ novos, jaExistiam, descartados, semNumeroResolvido });
+      toast.success(`${novos} contato(s) novo(s) — ${jaExistiam} já existiam`);
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setImportandoGrupo(false);
+      setShowImportarGrupoModal(false);
+    }
+  };
+
   const salvarNomeContato = async () => {
     if (!activeChatId || !nameInput.trim()) return;
     setSavingName(true);
@@ -645,6 +700,12 @@ export function WhatsAppInterface() {
   // Nenhum bug de render encontrado; se a Camada 1-4 entregam o dado atualizado em `chats`, a
   // tela reflete sem necessidade de refresh manual.
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
+
+  // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): mesma tag "Já enviado
+  // (campanha, data)"/"Nunca enviado" já usada em StepContacts (Disparos.tsx) e ContatoDetalhe.tsx —
+  // hook compartilhado, chave é telefone (este componente só tem `activeChat.phone`, sem
+  // `contatos.id` disponível — `Chat` não carrega esse campo).
+  const statusEnvioPorTelefone = useStatusEnvio(activeChat?.phone ? [activeChat.phone] : []);
 
   const filteredChats = useMemo(() => {
     let list = chats.filter(c =>
@@ -1186,6 +1247,8 @@ export function WhatsAppInterface() {
     if (chat) fetchMensagens(activeChatId, chatName, true);
     fetchIaStatus(activeChatId);
     if (chat && !chat.profile_pic) fetchProfilePic(activeChatId);
+    if (chat?.is_group) fetchGrupoInfoExtra(activeChatId); else setGrupoInfoExtra(null);
+    setResultadoImportacaoGrupo(null); // limpa resumo da importação anterior ao trocar de conversa
     // [AUDITORIA] LÓGICA — Camada 4, Interval C: usa activeChatIdRef.current (não activeChatId
     // diretamente) dentro do setInterval — corretamente evita o bug de closure obsoleto (o ref
     // sempre reflete o valor mais atual, atualizado pelo useEffect de activeChatIdRef.current logo
@@ -3636,6 +3699,14 @@ export function WhatsAppInterface() {
                 {activeChat.online && (
                   <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest animate-pulse">Online Agora</span>
                 )}
+                {/* [AUDITORIA] FIX APLICADO (Sprint Colunas de Status de Envio, 2026-07-31): mesma
+                    tag já usada em StepContacts (Disparos.tsx) e ContatoDetalhe.tsx — só
+                    visibilidade, não bloqueia nada. */}
+                <TagStatusEnvio
+                  ultimoDisparoEm={statusEnvioPorTelefone[chaveTelefone(activeChat.phone)]?.ultimo_disparo_em}
+                  campanhaNome={statusEnvioPorTelefone[chaveTelefone(activeChat.phone)]?.campanha_nome}
+                  className="mt-1"
+                />
               </div>
             </div>
 
@@ -3685,14 +3756,56 @@ export function WhatsAppInterface() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
+
+              {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): só aparece
+                  pra conversa de grupo — participante de grupo é dado de terceiro sem relação
+                  comercial direta, então a importação em massa exige confirmação explícita (ver
+                  modal abaixo), nunca acontece com um clique só. */}
+              {activeChat.is_group && (
+                <button
+                  onClick={() => setShowImportarGrupoModal(true)}
+                  className="w-full flex items-center justify-center gap-2 h-11 rounded-2xl border bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95"
+                >
+                  <Users className="h-3.5 w-3.5" />
+                  Baixar contatos do grupo
+                </button>
+              )}
+              {resultadoImportacaoGrupo && (
+                <p className="text-[11px] text-center text-muted-foreground font-medium">
+                  Última importação: {resultadoImportacaoGrupo.novos} novo(s), {resultadoImportacaoGrupo.jaExistiam} já existiam
+                  {resultadoImportacaoGrupo.descartados > 0 ? `, ${resultadoImportacaoGrupo.descartados} descartado(s)` : ''}.
+                  {/* [AUDITORIA] LÓGICA: em grupos com privacidade "Linked ID" ativa, a Evolution
+                      só resolve o telefone real de parte dos participantes (geralmente admins) —
+                      o resto fica só como lid interno, que não é telefone de verdade e por isso
+                      nunca é importado (ver buscarInfoGrupo, whatsappMediaStorage.ts). Sem este
+                      aviso o operador acharia que a importação "perdeu" gente sem motivo. */}
+                  {resultadoImportacaoGrupo.semNumeroResolvido > 0 && (
+                    <> {resultadoImportacaoGrupo.semNumeroResolvido} sem telefone resolvido pela Evolution (privacidade do grupo).</>
+                  )}
+                </p>
+              )}
             </div>
 
             {/* Sobre */}
             <div className="border-t border-border/40 px-5 py-5">
               <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 mb-2">Sobre / Recado</p>
               <p className="text-sm font-medium text-foreground/80 leading-relaxed italic">
-                {activeChat.is_group ? "Grupo de conversa" : (activeChat.push_name ? `~${activeChat.push_name}` : "Disponível")}
+                {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): descrição
+                    real do grupo (`desc`, buscada fresca via fetchGrupoInfoExtra) tem prioridade
+                    sobre o texto genérico "Grupo de conversa" — só cai no genérico se a Evolution
+                    não devolver descrição pra este grupo (grupo sem descrição definida, ou ainda
+                    carregando). Nunca aplicável a contato individual. */}
+                {activeChat.is_group
+                  ? (grupoInfoExtra?.desc || "Grupo de conversa")
+                  : (activeChat.push_name ? `~${activeChat.push_name}` : "Disponível")}
               </p>
+              {activeChat.is_group && grupoInfoExtra && (grupoInfoExtra.size || grupoInfoExtra.creation) && (
+                <p className="text-[11px] text-muted-foreground/70 font-medium mt-2">
+                  {grupoInfoExtra.size ? `${grupoInfoExtra.size} participantes` : ''}
+                  {grupoInfoExtra.size && grupoInfoExtra.creation ? ' · ' : ''}
+                  {grupoInfoExtra.creation ? `criado em ${new Date(grupoInfoExtra.creation * 1000).toLocaleDateString('pt-BR')}` : ''}
+                </p>
+              )}
             </div>
 
             {/* Etiquetas / Tags */}
@@ -3865,6 +3978,39 @@ export function WhatsAppInterface() {
               Cancelar
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): confirmação
+          explícita obrigatória antes de importar — participante de grupo é dado de terceiro sem
+          relação comercial direta, trazer centenas de contatos com um clique só (sem essa
+          barreira) seria fácil demais de disparar por engano. Mostra o total de participantes já
+          conhecido (`grupoInfoExtra`/`activeChat`, sem chamada nova à Evolution só pra exibir o
+          número — a importação em si sempre busca de novo, ver importarContatosDoGrupo). */}
+      <Dialog open={showImportarGrupoModal} onOpenChange={setShowImportarGrupoModal}>
+        <DialogContent className="sm:max-w-[440px] rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Users className="h-4 w-4 text-violet-600" />
+              Baixar contatos do grupo?
+            </DialogTitle>
+            <DialogDescription className="text-sm pt-2 leading-relaxed">
+              Isso vai importar {grupoInfoExtra?.size ? `os ${grupoInfoExtra.size} participantes` : 'os participantes'} de{' '}
+              <span className="font-semibold text-foreground">{activeChat?.name}</span> como contatos novos.
+              Contatos que já existem não são alterados. Participantes de grupo entram marcados
+              com origem própria e ficam de fora de campanhas por padrão, a menos que você
+              inclua algum manualmente (tag, lista ou estágio).
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => setShowImportarGrupoModal(false)} disabled={importandoGrupo} className="font-bold text-xs uppercase tracking-widest">
+              Cancelar
+            </Button>
+            <Button onClick={importarContatosDoGrupo} disabled={importandoGrupo} className="font-bold text-xs uppercase tracking-widest gap-2">
+              {importandoGrupo && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Importar
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
