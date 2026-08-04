@@ -46,6 +46,9 @@ interface KanbanColunaProps {
   onMoverTarefa: (tarefaId: string, colunaId: string, ordem: number) => void;
   onRenomearColuna?: (id: string, nome: string) => Promise<void>;
   onExcluirColuna?: (id: string) => Promise<void>;
+  /** Sprint seleção múltipla (2026-08-04) — ver KanbanBoard.tsx. */
+  selecionados?: Set<string>;
+  onToggleSelecionado?: (tarefaId: string) => void;
 }
 
 const KanbanColuna = ({
@@ -56,6 +59,8 @@ const KanbanColuna = ({
   onEditarTarefa,
   onRenomearColuna,
   onExcluirColuna,
+  selecionados,
+  onToggleSelecionado,
 }: KanbanColunaProps) => {
   const { setNodeRef, isOver } = useDroppable({ id: coluna.id });
 
@@ -196,7 +201,13 @@ const KanbanColuna = ({
               </div>
             ) : (
               tarefas.map((tarefa) => (
-                <KanbanCard key={tarefa.id} tarefa={tarefa} onEditar={onEditarTarefa} />
+                <KanbanCard
+                  key={tarefa.id}
+                  tarefa={tarefa}
+                  onEditar={onEditarTarefa}
+                  selecionado={selecionados?.has(tarefa.id)}
+                  onToggleSelecionado={onToggleSelecionado ? () => onToggleSelecionado(tarefa.id) : undefined}
+                />
               ))
             )}
           </SortableContext>

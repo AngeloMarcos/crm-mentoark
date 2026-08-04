@@ -1,9 +1,16 @@
 /**
  * KanbanBoard.tsx — Board Kanban reutilizável (sem CRMLayout)
- * Usado em /kanban e dentro da aba "Tarefas" de Equipe.
+ *
+ * [AUDITORIA] BUG (achado 2026-08-04): o comentário original aqui dizia "Usado em /kanban e
+ * dentro da aba 'Tarefas' de Equipe" — falso, checado via grep: nenhum arquivo importava este
+ * componente, `Kanban.tsx` (rota real `/kanban`) tinha sua PRÓPRIA cópia duplicada de ~450
+ * linhas da mesma lógica (state, handlers, JSX), e `Equipe.tsx` não referencia nenhum dos dois.
+ * Era código morto de fato. [AUDITORIA] FIX APLICADO: `Kanban.tsx` agora só renderiza este
+ * componente (dedup real) — daqui em diante, qualquer mudança no quadro (esta sprint: sensores
+ * de toque, filtros rápidos, drag/drop estilo Jira) vive num lugar só.
  */
-import { useEffect, useState, useMemo } from "react";
-import { LayoutGrid, Plus, Search, X, SlidersHorizontal, Check } from "lucide-react";
+import { useEffect, useState, useMemo, useRef } from "react";
+import { LayoutGrid, Plus, Search, X, SlidersHorizontal, Check, User, Flame } from "lucide-react";
 import { api } from "@/integrations/database/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,8 +23,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Label } from "@/components/ui/label";
 import {
   DndContext, DragEndEvent, DragOverEvent, DragStartEvent,
-  PointerSensor, useSensor, useSensors, DragOverlay, closestCorners,
+  PointerSensor, TouchSensor, useSensor, useSensors, DragOverlay, closestCorners,
 } from "@dnd-kit/core";
+import { useAuth } from "@/hooks/useAuth";
 import { arrayMove } from "@dnd-kit/sortable";
 import KanbanColuna from "@/components/kanban/KanbanColuna";
 import KanbanCard, { Tarefa } from "@/components/kanban/KanbanCard";
@@ -33,9 +41,18 @@ interface Coluna {
   limite_wip?: number | null;
 }
 
+// [AUDITORIA] LÓGICA (pedido do usuário, 2026-08-04): eram só 8 tons pastel claros — ampliado
+// pra 24, cobrindo uma faixa mais completa (inclui tons mais saturados/escuros, úteis pra quem
+// usa cor pra sinalizar urgência/status, não só decoração). O color picker nativo abaixo
+// (`<input type="color">`) cobre qualquer cor fora desta lista — os presets continuam sendo o
+// caminho rápido pra quem só quer "uma cor diferente", sem abrir o seletor do sistema.
 const CORES_COLUNA = [
   "#f1f5f9", "#dbeafe", "#fef9c3", "#dcfce7",
   "#fce7f3", "#ede9fe", "#ffedd5", "#e0f2fe",
+  "#fecaca", "#fed7aa", "#fde68a", "#bbf7d0",
+  "#a5f3fc", "#c7d2fe", "#f5d0fe", "#fbcfe8",
+  "#ef4444", "#f97316", "#eab308", "#22c55e",
+  "#06b6d4", "#6366f1", "#a855f7", "#64748b",
 ];
 
 interface KanbanBoardProps {
@@ -55,6 +72,7 @@ export default function KanbanBoard({
   filtroOrigemInicial = null,
   className,
 }: KanbanBoardProps) {
+  const { session } = useAuth();
   const [colunas, setColunas] = useState<Coluna[]>([]);
   const [tarefas, setTarefas] = useState<Tarefa[]>([]);
   const [membros, setMembros] = useState<any[]>([]);
@@ -65,6 +83,14 @@ export default function KanbanBoard({
   const [filtroMembro, setFiltroMembro] = useState<string | null>(null);
   const [filtroPrioridade, setFiltroPrioridade] = useState<string | null>(null);
   const [filtroOrigem, setFiltroOrigem] = useState<string | null>(filtroOrigemInicial);
+  // [AUDITORIA] LÓGICA (Sprint Kanban estilo Jira, 2026-08-04): "Apenas minhas tarefas" reaproveita
+  // o filtro por membro já existente (mesmo campo `atribuido_a`, que é FK direta pra `users.id` —
+  // confirmado em backend/src/routes/kanban.ts) em vez de criar um filtro paralelo. Um toggle não
+  // pode conviver com o filtro-por-avatar normal (os dois escrevem no mesmo estado por design —
+  // clicar num avatar específico enquanto "Minhas tarefas" está ativo naturalmente troca pra
+  // aquele membro), então não precisa de estado extra nem de reconciliar dois filtros que fariam
+  // a mesma coisa.
+  const minhasTarefasAtivo = !!session?.user?.id && filtroMembro === session.user.id;
   const [filtroOpen, setFiltroOpen] = useState(false);
 
   const [modalAberto, setModalAberto] = useState(false);
@@ -76,7 +102,40 @@ export default function KanbanBoard({
   const [novaColCor, setNovaColCor] = useState(CORES_COLUNA[0]);
   const [salvandoCol, setSalvandoCol] = useState(false);
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  // [AUDITORIA] LÓGICA (Sprint seleção múltipla, 2026-08-04): seleção é só um Set de ids —
+  // marcada via checkbox em cada KanbanCard (nunca pelo clique normal, que continua abrindo o
+  // modal). `idsGrupoArrastando` (ref, não state — não precisa re-render) guarda, só durante um
+  // drag em andamento, quais ids devem se mover JUNTO com o card fisicamente arrastado: se o
+  // card arrastado faz parte da seleção E a seleção tem mais de 1 item, todo o grupo vai junto;
+  // senão, o drag continua exatamente como sempre foi (1 card só, comportamento inalterado).
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
+  const idsGrupoArrastandoRef = useRef<string[]>([]);
+
+  const toggleSelecionado = (id: string) => {
+    setSelecionados((prev) => {
+      const novo = new Set(prev);
+      novo.has(id) ? novo.delete(id) : novo.add(id);
+      return novo;
+    });
+  };
+  const limparSelecao = () => setSelecionados(new Set());
+
+  // [AUDITORIA] BUG (achado 2026-08-04 — quadro inutilizável em toque/iPad): só existia
+  // PointerSensor com activationConstraint por distância (5px) — em touch, qualquer arraste de
+  // dedo pra rolar a coluna (que é vertical, sobre os próprios cards) já passa de 5px quase
+  // instantaneamente e o dnd-kit sequestra o gesto como início de drag, bloqueando o scroll
+  // nativo do iOS/iPadOS. [AUDITORIA] FIX APLICADO: TouchSensor dedicado com ativação por DELAY
+  // (250ms de toque sustentado antes de iniciar o drag, não por distância) — dá tempo do
+  // navegador decidir se é um scroll ou um drag de propósito, igual Trello/Jira mobile.
+  // `tolerance: 5` cancela o drag se o dedo tremer mais que 5px durante a janela de delay (evita
+  // iniciar drag por engano num toque impreciso). PointerSensor continua current pra mouse
+  // (sem delay — não faz sentido pra quem usa mouse/trackpad).
+  const sensors = useSensors(
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 250, tolerance: 5 },
+    }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
 
   const carregarDados = async () => {
     setLoading(true);
@@ -177,7 +236,19 @@ export default function KanbanBoard({
     toast.success("Coluna excluída");
   };
 
-  const handleDragStart = ({ active }: DragStartEvent) => setActiveId(active.id as string);
+  // [AUDITORIA] LÓGICA (Sprint seleção múltipla, 2026-08-04): dnd-kit só permite arrastar UM
+  // draggable por vez de verdade (é o card sob o dedo/mouse que carrega o sensor) — "arrastar
+  // vários" aqui significa: o card físico sob o cursor guia o gesto, e todo o resto da seleção
+  // muda de coluna JUNTO quando o drag termina, calculado a partir deste card guia. Se o card
+  // arrastado não fizer parte de uma seleção com 2+ itens, o comportamento é IDÊNTICO ao de
+  // antes desta sprint (grupo de 1 = só o próprio card).
+  const handleDragStart = ({ active }: DragStartEvent) => {
+    const id = active.id as string;
+    idsGrupoArrastandoRef.current = (selecionados.has(id) && selecionados.size > 1)
+      ? Array.from(selecionados)
+      : [id];
+    setActiveId(id);
+  };
 
   const handleDragOver = ({ active, over }: DragOverEvent) => {
     if (!over) return;
@@ -188,13 +259,18 @@ export default function KanbanBoard({
     const overCard = tarefas.find((t) => t.id === overId);
     const targetColunaId = overIsColuna ? overId : overCard?.coluna_id;
     if (!targetColunaId || targetColunaId === activeCard.coluna_id) return;
+    // Move o card guia E o resto do grupo (se houver) pra coluna de destino, optimisticamente —
+    // mesma ideia de antes, só que aplicada a `idsGrupo` em vez de só `activeCard.id`.
+    const idsGrupo = idsGrupoArrastandoRef.current;
     setTarefas((prev) => prev.map((t) =>
-      t.id === activeCard.id ? { ...t, coluna_id: targetColunaId } : t
+      idsGrupo.includes(t.id) ? { ...t, coluna_id: targetColunaId } : t
     ));
   };
 
   const handleDragEnd = async ({ active, over }: DragEndEvent) => {
     setActiveId(null);
+    const idsGrupo = idsGrupoArrastandoRef.current;
+    idsGrupoArrastandoRef.current = [];
     if (!over || active.id === over.id) return;
     const activeCard = tarefas.find((t) => t.id === active.id);
     if (!activeCard) return;
@@ -202,6 +278,34 @@ export default function KanbanBoard({
     const overIsColuna = colunas.some((c) => c.id === overId);
     const overCard = tarefas.find((t) => t.id === overId);
     const targetColunaId = overIsColuna ? overId : overCard?.coluna_id ?? activeCard.coluna_id;
+
+    if (idsGrupo.length > 1) {
+      // [AUDITORIA] LÓGICA: grupo sempre entra no FIM da coluna de destino, em sequência —
+      // reordenar múltiplos cards pra um índice exato no meio de outros cards (o que o drag de
+      // 1 card já faz abaixo) complicaria bastante sem ganho real: mover vários de uma vez já é
+      // uma ação em lote, o operador normalmente só quer "isso tudo pra essa coluna", não uma
+      // posição milimétrica entre dois cards específicos. Chamadas sequenciais (não paralelas)
+      // pro endpoint de mover já existente e testado — cada chamada reabre/fecha os buracos de
+      // ordem corretamente (ver backend/src/routes/kanban.ts), paralelo correria risco de duas
+      // transações disputarem o mesmo recálculo de ordem ao mesmo tempo.
+      const colunaDestinoAtual = tarefas.filter((t) => t.coluna_id === targetColunaId && !idsGrupo.includes(t.id));
+      let ordemBase = colunaDestinoAtual.length;
+      try {
+        for (const id of idsGrupo) {
+          await api.patch(`/api/kanban/tarefas/${id}/mover`, { coluna_id: targetColunaId, ordem: ordemBase });
+          ordemBase++;
+        }
+        toast.success(`${idsGrupo.length} tarefas movidas`);
+        limparSelecao();
+      } catch {
+        toast.error("Erro ao mover tarefas selecionadas");
+      } finally {
+        carregarDados();
+      }
+      return;
+    }
+
+    // Caminho de 1 card só — inalterado desde antes desta sprint.
     const colTarefas = tarefas.filter((t) => t.coluna_id === targetColunaId);
     let newOrdem: number;
     if (overIsColuna || !overCard) newOrdem = colTarefas.length;
@@ -246,6 +350,32 @@ export default function KanbanBoard({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <Input placeholder="Pesquisar..." className="pl-9 h-8 text-sm" value={busca} onChange={(e) => setBusca(e.target.value)} />
           </div>
+
+          {/* [AUDITORIA] LÓGICA (Sprint Kanban estilo Jira, 2026-08-04): filtros de 1 clique na
+              barra principal, sem precisar abrir o Popover "Filtrar" — mesmo padrão do Jira
+              (chips de atalho pra "assigned to me" e prioridade alta ficam sempre visíveis, o
+              resto das opções continua dentro do Popover). Mesmo estado de sempre
+              (filtroMembro/filtroPrioridade) — só um atalho visual pro que já existia dentro do
+              Popover, então os dois ficam sincronizados (clicar num ou no outro reflete igual).
+              "Alta" aqui é só `prioridade==='alta'`, não inclui 'urgente' — mesmo critério exato
+              já usado pelo chip "Alta" dentro do Popover, sem inventar um critério novo. */}
+          <Button
+            variant={minhasTarefasAtivo ? "default" : "outline"}
+            size="sm"
+            className="h-8 gap-1.5 text-xs shrink-0"
+            disabled={!session?.user?.id}
+            onClick={() => setFiltroMembro(minhasTarefasAtivo ? null : (session!.user!.id as string))}
+          >
+            <User className="w-3.5 h-3.5" /> Minhas tarefas
+          </Button>
+          <Button
+            variant={filtroPrioridade === "alta" ? "default" : "outline"}
+            size="sm"
+            className="h-8 gap-1.5 text-xs shrink-0"
+            onClick={() => setFiltroPrioridade(filtroPrioridade === "alta" ? null : "alta")}
+          >
+            <Flame className="w-3.5 h-3.5" /> Alta prioridade
+          </Button>
 
           <Popover open={filtroOpen} onOpenChange={setFiltroOpen}>
             <PopoverTrigger asChild>
@@ -319,6 +449,19 @@ export default function KanbanBoard({
         </div>
       </div>
 
+      {/* [AUDITORIA] LÓGICA (Sprint seleção múltipla, 2026-08-04): barra só aparece com seleção
+          ativa — não ocupa espaço/atenção no uso normal do quadro. */}
+      {selecionados.size > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2">
+          <p className="text-sm font-medium text-foreground">
+            {selecionados.size} {selecionados.size === 1 ? "tarefa selecionada" : "tarefas selecionadas"} — arraste qualquer uma delas pra mover todas juntas
+          </p>
+          <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={limparSelecao}>
+            <X className="w-3 h-3" /> Limpar seleção
+          </Button>
+        </div>
+      )}
+
       <div className="flex-1 rounded-xl border border-border bg-muted/5 overflow-hidden min-h-0">
         {loading ? (
           <div className="flex gap-3 p-4">
@@ -344,7 +487,9 @@ export default function KanbanBoard({
                     onEditarTarefa={(t) => { setTarefaEditando(t); setModalAberto(true); }}
                     onMoverTarefa={() => {}}
                     onRenomearColuna={handleRenomearColuna}
-                    onExcluirColuna={handleExcluirColuna} />
+                    onExcluirColuna={handleExcluirColuna}
+                    selecionados={selecionados}
+                    onToggleSelecionado={toggleSelecionado} />
                 ))}
                 <button onClick={() => setNovaColOpen(true)}
                   className="w-72 shrink-0 h-12 rounded-xl border-2 border-dashed border-border text-muted-foreground hover:border-primary hover:text-primary hover:bg-muted/30 transition-all flex items-center justify-center gap-2 text-sm font-medium">
@@ -353,10 +498,25 @@ export default function KanbanBoard({
               </div>
               <ScrollBar orientation="horizontal" />
             </ScrollArea>
+            {/* [AUDITORIA] LÓGICA (Sprint Kanban estilo Jira, 2026-08-04): rotação reduzida de 2°
+                pra 1.5° e sombra elevada pra shadow-2xl (era shadow-xl, herdado do próprio
+                KanbanCard) — o "cartão erguido" some do fluxo normal e vira só esta cópia
+                flutuante enquanto arrasta, então a elevação visual mora aqui, não no card
+                original (que fica com o estilo de isDragging tratado em KanbanCard.tsx). */}
             <DragOverlay dropAnimation={{ duration: 200, easing: "ease" }}>
               {activeTarefa && (
-                <div className="rotate-2 opacity-90 w-72">
+                <div className="relative rotate-[1.5deg] opacity-90 w-72 shadow-2xl rounded-lg cursor-grabbing">
                   <KanbanCard tarefa={activeTarefa} onEditar={() => {}} />
+                  {/* [AUDITORIA] LÓGICA (Sprint seleção múltipla, 2026-08-04): só o card guia é
+                      renderizado de verdade no overlay (dnd-kit não suporta "arrastar N nodes"
+                      nativamente) — este badge é o sinal visual de que o resto da seleção está
+                      vindo junto, senão o operador não teria feedback nenhum de que é um drag
+                      em grupo até soltar. */}
+                  {selecionados.has(activeTarefa.id) && selecionados.size > 1 && (
+                    <span className="absolute -top-2.5 -right-2.5 h-6 min-w-6 px-1.5 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center shadow-md">
+                      +{selecionados.size - 1}
+                    </span>
+                  )}
                 </div>
               )}
             </DragOverlay>
@@ -390,6 +550,28 @@ export default function KanbanBoard({
                       novaColCor === cor ? "border-foreground scale-110" : "border-transparent")}
                     style={{ backgroundColor: cor }} onClick={() => setNovaColCor(cor)} />
                 ))}
+                {/* [AUDITORIA] LÓGICA (pedido do usuário, 2026-08-04): input nativo type="color" —
+                    cobre qualquer cor fora dos 24 presets acima, sem precisar de biblioteca de
+                    color-picker nova. `<input type="color">` já tem suporte universal (inclusive
+                    Safari iOS) e abre o seletor de cor nativo do sistema/navegador. Estilizado
+                    pra parecer mais um swatch (redondo, mesmo tamanho dos outros) do que um
+                    input de formulário — o quadrado colorido cru do `<input>` fica "escondido"
+                    dentro do wrapper redondo via overflow-hidden. */}
+                <label
+                  className={cn(
+                    "relative w-7 h-7 rounded-full border-2 transition-transform hover:scale-110 overflow-hidden cursor-pointer",
+                    "bg-[conic-gradient(from_0deg,#ef4444,#f97316,#eab308,#22c55e,#06b6d4,#6366f1,#a855f7,#ef4444)]",
+                    !CORES_COLUNA.includes(novaColCor) ? "border-foreground scale-110" : "border-transparent"
+                  )}
+                  title="Cor personalizada"
+                >
+                  <input
+                    type="color"
+                    value={novaColCor}
+                    onChange={(e) => setNovaColCor(e.target.value)}
+                    className="absolute -top-1 -left-1 w-9 h-9 cursor-pointer opacity-0"
+                  />
+                </label>
               </div>
             </div>
           </div>

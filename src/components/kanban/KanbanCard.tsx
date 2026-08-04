@@ -18,6 +18,7 @@ import { ptBR } from "date-fns/locale";
 import { MessageSquare, Calendar, GripVertical } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -47,6 +48,11 @@ export interface Tarefa {
 interface KanbanCardProps {
   tarefa: Tarefa;
   onEditar: (tarefa: Tarefa) => void;
+  /** Sprint seleção múltipla (2026-08-04): true quando este card faz parte da seleção atual. */
+  selecionado?: boolean;
+  /** Alterna a seleção deste card — sempre via checkbox, nunca pelo clique normal no corpo do
+   * card (que continua abrindo o modal de edição, comportamento inalterado). */
+  onToggleSelecionado?: () => void;
 }
 
 const PRIORIDADE_COLOR: Record<string, string> = {
@@ -67,7 +73,7 @@ const PRIORIDADE_LABEL: Record<string, string> = {
   urgente: "Urgente", alta: "Alta", media: "Média", baixa: "Baixa",
 };
 
-const KanbanCard = ({ tarefa, onEditar }: KanbanCardProps) => {
+const KanbanCard = ({ tarefa, onEditar, selecionado = false, onToggleSelecionado }: KanbanCardProps) => {
   const {
     attributes, listeners, setNodeRef,
     transform, transition, isDragging,
@@ -87,18 +93,49 @@ const KanbanCard = ({ tarefa, onEditar }: KanbanCardProps) => {
       ref={setNodeRef}
       style={style}
       className={cn(
-        "bg-card rounded-lg border border-border shadow-sm transition-all duration-150 group",
+        "bg-card rounded-lg border transition-all duration-150 group",
         isDragging
-          ? "opacity-40 scale-95 shadow-xl ring-2 ring-primary/30"
-          : "hover:border-primary/30 hover:shadow-md cursor-pointer"
+          ? // [AUDITORIA] BUG (achado 2026-08-04 — pedido de "drop indicator" estilo Jira): antes
+            // disto, o slot que o card ocupava enquanto era arrastado mostrava o próprio conteúdo
+            // do card (só com opacity-40 + scale-95) — funcional, mas não é o "box tracejado
+            // limpo" pedido. [AUDITORIA] FIX APLICADO: o wrapper troca pro estilo de placeholder
+            // (borda tracejada, sem sombra, sem borda de cor); o conteúdo interno (abaixo) fica
+            // `invisible` — não `hidden` — de propósito: `invisible` preserva a altura real do
+            // layout (título de 1 linha vs. 2, com/sem tags, etc.), então o box tracejado sai
+            // sempre com a altura EXATA do card que está sendo arrastado, nunca uma altura fixa
+            // que erraria pra cards de tamanho diferente.
+            "border-2 border-dashed border-gray-300 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/30 shadow-none"
+          : cn(
+              "hover:shadow-md cursor-pointer",
+              // [AUDITORIA] LÓGICA (Sprint seleção múltipla, 2026-08-04): anel de destaque quando
+              // o card está selecionado (independente de estar em drag) — mesma convenção visual
+              // já usada pro filtro de membro ativo (ring-2 ring-primary) no header do board.
+              selecionado ? "border-primary ring-2 ring-primary/40 shadow-sm" : "border-border shadow-sm hover:border-primary/30"
+            )
       )}
     >
       {/* Barra de prioridade */}
-      <div className={cn("h-1 rounded-t-lg w-full", PRIORIDADE_COLOR[tarefa.prioridade] || "bg-slate-400")} />
+      <div className={cn("h-1 rounded-t-lg w-full", isDragging ? "invisible" : (PRIORIDADE_COLOR[tarefa.prioridade] || "bg-slate-400"))} />
 
-      <div className="p-3">
+      <div className={cn("p-3", isDragging && "invisible")}>
         {/* Header: título + handle de drag */}
         <div className="flex items-start gap-1.5 mb-2">
+          {/* [AUDITORIA] LÓGICA (Sprint seleção múltipla, 2026-08-04): checkbox dedicado pra
+              seleção — nunca o clique normal no corpo do card, que continua abrindo o modal de
+              edição sem nenhuma mudança de comportamento. `stopPropagation` no wrapper evita que
+              o clique no checkbox borbulhe pro drag-handle/card. Só existe se o board oferecer
+              `onToggleSelecionado` (ver KanbanBoard.tsx) — em qualquer outro lugar que reaproveite
+              KanbanCard sem esse prop, o checkbox simplesmente não aparece, sem quebrar nada. */}
+          {onToggleSelecionado && (
+            <div className="mt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+              <Checkbox
+                checked={selecionado}
+                onCheckedChange={() => onToggleSelecionado()}
+                className="h-4 w-4"
+                aria-label="Selecionar tarefa"
+              />
+            </div>
+          )}
           <div
             {...attributes}
             {...listeners}
