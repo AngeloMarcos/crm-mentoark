@@ -408,7 +408,9 @@ export default function suporteRouter(pool: Pool): Router {
       return res.status(503).json({ message: 'OPENAI_API_KEY não configurada no servidor.' });
     }
 
-    const openai = new OpenAI({ apiKey });
+    // [AUDITORIA] LÓGICA (correção de segurança pós-incidente 2026-07-28/31): maxRetries: 1 em
+    // vez do default do SDK (2) — evita triplicar tráfego/custo em 429/5xx sustentado.
+    const openai = new OpenAI({ apiKey, maxRetries: 1 });
 
     const historico: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: SYSTEM_PROMPT },

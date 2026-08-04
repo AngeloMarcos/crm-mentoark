@@ -27,7 +27,14 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
 
 // Cliente global — usado como fallback; substituído pela chave do banco sempre que possível
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+// [AUDITORIA] LÓGICA (correção de segurança pós-incidente 2026-07-28/31 — loop bot-a-bot que
+// esgotou o crédito): o SDK `openai` tem retry automático embutido (default maxRetries=2, 3
+// tentativas totais em 429/5xx) nunca desabilitado neste código. Durante um esgotamento real de
+// crédito (429 sustentado), isso faz cada chamada tentar de novo 2x contra a mesma parede,
+// amplificando tráfego exatamente no pior momento. `maxRetries: 1` (não 0) mantém uma
+// retentativa para falha transitória legítima (timeout de rede, 5xx pontual) sem multiplicar por
+// 3 o tráfego/custo potencial de cada chamada.
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '', maxRetries: 1 });
 
 export interface MensagemEntrada {
   instancia: string;
@@ -64,10 +71,79 @@ const bufferMensagens = new Map<string, {
 // ── Lock de concorrência — impede duas respostas simultâneas ao mesmo número ─
 const atendimentosAtivos = new Set<string>();
 
+// ── Circuit breaker anti-loop entre agentes (Sprint segurança 2026-08-04) ────────────────
+// [AUDITORIA] LÓGICA: incidente real de 2026-07-28 — duas IAs de contas diferentes ficaram 54min
+// respondendo uma à outra (67 mensagens, ~160k tokens, ver diagnosticos/AUDITORIA_LOG.md) porque
+// o antiloop já existente (botSentTexts/botMessageIds, abaixo) só protege o bot de ecoar A
+// PRÓPRIA mensagem DENTRO DA MESMA conta — não existe nada que detecte duas IAs presas
+// respondendo uma à outra entre CONTAS diferentes (cada uma vê a mensagem da outra como uma
+// mensagem legítima de cliente). Este freio é agnóstico à causa raiz (loop bot-a-bot, integração
+// externa com bug, ou qualquer outro cenário que gere volume anômalo) — só mede quantas
+// mensagens o BOT ENVIOU pro mesmo contato numa janela curta, sem tentar diagnosticar o motivo.
+// Chave sempre `userId:telefone` — nunca cruza contas (mesmo número pode estourar o limite numa
+// conta e continuar normal em outra).
+const LOOP_BREAKER_LIMITE = 6;              // mensagens enviadas pelo bot ao mesmo contato...
+const LOOP_BREAKER_JANELA_MS = 3 * 60_000;  // ...dentro desta janela → considera loop, não conversa humana normal
+const enviosPorContato = new Map<string, number[]>(); // chave `${userId}:${telefone}` → timestamps (ms) de cada envio
+
+// Registra um envio real do bot para o contato — chamado a partir de enviarResposta()/
+// enviarRespostaVoz(), nunca a partir do recebimento de mensagem (o freio mede o que o BOT
+// manda, não o que o contato manda, senão um cliente digitando rápido acionaria o freio à toa).
+function registrarEnvioBot(userId: string, telefone: string): void {
+  const chave = `${userId}:${telefone}`;
+  const agora = Date.now();
+  const timestamps = (enviosPorContato.get(chave) || []).filter(t => agora - t < LOOP_BREAKER_JANELA_MS);
+  timestamps.push(agora);
+  enviosPorContato.set(chave, timestamps);
+}
+
+// Quantos envios do bot pro mesmo contato ainda estão dentro da janela — chamado ANTES de
+// processar uma nova mensagem recebida (não depende de gerar resposta pra economizar a chamada
+// de LLM quando o freio já deveria ter disparado).
+function enviosRecentesAoContato(userId: string, telefone: string): number {
+  const chave = `${userId}:${telefone}`;
+  const agora = Date.now();
+  const timestamps = (enviosPorContato.get(chave) || []).filter(t => agora - t < LOOP_BREAKER_JANELA_MS);
+  enviosPorContato.set(chave, timestamps); // limpa expirados também na leitura, evita crescimento sem limite
+  return timestamps.length;
+}
+
+// Pausa automática por circuit breaker — mesmo mecanismo já usado por pausarPorFalhaLLM (ver
+// abaixo), mas SEM o webhook de card no Kanban de propósito (pedido explícito do usuário: "sem
+// notificação externa nesta sprint" — só log de alerta interno).
+async function pausarPorLoopDetectado(
+  pool: Pool, userId: string, telefone: string, quantidade: number,
+): Promise<void> {
+  const telefoneSuffix = `%${telefone.slice(-11)}`;
+  try {
+    await pool.query(
+      `UPDATE contatos SET atendente_pausou_ia = true, updated_at = NOW()
+       WHERE user_id = $1 AND telefone ILIKE $2`,
+      [userId, telefoneSuffix]
+    );
+    await pool.query(
+      `UPDATE dados_cliente SET atendimento_ia = 'pause', pausa_timestamp = NOW()
+       WHERE user_id = $1 AND telefone ILIKE $2`,
+      [userId, telefoneSuffix]
+    );
+    await pool.query(
+      `INSERT INTO ia_pausa_log (user_id, telefone, acao, observacao)
+       VALUES ($1, $2, 'pause', $3)`,
+      [userId, telefone,
+        `Pausa automática — circuit breaker anti-loop: ${quantidade} mensagens enviadas ao mesmo contato em menos de ${LOOP_BREAKER_JANELA_MS / 60_000}min (limite: ${LOOP_BREAKER_LIMITE}).`.slice(0, 500)],
+    );
+  } catch (errDb: any) {
+    log.error('LOOP_BREAKER', 'Falha ao registrar pausa automática por loop detectado', { err: errDb?.message, stack: errDb?.stack });
+  }
+  log.error('LOOP_BREAKER', 'Circuit breaker acionado — excesso de mensagens enviadas ao mesmo contato numa janela curta, pausando automaticamente', {
+    userId, telefone, quantidade, limite: LOOP_BREAKER_LIMITE, janelaMs: LOOP_BREAKER_JANELA_MS,
+  });
+}
+
 // ── Cria cliente OpenAI com chave do provider (fallback para env) ─────────────
 function criarClienteOpenAI(apiKey?: string): OpenAI {
   const key = apiKey || process.env.OPENAI_API_KEY || '';
-  return key ? new OpenAI({ apiKey: key }) : openai;
+  return key ? new OpenAI({ apiKey: key, maxRetries: 1 }) : openai;
 }
 
 // [AUDITORIA] BUG (Cenário E desta auditoria — timeouts em chamadas externas do motor de IA,
@@ -183,9 +259,15 @@ export const botSentTexts  = new Set<string>();
 
 // ── Envio via Evolution API ───────────────────────────────────────────────────
 async function enviarResposta(
-  serverUrl: string, apiKey: string,
+  userId: string, serverUrl: string, apiKey: string,
   instancia: string, telefone: string, texto: string
 ): Promise<void> {
+  // [AUDITORIA] LÓGICA: registra o envio para o circuit breaker anti-loop (ver
+  // enviosPorContato/registrarEnvioBot, declarados acima) mesmo em IA_TEST_MODE — a chamada de
+  // LLM que gerou este texto já aconteceu e já custou, o freio precisa contar isso também pra se
+  // proteger mesmo se IA_TEST_MODE for deixado ligado por engano em produção.
+  registrarEnvioBot(userId, telefone);
+
   // [AUDITORIA] LÓGICA: sandbox de teste — com IA_TEST_MODE=true, a resposta é gerada
   // normalmente pelo motor mas nunca chega a sair para o WhatsApp de verdade (nem passa pelo
   // bookkeeping antiloop abaixo, que só faz sentido quando há um envio real). Permite testar o
@@ -248,6 +330,12 @@ async function enviarRespostaVoz(
 
     const buffer = await sintetizarVoz(texto, elevenApiKey, voiceId);
     if (!buffer) return { ok: false }; // já logado dentro de sintetizarVoz
+
+    // [AUDITORIA] LÓGICA: registra pro circuit breaker anti-loop (ver enviosPorContato acima) só
+    // depois de confirmar que a voz foi sintetizada — antes disso (sem ElevenLabs configurado,
+    // por exemplo) o caminho cai pro texto normal via enviarResposta(), que registra por conta
+    // própria; registrar aqui também nesse caso contaria o mesmo turno duas vezes.
+    registrarEnvioBot(userId, telefone);
 
     if (process.env.IA_TEST_MODE === 'true') {
       log.info('IA_SANDBOX', 'Áudio de teste gerado (envio real suprimido)', {
@@ -549,6 +637,16 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     return;
   }
 
+  // 3.5. Circuit breaker anti-loop — checado ANTES de chamar a LLM de propósito (ver comentário
+  // completo na declaração de enviosPorContato/LOOP_BREAKER_LIMITE acima): se o limite já foi
+  // ultrapassado por envios anteriores, nem vale a pena gastar mais uma chamada de LLM só para
+  // descartar a resposta depois — pausa e sai imediatamente.
+  const enviosRecentes = enviosRecentesAoContato(userIdFinal, entrada.telefone);
+  if (enviosRecentes > LOOP_BREAKER_LIMITE) {
+    await pausarPorLoopDetectado(pool, userIdFinal, entrada.telefone, enviosRecentes);
+    return;
+  }
+
   // 4. Criar provider ANTES de resolver mídia (a apiKey é necessária para Whisper/Vision)
   const providerInfo = await criarProvider(pool, userIdFinal, agente.provider_id ?? null);
   if (!providerInfo) {
@@ -771,7 +869,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     const toolResults: AIMessage[] = [];
     for (const tc of resp.toolCalls) {
       log.info('ENGINE', 'Executando tool', { nome: tc.name, input: JSON.stringify(tc.input).slice(0, 80) });
-      const resultado = await executarFerramenta(pool, userIdFinal, tc.name, tc.input);
+      const resultado = await executarFerramenta(pool, userIdFinal, tc.name, tc.input, {
+        telefone: entrada.telefone,
+        contatoId: contato.id,
+        nomeContato: entrada.pushName || null,
+      });
 
       if (resultado.startsWith('PAUSA_ATIVADA:')) {
         pausaAtivada = true;
@@ -876,6 +978,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         if (i > 0) await new Promise(r => setTimeout(r, 3000));
         const textoFormatado = `*${nomeAgente}*\n${parserMessages[i]}`;
         await enviarResposta(
+          userIdFinal,
           agente.evolution_server_url,
           agente.evolution_api_key,
           agente.evolution_instancia || entrada.instancia,

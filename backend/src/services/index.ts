@@ -97,7 +97,10 @@ export class OpenAIProvider implements AIProvider {
   private client: OpenAI;
 
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+    // [AUDITORIA] LÓGICA (correção de segurança pós-incidente 2026-07-28/31): maxRetries: 1 em
+    // vez do default do SDK (2) — evita triplicar tráfego/custo em 429/5xx sustentado, mantendo
+    // 1 retentativa pra falha transitória legítima. Ver mesmo comentário em agentEngine.ts.
+    this.client = new OpenAI({ apiKey, maxRetries: 1 });
   }
 
   async complete(
