@@ -33,6 +33,15 @@ Dados de teste revertidos ao final (contato de controle restaurado ao estado `at
 
 **Pendente, fora do escopo desta sprint:** 0 contas com `ai_providers` próprio; duplicação Vision/Whisper (`webhook.ts`/`agentEngine.ts`); `agent_configs.prompt_sistema` vazio pra `fmakonee03`/`stefanocatedral` (achado na sprint de investigação anterior, não corrigido — precisa decisão do usuário); os 2 arquivos duplicados `suporte.ts` (routes/services) e o arquivo órfão `services/index.ts` não foram consolidados/removidos (fora do escopo desta correção pontual, "arquivo morto/duplicado" exige confirmação do usuário antes de deletar).
 
+### 🔴 Validação extra em produção do circuit breaker anti-loop + maxRetries (2026-08-04, sessão seguinte)
+
+Pedido de deploy em produção — mas `crm-api` já estava rodando o commit `296951f` desde o turno anterior (mesmo `StartedAt`, código confirmado no servidor). **`scripts/deploy.sh prod` não foi repetido** — reiniciaria o serviço em produção sem nenhuma mudança de código, um restart sem benefício. Em vez disso, executadas as duas validações extras pedidas, ainda não feitas em produção (só em homolog):
+
+1. **Conversa normal sem mudança de comportamento:** zero tráfego orgânico em produção desde o deploy (maioria dos contatos ainda pausada pelo incidente de crédito). Perguntado ao usuário como validar — optou por teste real. Uma mensagem sintética (`POST /webhook/evolution`, autenticada com o secret real de produção) pro contato "Angelo" (`5511991909106`, conta `mentoark@gmail.com`, não pausado) completou o fluxo inteiro: `RASTREIO IA` (chamada real à OpenAI, `openai/gpt-4o-mini`, 1678 tokens in/2 out) → resposta "OK" → `ENGINE "Processamento concluído", pausa:false`. 1 mensagem, bem abaixo do limite de 6/3min — freio não acionado, comportamento idêntico ao pré-deploy. `ai_uso_diario` confirmado incrementado no dia. Nenhum erro nos logs.
+2. **Pausas pré-existentes não afetadas:** os 5 contatos de `mentoark@gmail.com` com pausa automática por falha de LLM (registrados em `ia_pausa_log`, 07-29 a 07-31, ANTES desta correção) seguem com o mesmo estado: 4 ainda `atendente_pausou_ia=true`; 1 (`5511993753472`) está `false`, mas `contatos.updated_at` confirma que essa reativação aconteceu em **2026-07-30**, dias antes do deploy de hoje — não foi o deploy que mudou isso. Também logicamente garantido pelo código: `pausarPorLoopDetectado()`/o freio só fazem `SET atendente_pausou_ia = true`, nunca `false` — não existe caminho pelo qual o deploy pudesse ter revertido uma pausa existente.
+
+`/health` → 200, sem `ERROR` novo nos logs em nenhum momento desta validação.
+
 ### 🔧 Fix de infra (não código): OPENAI_API_KEY de homolog separada da de produção (2026-08-04)
 
 **Contexto:** sprint de diagnóstico anterior, mesmo dia, achou que `OPENAI_API_KEY` era uma única chave global compartilhada entre produção e homolog (byte a byte idêntica) — causa raiz mais provável do esgotamento de crédito desde 2026-07-28. Escopo desta sprint travado pelo usuário: só separar essa chave, nada mais.
