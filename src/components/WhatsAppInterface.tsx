@@ -440,7 +440,7 @@ export function WhatsAppInterface() {
   const [grupoInfoExtra, setGrupoInfoExtra] = useState<{ desc: string | null; size: number | null; creation: number | null } | null>(null);
   const [showImportarGrupoModal, setShowImportarGrupoModal] = useState(false);
   const [importandoGrupo, setImportandoGrupo] = useState(false);
-  const [resultadoImportacaoGrupo, setResultadoImportacaoGrupo] = useState<{ novos: number; jaExistiam: number; descartados: number; semNumeroResolvido: number } | null>(null);
+  const [resultadoImportacaoGrupo, setResultadoImportacaoGrupo] = useState<{ novos: number; jaExistiam: number; descartados: number; semNumeroResolvido: number; listaNome: string | null } | null>(null);
   // Cache de sessão: phone → foto_perfil buscada (evita repetir chamadas)
   const prevConversasRef = useRef<Map<string, { ts: string; role: string }>>(new Map());
   const prevUltimaAtividadeRef = useRef<Map<string, string>>(new Map());
@@ -647,9 +647,17 @@ export function WhatsAppInterface() {
         toast.error(err.message || 'Erro ao importar contatos do grupo');
         return;
       }
-      const { novos, jaExistiam, descartados, semNumeroResolvido } = await res.json();
-      setResultadoImportacaoGrupo({ novos, jaExistiam, descartados, semNumeroResolvido });
-      toast.success(`${novos} contato(s) novo(s) — ${jaExistiam} já existiam`);
+      const { novos, jaExistiam, descartados, semNumeroResolvido, listaNome } = await res.json();
+      setResultadoImportacaoGrupo({ novos, jaExistiam, descartados, semNumeroResolvido, listaNome });
+      // [AUDITORIA] FIX APLICADO (achado do usuário, 2026-08-06): antes o toast só dizia quantos
+      // contatos entraram, sem dizer ONDE — usuário não achava os contatos depois, porque a
+      // importação nunca tinha criado lista nenhuma (ver fix no backend, whatsapp.ts). Agora
+      // aponta o nome exato da lista nova (só existe se `novos > 0` — backend só cria a lista
+      // quando há pelo menos 1 contato genuinamente novo).
+      toast.success(
+        novos > 0 ? `${novos} contato(s) importado(s) para a lista "${listaNome}"` : `Nenhum contato novo — ${jaExistiam} já existiam no CRM`,
+        { description: jaExistiam > 0 && novos > 0 ? `${jaExistiam} já existiam e não foram alterados.` : undefined }
+      );
     } catch {
       toast.error('Sem conexão com o servidor');
     } finally {
@@ -3767,13 +3775,16 @@ export function WhatsAppInterface() {
                   className="w-full flex items-center justify-center gap-2 h-11 rounded-2xl border bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95"
                 >
                   <Users className="h-3.5 w-3.5" />
-                  Baixar contatos do grupo
+                  Importar para CRM
                 </button>
               )}
               {resultadoImportacaoGrupo && (
                 <p className="text-[11px] text-center text-muted-foreground font-medium">
                   Última importação: {resultadoImportacaoGrupo.novos} novo(s), {resultadoImportacaoGrupo.jaExistiam} já existiam
                   {resultadoImportacaoGrupo.descartados > 0 ? `, ${resultadoImportacaoGrupo.descartados} descartado(s)` : ''}.
+                  {resultadoImportacaoGrupo.listaNome && (
+                    <> Lista: <span className="font-bold text-foreground">{resultadoImportacaoGrupo.listaNome}</span>.</>
+                  )}
                   {/* [AUDITORIA] LÓGICA: em grupos com privacidade "Linked ID" ativa, a Evolution
                       só resolve o telefone real de parte dos participantes (geralmente admins) —
                       o resto fica só como lid interno, que não é telefone de verdade e por isso
@@ -3992,11 +4003,13 @@ export function WhatsAppInterface() {
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2">
               <Users className="h-4 w-4 text-violet-600" />
-              Baixar contatos do grupo?
+              Importar para o CRM?
             </DialogTitle>
             <DialogDescription className="text-sm pt-2 leading-relaxed">
               Isso vai importar {grupoInfoExtra?.size ? `os ${grupoInfoExtra.size} participantes` : 'os participantes'} de{' '}
-              <span className="font-semibold text-foreground">{activeChat?.name}</span> como contatos novos.
+              <span className="font-semibold text-foreground">{activeChat?.name}</span> como contatos novos,
+              numa lista nova criada automaticamente com o nome e a data do grupo — é lá que você
+              encontra esses contatos depois, na aba "Por Lista" de Disparos ou em Leads.
               Contatos que já existem não são alterados. Participantes de grupo entram marcados
               com origem própria e ficam de fora de campanhas por padrão, a menos que você
               inclua algum manualmente (tag, lista ou estágio).

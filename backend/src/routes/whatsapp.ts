@@ -459,10 +459,17 @@ export default function whatsappRouter(pool: Pool): Router {
   router.get('/grupos/:groupJid/info', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
-      const groupJid = req.params.groupJid;
-      if (!groupJid.endsWith('@g.us')) {
-        return res.status(400).json({ message: 'groupJid inválido — precisa terminar em @g.us' });
-      }
+      // [AUDITORIA] BUG (achado 2026-08-06, print do usuário — "groupJid inválido"): o
+      // `session_id` que GET /conversas devolve (usado pelo frontend como `activeChatId`) vem de
+      // `split_part(m.remote_jid,'@',1)` — SEMPRE sem sufixo, inclusive pra grupo (`is_group` é
+      // computado à parte, a partir do `remote_jid` completo, mas descartado do `phone`/
+      // `session_id` resultante). Ou seja: toda chamada real do frontend pra esta rota chegava
+      // com o groupJid SEM `@g.us`, rejeitada por este `endsWith` — 100% dos grupos, sempre, não
+      // era um caso raro. [AUDITORIA] FIX APLICADO: normaliza (acrescenta `@g.us` se ausente) em
+      // vez de rejeitar — rota só é chamada pelo frontend quando `chat.is_group` já é true, então
+      // não há ambiguidade real sobre a intenção; pior caso de um id não-grupo chegar aqui por
+      // engano é a Evolution devolver erro de "grupo não encontrado", não um risco de segurança.
+      const groupJid = req.params.groupJid.endsWith('@g.us') ? req.params.groupJid : `${req.params.groupJid}@g.us`;
       const cfg = await resolverConfigGrupoAtivo(userId);
       if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
 
@@ -484,22 +491,30 @@ export default function whatsappRouter(pool: Pool): Router {
   // POST /api/whatsapp/grupos/:groupJid/importar-contatos — importa os participantes reais do
   // grupo (sempre buscados frescos, nunca cacheados — cada chamada bate na Evolution de novo) como
   // contatos novos. [AUDITORIA] LÓGICA: contato que já existe (mesmo telefone, mesmo user_id)
-  // NUNCA é sobrescrito — nem nome, nem qualquer outro campo. É dado de terceiro sem relação
-  // comercial direta (participante de grupo, não lead orgânico nem importação intencional do
-  // operador), então `origem = 'Grupo WhatsApp'` (valor novo, distinto de 'WhatsApp'/'Importado
-  // (Disparos)') marca a procedência — usado por StepContacts/Disparos.tsx pra excluir esses
-  // contatos por padrão da opção "Todas as listas" (ver fix em Disparos.tsx), sem impedir que o
-  // operador inclua explicitamente via tag/lista/estágio manual, que já exige ação deliberada.
-  // Evolution não devolve nome de participante (só telefone) — nome nasce igual ao telefone,
-  // mesma convenção já usada em `upsertContato()`/importação CSV quando não há nome disponível.
+  // NUNCA é sobrescrito — nem nome, nem qualquer outro campo, nem `lista_id` (se já pertence a
+  // outra lista, permanece lá; a lista nova desta importação só recebe quem é genuinamente novo).
+  // É dado de terceiro sem relação comercial direta (participante de grupo, não lead orgânico nem
+  // importação intencional do operador), então `origem = 'Grupo WhatsApp'` (valor novo, distinto
+  // de 'WhatsApp'/'Importado (Disparos)') marca a procedência — usado por StepContacts/
+  // Disparos.tsx pra excluir esses contatos por padrão da opção "Todas as listas" (ver fix em
+  // Disparos.tsx), sem impedir que o operador inclua explicitamente via tag/lista/estágio manual,
+  // que já exige ação deliberada. Evolution não devolve nome de participante (só telefone) — nome
+  // nasce igual ao telefone, mesma convenção já usada em `upsertContato()`/importação CSV quando
+  // não há nome disponível.
+  // [AUDITORIA] FIX APLICADO (achado do usuário, 2026-08-06 — "não consigo encontrar eles nas
+  // lista do CRM"): a importação nunca setava `lista_id`, então os contatos ficavam órfãos de
+  // qualquer lista — apareciam em Leads/contatos, mas invisíveis na aba "Por Lista" de Disparos.
+  // Agora cria (só se houver pelo menos 1 contato genuinamente novo — não cria lista vazia à toa,
+  // mesmo espírito da sprint de "limpar listas vazias") uma lista nova por importação, nome no
+  // mesmo padrão já usado pela importação de CSV/XLSX em Disparos.tsx
+  // (`Importação ${arquivo} ${data}`): `Importação Grupo ${nomeDoGrupo} ${data}`.
   router.post('/grupos/:groupJid/importar-contatos', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
       const tenantId = await resolveOwnerId(userId);
-      const groupJid = req.params.groupJid;
-      if (!groupJid.endsWith('@g.us')) {
-        return res.status(400).json({ message: 'groupJid inválido — precisa terminar em @g.us' });
-      }
+      // [AUDITORIA] BUG/FIX APLICADO (mesmo achado do GET /grupos/:groupJid/info acima, ver
+      // comentário completo lá — session_id de GET /conversas nunca tem @g.us, nem pra grupo).
+      const groupJid = req.params.groupJid.endsWith('@g.us') ? req.params.groupJid : `${req.params.groupJid}@g.us`;
       const cfg = await resolverConfigGrupoAtivo(userId);
       if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
 
@@ -522,6 +537,8 @@ export default function whatsappRouter(pool: Pool): Router {
       let novos = 0;
       let jaExistiam = 0;
       let descartados = 0;
+      let listaId: string | null = null;
+      let listaNome: string | null = null;
       for (const p of info.participantes) {
         if (p.telefone.length < 10 || p.telefone.length > 13) { descartados++; continue; }
 
@@ -531,13 +548,28 @@ export default function whatsappRouter(pool: Pool): Router {
         );
         if (existente.rows.length) { jaExistiam++; continue; }
 
+        // [AUDITORIA] LÓGICA: lista criada só na primeira vez que há de fato um contato novo pra
+        // inserir (lazy) — grupo onde todo mundo já existia como contato não sobra com uma lista
+        // vazia à toa. `data-fns`/`toLocaleDateString` evitados de propósito (dependem de dados
+        // ICU que nem sempre estão presentes numa imagem Node enxuta) — formatação manual dd/mm/aaaa.
+        if (!listaId) {
+          const agora = new Date();
+          const dataFormatada = `${String(agora.getDate()).padStart(2, '0')}/${String(agora.getMonth() + 1).padStart(2, '0')}/${agora.getFullYear()}`;
+          listaNome = `Importação Grupo ${info.subject || groupJid} ${dataFormatada}`;
+          const listaRes = await pool.query(
+            `INSERT INTO listas (user_id, nome) VALUES ($1, $2) RETURNING id`,
+            [tenantId, listaNome]
+          );
+          listaId = listaRes.rows[0].id;
+        }
+
         const notas = p.admin ? `Admin do grupo "${info.subject || groupJid}"` : '';
         const inserted = await pool.query(
-          `INSERT INTO contatos (user_id, nome, telefone, origem, status, notas)
-           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4)
+          `INSERT INTO contatos (user_id, nome, telefone, origem, status, notas, lista_id)
+           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4, $5)
            ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
            RETURNING id`,
-          [tenantId, p.telefone, p.telefone, notas]
+          [tenantId, p.telefone, p.telefone, notas, listaId]
         ).catch(err => {
           log.warn('WA_GROUP_IMPORT', 'Falha ao inserir participante', { telefone: p.telefone, err: err?.message });
           return { rows: [] as any[] };
@@ -546,7 +578,7 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       log.info('WA_GROUP_IMPORT', 'Importação de contatos de grupo concluída', {
-        userId: tenantId, groupJid, novos, jaExistiam, descartados, semNumeroResolvido, totalNoGrupo,
+        userId: tenantId, groupJid, novos, jaExistiam, descartados, semNumeroResolvido, totalNoGrupo, listaId, listaNome,
       });
 
       return res.json({
@@ -554,6 +586,8 @@ export default function whatsappRouter(pool: Pool): Router {
         totalParticipantes: info.participantes.length,
         totalNoGrupo,
         grupoNome: info.subject,
+        listaId,
+        listaNome,
       });
     } catch (err: any) {
       log.error('WA_GROUP_IMPORT', 'Erro ao importar contatos do grupo', { err: err?.message, stack: err?.stack });
