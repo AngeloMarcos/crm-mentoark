@@ -64,6 +64,7 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
+import { processarMensagemGrupoAutorizado } from '../services/grupoTarefaEngine';
 import { withTenantContext } from '../db';
 import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
@@ -1513,24 +1514,6 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
-      // [AUDITORIA] LÓGICA: Whitelist de segurança da IA — só em homologação (2026-07-22).
-      // DATABASE_URL_MIGRATIONS só existe no .env de homolog (piloto de RLS, ver
-      // diagnosticos/AUDITORIA_LOG.md) — produção nunca define essa variável, então este bloco
-      // nunca roda lá. Objetivo: se alguém mandar mensagem por engano pro número de teste em
-      // homolog, a mensagem ainda é salva normalmente (não retornamos antes disso), só a
-      // resposta automática (N8N ou motor de IA embutido) fica bloqueada pra remetentes fora da
-      // whitelist — evita que um cliente real receba resposta do robô de teste.
-      if (process.env.DATABASE_URL_MIGRATIONS) {
-        const HOMOLOG_IA_WHITELIST = ['5511979579548', '5511946650482'];
-        const remetenteNormalizado = (telefone || '').replace(/\D/g, '');
-        if (!HOMOLOG_IA_WHITELIST.includes(remetenteNormalizado)) {
-          log.warn('WEBHOOK', 'IA bloqueada em homologação — remetente fora da whitelist de teste', {
-            traceId, remetente: remetenteNormalizado,
-          });
-          return;
-        }
-      }
-
       // Rota N8N: se agente tem n8n_webhook_url configurado, encaminha para lá.
       // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
       // este bloco rodava DEPOIS do `if (isGroup) return;` abaixo, então mensagens de grupo
@@ -1564,9 +1547,67 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // Grupos não disparam IA automaticamente (só chega aqui se não há N8N configurado)
+      // [AUDITORIA] LÓGICA (Sprint Tarefa por Grupo, 2026-08-02): ÚNICA exceção controlada ao
+      // bloqueio de grupo — se o JID bater com uma linha `ativo=true` em `grupos_ia_permitidos`
+      // (portão, ver migrations.ts), dispara um handler ISOLADO (`grupoTarefaEngine.ts`, não a
+      // engine de atendimento 1:1) que decide se a mensagem é uma demanda de trabalho e, se for,
+      // cria uma tarefa por rodízio. Fire-and-forget (mesmo padrão de `processarComDebounce`
+      // logo abaixo) — o `return` do bloco de grupo acontece sempre, autorizado ou não, então
+      // grupo NUNCA cai no fluxo genérico de `processarComDebounce`/`agentEngine.ts`.
+      // Roda ANTES da whitelist de homologação logo abaixo, de propósito: aquela whitelist é
+      // sobre "não deixar a IA 1:1 responder um CONTATO real por engano em homolog" — não se
+      // aplica ao conceito de grupo (que nem tem um "telefone" real; `telefone` pra grupo é o
+      // ID do grupo, nunca bateria com uma whitelist de números de teste). O portão de grupo
+      // já é, por padrão, MAIS restritivo que essa whitelist (nenhuma linha ativa = bloqueado
+      // igual a hoje, em qualquer ambiente).
       if (isGroup) {
-        log.info('WEBHOOK', 'Grupo — mensagem salva, IA não processada', { traceId, telefone });
+        // [AUDITORIA] FIX APLICADO (achado em teste real, 2026-08-03): antes o log abaixo
+        // ("fora do portão") era síncrono, disparado incondicionalmente logo após iniciar a
+        // query fire-and-forget — aparecia sempre, mesmo quando o grupo ESTAVA autorizado
+        // (o `.then()` ainda não tinha resolvido nesse ponto). IIFE com `await` deixa o log
+        // correto sem perder o padrão fire-and-forget (webhook não espera o resultado).
+        void (async () => {
+          try {
+            const permissaoRes = await pool.query(
+              `SELECT id FROM grupos_ia_permitidos WHERE user_id = $1 AND group_jid = $2 AND ativo = true LIMIT 1`,
+              [userId, remoteJid]
+            );
+            if (permissaoRes.rows.length) {
+              await processarMensagemGrupoAutorizado(pool, {
+                userId: userId as string,
+                instancia,
+                remoteJid,
+                texto: texto || '',
+                contatoNome: pushName || null,
+                contatoTelefone: senderPhone || null,
+              });
+            } else {
+              log.info('WEBHOOK', 'Grupo — mensagem salva, IA não processada (fora do portão de grupos_ia_permitidos)', { traceId, telefone });
+            }
+          } catch (err: any) {
+            log.error('WEBHOOK', 'Erro ao checar/processar grupo autorizado', { traceId, err: err?.message });
+          }
+        })();
         return;
+      }
+
+      // [AUDITORIA] LÓGICA: Whitelist de segurança da IA — só em homologação (2026-07-22).
+      // DATABASE_URL_MIGRATIONS só existe no .env de homolog (piloto de RLS, ver
+      // diagnosticos/AUDITORIA_LOG.md) — produção nunca define essa variável, então este bloco
+      // nunca roda lá. Objetivo: se alguém mandar mensagem por engano pro número de teste em
+      // homolog, a mensagem ainda é salva normalmente (não retornamos antes disso), só a
+      // resposta automática (N8N ou motor de IA embutido) fica bloqueada pra remetentes fora da
+      // whitelist — evita que um cliente real receba resposta do robô de teste. Grupo nunca
+      // chega aqui (sempre retorna no bloco acima, autorizado ou não).
+      if (process.env.DATABASE_URL_MIGRATIONS) {
+        const HOMOLOG_IA_WHITELIST = ['5511979579548', '5511946650482'];
+        const remetenteNormalizado = (telefone || '').replace(/\D/g, '');
+        if (!HOMOLOG_IA_WHITELIST.includes(remetenteNormalizado)) {
+          log.warn('WEBHOOK', 'IA bloqueada em homologação — remetente fora da whitelist de teste', {
+            traceId, remetente: remetenteNormalizado,
+          });
+          return;
+        }
       }
 
       // [AUDITORIA] LÓGICA: Direciona a mensagem processada para a fila de debounce e engine de IA (processarComDebounce).
