@@ -11,7 +11,6 @@
  * globais botMessageIds/botSentTexts que webhook.ts usa para não confundir a própria resposta
  * do bot com uma intervenção humana (ver [WEBHOOK_ANTILOOP] em webhook.ts).
  */
-import OpenAI from 'openai';
 import { Pool } from 'pg';
 import fs from 'fs';
 import path from 'path';
@@ -20,21 +19,14 @@ import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
 import { sintetizarVoz } from '../utils/elevenlabs';
+import { baixarMidiaDecriptografada } from '../utils/whatsappMediaStorage';
+import { transcreverAudio } from '../utils/transcribe';
+import { analisarImagem } from '../utils/vision';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
-
-// Cliente global — usado como fallback; substituído pela chave do banco sempre que possível
-// [AUDITORIA] LÓGICA (correção de segurança pós-incidente 2026-07-28/31 — loop bot-a-bot que
-// esgotou o crédito): o SDK `openai` tem retry automático embutido (default maxRetries=2, 3
-// tentativas totais em 429/5xx) nunca desabilitado neste código. Durante um esgotamento real de
-// crédito (429 sustentado), isso faz cada chamada tentar de novo 2x contra a mesma parede,
-// amplificando tráfego exatamente no pior momento. `maxRetries: 1` (não 0) mantém uma
-// retentativa para falha transitória legítima (timeout de rede, 5xx pontual) sem multiplicar por
-// 3 o tráfego/custo potencial de cada chamada.
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '', maxRetries: 1 });
 
 export interface MensagemEntrada {
   instancia: string;
@@ -140,97 +132,47 @@ async function pausarPorLoopDetectado(
   });
 }
 
-// ── Cria cliente OpenAI com chave do provider (fallback para env) ─────────────
-function criarClienteOpenAI(apiKey?: string): OpenAI {
-  const key = apiKey || process.env.OPENAI_API_KEY || '';
-  return key ? new OpenAI({ apiKey: key, maxRetries: 1 }) : openai;
-}
-
-// [AUDITORIA] BUG (Cenário E desta auditoria — timeouts em chamadas externas do motor de IA,
-// 2026-07-23): as duas chamadas fetch abaixo (download do áudio + Whisper) rodavam sem
-// AbortController/timeout — mesma classe de bug já corrigida em webhook.ts (achado B da
-// revisão externa: fetch nativo do Node não tem timeout padrão). Se o servidor de mídia
-// (Evolution/WhatsApp CDN) ou a API da OpenAI travarem/ficarem lentos, esta chamada síncrona
-// dentro de processarMensagem() ficava pendurada indefinidamente, seguravel o lock
-// `atendimentosAtivos` daquele telefone por tempo indeterminado (nenhuma outra mensagem do
-// mesmo contato seria processada enquanto isso). Não prende conexão de banco (nenhum client
-// do pool fica aberto durante estas chamadas — pool.query() de antes já liberou a conexão),
-// mas prende o processamento daquele chat e o worker do event loop.
-// [AUDITORIA] FIX APLICADO: AbortController com timeout em ambas — 15s pro download do áudio
-// (arquivo de voz costuma ser pequeno, mas a rede pode ser lenta), 30s pro Whisper (serviço
-// de transcrição, mais lento por natureza que uma chamada de API comum).
-async function transcreverAudio(url: string, apiKey?: string): Promise<string | null> {
+// [AUDITORIA] BUG (Sprint duplicação Whisper/Vision, 2026-08-06): este arquivo tinha suas
+// PRÓPRIAS cópias locais de transcreverAudio()/analisarImagem() (removidas aqui), que recebiam
+// `entrada.midiaUrl` — a URL crua do CDN do WhatsApp, sempre CRIPTOGRAFADA (ver cabeçalho de
+// whatsappMediaStorage.ts) — e tentavam mandar essa URL direto pro Whisper/Vision, SEM
+// decriptografar primeiro. Isso rodava em paralelo ao que webhook.ts já faz corretamente
+// (decripta via Evolution ANTES de chamar Whisper/Vision, grava o resultado em `entrada.texto`
+// como `[Áudio Transcrito: "..."]` / `[Mídia - Imagem: "..."]`) — ou seja, toda mensagem de
+// áudio/imagem gerava DUAS chamadas independentes à OpenAI. Confirmado com teste real (áudio e
+// imagem genuínos do WhatsApp, ambiente homolog, 2026-08-06, replicando exatamente a lógica que
+// existia aqui): baixar a URL crua retorna bytes cifrados (não bate a assinatura de nenhum
+// formato de áudio/imagem válido — nem "OggS", nem JPEG) — Whisper rejeita com HTTP 400
+// "Invalid file format", Vision rejeita com HTTP 400 "invalid_image_url". Pra ÁUDIO isso não
+// era só uma chamada duplicada e desperdiçada: a função local retornava `null`, e o call site
+// tinha `if (!transcrito) { ...; return; }` — ou seja, a IA NUNCA respondia à mensagem de
+// áudio, mesmo o webhook.ts já tendo transcrito com sucesso segundos antes. Bug funcional real
+// de perda de resposta, não só de custo. Pra IMAGEM o efeito era mais brando (o catch engolia o
+// erro e caía no fallback `caption || '[imagem]'`), mas ainda assim descartava a descrição real
+// já gerada pelo webhook.ts e respondia com base numa legenda genérica ou vazia.
+// [AUDITORIA] FIX APLICADO: removidas as cópias locais. O passo 5 abaixo agora usa
+// `entrada.texto` diretamente quando webhook.ts já processou a mídia (prefixo reconhecível) —
+// zero chamada nova a Whisper/Vision no caso normal. Só cai no fallback (mesmas funções
+// compartilhadas de webhook.ts: `utils/transcribe.ts`/`utils/vision.ts`, chamadas aqui só
+// depois de decriptografar via `baixarMidiaDecriptografada()` — nunca mais um fetch cru na URL
+// cifrada) quando webhook.ts não processou por algum motivo (ex: `OPENAI_API_KEY` global vazio
+// no momento do webhook mas o tenant tem provider OpenAI próprio configurado, usado só aqui;
+// decrypt falhou transitoriamente na Evolution; etc.) — mantendo as duas implementações
+// unificadas numa só (decidido não manter uma segunda cópia local só pra fallback: o ganho de
+// isolamento não compensa o risco de as duas divergirem de novo no futuro).
+async function buscarConfigEvolutionFallback(pool: Pool, userId: string): Promise<{ url: string; apiKey: string } | null> {
   try {
-    const downloadController = new AbortController();
-    const downloadTimer = setTimeout(() => downloadController.abort(), 15_000);
-    let r: globalThis.Response;
-    try {
-      r = await fetch(url, { signal: downloadController.signal });
-    } finally {
-      clearTimeout(downloadTimer);
-    }
-    if (!r.ok) return null;
-    const buf = await r.arrayBuffer();
-    const blob = new Blob([buf], { type: 'audio/ogg' });
-    const form = new FormData();
-    form.append('file', blob, 'audio.ogg');
-    form.append('model', 'whisper-1');
-    form.append('language', 'pt');
-    const key = apiKey || process.env.OPENAI_API_KEY || '';
-    const whisperController = new AbortController();
-    const whisperTimer = setTimeout(() => whisperController.abort(), 30_000);
-    let resp: globalThis.Response;
-    try {
-      resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${key}` },
-        body: form,
-        signal: whisperController.signal,
-      });
-    } finally {
-      clearTimeout(whisperTimer);
-    }
-    if (!resp.ok) {
-      log.warn('ENGINE', 'Whisper erro', { status: resp.status, body: await resp.text().catch(() => '') });
-      return null;
-    }
-    return ((await resp.json()) as any).text || null;
+    const r = await pool.query(
+      `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+       FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+      [userId],
+    );
+    const row = r.rows[0];
+    if (!row?.url || !row?.api_key) return null;
+    return { url: row.url, apiKey: row.api_key };
   } catch (err: any) {
-    log.warn('ENGINE', 'transcreverAudio falhou (timeout ou erro de rede)', { err: err?.message });
+    log.warn('ENGINE', 'buscarConfigEvolutionFallback falhou', { err: err?.message });
     return null;
-  }
-}
-
-// [AUDITORIA] LÓGICA (Cenário E): esta chamada usa o SDK oficial `openai`, não fetch cru — o
-// SDK já aplica um timeout padrão próprio (documentado como 10 minutos, configurável via
-// `timeout` no client) mesmo sem passarmos nada explícito aqui, diferente das duas chamadas
-// fetch cruas de transcreverAudio() (corrigidas acima). 10min ainda é bastante tempo para um
-// travamento acidental prender o lock `atendimentosAtivos` do contato — vale revisar se
-// compensa apertar esse timeout explicitamente numa próxima sessão, mas não é o mesmo tipo de
-// lacuna (ausência total de timeout) encontrado nas chamadas fetch cruas.
-// ── Análise de imagem via GPT-4o-mini Vision ─────────────────────────────────
-async function analisarImagem(url: string, caption?: string, apiKey?: string): Promise<string> {
-  try {
-    const client = criarClienteOpenAI(apiKey);
-    const r = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url } },
-          {
-            type: 'text',
-            text: caption
-              ? `Imagem com legenda: "${caption}". Descreva em 1-2 frases.`
-              : 'Descreva esta imagem brevemente.',
-          },
-        ],
-      }],
-      max_tokens: 200,
-    });
-    return r.choices[0]?.message?.content || caption || '[imagem]';
-  } catch {
-    return caption || '[imagem]';
   }
 }
 
@@ -661,19 +603,51 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     || envKey;
 
   // 5. Resolver mídia (usa apiKey do provider para Whisper/Vision)
+  // [AUDITORIA] FIX APLICADO (Sprint duplicação Whisper/Vision, 2026-08-06 — ver comentário
+  // completo acima de buscarConfigEvolutionFallback()): webhook.ts já decriptografa e
+  // transcreve/analisa a mídia ANTES de chamar processarComDebounce, gravando o resultado em
+  // `entrada.texto` com um prefixo reconhecível. O debounce (bufferMensagens) preserva esse
+  // texto — mesmo numa rajada mista com uma mensagem de texto puro no meio, o prefixo continua
+  // presente em algum ponto da string unida por `.join(' ')`. Detectando esse prefixo evitamos
+  // a segunda chamada (redundante e, no caso de áudio, quebrada — ver comentário acima) e usamos
+  // o texto já pronto diretamente. Só decripta e chama Whisper/Vision de novo aqui (via
+  // baixarMidiaDecriptografada() + as MESMAS funções de utils/transcribe.ts e utils/vision.ts
+  // usadas por webhook.ts, nunca mais um fetch cru na URL cifrada) quando o prefixo não está
+  // presente — sinal de que webhook.ts não processou essa mídia (ex: OPENAI_API_KEY global
+  // vazio no momento do webhook, decrypt falhou transitoriamente, etc.).
   let textoFinal = entrada.texto;
-  if (entrada.tipo === 'audio' && entrada.midiaUrl) {
-    const transcrito = await transcreverAudio(entrada.midiaUrl, openaiApiKey);
-    if (!transcrito) { log.warn('ENGINE', 'Falha na transcrição'); return; }
-    // [AUDITORIA] FIX APLICADO (2026-07-29): antes, `textoFinal = transcrito` descartava
-    // `entrada.texto` incondicionalmente — inofensivo pra um áudio isolado (normalmente vem sem
-    // texto), mas destruía silenciosamente uma mensagem de texto puro que o debounce mesclou
-    // aqui na mesma rajada (ex: cliente manda um áudio e, <3s depois, um texto — ver fix em
-    // `processarComDebounce`/`bufferMensagens` acima). Agora concatena em vez de sobrescrever.
+  const audioJaProcessado = entrada.tipo === 'audio' && !!entrada.texto?.includes('[Áudio Transcrito: "');
+  const imagemJaProcessada = entrada.tipo === 'image' && !!entrada.texto?.includes('[Mídia - Imagem: "');
+
+  if (entrada.tipo === 'audio' && entrada.midiaUrl && !audioJaProcessado) {
+    const evo = await buscarConfigEvolutionFallback(pool, userIdFinal);
+    const midiaDecriptografada = evo
+      ? await baixarMidiaDecriptografada({
+          evoUrl: evo.url, apiKey: evo.apiKey, instancia: entrada.instancia,
+          messageId: entrada.messageId, remoteJid: `${entrada.telefone}@s.whatsapp.net`, fromMe: false,
+        })
+      : null;
+    const transcrito = midiaDecriptografada
+      ? await transcreverAudio(midiaDecriptografada.buffer, midiaDecriptografada.mimetype || 'audio/ogg', openaiApiKey)
+      : null;
+    if (!transcrito) { log.warn('ENGINE', 'Falha na transcrição (fallback local — webhook.ts não processou este áudio)'); return; }
+    // [AUDITORIA] FIX APLICADO (2026-07-29, preservado): concatena em vez de sobrescrever, pra
+    // não descartar uma mensagem de texto puro que o debounce mesclou na mesma rajada.
     textoFinal = entrada.texto ? `${entrada.texto}\n${transcrito}` : transcrito;
-    log.info('ENGINE', 'Áudio transcrito', { textoTranscrito: textoFinal.slice(0, 60) });
-  } else if (entrada.tipo === 'image' && entrada.midiaUrl) {
-    textoFinal = await analisarImagem(entrada.midiaUrl, entrada.texto || undefined, openaiApiKey);
+    log.info('ENGINE', 'Áudio transcrito via fallback local (webhook.ts não havia processado)', { textoTranscrito: textoFinal.slice(0, 60) });
+  } else if (entrada.tipo === 'image' && entrada.midiaUrl && !imagemJaProcessada) {
+    const evo = await buscarConfigEvolutionFallback(pool, userIdFinal);
+    const midiaDecriptografada = evo
+      ? await baixarMidiaDecriptografada({
+          evoUrl: evo.url, apiKey: evo.apiKey, instancia: entrada.instancia,
+          messageId: entrada.messageId, remoteJid: `${entrada.telefone}@s.whatsapp.net`, fromMe: false,
+        })
+      : null;
+    const descricao = midiaDecriptografada
+      ? await analisarImagem(midiaDecriptografada.buffer, midiaDecriptografada.mimetype || 'image/jpeg', openaiApiKey)
+      : null;
+    textoFinal = descricao || entrada.texto || '[imagem]';
+    log.info('ENGINE', 'Imagem analisada via fallback local (webhook.ts não havia processado)');
   }
   if (!textoFinal) return;
 
