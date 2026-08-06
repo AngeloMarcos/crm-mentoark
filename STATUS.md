@@ -1,5 +1,133 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-08-06 (cont.) — 🆕 Cooldown vira filtro automático, sem checkbox obrigatório — em PRODUÇÃO
+
+Checkbox de confirmação de cooldown (`StepReview`, Disparos) nunca teve efeito real — quem sempre bloqueou de verdade contato em cooldown foi o backend (`disparoProcessor.ts`), independente da tela. Removido o bloqueio dos botões e o checkbox; aviso vira informativo puro. Bônus: contador de "Destinatários" agora mostra quantos serão efetivamente enviados vs. pulados por cooldown.
+
+Testado em homolog com envio real (payload idêntico ao que o frontend corrigido produz): contato em cooldown descartado (`status='cooldown'`) e contato fresco enviado de verdade — proteção de backend confirmada sem regressão. Build limpo. **Deployado em homolog e produção**, `sha256sum` idêntico nos 3 lugares. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🔴 Segurança: 2 contas com IA ativa+prompt vazio pausadas + 🔧 fix do 500 em POST /api/agent-config — em PRODUÇÃO
+
+Reconfirmado direto no banco (não assumido do relatório anterior) que `fmakonee03@gmail.com` e `stefanocatedral@hotmail.com` seguiam `ativo=true` com `prompt_sistema` vazio em produção. **Pausadas** (`ativo=false`, só esse campo) — confirmado por leitura independente. Reativação depende de cada dono configurar um prompt real; recomendo avisá-los.
+
+Corrigido também o 500 em `POST /api/agent-config` (achado no mesmo relatório): `nome_agente`/`prompt_sistema` são `NOT NULL DEFAULT`, mas o código sempre mandava `NULL` explícito quando o campo não vinha no body — o `DEFAULT` do Postgres só vale quando a coluna é omitida, nunca com `NULL` explícito. Fix cuidou de um efeito colateral real: aplicar o default só no lado do JS faria updates parciais (salvar só uma aba da tela) sobrescreverem um `nome_agente`/`prompt_sistema` já configurado — resolvido só no SQL (default no INSERT, preserva valor atual no UPDATE). Testado em homolog com 3 cenários reais (primeira gravação, gravação customizada, update parcial preservando valores) — sem regressão confirmada.
+
+Build limpo. **Deployado em homolog e, após confirmação explícita, em produção**, `sha256sum` idêntico nos 3 lugares. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🔧 Fix: contatos importados de grupo não caíam em lista nenhuma + botão renomeado pra "Importar para CRM" — em PRODUÇÃO
+
+Depois do fix anterior (groupJid), usuário reportou não achar os contatos importados em nenhuma lista. Causa: a importação nunca setava `lista_id`. Corrigido — cria automaticamente uma lista nova por importação (`Importação Grupo {nome} {data}`, mesmo padrão já usado na importação CSV/XLSX), só quando há contato genuinamente novo (não deixa lista vazia à toa). Contato que já existia nunca é realocado de lista. Botão "Baixar contatos do grupo" renomeado pra **"Importar para CRM"** a pedido do usuário.
+
+Testado em homolog com grupo real (229 contatos) — lista criada e vinculada corretamente, confirmado via API, dados de teste limpos. Build limpo. **Deployado em homolog e produção**, `sha256sum` idêntico nos 3 lugares. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🔧 Fix: "groupJid inválido" quebrava painel de grupo e importação de contatos pra 100% dos grupos — corrigido, em PRODUÇÃO
+
+Print do usuário mostrou o erro "groupJid inválido — precisa terminar em @g.us" ao abrir um grupo. Causa: `GET /api/whatsapp/conversas` sempre remove o sufixo `@g.us` do `session_id` (inclusive de grupo), e o frontend manda esse `session_id` cru pras rotas de info/importação de grupo, que exigiam o sufixo — rejeitando sempre, 100% dos grupos, desde que a feature foi ao ar (04/08). Corrigido normalizando o JID nas 2 rotas (acrescenta `@g.us` em vez de rejeitar) em vez de mexer no `session_id` (usado em dezenas de outros lugares, mudança bem mais arriscada pro problema real).
+
+**Testado em homolog com dado real:** reproduzido o bug, depois confirmado que as 2 rotas passaram a funcionar com o mesmo `session_id` sem sufixo que o frontend sempre mandou — info do grupo "Poá negócios" trazida corretamente, 229 contatos importados (dados de teste limpos depois). Build limpo. **Deployado em homolog e produção**, `sha256sum` idêntico nos 3 lugares. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🆕 Gerenciar listas (excluir/renomear/limpar vazias) no passo "Por Lista" de Disparos — testado em homolog, aguardando produção
+
+`StepContacts` (`Disparos.tsx`) só selecionava listas pra campanha, sem excluir/renomear — mesmo o backend já suportando (rota genérica `makeCrud`) e `Leads.tsx` já tendo o precedente de exclusão em produção. Adicionado: excluir lista individual (ícone de lixeira, mesmo padrão de confirmação de `Leads.tsx`, remove do array de seleção da campanha se estava selecionada), renomear (ícone de lápis, modal, `PUT /api/listas/:id`, rota que já existia mas nunca tinha sido usada nesta tela), e "Limpar N vazias" em lote (baseado na mesma contagem já mostrada no badge de cada linha).
+
+**Testado em homolog com API real** (dentro do container, JWT do próprio container): confirmado via `GET` que excluir lista com contato **não apaga o contato** — só zera `lista_id` (FK `ON DELETE SET NULL`, confirmada existir de fato no banco real, embora ausente de `migrations.ts`); renomeio confirmado persistido via `GET`; lógica de limpar vazias validada removendo as listas de teste vazias sem tocar na que tinha contato.
+
+**Listas vazias hoje:** produção — 2 de 4 (conta `mentoark@gmail.com`, de 30/07). Homolog — 8 de 13, 3 delas de hoje — bate com o print do usuário que motivou a sprint, sugerindo que o print era de homolog, não produção.
+
+Build (`vite build`) limpo. **Deployado em homolog e, após confirmação explícita do usuário, em produção** — `/health`→200 nos dois. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🔴 Revalidação da sprint spintax em homolog: isolamento de app confirmado OK, mas achou um SEGUNDO vazamento (número de WhatsApp compartilhado)
+
+Tentativa de fechar o ciclo do incidente anterior (spintax "testado em homolog" que na verdade rodou em produção) rodando o teste corretamente desta vez — de dentro do container de homolog, banco/config reais, sem JWT/URL manual. **O processo novo funcionou**: confirmado por `SELECT` direto que a campanha de teste (3 mensagens spintax reais, variação confirmada: "Oi, Duda!.../E aí, Theo!.../Olá, Bia!...") rodou e enviou 100% dentro de `crm_hml`, nunca tocou as tabelas de produção.
+
+**Mas vazou pra produção mesmo assim, por um mecanismo diferente**: a instância de homolog usada (`crm_435ee4720fc3_2`) está de fato conectada (confirmado via API da Evolution, `ownerJid`) a um número de WhatsApp real (`5511991909106`) que também é contato ativo em produção — o próprio protocolo multi-dispositivo do WhatsApp sincronizou a mensagem pros dois lados, acionando a IA de produção (Stella) de verdade, com custo real de OpenAI (~US$0, desprezível mas não-zero) e 6 respostas reais geradas. **Isso não é bug de código — isolamento de banco/JWT/URL estava perfeito; o problema é o WhatsApp físico compartilhado entre ambientes**, fora do controle da aplicação.
+
+**Corrigido:** dados de teste removidos dos dois ambientes. `AUDITORIA_PROTOCOLO.md` ganhou uma segunda camada de regra (checar `ownerJid` via API da Evolution nos dois ambientes antes de qualquer envio real de teste). **Pendente, requer decisão do usuário:** qual número deve ficar exclusivo de homolog — hoje `5511979579548` também aparece conectado nos dois servidores Evolution simultaneamente, mesmo risco pro próximo teste. **Achado lateral não investigado:** histórico de loop bot-a-bot pré-existente (140+ mensagens) encontrado no contato afetado, aparentemente não relacionado a este incidente — sinalizado pra sprint futura. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🔴 INCIDENTE: teste "de homolog" da sprint spintax vazou pra produção, mensagens reais enviadas — causa raiz confirmada, dados de teste removidos, processo corrigido
+
+Usuário reportou (com print de tela real) que as 3 mensagens de teste da sprint anterior ("motor de variação/spintax") apareceram na tela de Conversas de **produção**, não homolog como o relatório daquela sprint afirmava — e cada uma foi enviada em dobro.
+
+**Confirmado com evidência direta (não suposição):** o texto exato das mensagens de teste existe em `whatsapp_messages` **só em produção (`crm`), zero ocorrências em homolog (`crm_hml`)**. A conta afetada (`mentoark@gmail.com`, produção) usa `evolution_server_url = disparo.mentoark.com.br` — o Evolution real de produção, nada a ver com o Evolution isolado de homolog. `JWT_SECRET` confirmado **diferente** entre os dois containers (produção não vaza segredo pra homolog nem vice-versa) — ou seja, o teste usou credencial/URL de produção por engano, não é um bug de isolamento do sistema. O envio em dobro é explicado por essa mesma conta ter **2 conexões WhatsApp ativas simultâneas em produção** (`instancias_ids` da campanha provavelmente incluía as duas).
+
+**Dano real avaliado:** varredura completa de todas as mensagens enviadas em produção hoje, todas as contas — as 10 mensagens de teste foram parar só no número de teste conhecido (5511979579548). **Nenhum contato real foi afetado.**
+
+**Corrigido:** as 10 linhas de teste removidas de `whatsapp_messages` (produção). Processo de teste corrigido em `AUDITORIA_PROTOCOLO.md` — daqui pra frente, testes que mandam mensagem real **têm que rodar de dentro do container do ambiente alvo** (nunca mais JWT local + URL escrita à mão). O código do spintax em si funcionou corretamente no teste (mensagens realmente variaram) — só o ambiente do relatório estava errado; nenhuma exposição de código adicional a corrigir. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🔴 CONFIRMADO: duplicação Whisper/Vision fazia a IA nunca responder áudio — corrigido, testado em homolog, aguardando confirmação pra produção
+
+Achado pendente desde 2026-07-24 ("Vision/Whisper duplicado, dobra custo") virou, nesta sprint, **confirmação com evidência real de que era mais grave que custo duplicado**: `agentEngine.ts` tinha sua própria cópia de `transcreverAudio()`/`analisarImagem()` que mandava a URL crua do CDN do WhatsApp (sempre criptografada) direto pro Whisper/Vision, em paralelo ao que `webhook.ts` já fazia certo (decripta via Evolution antes). Teste real (URL de áudio genuína, homolog): download retorna bytes cifrados, Whisper rejeita com `HTTP 400 "Invalid file format"` → `transcreverAudio()` retornava `null` → a IA **nunca respondia à mensagem de áudio**, de forma determinística. Vision tinha o mesmo problema mas com efeito mais brando (cai num fallback genérico em vez de travar).
+
+**Impacto real medido em produção** (`whatsapp_messages`, desde 24/07 quando Whisper foi ao ar): `stefanocatedral@hotmail.com` — 873 áudios recebidos, só 2 com resposta do bot em até 3min (**99,8% sem resposta**, ~12 dias); `mentoark@gmail.com` — 45/65 sem resposta; `fmakonee03@gmail.com` — 30/37 sem resposta (parte dessa última janela coincide com o incidente de loop bot-a-bot de 28/07, não 100% atribuível só a este bug).
+
+**Corrigido:** `agentEngine.ts` agora reaproveita o texto que `webhook.ts` já gerou (zero chamada nova a Whisper/Vision no caso normal); as cópias locais duplicadas foram removidas e substituídas por um fallback que reusa as mesmas funções de `webhook.ts` (`utils/transcribe.ts`/`utils/vision.ts`, com decrypt real via `baixarMidiaDecriptografada()`), só acionado quando `webhook.ts` não processou a mídia.
+
+**Testado em homolog** (motor real rodado diretamente via script Node dentro do container, `IA_TEST_MODE=true` pra não mandar mensagem real a um contato): confirmado por log que áudio/imagem já processados por `webhook.ts` geram **zero** chamada nova a Whisper/Vision e a IA responde corretamente baseada no texto certo; caminho de fallback testado com mensagens reais mas antigas (Evolution recusou o decrypt por expiração, comportamento fail-safe correto em ambos os casos — áudio aborta sem responder, imagem degrada pra resposta genérica).
+
+Build backend limpo (`swc` + `tsc --noEmit` sem erros). **Deployado em homolog e, após confirmação explícita do usuário (dado o volume real de áudios sem resposta na maior conta ativa), em produção** — `/health`→200, sem `ERROR` nos logs pós-deploy. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🆕 Spintax (variação de mensagem sem IA) + aviso de mensagem sem personalização + "Humanizar com IA" nasce desligado — testado em homolog com envio real, aguardando decisão sobre produção
+
+Motivação: toda campanha nascia com `humanizar_ia: true` — cada envio chamava a OpenAI (gpt-4o-mini, chave global) pra reescrever a mensagem, mesmo o cache reaproveitando só ~70% das vezes depois de 5 variações reais (campanha de 1000 contatos ≈ 300 chamadas reais, não 1). Pesquisa registrada nesta sessão (política de spam WhatsApp Business Platform 2026 + guias de anti-ban pra API não-oficial) aponta texto **byte-idêntico** pra lista grande como o sinal de risco mais citado — não "ausência de IA". `substituirPlaceholders()` já resolve isso de graça quando a mensagem usa `{{primeiro_nome}}`.
+
+**Implementado:**
+1. **Spintax** — sintaxe `{opção 1|opção 2|opção 3}` (chave simples + `|`, nunca confundida com `{{placeholder}}`, chave dupla — a regra "sem pipe = texto literal" garante isso por construção, testado). Nova função `resolverSpintax()`, encadeada `resolverSpintax(substituirPlaceholders(...))` tanto na prévia (`StepMessage`) quanto no envio real (`StepReview.handleStart`) — cada contato sorteia sua combinação independente. Dica de sintaxe adicionada perto dos atalhos `{{nome}}`/etc, em `Disparos.tsx` e `DisparoTemplates.tsx`.
+2. **Aviso não-bloqueante** de "mensagem sem nenhuma personalização" (`mensagemSemPersonalizacao()`) — aparece em `StepMessage` quando a mensagem não tem placeholder nem spintax.
+3. **Default de `humanizar_ia` trocado de `true` pra `false`** — campanhas já criadas/agendadas não são afetadas (valor já gravado por campanha). Texto do toggle atualizado pra deixar claro o trade-off (tem custo, o sistema já varia sem custo via placeholders/spintax).
+
+**Testado em homolog com envio real** (API real, JWT assinado localmente): campanha com spintax + `{{primeiro_nome}}`, 3 "contatos" — as 3 mensagens que **de fato chegaram no WhatsApp de teste** vieram todas diferentes (saudação E frase variando por combinação sorteada, confirmado em `whatsapp_messages`). Bloco `{promocional}` sem pipe chegou literal, sem quebrar. Lógica de spintax + aviso testada isoladamente em Node antes (5/5 combinações distintas num teste com 5 contatos).
+
+**Estimativa de redução de chamadas à OpenAI:** campanha de 1000 contatos que não ligar manualmente o toggle passa de **~300 chamadas reais** (comportamento antigo, default ligado) pra **0** (novo default) — variação de texto agora vem do spintax, sem custo.
+
+Build (`vite build`) limpo. **Deployado em homolog e, após confirmação explícita do usuário, em produção** (`src/pages/Disparos.tsx`, `src/pages/DisparoTemplates.tsx`) — `/health`→200, sem `ERROR` nos logs. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+**Pendência linkada, não implementada:** `diagnosticos/SPRINT_DISPAROS_VARIACAO_IMAGEM.md` cobre o mesmo tema pro lado de imagem (hash de arquivo idêntico por campanha) — perguntado ao usuário se quer rodar em seguida.
+
+## Sessão 2026-08-06 (cont.) — ✅ Fechamento da sprint nome/telefone na saudação: reconfirmado tudo já feito + 🔴 achado colateral (fix de legenda de mídia sumiu de produção)
+
+Sprint de fechamento (não investigação nova) — reconfirmar se o fix de "telefone virando saudação" (sessão anterior, mesmo dia) estava de fato commitado/deployado/documentado, já que a sprint original presumia incerteza nos três pontos.
+
+**Reconfirmado (evidência, não suposição):**
+- `src/pages/Disparos.tsx` e `backend/src/routes/contatos.ts`: **não commitados no git** (working tree), mas `sha256sum` idêntico entre local, `/opt/crm-homolog` e `/opt/crm` — já deployados em produção e homolog de verdade, apesar de não commitados.
+- `STATUS.md`/`diagnosticos/AUDITORIA_LOG.md` **já tinham a entrada completa** sobre esse fix (sessão anterior, mesmo dia) — a premissa da sprint de que "nada foi encontrado" estava desatualizada (provavelmente escrita antes de ver essa mesma sessão já ter documentado).
+- Backfill: `SELECT COUNT(*) WHERE nome=telefone AND empresa preenchida` → **0 em produção e homolog** — já rodou (60 contatos corrigidos, conforme já registrado). Só restam os 19+1+8 contatos "sem empresa" (nunca foram alvo do backfill, cobertos só pela camada 2 em runtime — comportamento esperado, não pendência).
+
+**🔴 Achado colateral, fora do escopo direto desta sprint:** comparando os arquivos relacionados contra a VPS (mesmo padrão de verificação), `backend/src/services/disparoProcessor.ts` **diverge entre homolog e produção** — produção está rodando a versão ANTERIOR ao fix de "Sprint Fix Legenda de Mídia" (2026-08-02, mesma sessão): a prioridade de `legendaFinal` voltou a ser `legenda_midia || mensagem` (crua primeiro) em vez de `mensagem || legenda_midia` (personalizada primeiro) — o bug de `{{placeholders}}` literais em legenda de campanha de mídia baseada em template está de volta em produção, mesmo já tendo sido corrigido e deployado antes nesta mesma sessão. Causa não investigada agora (pode ser rollback intencional de outra sessão concorrente trabalhando na mesma VPS, ou um deploy anterior que não persistiu) — **não corrigido nesta sprint** (fora do escopo pedido, e mexer sem entender a causa poderia conflitar com trabalho de outra sessão em andamento). Recomendo sprint dedicada pra investigar e decidir se re-deploya.
+
+**Documentos absorvidos e apagados** (protocolo de absorção): `diagnosticos/SPRINT_FIX_NOME_TELEFONE_SAUDACAO.md` e `diagnosticos/SPRINT_DIAGNOSTICO_IMPORTACAO_NOME_ERRADO.md` — confirmado que os 4 itens do primeiro (fallback, proteção em `substituirPlaceholders`, backfill, registro da campanha já enviada) estão genuinamente cobertos pelo código/documentação atuais antes de apagar.
+
+**Nenhum re-deploy necessário nesta sprint** (código já estava no ar) — nenhum novo teste rodado (os testes reais já foram feitos e registrados na sessão anterior). Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🆕 Importação de contatos: upsert real (não quebra mais o lote) + resumo novos/existentes + validação determinística de linha suspeita — em PRODUÇÃO
+
+Importação de contatos usava o bulk-insert genérico sem `ON CONFLICT` — um telefone colidindo (já existente na conta, ou duplicado no próprio arquivo) rejeitava o `INSERT` inteiro, e NENHUMA linha do lote era gravada, sem aviso claro do porquê.
+
+**Corrigido:** endpoint dedicado `POST /contatos/importar-lote` (upsert real, `ON CONFLICT DO NOTHING` — contato já existente não é sobrescrito, nome/notas/tags de um lead em atendimento ficam intocados) + `POST /contatos/checar-telefones` (pré-validação real, mostrada ANTES de confirmar a importação: quantos são novos vs. já existentes na conta). Validação determinística de linha suspeita (sem IA, custo zero — decisão explícita após o incidente de crédito OpenAI): nome parece telefone, telefone com padrão de teste/placeholder, DDD inválido, duplicata dentro do arquivo — sinaliza, nunca bloqueia.
+
+**Testado em homolog com API real:** contato já existente com dados propositalmente diferentes no payload de reimportação ("HACKED") → confirmado no banco que NADA foi sobrescrito (nome/empresa/notas/tags/`updated_at` originais intactos), só os novos entraram. Telefone duplicado dentro do arquivo → sem erro, só 1 linha gravada. CSV limpo → sem regressão. Lógica de suspeita testada isoladamente em Node com 7 casos.
+
+Build limpo nos dois lados. **Deployado em homolog e, após confirmação explícita, em produção** (`backend/src/routes/contatos.ts`, `src/pages/Disparos.tsx`). Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 — 🔴 CRÍTICO: telefone virava saudação em campanha real ("Oi 5511984849872...") — corrigido, testado com envio real, em PRODUÇÃO
+
+Campanha real já enviada (lista de importação CNPJ, conta `mentoark@gmail.com`) mandou mensagens tipo "Oi 5511984849872, tudo tranquilo?" — planilha de empresa sem coluna de nome de pessoa deixava `nome` vazio, caindo no fallback antigo `nome || telefone`, sem nenhuma proteção depois disso antes de virar `{{nome}}`/`{{primeiro_nome}}` na mensagem real.
+
+**Corrigido em duas camadas:** (1) importação agora tenta `nome || empresa || telefone` (razão social/nome fantasia antes do telefone cru); (2) `substituirPlaceholders()` — a proteção mais importante — trata `nome === telefone` como "sem nome real" e remove o placeholder com limpeza de pontuação ao redor, em vez de usar o telefone como saudação. Conferido contra os templates reais em produção antes de decidir a abordagem.
+
+**Testado:** 5 casos isolados em Node (bug real, bug com `{{empresa}}`, nome real sem regressão, nome vazio mantém "cliente", `{{nome}}` no meio da frase) + 2 envios reais em homolog (mensagem chegou "Oi, tudo bem?..." sem telefone; nome real sem regressão).
+
+**Backfill em produção:** 60 contatos corrigidos (`nome = empresa` onde antes era `nome = telefone`). **Achado lateral não corrigido:** esses 60 receberam "ME"/"EPP"/"MICRO EMPRESA" como nome (a coluna `empresa` já estava errada desde a importação original — bug diferente, de extração de `porte_empresa`, fora do escopo desta sprint) — melhor que vazar telefone, mas não é um nome natural. 19 contatos sem `empresa` continuam com `nome=telefone` no banco, protegidos só em runtime (camada 2).
+
+Build (`vite build`) limpo. **Deployado em homolog e produção** (`src/pages/Disparos.tsx`) — `/health`→200 nos dois, sem `ERROR`. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-04/05 (cont.) — 🔴 Achado + corrigido: linha de teste da roleta de grupo ficou ativa apontando pra grupo real + reconfirmação do diagnóstico de crédito OpenAI
+
+Durante o teste da Sprint "Tarefa por Grupo" (`grupos_ia_permitidos`, homolog), a linha de teste criada pra validar o rodízio (`a4367fa5-...`, grupo real "Linux lovable extensão") ficou **ativa** depois que o teste foi interrompido por falta de crédito na conta de IA. Usuário pediu investigação de consumo de crédito antes de prosseguir — achado confirmado logo no início e **corrigido na hora**: `UPDATE grupos_ia_permitidos SET ativo=false WHERE id='a4367fa5-...'`. Não era a causa do esgotamento histórico (aconteceu em 28/07, antes dessa linha existir) — era um risco novo, neutralizado antes de gerar custo real.
+
+**Resto da investigação de crédito reconfirma (ao vivo, banco de produção) o diagnóstico já registrado em sessão anterior (04/08)** — sem achado novo, só validação: 4/4 contas com IA ativa (`mentoark@gmail.com`, `angelobispofilho@gmail.com`, `stefanocatedral@hotmail.com`, `fmakonee03@gmail.com`) seguem com **0 linhas em `ai_providers`** (100% no fallback `OPENAI_API_KEY` compartilhado). Pico de 28/07 confirmado como loop bot-a-bot (98% dos tokens de `fmakonee03` vieram de 1 único contato, o próprio dono da conta, em 54min) — **já corrigido** via circuit breaker (deployado 04/08). Duplicação Vision/Whisper (`webhook.ts` + `agentEngine.ts` chamando as duas em cima da mesma mídia) **reconfirmada no código atual — ainda não corrigida**. `ai_uso_diario` mostra 1ª chamada bem-sucedida desde o esgotamento em 04/08 (mentoark@gmail.com, 7 msgs, custo baixo) — sinal de que os fixes de 04/08 (circuit breaker + `maxRetries:1` + chave de homolog separada) estão funcionando.
+
+**Sprint "Tarefa por Grupo" (`grupos_ia_permitidos`) segue em andamento, só em homolog** — implementação completa (migration, `grupoTarefaEngine.ts`, gate em `webhook.ts`), mas os 3 testes reais (demanda/bate-papo/cooldown) ficaram bloqueados pela falta de crédito na chamada de LLM real; retomar quando houver chave válida com saldo. Nenhum grupo real de produção foi ativado — `grupos_ia_permitidos` nem existe na tabela de produção ainda.
+
 ## Sessão 2026-08-04 (cont.) — 🆕 Quadro Kanban reestruturado estilo Jira (touch/iPad, drag-drop, cores, seleção múltipla) — deployado em produção
 
 **Dedup real (achado no caminho):** `Kanban.tsx` (rota `/kanban`) tinha ~450 linhas de lógica duplicada de `KanbanBoard.tsx`, que por sua vez era **código morto** (comentário dizia "usado em /kanban e na aba Tarefas de Equipe" — falso, zero imports confirmados via grep). `Kanban.tsx` agora só renderiza `KanbanBoard`; qualquer mudança futura no quadro vive num lugar só.
