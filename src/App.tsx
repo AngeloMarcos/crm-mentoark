@@ -20,6 +20,7 @@ import FunilPage from "./pages/Funil";
 import WhatsAppPage from "./pages/WhatsApp";
 import SLAPage from "./pages/SLA";
 import RespostasRapidasPage from "./pages/RespostasRapidas";
+import CorridasPendentesPage from "./pages/CorridasPendentes";
 import DisparosPage from "./pages/Disparos";
 import DisparoTemplatesPage from "./pages/DisparoTemplates";
 import CampanhasPage from "./pages/Campanhas";
@@ -85,6 +86,7 @@ const App = () => (
               <Route path="/sla"          element={<ProtectedRoute requireModulo="whatsapp">    <SLAPage /></ProtectedRoute>} />
               <Route path="/monitor-whatsapp" element={<ProtectedRoute requireModulo="whatsapp"> <MonitorWhatsApp /></ProtectedRoute>} />
               <Route path="/respostas-rapidas" element={<ProtectedRoute requireModulo="whatsapp"> <RespostasRapidasPage /></ProtectedRoute>} />
+              <Route path="/corridas-pendentes" element={<ProtectedRoute requireModulo="whatsapp"> <CorridasPendentesPage /></ProtectedRoute>} />
               <Route path="/disparos"     element={<ProtectedRoute requireModulo="disparos">    <DisparosPage /></ProtectedRoute>} />
               <Route path="/disparos/templates" element={<ProtectedRoute requireModulo="disparos"> <DisparoTemplatesPage /></ProtectedRoute>} />
               <Route path="/campanhas"    element={<ProtectedRoute requireModulo="campanhas">   <CampanhasPage /></ProtectedRoute>} />

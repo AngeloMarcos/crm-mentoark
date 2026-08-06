@@ -82,6 +82,7 @@ const TIPO_LABELS: Record<string, string> = {
   gemini: "Google Gemini",
   telegram: "Telegram Bot",
   instagram: "Instagram",
+  corridas_cliente: "Corridas — Sistema do Cliente",
 };
 
 const TIPO_OPTIONS = Object.entries(TIPO_LABELS).map(([value, label]) => ({ value, label }));
@@ -505,7 +506,7 @@ export default function IntegracoesPage() {
               />
             </div>
 
-            {["n8n", "webhook_in", "webhook_out", "database_vector"].includes(form.tipo) && (
+            {["n8n", "webhook_in", "webhook_out", "database_vector", "corridas_cliente"].includes(form.tipo) && (
               <div className="space-y-1.5">
                 <Label>URL</Label>
                 <Input
@@ -516,9 +517,9 @@ export default function IntegracoesPage() {
               </div>
             )}
 
-            {["openai", "gemini", "elevenlabs", "meta_ads", "telegram", "instagram", "database_vector", "google_places"].includes(form.tipo) && (
+            {["openai", "gemini", "elevenlabs", "meta_ads", "telegram", "instagram", "database_vector", "google_places", "corridas_cliente"].includes(form.tipo) && (
               <div className="space-y-1.5">
-                <Label>API Key</Label>
+                <Label>{form.tipo === "corridas_cliente" ? "Token (Authorization: Bearer)" : "API Key"}</Label>
                 <SecretInput
                   value={form.api_key}
                   onChange={v => setForm(f => ({ ...f, api_key: v }))}

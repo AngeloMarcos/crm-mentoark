@@ -10,9 +10,21 @@ import {
   CriarAgendamentoArgsSchema,
   ConsultarFaqArgsSchema,
   BuscarDocumentosArgsSchema,
+  CriarCorridaArgsSchema,
 } from '../functionCallingSecurity';
 import { gerarEmbedding } from '../../utils/embeddings';
+import { enviarCorridaParaSistemaCliente } from '../corridasService';
 import { log } from '../../logger';
+
+// Dados do contato da conversa atual — usados por ferramentas que precisam do telefone/id
+// real de quem está falando (nunca extraído pela LLM, ver comentário em
+// CriarCorridaArgsSchema). Opcional: ferramentas que não precisam disso seguem funcionando
+// sem essa informação (chamadas fora do fluxo de agentEngine.ts, ex: testes/suporte).
+export interface ContextoConversa {
+  telefone?: string;
+  contatoId?: string | null;
+  nomeContato?: string | null;
+}
 
 export interface MCPTool {
   name: string;
@@ -125,13 +137,30 @@ export const MCP_TOOLS: MCPTool[] = [
       required: ['query'],
     },
   },
+  {
+    name: 'criar_corrida',
+    description: 'Registra um pedido de corrida identificado na conversa de WhatsApp, para envio ao sistema de gestão de corridas do cliente. Use quando o contato pedir uma corrida/carro/transporte. Extraia origem, destino e horário do texto da conversa. Marque confianca="alta" SOMENTE se origem, destino E horário estiverem claros e sem ambiguidade — nesse caso a corrida é enviada automaticamente. Em qualquer outro caso (dado faltando, texto vago, ambiguidade) use confianca="baixa": a corrida cai numa fila de confirmação humana antes de ser enviada, o que é preferível a mandar dado errado pro sistema do cliente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        origem: { type: 'string', description: 'Endereço ou local de partida, se mencionado.' },
+        destino: { type: 'string', description: 'Endereço ou local de destino, se mencionado.' },
+        horario_solicitado: { type: 'string', description: "Quando a pessoa quer a corrida, em texto livre (ex: 'agora', 'amanhã 8h')." },
+        nome_passageiro: { type: 'string', description: 'Nome do passageiro, se diferente do nome já conhecido do contato.' },
+        observacoes: { type: 'string', description: 'Detalhe extra relevante (bagagem, pet, ponto de referência, etc.).' },
+        confianca: { type: 'string', description: "'alta' somente se origem, destino e horário estiverem claros e sem ambiguidade; 'baixa' em qualquer outro caso." },
+      },
+      required: ['confianca'],
+    },
+  },
 ];
 
 export async function executarFerramenta(
   pool: Pool,
   userId: string,
   nome: string,
-  args: Record<string, any>
+  args: Record<string, any>,
+  contexto?: ContextoConversa,
 ): Promise<string> {
   try {
     // Validação de segurança: userId deve ser UUID (isolamento multi-tenant)
@@ -316,6 +345,63 @@ export async function executarFerramenta(
         return r.rows
           .map((row: any, idx: number) => `[Trecho ${idx + 1}]: ${row.content}`)
           .join('\n\n');
+      }
+
+      case 'criar_corrida': {
+        // Valida argumentos com zod schema
+        const validatedArgs = CriarCorridaArgsSchema.parse(args);
+
+        const telefoneContato = contexto?.telefone;
+        if (!telefoneContato) {
+          // Não deveria acontecer no fluxo real (agentEngine.ts sempre passa o contexto),
+          // mas nunca registra corrida sem saber de qual contato ela veio.
+          return 'Não foi possível registrar a corrida: telefone do contato não identificado.';
+        }
+
+        const insertRes = await pool.query(
+          `INSERT INTO corridas
+             (user_id, contato_id, telefone, nome_passageiro, origem, destino, horario_solicitado, observacoes, status, origem_extracao, confianca_ia)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pendente_confirmacao','ia',$9)
+           RETURNING id, created_at`,
+          [
+            userId,
+            contexto?.contatoId || null,
+            telefoneContato,
+            validatedArgs.nome_passageiro || contexto?.nomeContato || null,
+            validatedArgs.origem || null,
+            validatedArgs.destino || null,
+            validatedArgs.horario_solicitado || null,
+            validatedArgs.observacoes || null,
+            validatedArgs.confianca,
+          ]
+        );
+        const corridaId = insertRes.rows[0].id;
+        const createdAt = insertRes.rows[0].created_at;
+
+        // Defesa extra: mesmo que a LLM tenha marcado confianca='alta', só dispara o envio
+        // automático se os 3 campos essenciais realmente vieram preenchidos — uma
+        // contradição aqui (alta confiança, campo faltando) cai pra fila humana em vez de
+        // arriscar mandar corrida incompleta pro sistema do cliente.
+        const dadosCompletos = !!(validatedArgs.origem && validatedArgs.destino && validatedArgs.horario_solicitado);
+
+        if (validatedArgs.confianca === 'alta' && dadosCompletos) {
+          const resultado = await enviarCorridaParaSistemaCliente(pool, userId, {
+            id: corridaId,
+            telefone: telefoneContato,
+            nome_passageiro: validatedArgs.nome_passageiro || contexto?.nomeContato || null,
+            origem: validatedArgs.origem || null,
+            destino: validatedArgs.destino || null,
+            horario_solicitado: validatedArgs.horario_solicitado || null,
+            observacoes: validatedArgs.observacoes || null,
+            created_at: createdAt,
+          });
+          if (resultado.enviado) {
+            return `CORRIDA_REGISTRADA: enviada automaticamente ao sistema do cliente (origem: ${validatedArgs.origem}, destino: ${validatedArgs.destino}, horário: ${validatedArgs.horario_solicitado}).`;
+          }
+          return `CORRIDA_REGISTRADA: dados completos, mas não foi possível enviar automaticamente agora (${resultado.motivo}). A corrida ficou registrada na fila para reenvio/confirmação manual.`;
+        }
+
+        return 'CORRIDA_REGISTRADA: dados incompletos ou incertos — encaminhada para confirmação de um atendente antes de ser enviada ao sistema do cliente.';
       }
 
       default:

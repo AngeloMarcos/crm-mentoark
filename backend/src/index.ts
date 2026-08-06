@@ -56,6 +56,7 @@ import galeriaRouter from './routes/galeria';
 import modulosRouter from './routes/modulos';
 import whatsappRouter from './routes/whatsapp';
 import cargosRouter from './routes/cargos';
+import corridasRouter from './routes/corridas';
 import { mcpRouter } from './routes/mcp';
 import marketingRouter from './routes/marketing';
 import teamRouter, { teamInvitePublicRouter } from './routes/team';
@@ -344,6 +345,7 @@ app.use('/api/ai-providers', aiProvidersRouter(pool));
 app.use('/api/ai', aiUsoRouter(pool));
 app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));
+app.use('/api/corridas', corridasRouter(pool));
 app.use('/api/suporte',        suporteCopilotoRouter(pool));
 app.use('/api/admin/firewall', adminFirewallRouter(pool));
 

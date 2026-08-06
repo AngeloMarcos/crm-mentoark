@@ -179,6 +179,21 @@ export const BuscarDocumentosArgsSchema = z.object({
 
 export type BuscarDocumentosArgs = z.infer<typeof BuscarDocumentosArgsSchema>;
 
+// [AUDITORIA] LÓGICA: `telefone` do passageiro NÃO faz parte deste schema de propósito —
+// vem sempre do contexto real da conversa (contato que está falando no WhatsApp), nunca de
+// extração da LLM, para não arriscar mandar uma corrida pro telefone errado por alucinação
+// do modelo. Ver `executarFerramenta()` (mcp/tools.ts), parâmetro `contexto`.
+export const CriarCorridaArgsSchema = z.object({
+  origem: z.string().max(300).optional().describe('Endereço ou local de partida, se mencionado'),
+  destino: z.string().max(300).optional().describe('Endereço ou local de destino, se mencionado'),
+  horario_solicitado: z.string().max(200).optional().describe('Quando a pessoa quer a corrida, em texto livre'),
+  nome_passageiro: z.string().max(200).optional().describe('Nome do passageiro, se diferente do nome já conhecido do contato'),
+  observacoes: z.string().max(500).optional().describe('Detalhe extra relevante (bagagem, pet, ponto de referência, etc.)'),
+  confianca: z.enum(['alta', 'baixa']).describe('alta somente se origem, destino e horário estiverem claros e sem ambiguidade; baixa em qualquer outro caso'),
+}).strict();
+
+export type CriarCorridaArgs = z.infer<typeof CriarCorridaArgsSchema>;
+
 /**
  * MCP.TS — Ferramentas genéricas do MCP Server
  */
