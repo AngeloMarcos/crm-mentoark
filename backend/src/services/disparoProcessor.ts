@@ -394,7 +394,19 @@ export async function processarDisparos(pool: Pool) {
         // 3.1. Humanizar mensagem via IA — withAiFallback garante que erros 401/429
         //      não travam o disparo; a mensagem original é usada como contingência.
         let textoFinal: string = mensagem;
-        let legendaFinal: string = legenda_midia || mensagem;
+        // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): prioridade invertida
+        // — `mensagem` (disparo_logs.mensagem_enviada) é a legenda JÁ PERSONALIZADA por contato
+        // (substituirPlaceholders rodou no frontend, StepReview.handleStart, ao criar cada log);
+        // `legenda_midia` (disparos.legenda_midia) é o texto CRU da campanha inteira, compartilhado
+        // por todos os destinatários, sem substituição de placeholder nenhuma — não existe coluna
+        // de "legenda por contato" em disparo_logs, então usar `legenda_midia` como preferência (como
+        // antes) mandava `{{nome}}`/`{{primeiro_nome}}`/etc. literais pra campanhas de mídia com
+        // placeholder na legenda, sempre que essa coluna viesse preenchida (ex: campanha criada a
+        // partir de um template, ou qualquer campanha após o fix de
+        // "Textarea sempre escreve em form.mensagem" em Disparos.tsx, que agora preenche
+        // `legenda_midia` de verdade). `legenda_midia` void o fallback só quando `mensagem` vier
+        // vazio (ex: campanha antiga, criada antes deste fix, sem log personalizado equivalente).
+        let legendaFinal: string = mensagem || legenda_midia;
         if (await deveHumanizar(pool, disparo_id)) {
           if (tipo_midia === 'texto' || !tipo_midia) {
             textoFinal = await withAiFallback(
@@ -402,10 +414,15 @@ export async function processarDisparos(pool: Pool) {
               mensagem,
               'humanizarMensagem(texto)',
             );
-          } else if (legenda_midia) {
+          } else if (legendaFinal) {
+            // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): humaniza
+            // `legendaFinal` (já resolvido acima, prioritariamente a versão PERSONALIZADA por
+            // contato) em vez do `legenda_midia` cru — humanizar o texto cru reescreveria a
+            // mensagem inteira sem nunca substituir `{{placeholders}}` (a humanização roda antes
+            // de qualquer substituição, e não existe um segundo passo de substituição depois dela).
             legendaFinal = await withAiFallback(
-              () => humanizarMensagem(legenda_midia),
-              legenda_midia,
+              () => humanizarMensagem(legendaFinal),
+              legendaFinal,
               'humanizarMensagem(legenda)',
             );
           }
