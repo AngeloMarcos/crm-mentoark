@@ -16,7 +16,7 @@ import {
   Clock, Calendar, MessageSquare, Image as ImageIcon,
   FileText, Headphones, AlertTriangle, CheckCircle2,
   Table as TableIcon, Send, XCircle, Activity, AlertCircle,
-  LayoutTemplate, Loader2, Save
+  LayoutTemplate, Loader2, Save, Trash2, Pencil
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, getFreshToken } from "@/integrations/database/client";
@@ -153,11 +153,71 @@ interface ContatoImportado {
   nome: string; telefone: string; email: string; empresa: string; cargo: string; notas: string;
 }
 
+interface LinhaSuspeita { linha: number; motivo: string }
+
 interface AnaliseImportacao {
   novos: ContatoImportado[];
   totalLinhas: number;
   corrigidos: number;
   descartados: number;
+  suspeitos: LinhaSuspeita[];
+}
+
+// [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): DDDs brasileiros válidos hoje — lista
+// fechada (não "adivinhada" por faixa contínua, já que a numeração real tem buracos: não existe
+// DDD 20, 23(SP não usa), 26, 29, 30, 36, 39, 40, 50, 52, 56-60, 70, 72, 76, 78, 80, 83... alguns
+// desses na real existem — por isso a lista é explícita, conferida, não uma regex de faixa).
+const DDDS_BRASIL_VALIDOS = new Set([
+  "11", "12", "13", "14", "15", "16", "17", "18", "19",
+  "21", "22", "24",
+  "27", "28",
+  "31", "32", "33", "34", "35", "37", "38",
+  "41", "42", "43", "44", "45", "46", "47", "48", "49",
+  "51", "53", "54", "55",
+  "61", "62", "63", "64", "65", "66", "67", "68", "69",
+  "71", "73", "74", "75", "77", "79",
+  "81", "82", "83", "84", "85", "86", "87", "88", "89",
+  "91", "92", "93", "94", "95", "96", "97", "98", "99",
+]);
+
+// [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): validação de linha suspeita — só
+// regras determinísticas, sem IA, decisão explícita do usuário (custo zero por importação, motivada
+// pelo incidente de esgotamento de crédito OpenAI já registrado em AUDITORIA_LOG.md). Sinaliza,
+// nunca bloqueia — a linha sinalizada continua entrando em `novos` normalmente.
+function nomePareceTelefone(nome: string): boolean {
+  const limpo = nome.replace(/[\s.\-()]/g, "");
+  return limpo.length >= 8 && /^\d+$/.test(limpo);
+}
+
+function telefoneParecePlaceholder(telefone: string): boolean {
+  // Ignora o prefixo DDI "55" fixo pra não confundir esses 2 dígitos repetidos com o padrão —
+  // o que importa é DDD+número, que é o que a planilha realmente "digitou" errado/de teste.
+  const digitos = telefone.startsWith("55") ? telefone.slice(2) : telefone;
+  if (digitos.length < 8) return false;
+  if (/^(\d)\1+$/.test(digitos)) return true; // todos os dígitos iguais (ex: 11111111111)
+  // Sequência ascendente/descendente de 6+ dígitos CONSECUTIVOS em qualquer trecho do número
+  // (não precisa ser o número inteiro) — cobre "12345678900" e também um número real com um
+  // trecho de teste colado no meio. 6 dígitos seguidos em ordem é praticamente impossível por
+  // acaso num telefone real.
+  let runAsc = 1, runDesc = 1;
+  for (let i = 1; i < digitos.length; i++) {
+    const anterior = Number(digitos[i - 1]);
+    const atual = Number(digitos[i]);
+    runAsc = atual === anterior + 1 ? runAsc + 1 : 1;
+    runDesc = atual === anterior - 1 ? runDesc + 1 : 1;
+    if (runAsc >= 6 || runDesc >= 6) return true;
+  }
+  return false;
+}
+
+function dddInvalido(telefone: string): string | null {
+  // Só valida quando o formato bate exatamente com o que `sanitizarTelefoneImportacao` produz
+  // pra um celular/fixo brasileiro normal (55 + DDD + número, 12 ou 13 dígitos) — telefone fora
+  // desse formato (o caso raro "mantém como veio" da sanitização) não tem DDD confiável pra
+  // checar, e sinalizar nesse caso daria falso positivo.
+  if (!telefone.startsWith("55") || (telefone.length !== 12 && telefone.length !== 13)) return null;
+  const ddd = telefone.slice(2, 4);
+  return DDDS_BRASIL_VALIDOS.has(ddd) ? null : ddd;
 }
 
 // [AUDITORIA] LÓGICA (Sprint Disparos/Importação, revisão 2026-07-25): extraída de dentro de
@@ -192,6 +252,13 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
   let corrigidos = 0;
   let descartados = 0;
   const novos: ContatoImportado[] = [];
+  const suspeitos: LinhaSuspeita[] = [];
+  // [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): telefone (já sanitizado) -> linhas
+  // onde apareceu — detecta duplicata DENTRO do próprio arquivo depois do loop principal. Hoje
+  // isso silenciosamente virava 2 tentativas de insert pro mesmo (user_id, telefone); com o
+  // upsert de `/importar-lote` (backend) isso não quebra mais o lote, mas o operador continua sem
+  // saber que a planilha tinha duplicata interna — vale sinalizar mesmo assim.
+  const linhasPorTelefone = new Map<string, number[]>();
 
   for (let i = 1; i < rows.length; i++) {
     const cols = (rows[i] || []).map(c => (c || "").replace(/^["']|["']$/g, "").trim());
@@ -241,20 +308,57 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
     if (porte) notasExtra.push(`Porte: ${porte}`);
     if (endereco) notasExtra.push(`Endereço: ${endereco}`);
 
+    // [AUDITORIA] BUG (achado real — campanha "Importação cnpj_biz" já enviada em produção,
+    // 2026-08-05): planilha de CNPJ/empresa não tem coluna de nome de PESSOA, só razão
+    // social/nome fantasia (que só ia pro campo `empresa`) — `nome` ficava vazio e caía direto
+    // pro fallback `nome || telefone`, então o "nome" do contato virava o próprio telefone.
+    // `substituirPlaceholders()` não tinha nenhuma proteção contra isso, e `{{primeiro_nome}}`/
+    // `{{nome}}` substituíam pelo telefone cru na mensagem real ("Oi 5511984849872, tudo
+    // tranquilo?"). [AUDITORIA] FIX APLICADO: `empresa` extraída ANTES do `push()` (não mais
+    // inline) pra poder entrar no fallback de `nome` — planilha de empresa sem nome de pessoa
+    // agora usa a razão social/nome fantasia como "nome" do contato, só caindo pro telefone cru
+    // quando NEM ISSO existir. Segunda camada de proteção (pro caso de nome==telefone escapar
+    // mesmo assim, ou já existir na base de dados anterior) em `substituirPlaceholders()`, abaixo.
+    const empresa = getPorSubstring(cols, "razão social", "razao_social", "nome fantasia", "nome_fantasia", "empresa", "company");
+    const nomeFinal = nome || empresa || telefone;
     novos.push({
-      nome: nome || telefone,
+      nome: nomeFinal,
       telefone,
       email: getPorSubstring(cols, "e-mail", "email", "mail"),
-      // "razão social"/"nome_fantasia" checados antes da chave genérica "empresa"/"company" —
-      // evita a colisão com "porte_empresa" descrita acima quando a planilha não tem uma coluna
-      // literalmente chamada "empresa".
-      empresa: getPorSubstring(cols, "razão social", "razao_social", "nome fantasia", "nome_fantasia", "empresa", "company"),
+      empresa,
       cargo: getPorSubstring(cols, "cargo", "função", "role", "profissão", "profissao") || atividade,
       notas: notasExtra.join(" | "),
     });
+
+    // [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): validação determinística de linha
+    // suspeita, sem IA (decisão explícita — custo zero por importação). Sinaliza, nunca descarta;
+    // a linha já entrou em `novos` acima igual antes.
+    const linha = i + 1; // linha 1 = cabeçalho, primeira linha de dado = linha 2
+    const motivos: string[] = [];
+    if (nomePareceTelefone(nomeFinal)) motivos.push("nome parece ser um telefone");
+    if (telefoneParecePlaceholder(telefone)) motivos.push("telefone com padrão de teste/placeholder (dígitos repetidos ou sequência óbvia)");
+    const dddSuspeito = dddInvalido(telefone);
+    if (dddSuspeito) motivos.push(`DDD ${dddSuspeito} fora da lista de DDDs brasileiros válidos`);
+    if (motivos.length) suspeitos.push({ linha, motivo: motivos.join("; ") });
+
+    const linhasExistentes = linhasPorTelefone.get(telefone) || [];
+    linhasExistentes.push(linha);
+    linhasPorTelefone.set(telefone, linhasExistentes);
   }
 
-  return { novos, totalLinhas, corrigidos, descartados };
+  // Duplicata dentro do próprio arquivo — checado depois do loop principal (só dá pra saber
+  // depois de ver todas as linhas). Sinaliza TODAS as ocorrências do telefone repetido, não só a
+  // 2ª em diante, pra o operador conseguir localizar todas no arquivo original.
+  for (const [telefone, linhas] of linhasPorTelefone) {
+    if (linhas.length > 1) {
+      for (const linha of linhas) {
+        suspeitos.push({ linha, motivo: `telefone duplicado no arquivo (também aparece na linha ${linhas.filter(l => l !== linha).join(", ")})` });
+      }
+    }
+  }
+  suspeitos.sort((a, b) => a.linha - b.linha);
+
+  return { novos, totalLinhas, corrigidos, descartados, suspeitos };
 }
 
 // [AUDITORIA] FIX APLICADO (2026-07-29): busca de contatos-alvo (por tag/estágio/lista) caía no
@@ -288,16 +392,94 @@ async function fetchAllContatos(build: () => any): Promise<any[]> {
 // (StepReview.handleStart) — evita que a prévia prometa uma substituição que o envio real não
 // cumpre (ou vice-versa). `.replaceAll()` em vez de `.replace()` cobre múltiplas ocorrências do
 // mesmo placeholder na mesma mensagem (antes, só a 1ª ocorrência era trocada).
+// [AUDITORIA] LÓGICA (Sprint Fix Nome/Telefone na Saudação, 2026-08-05): remove um placeholder
+// vazio (sem valor real pra usar) sem deixar pontuação solta ao redor — "Oi {{primeiro_nome}},
+// tudo bem?" vira "Oi, tudo bem?" (vírgula preservada, colada na saudação), não "Oi , tudo
+// bem?" (vírgula solta) nem "Oi tudo bem?" (perde a pausa da vírgula). Ordem das regras importa:
+// mais específica primeiro (espaço+vírgula) até a mais genérica (placeholder bare, sem espaço/
+// vírgula ao redor) — cada `replaceAll` só bate no que sobrou depois da regra anterior.
+// Conferido contra os templates reais em produção (`disparo_templates`/`disparos.mensagem_template`):
+// cobre tanto "Oi {{primeiro_nome}}, tudo bem?" (vírgula) quanto "Oi {{primeiro_nome}}! Vi que..."
+// (exclamação, cai na regra de espaço sem vírgula — "Oi!", sem espaço duplo).
+function removerPlaceholderVazio(texto: string, placeholder: string): string {
+  return texto
+    .replaceAll(` ${placeholder},`, ",")  // "Oi {{p}}, tudo bem?" -> "Oi, tudo bem?"
+    .replaceAll(`${placeholder}, `, "")   // "{{p}}, tudo bem?" (placeholder no início) -> "tudo bem?"
+    .replaceAll(` ${placeholder}`, "")    // "Oi {{p}}!" / "seu pedido {{p}} chegou" -> "Oi!" / "seu pedido chegou"
+    .replaceAll(`${placeholder} `, "")    // "{{p}} chegou" (placeholder no início, sem vírgula) -> "chegou"
+    .replaceAll(placeholder, "");         // sobra bare, sem espaço/vírgula ao redor
+}
+
 function substituirPlaceholders(mensagem: string, contato: { nome?: string; telefone?: string; empresa?: string }): string {
-  const nome = contato.nome || "cliente";
-  const primeiroNome = nome.split(" ")[0];
+  // [AUDITORIA] BUG (achado real — campanha "Importação cnpj_biz" já enviada em produção,
+  // 2026-08-05): contato importado sem coluna de nome de pessoa (só CNPJ/razão social) tinha
+  // `nome` igual ao próprio `telefone` (fallback antigo de `analisarLinhasImportacao`, corrigido
+  // acima pra tentar `empresa` primeiro) — sem nenhuma proteção aqui, `{{primeiro_nome}}`/
+  // `{{nome}}` substituíam pelo telefone cru: mensagem real saiu como "Oi 5511984849872, tudo
+  // tranquilo?". [AUDITORIA] FIX APLICADO: `nome === telefone` é tratado como "sem nome real" —
+  // NÃO cai no fallback "cliente" (esse continua só pra quando `nome` está genuinamente vazio,
+  // caso inalterado) nem usa o telefone como saudação; o placeholder é removido com limpeza de
+  // pontuação (`removerPlaceholderVazio`, acima) em vez de virar texto vazio no meio da frase.
+  // Segunda camada de proteção — a primeira é o fallback de importação (nome || empresa ||
+  // telefone) — cobre contatos já contaminados na base antes deste fix e qualquer outro caminho
+  // de criação de contato que possa gravar nome === telefone no futuro.
+  const semNomeReal = !!contato.telefone && contato.nome === contato.telefone;
+  const nome = semNomeReal ? "" : (contato.nome || "cliente");
+  const primeiroNome = semNomeReal ? "" : nome.split(" ")[0];
   const dataHoje = new Date().toLocaleDateString("pt-BR");
-  return mensagem
-    .replaceAll("{{nome}}", nome)
-    .replaceAll("{{primeiro_nome}}", primeiroNome)
+
+  let resultado = mensagem;
+  if (semNomeReal) {
+    resultado = removerPlaceholderVazio(resultado, "{{nome}}");
+    resultado = removerPlaceholderVazio(resultado, "{{primeiro_nome}}");
+  } else {
+    resultado = resultado.replaceAll("{{nome}}", nome).replaceAll("{{primeiro_nome}}", primeiroNome);
+  }
+  return resultado
     .replaceAll("{{telefone}}", contato.telefone || "")
     .replaceAll("{{data}}", dataHoje)
     .replaceAll("{{empresa}}", contato.empresa || "");
+}
+
+// [AUDITORIA] LÓGICA (Sprint Variação sem IA, 2026-08-06): motor de variação determinística
+// (spintax) — zero custo de IA, decisão explícita pra reduzir a dependência de "Humanizar com IA"
+// (que chama OpenAI uma vez por contato). Sintaxe `{opção 1|opção 2|opção 3}` (chave SIMPLES +
+// pelo menos um `|` dentro) — nunca confundir com `{{placeholder}}` (chave DUPLA, nunca tem `|`).
+// A regex abaixo casa qualquer bloco `{...sem chaves aninhadas...}`, inclusive — por construção
+// de regex, não por checagem explícita de posição — o miolo de um `{{placeholder}}` (ex: bateria
+// em `{primeiro_nome}` dentro de `{{primeiro_nome}}`). Isso é INOFENSIVO de propósito: como esse
+// miolo nunca tem `|`, a regra "sem pipe = texto literal, devolve o próprio trecho casado sem
+// mudar nada" reconstrói o placeholder duplo exatamente como era — as chaves externas nunca
+// fazem parte de nenhum match, só sobram no lugar. Testado (ver AUDITORIA_LOG.md) com
+// `{{primeiro_nome}}` ao lado de spintax real na mesma mensagem — cada um resolve certo, sem
+// vazar um no outro. Escolha independente por chamada (`Math.random()`) — chamado uma vez por
+// contato (`StepReview.handleStart`, depois de `substituirPlaceholders`), então cada destinatário
+// sorteia sua própria combinação.
+function resolverSpintax(texto: string): string {
+  return texto.replace(/\{([^{}]+)\}/g, (match, conteudo: string) => {
+    if (!conteudo.includes("|")) return match; // sem pipe — não é spintax, mantém literal (cobre {{placeholder}} e chave simples usada por outro motivo)
+    const opcoes = conteudo.split("|").map(o => o.trim());
+    return opcoes[Math.floor(Math.random() * opcoes.length)];
+  });
+}
+
+// [AUDITORIA] LÓGICA (Sprint Variação sem IA, 2026-08-06): extraído do meio de
+// `mensagemSemPersonalizacao` pra ser reaproveitado também na prévia (avisar que "esta prévia
+// mostra só um exemplo" quando a mensagem realmente tem spintax) — mesma regex, um único lugar
+// que sabe o que "conta como spintax de verdade" (bloco `{...}` com `|` dentro).
+function textoTemSpintax(texto: string): boolean {
+  return /\{([^{}]*\|[^{}]*)\}/.test(texto);
+}
+
+// [AUDITORIA] LÓGICA (Sprint Variação sem IA, 2026-08-06): usado tanto no aviso de "mensagem sem
+// personalização" (StepMessage) quanto, potencialmente, em telas futuras que precisem da mesma
+// checagem — mensagem sem NENHUM placeholder nem bloco spintax sai byte-idêntica pra todo mundo,
+// o sinal de risco de spam mais citado na pesquisa desta sessão (política WhatsApp Business
+// Platform 2026 + guias de anti-ban pra API não-oficial), mais forte que "ausência de IA".
+function mensagemSemPersonalizacao(texto: string): boolean {
+  if (!texto) return false; // mensagem vazia não é "sem personalização", é só vazia — StepMessage já valida isso separado
+  const temPlaceholder = /\{\{\s*(nome|primeiro_nome|telefone|data|empresa)\s*\}\}/.test(texto);
+  return !temPlaceholder && !textoTemSpintax(texto);
 }
 
 const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
@@ -347,7 +529,19 @@ export default function DisparosPage() {
     listas_selecionadas: [] as string[],
     url_midia: "",
     legenda_midia: "",
-    humanizar_ia: true,
+    // [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): default trocado de `true`
+    // pra `false` — toda campanha nascia chamando OpenAI uma vez por contato (via
+    // `disparoProcessor.ts`/`humanizationService.ts`), mesmo quando o operador nunca decidiu
+    // isso ativamente (só via se quisesse desligar). Pesquisa registrada nesta sessão (política
+    // de spam da WhatsApp Business Platform 2026, guias de anti-ban pra API não-oficial) aponta
+    // texto byte-idêntico pra lista grande, sem personalização nenhuma, como o sinal de risco
+    // mais citado — não "ausência de reescrita por IA". `substituirPlaceholders()` já resolve
+    // isso de graça quando a mensagem usa `{{primeiro_nome}}`/etc, e o motor de spintax novo
+    // (`resolverSpintax()`, abaixo) cobre variação de texto sem custo nenhum de IA — humanização
+    // por IA vira reforço opcional, não o comportamento padrão de toda campanha nova. Campanhas
+    // já criadas/agendadas não são afetadas (cada uma já tem `humanizar_ia` gravado no próprio
+    // registro em `disparos`, só o valor inicial do formulário de campanha NOVA muda).
+    humanizar_ia: false,
   });
 
   // Live contact count — recalcula sempre que os filtros mudam
@@ -564,6 +758,13 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
   const [estagios, setEstagios] = useState<any[]>([]);
   const [listas, setListas] = useState<any[]>([]);
   const [listasCounts, setListasCounts] = useState<Record<string, number>>({});
+  // [AUDITORIA] LÓGICA (Sprint Gerenciar Listas em Disparos, 2026-08-06): estado da aba "Por
+  // Lista" pra excluir/renomear lista direto daqui, sem precisar ir em Leads.tsx — mesmo padrão
+  // (api.from("listas"), makeCrud genérico já suporta DELETE/PATCH por id) já usado e validado
+  // em produção por `removerLista()` de Leads.tsx.
+  const [renomeandoLista, setRenomeandoLista] = useState<{ id: string; nome: string } | null>(null);
+  const [salvandoRenomeio, setSalvandoRenomeio] = useState(false);
+  const [limpandoVazias, setLimpandoVazias] = useState(false);
   const [totalContatos, setTotalContatos] = useState<number>(0);
   const [csvPreview, setCsvPreview] = useState<string[][]>([]);
   const [tagSearch, setTagSearch] = useState("");
@@ -615,6 +816,86 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
   };
 
   useEffect(() => { fetchTargets(); }, []);
+
+  // [AUDITORIA] LÓGICA (Sprint Gerenciar Listas em Disparos, 2026-08-06): mesmo padrão de
+  // removerLista() em Leads.tsx (confirm() nativo, api.from("listas").delete().eq("id", id),
+  // backend já faz lista_id->null nos contatos via FK ON DELETE SET NULL — contato nunca é
+  // apagado, só perde o vínculo com a lista). Diferença daqui pra lá: se a lista removida
+  // estivesse selecionada em form.listas_selecionadas (alvo da campanha em edição), precisa sair
+  // do array também — senão a campanha ficaria "mirando" um id que não existe mais.
+  const removerLista = async (id: string, nome: string) => {
+    if (!confirm(`Remover a lista "${nome}"? Os contatos ficarão sem lista mas não serão apagados.`)) return;
+    const { error } = await api.from("listas").delete().eq("id", id);
+    if (error) {
+      toast.error("Erro ao remover lista", { description: error.message });
+      return;
+    }
+    setForm((prev: any) => ({
+      ...prev,
+      listas_selecionadas: prev.listas_selecionadas.filter((lid: string) => lid !== id),
+    }));
+    toast.success("Lista removida");
+    fetchTargets();
+  };
+
+  // [AUDITORIA] LÓGICA: renomear é só um PATCH — makeCrud genérico (crud.ts) já expõe
+  // PUT /api/listas/:id, nunca usado antes nesta tela (Leads.tsx só cria/exclui). Modal simples
+  // reaproveitando os mesmos componentes Dialog já importados nesta página.
+  const abrirRenomeio = (l: any) => setRenomeandoLista({ id: l.id, nome: l.nome });
+
+  const confirmarRenomeio = async () => {
+    if (!renomeandoLista) return;
+    const nomeNovo = renomeandoLista.nome.trim();
+    if (!nomeNovo) {
+      toast.error("Nome não pode ficar vazio");
+      return;
+    }
+    setSalvandoRenomeio(true);
+    try {
+      const { error } = await api.from("listas").update({ nome: nomeNovo }).eq("id", renomeandoLista.id);
+      if (error) {
+        toast.error("Erro ao renomear lista", { description: error.message });
+        return;
+      }
+      toast.success("Lista renomeada");
+      setRenomeandoLista(null);
+      fetchTargets();
+    } finally {
+      setSalvandoRenomeio(false);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA: não existe endpoint de bulk-delete por lista de ids (makeCrud genérico
+  // só faz um registro por vez) — dado que o cenário real (print do usuário) é umas poucas
+  // dezenas de listas vazias de teste/reimportação, sequencial é aceitável (não vale criar rota
+  // nova só pra isso). `listasCounts` já é a mesma contagem usada no badge de cada linha —
+  // reaproveitada aqui, sem query nova.
+  const listasVazias = useMemo(() => listas.filter(l => (listasCounts[l.id] ?? 0) === 0), [listas, listasCounts]);
+
+  const limparListasVazias = async () => {
+    if (listasVazias.length === 0) return;
+    if (!confirm(`Excluir ${listasVazias.length} lista(s) vazia(s) (0 contatos)? Esta ação não pode ser desfeita.`)) return;
+    setLimpandoVazias(true);
+    try {
+      let falhas = 0;
+      for (const l of listasVazias) {
+        const { error } = await api.from("listas").delete().eq("id", l.id);
+        if (error) falhas++;
+      }
+      setForm((prev: any) => ({
+        ...prev,
+        listas_selecionadas: prev.listas_selecionadas.filter((lid: string) => !listasVazias.some(l => l.id === lid)),
+      }));
+      if (falhas > 0) {
+        toast.error(`${falhas} lista(s) não puderam ser removidas`, { description: "As demais foram removidas normalmente." });
+      } else {
+        toast.success(`${listasVazias.length} lista(s) vazia(s) removida(s)`);
+      }
+      fetchTargets();
+    } finally {
+      setLimpandoVazias(false);
+    }
+  };
 
   // [AUDITORIA] BUG (Sprint Disparos/Importação, 2026-07-25, ver
   // diagnosticos/SPRINT_DISPAROS_IMPORTACAO_CSV_XLSX.md): `handleCsvUpload` só sabia ler XLSX
@@ -692,6 +973,40 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
     [pendingImportRows]
   );
 
+  // [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): pergunta ao backend quais telefones
+  // já existem na conta assim que o arquivo é lido (antes de qualquer clique em "Confirmar
+  // Importação") — abordagem escolhida (endpoint leve dedicado, `POST /contatos/checar-telefones`)
+  // em vez de só mostrar o número real depois de confirmar: é pouco código a mais e entrega o que
+  // foi pedido de verdade (resumo de PRÉ-importação com novos vs. já existentes, não só depois do
+  // fato). `api.post` lança em erro HTTP — falha aqui não deve travar a tela de importação, só
+  // deixa a contagem de "já existentes" temporariamente indisponível (cai pra 0, mostrado como
+  // "não verificado" na UI abaixo).
+  const [checandoExistentes, setCheckandoExistentes] = useState(false);
+  const [telefonesExistentes, setTelefonesExistentes] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (!preAnalise || !preAnalise.novos.length) { setTelefonesExistentes(null); return; }
+    let cancelado = false;
+    setCheckandoExistentes(true);
+    (async () => {
+      try {
+        const { data } = await api.post("/api/contatos/checar-telefones", {
+          telefones: preAnalise.novos.map(c => c.telefone),
+        });
+        if (!cancelado) setTelefonesExistentes(new Set(data?.existentes || []));
+      } catch {
+        if (!cancelado) setTelefonesExistentes(null);
+      } finally {
+        if (!cancelado) setCheckandoExistentes(false);
+      }
+    })();
+    return () => { cancelado = true; };
+  }, [preAnalise]);
+
+  const jaExistiamCount = useMemo(
+    () => (preAnalise && telefonesExistentes ? preAnalise.novos.filter(c => telefonesExistentes.has(c.telefone)).length : 0),
+    [preAnalise, telefonesExistentes]
+  );
+
   const confirmarImportacao = async () => {
     if (!pendingImportRows || !user) return;
     setImportLoading(true);
@@ -702,7 +1017,6 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         origem: "Importado (Disparos)",
         status: "novo",
         tags: [] as string[],
-        user_id: user.id,
       }));
 
       if (!novos.length) {
@@ -724,18 +1038,26 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         return;
       }
 
-      const { error: insertError } = await api
-        .from("contatos")
-        .insert(novos.map(n => ({ ...n, lista_id: listaCriada.id })));
-
-      if (insertError) {
-        toast.error("Erro ao importar contatos", { description: insertError.message });
-        return;
-      }
+      // [AUDITORIA] FIX APLICADO (Sprint Importação Upsert, 2026-08-06): antes usava o bulk-insert
+      // genérico (`api.from("contatos").insert(...)`, POST / de crud.ts), sem ON CONFLICT — UM
+      // telefone colidindo (já existente na conta, ou duplicado dentro do próprio arquivo)
+      // rejeitava o INSERT inteiro (23505), e NENHUMA linha do lote era gravada, mesmo as que não
+      // colidiam com nada. Endpoint dedicado (`/api/contatos/importar-lote`) faz upsert real
+      // (ON CONFLICT DO NOTHING) — contato já existente não é sobrescrito (nome/notas/tags/status
+      // de um lead em atendimento continuam intocados), e as linhas novas do lote entram mesmo que
+      // outras colidam. `api.post` lança exceção em erro HTTP (diferente de `.from()`, que devolve
+      // `{data,error}`) — por isso dentro do try/catch já existente, não um `if (error)` separado.
+      const { data: resultadoImportacao } = await api.post("/api/contatos/importar-lote", {
+        contatos: novos.map(n => ({ ...n, lista_id: listaCriada.id })),
+      });
+      const inseridos: number = resultadoImportacao?.inseridos ?? 0;
+      const jaExistiam: number = resultadoImportacao?.jaExistiam ?? 0;
 
       // [AUDITORIA] FIX APLICADO: marca a lista recém-criada como selecionada — é isso que faz o
       // useEffect de targetContacts (componente pai) de fato puxar esses contatos pra campanha,
-      // fechando a ponte que faltava entre "arquivo importado" e "quem recebe o disparo".
+      // fechando a ponte que faltava entre "arquivo importado" e "quem recebe o disparo". Mesmo
+      // contatos que já existiam (não entraram de novo, mas já pertenciam à conta) ficam
+      // acessíveis pela lista — ela foi criada de qualquer forma pra agrupar a importação.
       setForm({
         ...form,
         listas_selecionadas: Array.from(new Set([
@@ -745,7 +1067,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
       });
 
       toast.success("Importação concluída", {
-        description: `${totalLinhas} linha(s) lidas · ${novos.length} importado(s) · ${corrigidos} telefone(s) corrigido(s) automaticamente · ${descartados} descartado(s) por telefone inválido.`,
+        description: `${totalLinhas} linha(s) lidas · ${inseridos} importado(s) · ${jaExistiam} já existia(m) na sua base (não sobrescritos) · ${corrigidos} telefone(s) corrigido(s) automaticamente · ${descartados} descartado(s) por telefone inválido.`,
       });
 
       await fetchTargets();
@@ -786,20 +1108,36 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         </TabsList>
 
         <TabsContent value="lista" className="p-4 border rounded-lg bg-card space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <p className="text-sm font-medium">Selecione uma ou mais listas de leads:</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => {
-                const allIds = listas.map(l => l.id);
-                const allSelected = listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id));
-                setForm({ ...form, listas_selecionadas: allSelected ? [] : allIds });
-              }}
-            >
-              {listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id)) ? "Limpar" : "Selecionar todas"}
-            </Button>
+            <div className="flex items-center gap-2">
+              {listasVazias.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-destructive hover:text-destructive"
+                  disabled={limpandoVazias}
+                  onClick={limparListasVazias}
+                >
+                  {limpandoVazias
+                    ? <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    : <Trash2 className="h-3 w-3 mr-1" />}
+                  Limpar {listasVazias.length} vazia{listasVazias.length > 1 ? "s" : ""}
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  const allIds = listas.map(l => l.id);
+                  const allSelected = listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id));
+                  setForm({ ...form, listas_selecionadas: allSelected ? [] : allIds });
+                }}
+              >
+                {listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id)) ? "Limpar seleção" : "Selecionar todas"}
+              </Button>
+            </div>
           </div>
 
           {/* Opção especial: Todos os Leads (ignora lista_id) */}
@@ -863,9 +1201,30 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                     <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: l.cor || "hsl(217 91% 45%)" }} />
                     <span className="text-sm truncate">{l.nome}</span>
                   </div>
-                  <Badge variant="outline" className="text-[10px] flex-shrink-0">
-                    {listasCounts[l.id] ?? "..."}
-                  </Badge>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <Badge variant="outline" className="text-[10px]">
+                      {listasCounts[l.id] ?? "..."}
+                    </Badge>
+                    {/* [AUDITORIA] LÓGICA: stopPropagation obrigatório nos dois botões — a linha
+                        inteira é um <label> que dispara o toggle do checkbox ao clicar em
+                        qualquer lugar dela, inclusive nestes ícones, se não fosse isolado aqui. */}
+                    <button
+                      type="button"
+                      title="Renomear lista"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); abrirRenomeio(l); }}
+                      className="p-1 rounded hover:bg-muted-foreground/10 text-muted-foreground hover:text-foreground"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Excluir lista"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); removerLista(l.id, l.nome); }}
+                      className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </label>
               );
             })}
@@ -876,6 +1235,31 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
             )}
           </div>
         </TabsContent>
+
+        {/* [AUDITORIA] LÓGICA (Sprint Gerenciar Listas em Disparos, 2026-08-06): modal de
+            renomeio — reaproveita os mesmos componentes Dialog já importados nesta página. */}
+        <Dialog open={!!renomeandoLista} onOpenChange={(open) => { if (!open) setRenomeandoLista(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Renomear lista</DialogTitle>
+              <DialogDescription>O novo nome fica visível em todas as telas que usam esta lista (Leads, Disparos).</DialogDescription>
+            </DialogHeader>
+            <Input
+              value={renomeandoLista?.nome ?? ""}
+              onChange={(e) => setRenomeandoLista(prev => prev ? { ...prev, nome: e.target.value } : prev)}
+              onKeyDown={(e) => { if (e.key === "Enter") confirmarRenomeio(); }}
+              autoFocus
+              maxLength={100}
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRenomeandoLista(null)} disabled={salvandoRenomeio}>Cancelar</Button>
+              <Button onClick={confirmarRenomeio} disabled={salvandoRenomeio}>
+                {salvandoRenomeio ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                Salvar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
 
 
@@ -1032,6 +1416,33 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                       <span className="font-bold text-destructive">{preAnalise.descartados}</span> linha(s) serão descartadas por telefone vazio ou inválido (fora do padrão de 10 a 13 dígitos, ou mais de um telefone colado na mesma célula) — a preview acima mostra o arquivo cru, essas linhas não geram contato.
                     </p>
                   )}
+                  {/* [AUDITORIA] FIX APLICADO (Sprint Importação Upsert, 2026-08-06): novos vs. já
+                      existentes na conta, checado contra o banco (POST /contatos/checar-telefones)
+                      assim que o arquivo é lido — antes não tinha como saber isso ANTES de
+                      confirmar (só depois, e olhe lá, já que o insert antigo nem devolvia essa
+                      contagem separada). */}
+                  {checandoExistentes ? (
+                    <p className="text-muted-foreground italic">Verificando quais já existem na sua base...</p>
+                  ) : telefonesExistentes && preAnalise.novos.length > 0 ? (
+                    <p>
+                      Desses, <span className="font-bold text-emerald-600">{preAnalise.novos.length - jaExistiamCount}</span> são novos
+                      {jaExistiamCount > 0 && <> e <span className="font-bold text-amber-600">{jaExistiamCount}</span> já existem na sua base (não serão sobrescritos — nome/notas/tags de um contato já existente permanecem como estão)</>}.
+                    </p>
+                  ) : null}
+                  {preAnalise.suspeitos.length > 0 && (() => {
+                    const contagemMotivos: Record<string, number> = {};
+                    for (const s of preAnalise.suspeitos) {
+                      for (const m of s.motivo.split("; ")) contagemMotivos[m] = (contagemMotivos[m] || 0) + 1;
+                    }
+                    const motivoMaisComum = Object.entries(contagemMotivos).sort((a, b) => b[1] - a[1])[0];
+                    // Linhas únicas (uma linha pode ter mais de 1 motivo, ex: nome=telefone E DDD inválido)
+                    const linhasUnicas = new Set(preAnalise.suspeitos.map(s => s.linha)).size;
+                    return (
+                      <p className="text-amber-700 dark:text-amber-500">
+                        ⚠️ <span className="font-bold">{linhasUnicas}</span> linha(s) sinalizada(s) como suspeita(s) — mais comum: "{motivoMaisComum?.[0]}" ({motivoMaisComum?.[1]}×). Serão importadas normalmente, só revise antes de disparar.
+                      </p>
+                    );
+                  })()}
                 </div>
               )}
               <div className="flex items-center justify-end gap-2">
@@ -1365,6 +1776,23 @@ function StepMessage({ form, setForm }: any) {
               }}>+{v}</Button>
             ))}
           </div>
+          {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): dica de sintaxe do
+              spintax, perto dos atalhos de placeholder — mesmo lugar que `DisparoTemplates.tsx`
+              usa pro texto de ajuda equivalente. */}
+          <p className="text-[10px] text-muted-foreground">
+            💡 Use <code className="px-1 rounded bg-muted">{"{opção 1|opção 2|opção 3}"}</code> pra variar o texto por contato sem custo de IA — ex: <code className="px-1 rounded bg-muted">{"{Oi|Olá|E aí}"}</code>.
+          </p>
+          {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): aviso NÃO bloqueante
+              (mesmo espírito da decisão já tomada na sprint de importação — avisa, não trava) —
+              mensagem sem nenhum placeholder nem spintax sai byte-idêntica pra todo mundo, o
+              sinal de risco de spam mais citado na pesquisa desta sessão (política WhatsApp
+              Business Platform 2026), mais forte que "sem humanização por IA". */}
+          {mensagemSemPersonalizacao(textoAtivo) && (
+            <p className="text-[10px] text-amber-700 dark:text-amber-500 flex items-start gap-1">
+              <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+              Esta mensagem vai sair idêntica para todos os destinatários — considere usar {"{{primeiro_nome}}"} ou variações {"{a|b}"} para reduzir risco de bloqueio.
+            </p>
+          )}
         </div>
 
         {/* Preview Card */}
@@ -1384,10 +1812,20 @@ function StepMessage({ form, setForm }: any) {
                 [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): usa `textoAtivo`
                 (mensagem OU legenda, conforme tipo_midia) em vez de `form.mensagem` sempre — pra
                 mídia, a prévia agora mostra de fato o que vai virar `mensagem_enviada` (legenda
-                personalizada) e não o campo errado (que ficava vazio). */}
+                personalizada) e não o campo errado (que ficava vazio).
+                [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): `resolverSpintax`
+                encadeado por cima — mostra UMA resolução possível (a prévia já ajuda o operador a
+                visualizar o formato), não promete que é o texto exato que todo mundo vai receber
+                (aviso explícito logo abaixo, já que cada contato sorteia sua própria combinação
+                no envio real). */}
             <p className="text-sm whitespace-pre-wrap">
-              {substituirPlaceholders(textoAtivo, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" })}
+              {resolverSpintax(substituirPlaceholders(textoAtivo, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" }))}
             </p>
+            {textoTemSpintax(textoAtivo) && (
+              <p className="text-[10px] text-muted-foreground italic mt-1">
+                🎲 Mensagem tem variação (spintax) — cada contato recebe uma combinação sorteada de verdade; esta prévia mostra só um exemplo.
+              </p>
+            )}
             <span className="text-[10px] text-muted-foreground float-right">10:45</span>
           </div>
         </div>
@@ -1726,12 +2164,17 @@ function StepAntiBan({ form, setForm }: any) {
         </Card>
 
         {/* Humanização IA */}
+        {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): texto atualizado pra
+            deixar o trade-off explícito — antes sugeria que "reduzir risco de bloqueio" exigia
+            IA, sem mencionar que o sistema já faz variação sem custo (placeholders + spintax,
+            ver StepMessage). Card continua funcional (toggle liga/desliga normalmente) — só o
+            texto e o default (acima) mudaram, nenhuma mudança no comportamento de quem ligar. */}
         <Card className="p-4 space-y-3 border-primary/30 bg-primary/5">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label className="font-bold">Humanizar com IA</Label>
               <p className="text-[11px] text-muted-foreground">
-                Reescreve cada mensagem com leve variação para reduzir risco de bloqueio pela Meta.
+                Reescreve cada mensagem via IA (OpenAI) para variação adicional — tem custo por envio. O sistema já varia mensagens com placeholders/spintax sem custo (Passo 2); use isto só se quiser um nível extra de variação.
               </p>
             </div>
             <Switch
@@ -1783,12 +2226,21 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
   // contato de teste recebendo a mesma mensagem mais de uma vez, em campanhas diferentes criadas
   // em sequência — a dedupe existente (`Array.from(new Map(...))` por telefone, componente pai)
   // só evita duplicata DENTRO da mesma seleção de alvo; nada avisava sobre contatos que já tinham
-  // recebido OUTRA campanha recentemente. [AUDITORIA] FIX APLICADO: aviso aqui (camada 1, UI) —
-  // não bloqueia sozinho, só avisa e exige confirmação explícita antes de habilitar os botões de
-  // disparo (pode ser um follow-up legítimo). O bloqueio de verdade é no backend
-  // (disparoProcessor.ts + get_next_disparo_batch, migrations.ts) — funciona mesmo se este aviso
-  // for ignorado ou contornado (ex: log inserido direto no banco).
-  const [confirmarCooldown, setConfirmarCooldown] = useState(false);
+  // recebido OUTRA campanha recentemente. [AUDITORIA] FIX APLICADO (2026-07-30): aviso aqui
+  // (camada 1, UI), exigindo confirmação explícita (checkbox) antes de habilitar os botões.
+  // [AUDITORIA] BUG (achado do usuário, Sprint Cooldown vira filtro automático, 2026-08-06): o
+  // checkbox nunca teve efeito real no envio — o bloqueio de verdade sempre foi (e continua
+  // sendo) o backend (`disparoProcessor.ts` + `get_next_disparo_batch()`, `migrations.ts`), que
+  // pula silenciosamente qualquer contato em cooldown (`status='cooldown'` no log) INDEPENDENTE
+  // de qualquer coisa marcada aqui na tela — já testado com envio real na sprint original
+  // (2026-07-30). Marcar o checkbox não forçava envio pros contatos em cooldown (o backend
+  // continuava pulando); só liberava os botões pros DEMAIS contatos, sem problema nenhum,
+  // poderem receber a campanha. Era uma trava de UI sem efeito prático, só atrapalhando o
+  // operador com uma pergunta sobre algo que ele não tem como realmente forçar.
+  // [AUDITORIA] FIX APLICADO: removido o checkbox `confirmarCooldown` e `bloqueadoPorCooldown` —
+  // `contatosCooldown` (cálculo mantido, ainda usado pro aviso informativo abaixo) deixa de
+  // travar os botões. O backend não muda em nada (já fazia — e continua fazendo — o descarte
+  // real sozinho).
   const contatosCooldown = useMemo(() => {
     const cooldownMs = (Number(form.cooldown_horas) || 0) * 60 * 60 * 1000;
     if (cooldownMs <= 0) return [];
@@ -1796,7 +2248,6 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       c.ultimo_disparo_em && (Date.now() - new Date(c.ultimo_disparo_em).getTime()) < cooldownMs
     );
   }, [targetContacts, form.cooldown_horas]);
-  const bloqueadoPorCooldown = contatosCooldown.length > 0 && !confirmarCooldown;
 
   const handleStart = async (now = true) => {
     try {
@@ -1866,13 +2317,19 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       // `mensagem_enviada` viraria "" pra cada contato e `disparoProcessor.ts` usaria a legenda
       // crua (com `{{placeholders}}` literais) da campanha, nunca a versão personalizada. Ver fix
       // relacionado em `disparoProcessor.ts` (prioridade de `legendaFinal` invertida pro mesmo motivo).
+      // [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): `resolverSpintax` encadeado
+      // por cima de `substituirPlaceholders` (placeholders primeiro, spintax depois — mesma ordem
+      // documentada na declaração de `resolverSpintax`). Chamado dentro do `.map()`, uma vez por
+      // contato — cada `Math.random()` roda de forma independente, então dois contatos com a
+      // mesma mensagem-base podem sortear opções diferentes, sem precisar tocar em
+      // `disparoProcessor.ts` (o backend só lê `mensagem_enviada` já pronta).
       const logs = targetContacts.map(c => ({
         disparo_id: campaignData.id,
         user_id: user?.id,
         contato_id: c.id,
         telefone: c.telefone,
         nome: c.nome,
-        mensagem_enviada: substituirPlaceholders(form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia, c),
+        mensagem_enviada: resolverSpintax(substituirPlaceholders(form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia, c)),
         status: 'pending'
       }));
 
@@ -1905,6 +2362,15 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
 
               </div>
               <p className="text-[10px] text-muted-foreground mt-1">Duplicados removidos automaticamente</p>
+              {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown vira filtro automático, 2026-08-06,
+                  item 4): número de quem efetivamente recebe já calculado (`contatosCooldown`,
+                  usado também no aviso abaixo) — mostrado aqui em cima pra ficar visível de cara,
+                  sem precisar rolar até o aviso. */}
+              {contatosCooldown.length > 0 && (
+                <p className="text-[10px] text-amber-600 dark:text-amber-500 mt-1 font-medium">
+                  {targetContacts.length - contatosCooldown.length} serão enviados agora — {contatosCooldown.length} pulados por cooldown
+                </p>
+              )}
             </div>
             
             <div>
@@ -1955,26 +2421,19 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           <p className="text-xs italic text-muted-foreground line-clamp-3">"{form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia}"</p>
         </div>
 
-        {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): aviso não-bloqueante
-            — mostra quantos contatos já receberam campanha recentemente, exige confirmação
-            explícita antes de habilitar os botões de disparo (ver bloqueadoPorCooldown acima). */}
+        {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown vira filtro automático, 2026-08-06): virou
+            informativo puro — sem checkbox, sem exigir ação nenhuma. O operador continua sabendo
+            que X contatos serão pulados (informação útil), mas nada aqui bloqueia o início da
+            campanha; quem decide de verdade quem recebe é sempre o backend (ver comentário
+            completo na declaração de `contatosCooldown` acima). */}
         {contatosCooldown.length > 0 && (
-          <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-500/30 rounded-lg space-y-2">
+          <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-500/30 rounded-lg">
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
               <p className="text-xs text-amber-800 dark:text-amber-400">
-                <span className="font-bold">{contatosCooldown.length} de {targetContacts.length}</span> contatos selecionados já receberam uma mensagem de campanha nas últimas {form.cooldown_horas}h — enviar mesmo assim?
+                <span className="font-bold">{contatosCooldown.length} de {targetContacts.length}</span> contatos selecionados já receberam campanha nas últimas {form.cooldown_horas}h e serão pulados automaticamente — os demais recebem normalmente.
               </p>
             </div>
-            <label className="flex items-center gap-2 pl-6 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={confirmarCooldown}
-                onChange={e => setConfirmarCooldown(e.target.checked)}
-                className="h-4 w-4"
-              />
-              <span className="text-xs text-amber-800 dark:text-amber-400">Sim, quero enviar mesmo assim (ex: follow-up legítimo)</span>
-            </label>
           </div>
         )}
       </Card>
@@ -1982,7 +2441,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       <Card className="p-6 flex flex-col justify-between">
         <div className="space-y-4">
           <h3 className="font-bold">Ações</h3>
-          <Button className="w-full gap-2 h-12 text-lg font-bold" disabled={bloqueadoPorCooldown} onClick={() => handleStart(true)}>
+          <Button className="w-full gap-2 h-12 text-lg font-bold" onClick={() => handleStart(true)}>
             <Play className="h-5 w-5 fill-current" /> Disparar Agora
           </Button>
 
@@ -1994,7 +2453,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           <div className="space-y-2">
             <Label className="text-xs">Agendar para:</Label>
             <Input type="datetime-local" value={agendarAt} onChange={e => setAgendarAt(e.target.value)} />
-            <Button variant="outline" className="w-full gap-2" disabled={!agendarAt || bloqueadoPorCooldown} onClick={() => handleStart(false)}>
+            <Button variant="outline" className="w-full gap-2" disabled={!agendarAt} onClick={() => handleStart(false)}>
               <Calendar className="h-4 w-4" /> Agendar Disparo
             </Button>
           </div>

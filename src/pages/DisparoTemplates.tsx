@@ -467,6 +467,13 @@ export default function DisparoTemplatesPage() {
               <p className="text-xs text-muted-foreground">
                 Use <code className="bg-muted px-1 rounded">{"{{nome}}"}</code>, <code className="bg-muted px-1 rounded">{"{{primeiro_nome}}"}</code>, <code className="bg-muted px-1 rounded">{"{{telefone}}"}</code>, <code className="bg-muted px-1 rounded">{"{{empresa}}"}</code> — as mesmas variáveis do passo Mensagem em Disparos.
               </p>
+              {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): mesma dica de
+                  spintax que StepMessage (Disparos.tsx) — um template salvo com spintax funciona
+                  normalmente quando carregado numa campanha (a resolução acontece no wizard, na
+                  hora do envio real, não aqui). */}
+              <p className="text-xs text-muted-foreground">
+                💡 Use <code className="bg-muted px-1 rounded">{"{opção 1|opção 2|opção 3}"}</code> pra variar o texto por contato sem custo de IA (resolvido quando este template for usado numa campanha).
+              </p>
             </div>
           </div>
 
