@@ -1,5 +1,19 @@
 # Auditoria de Código — Log
 
+### 🆕 Motor nativo de Disparo, bloco 2: "Gerar variações com IA" (item 4) — em PRODUÇÃO, sprint encerrada
+
+**Contexto:** fecha a sprint do motor nativo de mensagens do Disparo (bloco 1, entrada abaixo). Único item com risco real de chamar IA por engano — ticket exigia confirmar "exatamente 1 chamada por clique, nunca por contato" com evidência de log antes de considerar pronto.
+
+**Implementado:**
+- `POST /api/disparos/gerar-variacoes` (novo, `backend/src/routes/disparos.ts`): recebe `{mensagem, quantidade}` (2-5, default 3), reaproveita `criarProvider()` (mesmo helper de `agentEngine.ts` — provider/modelo configurado pra conta, fallback pro `OPENAI_API_KEY` do `.env` quando a conta não tem `ai_providers` próprio, igual `agentEngine.ts` faz). Uma única chamada `provider.complete()` (sem loop, sem tool, `tools: []`), prompt instrui a IA a devolver JSON array de variantes completas preservando `{{placeholder}}` intacto. Parse defensivo (remove cercas de markdown que o modelo às vezes adiciona mesmo pedindo JSON puro; valida que é array de strings antes de aceitar).
+- `VariantesMensagem` (`Disparos.tsx`): botão "✨ Gerar variações com IA" + seletor de quantidade, chama o endpoint 1 vez ao clicar, resultado é APPEND em `mensagens_variantes` (não substitui o que o operador já escreveu à mão). Texto de ajuda explícito "roda 1 vez só, agora... depois disso, zero chamada de IA no envio" — cuidado deliberado pra não passar a impressão de custo por mensagem enviada.
+
+**Teste real em homolog** (JWT assinado dentro do próprio container com `JWT_SECRET` real — nunca copiado à mão, mesma regra desde o incidente spintax; sem envio de WhatsApp nenhum, então a segunda camada de checagem de `ownerJid` não se aplica aqui): chamada real contra a conta `mentoark`, 3 variantes coerentes geradas, `{{primeiro_nome}}` preservado intacto nas 3. **Garantia central do item 4 confirmada com evidência, não só assumida pelo código**: `docker logs` filtrado pela tag `DISPARO/GERAR_VARIACOES` mostrou **exatamente 1 linha de log pra 1 chamada de teste** — nenhum loop, nenhuma duplicação.
+
+**Deploy:** build limpo (frontend+backend). Homolog e produção — `/health`→200 nos dois, sem `ERROR` nos logs. Script de teste removido do container ao final.
+
+**Fechamento da sprint (5/5 itens):** biblioteca de variações curadas, mensagens-base completas com round-robin, regra por tag, autoria assistida por IA (1x/campanha), copy reforçada — todos em produção. `humanizar_ia`/`humanizationService.ts` mantidos intactos como opção avançada (não removidos, conforme pedido).
+
 ### 🆕 Motor nativo de mensagens do Disparo (itens 1+2+3+5, sem IA) — em PRODUÇÃO
 
 **Contexto:** pedido direto do usuário, não numerado no plano multi-agente — reduzir a dependência de `humanizar_ia`/`humanizationService.ts` (única chamada de IA por contato que sobrava no módulo de Disparo) com um motor 100% determinístico, guiado por config. Escopo de 5 itens, dividido em 2 blocos com confirmação do usuário (item 4, autoria assistida por IA, fica separado por ser o único com risco real de chamar IA por engano).

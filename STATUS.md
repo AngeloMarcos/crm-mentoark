@@ -1,5 +1,13 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-08-07 (cont.) — 🆕 Motor nativo de Disparo, bloco 2: "Gerar variações com IA" (item 4, 1 chamada por campanha) — em PRODUÇÃO
+
+Fecha a sprint do motor nativo (bloco 1 abaixo). `POST /api/disparos/gerar-variacoes` (novo, `routes/disparos.ts`) — reaproveita `criarProvider()` (mesmo helper de `agentEngine.ts`, provider/modelo da conta, fallback pro `.env` sem `ai_providers` próprio), 1 chamada por clique, nunca por contato. Preserva `{{placeholder}}` intacto (regra explícita no prompt), devolve JSON array de variantes completas. Botão em `StepMessage`/`VariantesMensagem`, texto explícito "roda 1 vez só, agora" pra não passar a falsa impressão de custo por envio — resultado alimenta `mensagens_variantes` (bloco 1), depois disso zero chamada de IA no envio real.
+
+**Testado em homolog** com JWT real (assinado dentro do container, `JWT_SECRET` real — nunca copiado à mão) contra a conta real `mentoark`: 3 variantes geradas, coerentes, `{{primeiro_nome}}` preservado intacto nas 3. **Confirmado por log estruturado** (`docker logs`, tag `DISPARO/GERAR_VARIACOES`) que a chamada de teste gerou **exatamente 1 linha de log = exatamente 1 chamada de IA** — garantia central do item 4 comprovada com evidência, não só assumida pelo código.
+
+Build limpo, deployado em homolog e produção — `/health`→200 nos dois, sem `ERROR`. Sprint do motor nativo de Disparo encerrada (5/5 itens). Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
 ## Sessão 2026-08-07 (cont.) — 🆕 Motor nativo de mensagens do Disparo (itens 1+2+3+5, sem IA) — em PRODUÇÃO
 
 Pedido direto do usuário, paralelo ao plano multi-agente: reduzir dependência de "Humanizar com IA" no módulo de Disparo com um motor 100% determinístico. Escopo dividido em 2 blocos (confirmado com o usuário) — este é o primeiro, sem chamada de IA nenhuma.
@@ -14,7 +22,7 @@ Pedido direto do usuário, paralelo ao plano multi-agente: reduzir dependência 
 
 **Testado em homolog** (mirror exato das funções de `Disparos.tsx` rodado contra contatos reais + INSERT real de campanha de teste em `disparo_logs`, removida ao final via CASCADE): round-robin alterna corretamente entre as variantes; regra por tag escolhe a variante certa pras tags mapeadas e cai pro round-robin pras demais, nunca deixa contato sem mensagem; placeholders+spintax continuam resolvendo corretamente por cima da variante escolhida.
 
-Build limpo (frontend+backend). Deployado em homolog e produção — `/health`→200 nos dois, sem `ERROR` nos logs, schema confirmado nas 2 bases via `information_schema`. **Item 4 (botão "Gerar variações com IA", chamada única por campanha) fica para o próximo bloco desta mesma sprint** — testado/deployado separadamente por ser o único com risco real de chamar IA por engano. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+Build limpo (frontend+backend). Deployado em homolog e produção — `/health`→200 nos dois, sem `ERROR` nos logs, schema confirmado nas 2 bases via `information_schema`. **Item 4 concluído no bloco seguinte** (ver entrada acima). Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
 
 ## Sessão 2026-08-07 (cont.) — 📋 Sprint 3 do plano multi-agente: `lead_context` estruturado — avaliado, decisão de NÃO implementar por economia
 

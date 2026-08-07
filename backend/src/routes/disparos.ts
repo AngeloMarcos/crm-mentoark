@@ -4,6 +4,7 @@ import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { evolutionFetch } from '../utils/resilientFetch';
+import { criarProvider, OpenAIProvider } from '../services/providers';
 
 // ── Rate limiting persistente via banco ──────────────────────────────────────
 async function checkRateLimit(pool: Pool, userId: string): Promise<boolean> {
@@ -249,6 +250,85 @@ export default function disparos(pool: Pool): Router {
         [disparo_id, userId]
       ).catch(() => {});
       return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ── POST /disparos/gerar-variacoes ──────────────────────────────────────────
+  // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, bloco 2 — item 4, 2026-08-07): autoria
+  // assistida por IA UMA VEZ POR CAMPANHA, nunca por contato — diferente de `humanizar_ia`
+  // (`humanizationService.ts`), que chama IA a cada envio. Chamada aqui acontece só quando o
+  // operador clica o botão em StepMessage, ao MONTAR a campanha — resultado vira texto estático
+  // em `mensagens_variantes` (item 2), zero chamada de IA depois disso, pros 1, 10 ou 10.000
+  // contatos que a campanha tiver. Reaproveita `criarProvider()` (mesmo helper de
+  // `agentEngine.ts`) — provider/modelo já configurado pra conta, não hardcoded pra OpenAI;
+  // fallback pro OPENAI_API_KEY do .env quando a conta não tem `ai_providers` próprio (mesmo
+  // padrão de `agentEngine.ts`).
+  router.post('/gerar-variacoes', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const mensagem = String(req.body?.mensagem ?? '').trim();
+    const quantidade = Math.min(Math.max(Number(req.body?.quantidade) || 3, 2), 5);
+
+    if (!mensagem) {
+      return res.status(400).json({ message: 'Campo "mensagem" é obrigatório — escreva um rascunho antes de gerar variações.' });
+    }
+    if (mensagem.length > 2000) {
+      return res.status(400).json({ message: 'Mensagem-base muito longa (máx. 2000 caracteres) para gerar variações.' });
+    }
+
+    try {
+      const providerInfo = await criarProvider(pool, userId, null);
+      const envKey = process.env.OPENAI_API_KEY || '';
+      if (!providerInfo && !envKey) {
+        return res.status(503).json({ message: 'Nenhum provider de IA configurado (Integrações > Configuração de IA) e OPENAI_API_KEY não definida no servidor.' });
+      }
+      const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
+      const modelo = providerInfo?.modelo || 'gpt-4o-mini';
+
+      const systemPrompt = `Você reescreve mensagens de WhatsApp de vendas/atendimento em variações diferentes, mantendo o mesmo sentido e tom da original.
+REGRAS ESTRITAS:
+- Preserve EXATAMENTE qualquer trecho entre chaves duplas, como {{nome}}, {{primeiro_nome}}, {{telefone}}, {{data}}, {{empresa}} — nunca traduza, remova ou altere esses tokens.
+- Cada variação deve ser uma mensagem COMPLETA e pronta pra enviar, não um resumo nem uma lista de sugestões.
+- Varie a estrutura da frase de verdade (não só trocar 1-2 palavras) — objetivo é reduzir padrão repetitivo em envio em massa.
+- Responda APENAS com um JSON array de strings, sem markdown, sem texto antes ou depois. Exemplo: ["variação 1", "variação 2"]`;
+
+      // [AUDITORIA] LÓGICA: UMA chamada só (sem loop, sem tool, `tools: []`) — a garantia de "1
+      // chamada por clique" pedida no ticket vem exatamente daqui: nada neste handler itera sobre
+      // contatos nem chama `provider.complete()` mais de uma vez.
+      const resp = await provider.complete(
+        [{ role: 'user', content: `Mensagem original:\n${mensagem}\n\nGere ${quantidade} variações completas em JSON array, seguindo as regras.` }],
+        systemPrompt,
+        [],
+        { model: modelo, temperature: 0.9, maxTokens: 800 },
+      );
+
+      if (!resp.text) {
+        return res.status(502).json({ message: 'Provider de IA não retornou texto — tente novamente.' });
+      }
+
+      let variantes: string[];
+      try {
+        const limpo = resp.text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+        const parsed = JSON.parse(limpo);
+        if (!Array.isArray(parsed) || !parsed.every(v => typeof v === 'string')) throw new Error('formato inesperado');
+        variantes = parsed.filter(v => v.trim()).slice(0, quantidade);
+      } catch (parseErr: any) {
+        log.warn('DISPARO/GERAR_VARIACOES', 'Falha ao parsear JSON do provider', { texto: resp.text.slice(0, 300), err: parseErr?.message });
+        return res.status(502).json({ message: 'IA retornou um formato inesperado — tente novamente.' });
+      }
+
+      if (!variantes.length) {
+        return res.status(502).json({ message: 'Nenhuma variação válida retornada — tente novamente.' });
+      }
+
+      log.info('DISPARO/GERAR_VARIACOES', '1 chamada de IA — variações geradas', {
+        userId, quantidadePedida: quantidade, quantidadeRetornada: variantes.length,
+        tokensIn: resp.inputTokens, tokensOut: resp.outputTokens, modelo,
+      });
+
+      return res.json({ variantes, tokensIn: resp.inputTokens, tokensOut: resp.outputTokens });
+    } catch (err: any) {
+      log.error('DISPARO/GERAR_VARIACOES', 'Erro', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message || 'Erro ao gerar variações' });
     }
   });
 

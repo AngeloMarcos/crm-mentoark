@@ -1692,8 +1692,42 @@ const DELAY_MIN_ABSOLUTO_MINUTOS = 5 / 60;
 // quem não abrir isso.
 function VariantesMensagem({ form, setForm }: any) {
   const [aberto, setAberto] = useState(false);
+  const [gerando, setGerando] = useState(false);
+  const [quantidadeGerar, setQuantidadeGerar] = useState(3);
   const variantes: string[] = form.mensagens_variantes;
   const variantesValidas = variantes.filter((v: string) => v.trim()).length;
+
+  // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, bloco 2 — item 4, 2026-08-07): botão
+  // "Gerar variações com IA" — chama o backend UMA vez ao clicar (nunca em loop, nunca por
+  // contato). Resultado vira texto estático em `mensagens_variantes` (append, não substitui o
+  // que o operador já escreveu) — depois deste clique, zero chamada de IA nova pra essa
+  // campanha, por maior que seja a lista de contatos.
+  const gerarComIA = async () => {
+    const textoBase = form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia;
+    if (!textoBase?.trim()) {
+      toast.error("Escreva uma mensagem-base no campo acima antes de gerar variações.");
+      return;
+    }
+    setGerando(true);
+    try {
+      const token = await getFreshToken();
+      const res = await fetch(`${API_BASE}/api/disparos/gerar-variacoes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ mensagem: textoBase, quantidade: quantidadeGerar }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Falha ao gerar variações");
+      const novas = [...variantes.filter((v: string) => v.trim()), ...data.variantes];
+      setForm({ ...form, mensagens_variantes: novas });
+      setAberto(true);
+      toast.success(`${data.variantes.length} variações geradas (1 chamada de IA, não repete por contato).`);
+    } catch (err: any) {
+      toast.error("Erro ao gerar variações", { description: err?.message });
+    } finally {
+      setGerando(false);
+    }
+  };
 
   const atualizarVariante = (i: number, valor: string) => {
     const novas = [...variantes];
@@ -1753,6 +1787,24 @@ function VariantesMensagem({ form, setForm }: any) {
           <p className="text-[10px] text-muted-foreground">
             Em vez de UMA mensagem com spintax por dentro, cadastre {"2+"} mensagens completas diferentes — o motor alterna entre elas por contato. Precisa de pelo menos 2 preenchidas pra ativar; com 0 ou 1, a campanha usa só o campo "Mensagem" acima, normalmente.
           </p>
+
+          {/* [AUDITORIA] LÓGICA (item 4): texto do botão e ajuda deixam explícito "1 vez", de
+              propósito — fácil o operador achar que roda por mensagem se não estiver claro. */}
+          <div className="flex items-center gap-2 flex-wrap p-2 rounded-md bg-muted/40 border border-dashed">
+            <Button size="sm" variant="secondary" className="h-7 text-[10px] gap-1" disabled={gerando} onClick={gerarComIA}>
+              {gerando ? <Loader2 className="h-3 w-3 animate-spin" /> : "✨"} Gerar variações com IA
+            </Button>
+            <Select value={String(quantidadeGerar)} onValueChange={v => setQuantidadeGerar(Number(v))}>
+              <SelectTrigger className="h-7 text-[10px] w-24"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {[2, 3, 4, 5].map(n => <SelectItem key={n} value={String(n)}>{n} variações</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <span className="text-[10px] text-muted-foreground">
+              Roda 1 vez só, agora — usa a mensagem do campo acima como base. Depois disso, zero chamada de IA no envio, pra qualquer quantidade de contatos.
+            </span>
+          </div>
+
           {variantes.map((v: string, i: number) => (
             <div key={i} className="flex gap-2 items-start">
               <span className="text-[10px] text-muted-foreground mt-2 w-4">{i + 1}.</span>
