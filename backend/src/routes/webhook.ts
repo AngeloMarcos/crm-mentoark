@@ -3,8 +3,10 @@
  *
  * Recebe POST /webhook/evolution (autenticado por EVOLUTION_WEBHOOK_SECRET via
  * header HMAC opcional ou ?key= na URL — ver verificarAssinaturaEvolution/verificarChaveQuery).
- * Resolve o dono (userId) da instância que disparou o evento em 4 níveis de fallback,
- * nesta ordem: agent_configs → agentes → prefixo UUID (crm_<12-hex>) → integracoes_config.
+ * Resolve o dono (userId) da instância que disparou o evento em 3 níveis de fallback,
+ * nesta ordem: agentes → prefixo UUID (crm_<12-hex>) → integracoes_config. (Até a Sprint 1 de
+ * unificação, 2026-08-07, havia um 4º nível anterior a este — agent_configs — removido junto com
+ * a migração de config pra `agentes`; ver diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md.)
  * Sem userId, a mensagem é descartada (log [WEBHOOK_REJECT]).
  * [AUDITORIA] FIX APLICADO (2026-07-21): havia um 5º fallback ("primeiro admin cadastrado")
  * que atribuía QUALQUER instância não resolvida a uma conta de cliente real — vazamento de
@@ -15,7 +17,7 @@
  *
  * [AUDITORIA] LÓGICA: cabeçalho reescrito em 2026-07 — a versão anterior citava uma
  * tabela "whatsapp_instances" que não existe mais no código (a lógica real usa
- * agent_configs/agentes), ficara desatualizado de um refactor anterior.
+ * agentes), ficara desatualizado de um refactor anterior.
  *
  * [AUDITORIA] BUG (achado C da revisão externa/Google AI Studio; reconfirmado e ampliado no
  * Cenário D desta auditoria, 2026-07-23): toda busca por telefone neste arquivo, em
@@ -347,21 +349,13 @@ export default function webhookRouter(pool: Pool): Router {
 
   // [AUDITORIA] LÓGICA: Sincronização automática de histórico ao conectar/reconectar (piloto,
   // 2026-07-22, só homologação — ver diagnosticos/AUDITORIA_LOG.md, caso real
-  // stefanocatedral@hotmail.com). Resolve o userId a partir da instância pelos mesmos 4 níveis
-  // de fallback já usados no fluxo de messages.upsert (agent_configs → agentes → prefixo UUID →
-  // integracoes_config). Duplicado deliberadamente em vez de refatorar o bloco original (~linha
-  // 555 abaixo) — aquele trecho é código já auditado por um incidente real de vazamento de dados
+  // stefanocatedral@hotmail.com). Resolve o userId a partir da instância pelos mesmos 3 níveis
+  // de fallback já usados no fluxo de messages.upsert (agentes → prefixo UUID →
+  // integracoes_config — nível `agent_configs` removido na Sprint 1 de unificação, 2026-08-07).
+  // Duplicado deliberadamente em vez de refatorar o bloco original (~linha 555 abaixo) —
+  // aquele trecho é código já auditado por um incidente real de vazamento de dados
   // entre tenants (ver cabeçalho do arquivo); evitar risco de regressão nele.
   async function resolverUserIdPorInstancia(instancia: string): Promise<string | null> {
-    const cfgRes = await pool.query(
-      `SELECT user_id FROM agent_configs
-       WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome_agente) = LOWER($1))
-         AND ativo = true
-       LIMIT 1`,
-      [instancia]
-    ).catch(() => ({ rows: [] as any[] }));
-    if (cfgRes.rows.length) return cfgRes.rows[0].user_id;
-
     const agtRes = await pool.query(
       `SELECT user_id FROM agentes
        WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
@@ -733,54 +727,36 @@ export default function webhookRouter(pool: Pool): Router {
       const pushName   = payload.data?.pushName || (isGroup ? senderPhone : telefone);
       const fromMe     = payload.data?.key?.fromMe === true;
 
-      // ── Lookup unificado: agent_configs → agentes → prefixo → integracoes_config → admin ──
-      // [AUDITORIA] LÓGICA: agent_configs guarda no máximo 1 instância ativa por usuário
-      // (UNIQUE(user_id)) — é a config "oficial" escrita por syncEvolution() em integracoes.ts
-      // quando o usuário conecta pela tela de Integrações. agentes permite várias instâncias
-      // por usuário (UNIQUE(user_id, evolution_instancia)) e é quem carrega n8n_webhook_url.
-      // Por isso agent_configs vem primeiro (é a fonte "canônica" de 1:1), mas só agentes
-      // consegue resolver o roteamento N8N — daí o lookup extra de n8nWebhookUrl logo abaixo
-      // mesmo quando o userId já veio de agent_configs.
+      // ── Lookup unificado: agentes → prefixo → integracoes_config → admin ──
+      // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): nível `agent_configs` removido —
+      // config unificada em `agentes` (ver SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md).
+      // `agentes` permite várias instâncias por usuário (UNIQUE(user_id, evolution_instancia)),
+      // já carrega n8n_webhook_url e agora também palavra_reativar — uma única query resolve o
+      // que antes vinha espalhado entre agent_configs (nível 1) e agentes (nível 2 + n8n à parte).
       let userId: string | null = null;
       let palavraReativar = 'atendimento finalizado';
       let n8nWebhookUrl: string | null = null;
 
-      // 1. agent_configs
-      const cfgRes = await pool.query(
-        `SELECT user_id, palavra_reativar
-         FROM agent_configs
-         WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome_agente) = LOWER($1))
-           AND ativo = true
-         LIMIT 1`,
+      // 1. agentes
+      const agtRes = await pool.query(
+        `SELECT user_id, palavra_reativar, n8n_webhook_url FROM agentes
+         WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
+           AND ativo = true AND user_id IS NOT NULL
+         ORDER BY updated_at DESC LIMIT 1`,
         [instancia]
       ).catch(() => ({ rows: [] as any[] }));
 
-      if (cfgRes.rows.length) {
-        userId = cfgRes.rows[0].user_id;
-        palavraReativar = (cfgRes.rows[0].palavra_reativar || palavraReativar).toLowerCase();
-        log.info('WEBHOOK', 'USERID via agent_configs', { traceId, userId });
+      if (agtRes.rows.length) {
+        userId = agtRes.rows[0].user_id;
+        palavraReativar = (agtRes.rows[0].palavra_reativar || palavraReativar).toLowerCase();
+        n8nWebhookUrl = agtRes.rows[0].n8n_webhook_url || null;
+        log.info('WEBHOOK', 'USERID via agentes', { traceId, userId, temN8n: !!n8nWebhookUrl });
       } else {
-        log.info('WEBHOOK', 'agent_configs: nenhum resultado', { traceId, instancia });
+        log.info('WEBHOOK', 'agentes: nenhum resultado', { traceId, instancia });
       }
 
-      // 2. Fallback legado: tabela agentes (também captura n8n_webhook_url)
-      if (!userId) {
-        const agtRes = await pool.query(
-          `SELECT user_id, n8n_webhook_url FROM agentes
-           WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
-             AND ativo = true AND user_id IS NOT NULL
-           ORDER BY updated_at DESC LIMIT 1`,
-          [instancia]
-        ).catch(() => ({ rows: [] as any[] }));
-        if (agtRes.rows.length) {
-          userId = agtRes.rows[0].user_id;
-          n8nWebhookUrl = agtRes.rows[0].n8n_webhook_url || null;
-          log.info('WEBHOOK', 'USERID via agentes', { traceId, userId, temN8n: !!n8nWebhookUrl });
-        } else {
-          log.info('WEBHOOK', 'agentes: nenhum resultado', { traceId });
-        }
-      }
-      // Também verifica n8n_webhook_url se userId já foi resolvido via agent_configs
+      // Se a linha que resolveu o userId não tinha n8n_webhook_url, procura em outra linha do
+      // mesmo usuário (ex: um agente genérico sem instância específica guarda o webhook).
       if (userId && !n8nWebhookUrl) {
         const n8nRes = await pool.query(
           `SELECT n8n_webhook_url FROM agentes
@@ -795,7 +771,7 @@ export default function webhookRouter(pool: Pool): Router {
         }
       }
 
-      // 3. Fallback: prefixo UUID na instância (ex: crm_435ee4720fc3)
+      // 2. Fallback: prefixo UUID na instância (ex: crm_435ee4720fc3)
       if (!userId && instancia.startsWith('crm_')) {
         // [AUDITORIA] FIX APLICADO: remove curingas do operador LIKE (% e _) do prefixo antes de
         // usá-lo na query. Sem isso, um `instancia` malicioso/malformado com esses caracteres
@@ -814,7 +790,7 @@ export default function webhookRouter(pool: Pool): Router {
         }
       }
 
-      // 4. Fallback: integracoes_config
+      // 3. Fallback: integracoes_config
       if (!userId) {
         const icRes = await pool.query(
           `SELECT user_id FROM integracoes_config
@@ -1092,7 +1068,9 @@ export default function webhookRouter(pool: Pool): Router {
         try {
           const cfgAudio = await pool.query(
             `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-             FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+             FROM agentes WHERE user_id = $1 AND ativo = true
+               AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+             ORDER BY updated_at DESC LIMIT 1`,
             [userId]
           ).catch(() => ({ rows: [] as any[] }));
           const evoUrlAudio = cfgAudio.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
@@ -1132,7 +1110,9 @@ export default function webhookRouter(pool: Pool): Router {
         try {
           const cfgImagem = await pool.query(
             `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-             FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+             FROM agentes WHERE user_id = $1 AND ativo = true
+               AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+             ORDER BY updated_at DESC LIMIT 1`,
             [userId]
           ).catch(() => ({ rows: [] as any[] }));
           const evoUrlImagem = cfgImagem.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
@@ -1229,7 +1209,9 @@ export default function webhookRouter(pool: Pool): Router {
             try {
               const cfgMidia = await pool.query(
                 `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-                 FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+                 FROM agentes WHERE user_id = $1 AND ativo = true
+                   AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+                 ORDER BY updated_at DESC LIMIT 1`,
                 [userId]
               ).catch(() => ({ rows: [] as any[] }));
               const evoUrlMidia = (cfgMidia.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br');
@@ -1290,10 +1272,12 @@ export default function webhookRouter(pool: Pool): Router {
                 return; // foto já salva — não chamar Evolution API
               }
 
-              // Foto de perfil via Evolution API — usa agent_configs como fonte
+              // Foto de perfil via Evolution API — usa agentes como fonte (Sprint 1 unificação)
               const cfgEvo = await pool.query(
                 `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-                 FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+                 FROM agentes WHERE user_id = $1 AND ativo = true
+                   AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+                 ORDER BY updated_at DESC LIMIT 1`,
                 [userId]
               ).catch(() => ({ rows: [] as any[] }));
               const evoUrl = (cfgEvo.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br').replace(/\/$/, '');
@@ -1383,7 +1367,9 @@ export default function webhookRouter(pool: Pool): Router {
 
               const cfgGrupo = await pool.query(
                 `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-                 FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+                 FROM agentes WHERE user_id = $1 AND ativo = true
+                   AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+                 ORDER BY updated_at DESC LIMIT 1`,
                 [userId]
               ).catch(() => ({ rows: [] as any[] }));
               const evoUrlGrupo = cfgGrupo.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';

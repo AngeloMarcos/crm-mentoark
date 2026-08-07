@@ -2,8 +2,10 @@
  * agentEngine.ts — Motor de resposta automática da IA para mensagens do WhatsApp.
  *
  * Chamado por webhook.ts (via processarComDebounce, 3s de debounce por telefone) após uma
- * mensagem recebida ser atribuída a um userId. Resolve o agente (tabela agentes) e a config de
- * IA (agent_configs: prompt, modelo, provider), monta o histórico (n8n_chat_histories), chama o
+ * mensagem recebida ser atribuída a um userId. Resolve o agente e toda a config de IA (prompt,
+ * modelo, provider, MCP tools habilitadas) numa única fonte — tabela `agentes` (unificação Sprint
+ * 1, ver diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md; `agent_configs` existe fisicamente
+ * mas não é mais lida/escrita por este arquivo), monta o histórico (n8n_chat_histories), chama o
  * provider (OpenAI/Claude/Gemini), faz parsing nativo da resposta (quebra em até 2
  * mensagens, detecta sinal de pausa) e envia via Evolution API (enviarResposta ou, quando
  * configurado por agente e a mensagem recebida foi um áudio, enviarRespostaVoz — TTS via
@@ -162,9 +164,16 @@ async function pausarPorLoopDetectado(
 // isolamento não compensa o risco de as duas divergirem de novo no futuro).
 async function buscarConfigEvolutionFallback(pool: Pool, userId: string): Promise<{ url: string; apiKey: string } | null> {
   try {
+    // [AUDITORIA] LÓGICA (Sprint 1 unificação, ver agentEngine.ts topo): fonte repontada de
+    // `agent_configs` pra `agentes`. Um tenant pode ter mais de uma linha em `agentes` — prioriza
+    // a mais recentemente atualizada com credenciais preenchidas, mesmo critério de desempate já
+    // usado pra resolver `agente` lá em cima (`ORDER BY updated_at DESC`).
     const r = await pool.query(
       `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-       FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+       FROM agentes
+       WHERE user_id = $1 AND ativo = true
+         AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+       ORDER BY updated_at DESC LIMIT 1`,
       [userId],
     );
     const row = r.rows[0];
@@ -550,6 +559,20 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   const userIdFinal = agente.user_id || entrada.userId!;
 
+  // [AUDITORIA] LÓGICA (Sprint 0 do plano em diagnosticos/PLANO_MOTOR_MULTIAGENTE_ECONOMIA_TOKEN.md):
+  // scaffolding da flag de segurança pro motor multi-agente — só lê e loga por enquanto, não
+  // muda comportamento nenhum. Não existe ainda nenhum motor novo pra rotear quando `true`
+  // (Sprints 1+ do plano, ainda não implementadas) — todo mundo (flag `true` ou `false`) segue
+  // pelo caminho único de sempre logo abaixo. Ponto de extensão pronto pra quando existir de
+  // fato algo diferente pra fazer aqui.
+  const multiAgentFlagRes = await pool.query(
+    `SELECT multi_agent_enabled FROM users WHERE id = $1`,
+    [userIdFinal]
+  ).catch(() => ({ rows: [] as any[] }));
+  if (multiAgentFlagRes.rows[0]?.multi_agent_enabled) {
+    log.info('ENGINE', 'multi_agent_enabled=true pra esta conta, mas o motor novo ainda não existe — seguindo pelo caminho único atual', { userId: userIdFinal });
+  }
+
   // 2. Verificar opt-out
   const contato = await upsertContato(pool, userIdFinal, entrada.telefone, entrada.pushName);
   if (contato.opt_out) {
@@ -651,42 +674,30 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
   if (!textoFinal) return;
 
-  // 6. Configuração unificada — fonte única: agent_configs (por user_id)
-  const configRes = await pool.query(
-    `SELECT prompt_sistema, nome_agente, sinal_pausa, palavra_reativar,
-            modelo_llm, evolution_server_url, evolution_api_key,
-            operation_mode, distribution_mode,
-            saudacao_inicial, bloco_qualificacao,
-            mensagem_encaminhamento, mensagem_encerramento,
-            resposta_voz_habilitada, resposta_voz_id
-     FROM agent_configs
-     WHERE user_id = $1 AND ativo = true
-     LIMIT 1`,
-    [userIdFinal]
-  );
-
-  const agentConfig = configRes.rows[0] ?? null;
+  // 6. Configuração unificada — fonte única: agentes (Sprint 1 do plano em
+  // diagnosticos/PLANO_MOTOR_MULTIAGENTE_ECONOMIA_TOKEN.md, spec completa em
+  // diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md). `agente` já foi carregado com
+  // `SELECT *` lá em cima (linha ~506) — os campos que antes vinham de uma segunda query em
+  // `agent_configs` (prompt_sistema, sinal_pausa, saudacao_inicial, etc.) agora vivem na mesma
+  // linha. `agent_configs` deixa de ser lida/escrita a partir desta sprint — a tabela continua
+  // existindo fisicamente (não foi apagada), só não é mais consultada por nenhum código.
 
   // [AUDITORIA] BUG (achado 2026-07-28, reportado pelo usuário — cliente novo com IA
   // respondendo e usando o prompt configurado pra OUTRO cliente já existente): antes, sem
   // `agent_configs.prompt_sistema` nem `agent_prompts` real, o motor caía num prompt genérico
   // hardcoded ("Você é um assistente prestativo.") e RESPONDIA mesmo assim — violando a regra
-  // "a IA não pode responder sem antes estar configurada". Isso, somado a `agent_configs`
-  // nascendo `ativo=true` por padrão em pelo menos 3 pontos do sistema (agent-config.ts,
-  // integracoes.ts, evolutionReconciliation.ts — todos corrigidos na mesma sessão) e ao bug
-  // separado de roteamento em `ConfigAgenteIA.tsx`/`agent-config.ts` (rota `/api/agent_configs`
-  // usada pelo frontend nunca existiu — `/api/agent-config`, singular/hífen, é a rota real —
-  // fazendo a tela de configuração falhar silenciosamente ao carregar/salvar, então o operador
-  // nunca via se a config realmente tinha sido salva pro cliente certo), formava exatamente o
-  // cenário reportado. [AUDITORIA] FIX APLICADO: prompt do sistema só é considerado "real" com
-  // conteúdo genuíno vindo de `agent_configs`/`agent_prompts` — sem isso, a IA NÃO responde
-  // (mesmo comportamento de "agente não encontrado" já usado linhas acima), em vez de
-  // silenciosamente assumir uma persona genérica que não é a do cliente.
-  // Prompt do sistema: usa agent_configs.prompt_sistema como fonte principal.
-  // Fallback para agent_prompts apenas para compatibilidade com contas antigas sem migração.
+  // "a IA não pode responder sem antes estar configurada". [AUDITORIA] FIX APLICADO (preservado
+  // na unificação): prompt do sistema só é considerado "real" com conteúdo genuíno vindo de
+  // `agentes.prompt_sistema`/`agent_prompts` — sem isso, a IA NÃO responde (mesmo comportamento
+  // de "agente não encontrado" já usado linhas acima), em vez de silenciosamente assumir uma
+  // persona genérica que não é a do cliente. Esse guard-rail é o motivo pelo qual a migração de
+  // dados desta sprint NUNCA cria automaticamente uma linha `agentes` com prompt vazio pra uma
+  // conta que tinha prompt real em `agent_configs` — ver script de migração e AUDITORIA_LOG.md.
+  // Prompt do sistema: usa agentes.prompt_sistema como fonte principal.
+  // Fallback para agent_prompts apenas para compatibilidade com contas ainda não migradas.
   let systemPromptBase: string | null = null;
-  if (agentConfig?.prompt_sistema) {
-    systemPromptBase = agentConfig.prompt_sistema;
+  if (agente.prompt_sistema) {
+    systemPromptBase = agente.prompt_sistema;
   } else {
     const legacyRes = await pool.query(
       `SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`,
@@ -699,16 +710,15 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     return;
   }
 
-  const nomeAgente = agentConfig?.nome_agente || agente.nome || 'Assistente';
-  const sinalPausa = agentConfig?.sinal_pausa || '251213';
+  const nomeAgente = agente.nome || 'Assistente';
+  const sinalPausa = agente.sinal_pausa || '251213';
 
-  // Override de Evolution a partir do agent_configs (tem precedência sobre o agente)
-  // [AUDITORIA] LÓGICA: só url e api_key vêm de agent_configs — evolution_instancia continua
-  // vindo exclusivamente de `agentes` (linha ~253 acima). É uma terceira variação de como este
-  // módulo trata agent_configs vs. agentes/integracoes_config — ver o achado mais completo sobre
-  // essa inconsistência entre tabelas em backend/src/routes/whatsapp.ts (getEvolutionConfig).
-  if (agentConfig?.evolution_server_url) agente.evolution_server_url = agentConfig.evolution_server_url;
-  if (agentConfig?.evolution_api_key)    agente.evolution_api_key    = agentConfig.evolution_api_key;
+  // MCP tools habilitadas por agente (Aba Motor, Agentes.tsx) — `agente.mcp_tools` é
+  // TEXT[] | null. null/ausente = todas habilitadas (comportamento anterior, sem regressão pra
+  // quem nunca mexeu nessa aba); array (mesmo vazio) = filtro explícito pelos ids salvos.
+  const mcpToolsHabilitadas = agente.mcp_tools == null
+    ? MCP_TOOLS
+    : MCP_TOOLS.filter(t => (agente.mcp_tools as string[]).includes(t.name));
 
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
@@ -754,7 +764,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   // 8. Finalizar configuração do provider
   const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
-  const modelo = providerInfo?.modelo || agentConfig?.modelo_llm || agente.modelo || 'gpt-4o-mini';
+  const modelo = providerInfo?.modelo || agente.modelo || 'gpt-4o-mini';
   const providerSlug = providerInfo?.providerSlug || 'openai';
   log.info('ENGINE', 'Provider selecionado', {
     provider: providerInfo ? providerSlug + '/' + modelo : 'FALLBACK env',
@@ -784,7 +794,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     let resp: Awaited<ReturnType<typeof provider.complete>> | null = null;
     try {
       resp = await withAiFallback(
-        () => provider.complete(mensagens, systemPrompt, MCP_TOOLS, {
+        () => provider.complete(mensagens, systemPrompt, mcpToolsHabilitadas, {
           model: modelo,
           temperature: Number(agente.temperatura) || 0.7,
           maxTokens: agente.max_tokens || 1024,
@@ -842,6 +852,14 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     // Executar ferramentas e adicionar resultados
     const toolResults: AIMessage[] = [];
     for (const tc of resp.toolCalls) {
+      // Defesa em profundidade: a tool já não é oferecida no `provider.complete()` acima quando
+      // desabilitada em `agente.mcp_tools`, então isto só dispara se o modelo tentar chamar algo
+      // fora da lista oferecida (ex: nome reaproveitado de uma mensagem antiga do histórico).
+      if (!mcpToolsHabilitadas.some(t => t.name === tc.name)) {
+        log.warn('ENGINE', 'Tool chamada pelo modelo mas desabilitada pra este agente — ignorando', { nome: tc.name, userId: userIdFinal });
+        toolResults.push({ role: 'user', content: `[Resultado de ${tc.name}]: ferramenta não disponível.` });
+        continue;
+      }
       log.info('ENGINE', 'Executando tool', { nome: tc.name, input: JSON.stringify(tc.input).slice(0, 80) });
       const resultado = await executarFerramenta(pool, userIdFinal, tc.name, tc.input, {
         telefone: entrada.telefone,
@@ -920,13 +938,13 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     }
 
     // [AUDITORIA] LÓGICA (Sprint TTS): resposta em voz é opt-in por agente
-    // (agent_configs.resposta_voz_habilitada + resposta_voz_id) e só é tentada quando a
+    // (agentes.resposta_voz_habilitada + voice_id) e só é tentada quando a
     // mensagem RECEBIDA do cliente foi um áudio (espelha o canal — critério simples e seguro
     // sugerido pelo usuário). Fora dessas condições, comportamento 100% idêntico ao anterior
     // (texto em pedaços, sem nenhuma mudança pra tenants sem a flag ativada).
     const deveResponderEmVoz =
-      agentConfig?.resposta_voz_habilitada === true &&
-      !!agentConfig?.resposta_voz_id &&
+      agente.resposta_voz_habilitada === true &&
+      !!agente.voice_id &&
       entrada.tipo === 'audio';
 
     let vozEnviada = false;
@@ -935,7 +953,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         pool, userIdFinal,
         agente.evolution_server_url, agente.evolution_api_key,
         agente.evolution_instancia || entrada.instancia,
-        entrada.telefone, respostaFinal, agentConfig.resposta_voz_id,
+        entrada.telefone, respostaFinal, agente.voice_id,
       );
       if (resultado.ok) {
         vozEnviada = true;

@@ -34,8 +34,7 @@ export async function retentarMidiaPendente(pool: Pool): Promise<{ tentadas: num
        AND created_at > NOW() - INTERVAL '${JANELA_DIAS} days'
        AND deleted_at IS NULL
        AND (
-         EXISTS (SELECT 1 FROM agent_configs a WHERE LOWER(a.evolution_instancia) = LOWER(m.instance_name) AND a.ativo = true)
-         OR EXISTS (SELECT 1 FROM agentes a WHERE LOWER(a.evolution_instancia) = LOWER(m.instance_name) AND a.ativo = true)
+         EXISTS (SELECT 1 FROM agentes a WHERE LOWER(a.evolution_instancia) = LOWER(m.instance_name) AND a.ativo = true)
          OR EXISTS (SELECT 1 FROM integracoes_config i WHERE LOWER(i.instancia) = LOWER(m.instance_name) AND i.tipo = 'evolution')
        )
      ORDER BY created_at DESC
@@ -51,7 +50,9 @@ export async function retentarMidiaPendente(pool: Pool): Promise<{ tentadas: num
     if (cfgCache.has(userId)) return cfgCache.get(userId)!;
     const r = await pool.query(
       `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-       FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+       FROM agentes WHERE user_id = $1 AND ativo = true
+         AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+       ORDER BY updated_at DESC LIMIT 1`,
       [userId]
     ).catch(() => ({ rows: [] as any[] }));
     const cfg = {

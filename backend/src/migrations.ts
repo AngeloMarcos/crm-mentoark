@@ -1490,6 +1490,25 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'users.owner_id OK');
 
+  // ── users.multi_agent_enabled: flag de segurança pro motor multi-agente (Sprint 0, plano
+  // em diagnosticos/PLANO_MOTOR_MULTIAGENTE_ECONOMIA_TOKEN.md) ─────────────────────────────
+  // [AUDITORIA] LÓGICA: `false` por padrão pra TODA conta (inclusive as já existentes, via
+  // DEFAULT da coluna — nenhum `UPDATE` retroativo necessário). Escopo de conta (não de
+  // agente individual) de propósito: liga/desliga o motor inteiro pra aquela conta, decisão
+  // que não faz sentido variar por agente antes do motor multi-agente sequer existir.
+  // Colocado em `users` (não em `agent_configs`) porque a Sprint 1 desse mesmo plano vai
+  // aposentar `agent_configs` em favor de `agentes` (ver SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md)
+  // — `users` sobrevive a essa migração sem precisar mover a flag de novo.
+  // [AUDITORIA] LÓGICA: nesta sprint (Sprint 0) a flag é só scaffolding — `agentEngine.ts` lê
+  // e loga o valor, mas ainda não existe nenhum motor novo pra rotear quando `true`, porque as
+  // Sprints 1+ (unificar config, memória estruturada, multi-agente de verdade) ainda não foram
+  // implementadas. Nenhuma conta muda de comportamento agora, com a flag `true` ou `false` —
+  // é o mesmo espírito de "nascer inofensivo" já usado em `grupos_ia_permitidos` (Sprint Tarefa
+  // por Grupo): a infraestrutura de segurança vem ANTES da funcionalidade que ela vai proteger.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS multi_agent_enabled BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+
+  log.info('MIGRATIONS', 'users.multi_agent_enabled OK');
+
   // ── integracoes_config: remover UNIQUE(user_id, tipo) para permitir múltiplas instâncias ──
   await pool.query(`DROP INDEX IF EXISTS idx_integracoes_user_tipo`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_integracoes_user_tipo ON integracoes_config(user_id, tipo)`).catch(() => {});
@@ -1757,6 +1776,34 @@ export async function runMigrations(pool: Pool): Promise<void> {
   `).catch(() => {});
 
   log.info('MIGRATIONS', 'grupos_ia_permitidos OK');
+
+  // ── agentes: colunas que faltavam pra fechar a unificação com agent_configs (Sprint 1 do
+  // plano em diagnosticos/PLANO_MOTOR_MULTIAGENTE_ECONOMIA_TOKEN.md, spec completa em
+  // diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md) ─────────────────────────────────
+  // [AUDITORIA] LÓGICA: `agentes` já tinha (adicionado fora deste arquivo em algum momento
+  // anterior, nunca lido por nenhum código até agora) prompt_sistema/evolution_*/operation_mode/
+  // distribution_mode — só faltavam estas. `agent_configs` NÃO é apagada aqui nem em nenhum
+  // outro lugar desta sprint — ela permanece intacta fisicamente, só deixa de ser lida/escrita
+  // pelo código de produção depois que a migração de dados (script manual, não automática, ver
+  // AUDITORIA_LOG.md) confirmar os dados espelhados corretamente. Tudo com DEFAULT inofensivo —
+  // nenhuma conta muda de comportamento só por essa ALTER TABLE rodar.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS saudacao_inicial        TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS bloco_qualificacao      TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS mensagem_encaminhamento TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS mensagem_encerramento   TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS palavra_reativar        TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS sinal_pausa             TEXT DEFAULT '251213'`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS tempo_espera_mensagem   INTEGER`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS tempo_espera_resposta   INTEGER`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS modelo_parser           TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS grupo_notificacao       TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS resposta_voz_habilitada BOOLEAN DEFAULT false`).catch(() => {});
+  // MCP tools habilitadas por agente (Aba Motor) — null/ausente = todas habilitadas (comportamento
+  // atual, sem regressão pra quem nunca configurou); array vazio = nenhuma habilitada; array com
+  // ids = filtro explícito. Ver backend/src/services/mcp/tools.ts pros ids válidos.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS mcp_tools               TEXT[]`).catch(() => {});
+
+  log.info('MIGRATIONS', 'agentes colunas Sprint 1 (unificação agent_configs) OK');
 
   log.info('MIGRATIONS', 'OK');
 }

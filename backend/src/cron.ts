@@ -116,7 +116,7 @@ export function initCronJobs() {
     }
   });
 
-  // A cada 15 minutos — reconciliar integracoes_config/agent_configs contra o estado
+  // A cada 15 minutos — reconciliar integracoes_config/agentes contra o estado
   // real das instâncias na Evolution (ver services/evolutionReconciliation.ts — corrige
   // o drift que ficava acumulando silenciosamente, causa raiz documentada em AUDITORIA_LOG.md)
   cron.schedule('*/15 * * * *', async () => {

@@ -7,9 +7,15 @@ import { verificarInstanciaAberta, reconciliarInstanciasEvolution } from '../ser
 // [AUDITORIA] LÓGICA: CRUD de `integracoes_config` (Evolution, N8N, OpenAI, etc.),
 // consumido por src/pages/Integracoes.tsx ("Conectores"). Quando uma integração do
 // tipo 'evolution' é salva com status='conectado', syncEvolution() espelha
-// instancia/url/api_key para agent_configs — a tabela que webhook.ts lê PRIMEIRO
+// instancia/url/api_key para `agentes` — a tabela que webhook.ts lê PRIMEIRO
 // para resolver o userId de mensagens recebidas (antes de cair nos fallbacks
-// agentes/integracoes_config/prefixo UUID). Ver BUG em syncEvolution() abaixo.
+// prefixo UUID/integracoes_config). [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07):
+// antes espelhava pra `agent_configs` (removida desta cadeia — ver
+// diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md). Diferença importante: `agent_configs`
+// tinha UNIQUE(user_id) — um UPSERT simples por user_id bastava. `agentes` permite VÁRIAS linhas
+// por usuário (uma por instância/número conectado, sem UNIQUE de banco pra isso — só disciplina
+// de aplicação), então o find-or-create abaixo casa por (user_id, evolution_instancia), igual ao
+// padrão já usado em saveEvolutionConfig() (routes/whatsapp.ts) pra não divergir de novo.
 export default function integracoesRouter(pool: Pool): Router {
   const router = Router();
 
@@ -37,11 +43,10 @@ export default function integracoesRouter(pool: Pool): Router {
 
   // [AUDITORIA] FIX APLICADO (2026-07-21): syncEvolution() antes confiava cegamente no
   // status='conectado' enviado pelo frontend, sem checar a Evolution de verdade — causava
-  // drift entre agent_configs/integracoes_config e a Evolution real (documentado em
-  // AUDITORIA_LOG.md: agent_configs.evolution_instancia='teste' divergente da instância
-  // real). Agora chama verificarInstanciaAberta() (services/evolutionReconciliation.ts)
-  // e só grava em agent_configs se a instância estiver genuinamente connectionStatus:'open'.
-  // Sincroniza instância Evolution conectada com agent_configs
+  // drift entre agentes/integracoes_config e a Evolution real (documentado em
+  // AUDITORIA_LOG.md). Agora chama verificarInstanciaAberta() (services/evolutionReconciliation.ts)
+  // e só grava em `agentes` se a instância estiver genuinamente connectionStatus:'open'.
+  // Sincroniza instância Evolution conectada com `agentes` (find-or-create por user_id+instancia)
   async function syncEvolution(
     userId: string, instancia: string, url: string, apiKey: string
   ) {
@@ -50,25 +55,24 @@ export default function integracoesRouter(pool: Pool): Router {
       log.warn('INTEGRACOES', 'syncEvolution abortado: instância não está open na Evolution', { userId, instancia });
       return;
     }
-    // [AUDITORIA] LÓGICA: UPSERT em `agent_configs` para registrar/atualizar os dados de conexão de saída da Evolution API.
     // [AUDITORIA] BUG (achado 2026-07-28 — "IA não pode vir ativada sem antes estar
     // configurada"): conectar o WhatsApp aqui já ligava `ativo=true` — cliente novo conecta o
-    // número e a IA já sai respondendo com prompt genérico (ou, achado separado nesta mesma
-    // sessão, o prompt de outro tenant — ver ConfigAgenteIA.tsx/agent-config.ts), antes mesmo
-    // de configurar persona/prompt. [AUDITORIA] FIX APLICADO: nasce `false`; ON CONFLICT não
-    // toca `ativo`, então só afeta a criação inicial — nunca desativa um agente que o usuário
-    // já ligou de propósito depois de configurar.
-    await pool.query(
-      `INSERT INTO agent_configs
-         (user_id, evolution_instancia, evolution_server_url, evolution_api_key, ativo)
-       VALUES ($1, $2, $3, $4, false)
-       ON CONFLICT (user_id) DO UPDATE SET
-         evolution_instancia  = EXCLUDED.evolution_instancia,
-         evolution_server_url = EXCLUDED.evolution_server_url,
-         evolution_api_key    = EXCLUDED.evolution_api_key,
-         updated_at           = NOW()`,
-      [userId, instancia, url, apiKey]
-    ).catch(err => log.warn('INTEGRACOES', 'sync agent_configs', { err: err?.message, stack: err?.stack }));
+    // número e a IA já sai respondendo com prompt genérico ou de outro tenant, antes mesmo de
+    // configurar persona/prompt. [AUDITORIA] FIX APLICADO (preservado na unificação): o UPDATE
+    // abaixo nunca toca `ativo`; só o INSERT do caminho "linha nova" a define, e como `false` —
+    // nunca desativa um agente que o usuário já ligou de propósito depois de configurar.
+    const upd = await pool.query(
+      `UPDATE agentes SET evolution_server_url = $1, evolution_api_key = $2, updated_at = NOW()
+       WHERE user_id = $3 AND evolution_instancia = $4`,
+      [url, apiKey, userId, instancia]
+    ).catch(err => { log.warn('INTEGRACOES', 'sync agentes (update)', { err: err?.message, stack: err?.stack }); return null; });
+    if (upd && !upd.rowCount) {
+      await pool.query(
+        `INSERT INTO agentes (user_id, nome, evolution_instancia, evolution_server_url, evolution_api_key, ativo, ativo_motor)
+         VALUES ($1, 'Conexão WhatsApp', $2, $3, $4, false, false)`,
+        [userId, instancia, url, apiKey]
+      ).catch(err => log.warn('INTEGRACOES', 'sync agentes (insert)', { err: err?.message, stack: err?.stack }));
+    }
   }
 
   // ── GET /api/integracoes_config ─────────────────────────────────────────────
@@ -142,7 +146,7 @@ export default function integracoesRouter(pool: Pool): Router {
 
       const row = r.rows[0];
 
-      // Sincronizar com agent_configs quando Evolution conectada
+      // Sincronizar com agentes quando Evolution conectada
       if (tipo === 'evolution' && resolvedInstancia && url && resolvedKey && row.status === 'conectado') {
         await syncEvolution(userId, resolvedInstancia, url, resolvedKey);
       }
@@ -262,12 +266,12 @@ export default function integracoesRouter(pool: Pool): Router {
 
   // ── DELETE /api/integracoes_config/:id ──────────────────────────────────────
   // [AUDITORIA] FIX APLICADO: antes de deletar, se o conector for do tipo 'evolution', limpa a
-  // referência espelhada em agent_configs (única por user_id, ver syncEvolution acima) — sem isso
-  // o motor de IA/webhook ficava com credenciais órfãs de uma instância já excluída. IMPORTANTE:
-  // um mesmo usuário pode ter MAIS DE UM conector 'evolution' (instâncias diferentes, sem UNIQUE
-  // no banco para tipo+instancia), mas agent_configs só guarda UMA (unique_user_config). Por isso
-  // o UPDATE só limpa se `evolution_instancia` atual for exatamente a instância deletada — deletar
-  // uma instância inativa/extra não deve derrubar a instância realmente ativa de outro conector.
+  // referência espelhada em `agentes` (ver syncEvolution acima) — sem isso o motor de
+  // IA/webhook ficava com credenciais órfãs de uma instância já excluída. [AUDITORIA] LÓGICA
+  // (Sprint 1 unificação, 2026-08-07): antes limpava `agent_configs` (única por user_id); agora
+  // limpa a(s) linha(s) de `agentes` cujo `evolution_instancia` bate exatamente com a instância
+  // deletada — deletar uma instância inativa/extra não deve afetar a instância ativa de outro
+  // conector do mesmo usuário.
   router.delete('/:id', wrap(async (req: AuthRequest, res: Response) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
@@ -279,14 +283,14 @@ export default function integracoesRouter(pool: Pool): Router {
 
     if (intRes.rows.length && intRes.rows[0].tipo === 'evolution') {
       await pool.query(
-        `UPDATE agent_configs
+        `UPDATE agentes
          SET evolution_instancia = NULL,
              evolution_server_url = NULL,
              evolution_api_key = NULL,
              updated_at = NOW()
          WHERE user_id = $1 AND evolution_instancia IS NOT DISTINCT FROM $2`,
         [userId, intRes.rows[0].instancia]
-      ).catch(err => log.warn('INTEGRACOES', 'limpar agent_configs orfao', { err: err?.message, stack: err?.stack }));
+      ).catch(err => log.warn('INTEGRACOES', 'limpar agentes orfao', { err: err?.message, stack: err?.stack }));
     }
 
     await pool.query(

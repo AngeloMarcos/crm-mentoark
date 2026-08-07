@@ -297,8 +297,16 @@ app.use('/api/agentes', makeCrud(pool, 'agentes', {
     // Campos que o Lovable envia mas não existem em agentes
     'tipo', 'config', 'provider_slug', 'instancia', 'active',
     // Campos de outras versões/aliases
+    // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): `mcp_tools` SAIU desta lista —
+    // virou coluna real em `agentes` (migrations.ts) e agentEngine.ts agora filtra as tools MCP
+    // por ela. Antes disso, qualquer POST/PATCH que o frontend mandasse com `mcp_tools` era
+    // descartado silenciosamente aqui — por isso o toggle da aba Motor nunca teve efeito nenhum,
+    // mesmo antes da unificação (achado desta sprint, não só "não lido", também "nunca salvo").
+    // `modalidade_audio/imagem/video` continuam de fora de propósito — decisão desta sprint foi
+    // deixar esses 3 toggles inertes (sem coluna, sem leitura em agentEngine.ts) por enquanto;
+    // ver diagnosticos/AUDITORIA_LOG.md pra justificativa completa.
     'provider', 'modelo_id', 'modalidade_audio', 'modalidade_imagem',
-    'modalidade_video', 'mcp_tools', 'name', 'description',
+    'modalidade_video', 'name', 'description',
     'is_active', 'enabled', 'settings', 'metadata',
   ],
   transformRow: (row: any) => {

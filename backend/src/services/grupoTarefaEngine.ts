@@ -182,18 +182,24 @@ async function criarTarefaComRodizio(
 // explícito.
 async function enviarConfirmacaoGrupo(pool: Pool, userId: string, instancia: string, remoteJid: string): Promise<void> {
   try {
-    const cfgRes = await pool.query(
-      `SELECT evolution_server_url AS url, evolution_api_key AS api_key FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
-      [userId]
+    // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): tentativa por evolution_instancia
+    // exata primeiro (mais específica pra tenant com múltiplas instâncias); fallback pra
+    // qualquer linha ativa do usuário com credenciais preenchidas.
+    const agtRes = await pool.query(
+      `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+       FROM agentes WHERE user_id = $1 AND LOWER(evolution_instancia) = LOWER($2) AND ativo = true LIMIT 1`,
+      [userId, instancia]
     );
-    let cfg = cfgRes.rows[0];
+    let cfg = agtRes.rows[0];
     if (!cfg?.url || !cfg?.api_key) {
-      const agtRes = await pool.query(
+      const agtFallbackRes = await pool.query(
         `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-         FROM agentes WHERE user_id = $1 AND LOWER(evolution_instancia) = LOWER($2) AND ativo = true LIMIT 1`,
-        [userId, instancia]
+         FROM agentes WHERE user_id = $1 AND ativo = true
+           AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+         ORDER BY updated_at DESC LIMIT 1`,
+        [userId]
       );
-      cfg = agtRes.rows[0];
+      cfg = agtFallbackRes.rows[0];
     }
     if (!cfg?.url || !cfg?.api_key) {
       log.warn('GRUPO_TAREFA', 'Sem config de Evolution para confirmar no grupo — tarefa já criada, confirmação não enviada', { userId, remoteJid });

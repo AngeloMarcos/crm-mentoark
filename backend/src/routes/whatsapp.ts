@@ -6,7 +6,8 @@
  * fotos de perfil, e registrar o webhook da instância na Evolution (registrarWebhook/webhookInner).
  * getEvolutionConfig()/saveEvolutionConfig() são a fonte de verdade da config Evolution (url,
  * api_key, instancia) usada por toda ação de saída — ver [AUDITORIA] BUG logo abaixo sobre a
- * relação (inconsistente) dessas funções com a tabela agent_configs.
+ * relação dessas funções com a tabela `agentes` (config unificada, Sprint 1 — ver
+ * diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md).
  */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
@@ -422,32 +423,26 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   });
 
-  // [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): resolve a config
-  // Evolution REAL do agente ativo do tenant (agent_configs, com fallback pra `agentes`) — não
-  // usa `getEvolutionConfig()` acima de propósito. Aquele helper devolve sempre a instância
-  // "padrão" sem sufixo (`crm_<prefixo>`), mas o suporte a multi-instância (Sprint 1, comentário
-  // em `getEvolutionConfig` acima) permite que a instância REALMENTE conectada de um tenant seja
-  // uma secundária (`crm_<prefixo>_2`, `_3`...) — confirmado em homolog: `getEvolutionConfig()`
-  // apontaria pra `crm_435ee4720fc3` (instância padrão, não necessariamente a conectada),
-  // enquanto o agente ativo de verdade usa `crm_435ee4720fc3_2`. Ações de grupo (que dependem de
-  // uma sessão WhatsApp real e conectada) usam a mesma fonte que `grupoTarefaEngine.ts`/
-  // `webhook.ts` já usam pra esse fim.
+  // [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04; repontado pra `agentes`
+  // na Sprint 1 unificação, 2026-08-07): resolve a config Evolution REAL do agente ativo do
+  // tenant — não usa `getEvolutionConfig()` acima de propósito. Aquele helper devolve sempre a
+  // instância "padrão" sem sufixo (`crm_<prefixo>`), mas o suporte a multi-instância (Sprint 1,
+  // comentário em `getEvolutionConfig` acima) permite que a instância REALMENTE conectada de um
+  // tenant seja uma secundária (`crm_<prefixo>_2`, `_3`...) — confirmado em homolog:
+  // `getEvolutionConfig()` apontaria pra `crm_435ee4720fc3` (instância padrão, não
+  // necessariamente a conectada), enquanto o agente ativo de verdade usa `crm_435ee4720fc3_2`.
+  // Ações de grupo (que dependem de uma sessão WhatsApp real e conectada) usam a mesma fonte que
+  // `grupoTarefaEngine.ts`/`webhook.ts` já usam pra esse fim.
   async function resolverConfigGrupoAtivo(userId: string): Promise<{ url: string; api_key: string; instancia: string } | null> {
     const tenantId = await resolveOwnerId(userId);
     const cfgRes = await pool.query(
       `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
-       FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+       FROM agentes WHERE user_id = $1 AND ativo = true
+         AND evolution_instancia IS NOT NULL AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+       ORDER BY updated_at DESC LIMIT 1`,
       [tenantId]
     );
-    let cfg = cfgRes.rows[0];
-    if (!cfg?.url || !cfg?.api_key || !cfg?.instancia) {
-      const agtRes = await pool.query(
-        `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
-         FROM agentes WHERE user_id = $1 AND ativo = true AND evolution_instancia IS NOT NULL ORDER BY updated_at DESC LIMIT 1`,
-        [tenantId]
-      );
-      cfg = agtRes.rows[0];
-    }
+    const cfg = cfgRes.rows[0];
     if (!cfg?.url || !cfg?.api_key || !cfg?.instancia) return null;
     return { url: cfg.url, api_key: cfg.api_key, instancia: cfg.instancia };
   }
@@ -943,10 +938,13 @@ export default function whatsappRouter(pool: Pool): Router {
          WHERE user_id = $1 AND ativo = true LIMIT 1`,
         [req.userId]
       );
-      const agentConfig = await pool.query(
-        `SELECT nome_agente, modelo_llm, ativo,
+      // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): resumo de config "ativa" repontado
+      // de `agent_configs` (removida) pra `agentes` — mesma linha mais recente que agentEngine.ts
+      // usaria de verdade pra essa instância.
+      const agentAtivo = await pool.query(
+        `SELECT nome, modelo,
                 (prompt_sistema IS NOT NULL AND prompt_sistema != '') AS tem_prompt
-         FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
+         FROM agentes WHERE user_id = $1 AND ativo = true ORDER BY updated_at DESC LIMIT 1`,
         [req.userId]
       );
       return res.json({
@@ -954,7 +952,7 @@ export default function whatsappRouter(pool: Pool): Router {
         integracoes: integracoes.rows,
         ultima_mensagem: ultimaMensagem.rows[0] || null,
         provider: provider.rows[0] || null,
-        agent_config: agentConfig.rows[0] || null,
+        agente_ativo: agentAtivo.rows[0] || null,
       });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });

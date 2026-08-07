@@ -20,7 +20,6 @@ import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
 import { TestarAgente } from "@/components/cerebro/TestarAgente";
 import { PromptAgente } from "@/components/cerebro/PromptAgente";
 import { Configuracoes } from "@/components/cerebro/Configuracoes";
-import { ConfigAgenteIA } from "@/components/cerebro/ConfigAgenteIA";
 // GeradorPrompt removido pois agora está integrado no SetupAgente
 import { SetupAgente } from "@/components/cerebro/SetupAgente";
 import { api } from "@/integrations/database/client";
@@ -966,7 +965,24 @@ export default function CerebroPage() {
             </div>
 
             <TabsContent value="fluxo" className="mt-4">
-              <ConfigAgenteIA />
+              {/* [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): ConfigAgenteIA aposentada
+                  aqui — configuração de agente unificada na tela /agentes (ver
+                  diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md). O componente em si não
+                  foi apagado (só parou de ser renderizado), pra não perder o histórico de fixes
+                  documentados nele caso seja preciso consultar depois. */}
+              <Card>
+                <CardContent className="py-10 text-center space-y-3">
+                  <Bot className="h-10 w-10 mx-auto text-muted-foreground" />
+                  <p className="font-medium">Esta tela foi unificada com a página de Agentes</p>
+                  <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                    Prompt, modelo, mensagens automáticas e ferramentas MCP agora são configurados
+                    num só lugar, por agente.
+                  </p>
+                  <Button asChild>
+                    <a href="/agentes">Ir para Agentes</a>
+                  </Button>
+                </CardContent>
+              </Card>
             </TabsContent>
             <TabsContent value="personalidade" className="mt-4">
               <KeyValueEditor {...personalidade} labelCampo="Atributo" />
