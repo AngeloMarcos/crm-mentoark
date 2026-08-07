@@ -626,7 +626,29 @@ export default function DisparosPage() {
       // encontrado — mesma checagem reforçada no backend (get_next_disparo_batch, ver
       // migrations.ts), essa aqui evita que ele nem apareça na prévia/contagem.
       const semOptOut = list.filter((c: any) => c.opt_out !== true);
-      const unique = Array.from(new Map(semOptOut.map(c => [c.telefone, c])).values());
+      // [AUDITORIA] BUG (achado real do usuário, print em produção, 2026-08-06):
+      // `disparo_logs.telefone` é NOT NULL — um único contato sem telefone (`nome`
+      // preenchido, `telefone` null/vazio, possível via criação manual em Leads.tsx, que só
+      // exige `nome`) na seleção derrubava o `INSERT` multi-linha inteiro em `handleStart`
+      // (sem `ON CONFLICT`/tratamento por linha, mesma classe de bug já corrigida na
+      // importação — ver `SPRINT_IMPORTACAO_INTELIGENTE_UPSERT.md`), impedindo a campanha
+      // inteira de ser criada — mesmo com 246 dos 247 contatos perfeitamente válidos. Pior:
+      // a linha em `disparos` já tinha sido criada num INSERT anterior separado, gerando
+      // campanha órfã (status `em_andamento`, zero `disparo_logs`) a cada tentativa.
+      // [AUDITORIA] FIX APLICADO: filtra aqui — camada única que já protege as 4 fontes de
+      // alvo (tag/estágio/lista/"Todos os Leads", todas alimentam `list` antes deste ponto)
+      // — nunca deixa um contato sem telefone chegar em `targetContacts`. Aviso não-bloqueante
+      // (mesmo espírito da validação determinística de linha suspeita da importação) avisa o
+      // operador em vez de simplesmente sumir com o contato em silêncio.
+      const comTelefone = semOptOut.filter((c: any) => c.telefone && String(c.telefone).trim());
+      const semTelefoneCount = semOptOut.length - comTelefone.length;
+      if (semTelefoneCount > 0) {
+        toast.warning(
+          `${semTelefoneCount} contato(s) sem telefone válido foram excluídos da seleção`,
+          { description: "Contatos sem telefone não podem receber campanha de WhatsApp." }
+        );
+      }
+      const unique = Array.from(new Map(comTelefone.map(c => [c.telefone, c])).values());
       setTargetContacts(unique);
       setLoadingCount(false);
     };
@@ -718,7 +740,7 @@ export default function DisparosPage() {
         </div>
 
         <div className="min-h-[400px]">
-          {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} targetContacts={targetContacts} />}
+          {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} targetContacts={targetContacts} setTargetContacts={setTargetContacts} />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
           {step === 3 && <StepReview form={form} targetContacts={targetContacts} loadingContacts={loadingCount} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
@@ -746,7 +768,7 @@ export default function DisparosPage() {
   );
 }
 
-function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [] }: any) {
+function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [], setTargetContacts }: any) {
   const { user } = useAuth();
   const [previewSearch, setPreviewSearch] = useState("");
   const filteredPreview = targetContacts.filter((c: any) => {
@@ -894,6 +916,40 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
       fetchTargets();
     } finally {
       setLimpandoVazias(false);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Excluir Contato na Prévia, 2026-08-06): mesmo padrão já
+  // validado em produção por `removerLista()` de Leads.tsx (confirm nativo,
+  // `api.from("contatos").delete().eq("id", id)`) — backend genérico (`makeCrud`) já suporta.
+  // [AUDITORIA] BUG (achado real, corrige a premissa do pedido original): a sprint que pediu
+  // este botão presumiu "confirmado por leitura de migrations.ts: não existe FOREIGN KEY ...
+  // REFERENCES contatos(id) em nenhuma tabela" — **checado direto no banco (information_schema,
+  // não só o arquivo de migração) e é falso**: `chamadas`, `tarefas` e `timeline_eventos` têm FK
+  // pra `contatos(id)` com `ON DELETE CASCADE` — excluir o contato aqui apaga de verdade
+  // ligações/tarefas do Kanban/histórico de timeline associados a ele, não é uma operação
+  // isolada. Só `disparo_logs` (a preocupação original) é `ON DELETE SET NULL` — confirmado com
+  // teste real que o log de uma campanha já enviada sobrevive intacto (nome/telefone/mensagem/
+  // status preservados, só `contato_id` vira null). Aviso abaixo corrigido pra refletir o
+  // alcance real, não a premissa errada do pedido original.
+  const [removendoContatoId, setRemovendoContatoId] = useState<string | null>(null);
+  const removerContatoDaPreview = async (id: string, nome: string) => {
+    if (!confirm(`Remover o contato "${nome || 'sem nome'}"? Isso apaga o contato do CRM de vez, junto com tarefas do Kanban, chamadas e histórico de timeline associados a ele. O histórico de campanhas já enviadas (disparo_logs) não é afetado.`)) return;
+    setRemovendoContatoId(id);
+    try {
+      const { error } = await api.from("contatos").delete().eq("id", id);
+      if (error) {
+        toast.error("Erro ao remover contato", { description: error.message });
+        return;
+      }
+      // [AUDITORIA] FIX APLICADO: atualiza `targetContacts` do componente pai direto (sem
+      // refetch completo — a seleção pode ter centenas/milhares de linhas, refazer a busca
+      // inteira só pra tirar 1 contato seria lento e desnecessário). Tabela e contador
+      // ("X de Y totais") refletem na hora.
+      setTargetContacts((prev: any[]) => prev.filter(c => c.id !== id));
+      toast.success("Contato removido");
+    } finally {
+      setRemovendoContatoId(null);
     }
   };
 
@@ -1494,6 +1550,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                   <th className="px-3 py-2 font-medium text-xs">Status de envio</th>
                   <th className="px-3 py-2 font-medium text-xs">Último envio</th>
                   <th className="px-3 py-2 font-medium text-xs">Última campanha</th>
+                  <th className="px-3 py-2 font-medium text-xs w-8"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1521,11 +1578,27 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                       <td className="px-3 py-1.5 text-xs text-muted-foreground truncate max-w-[160px]">
                         {statusEnvio?.campanha_nome || "—"}
                       </td>
+                      <td className="px-3 py-1.5">
+                        {/* [AUDITORIA] LÓGICA (Sprint Excluir Contato na Prévia, 2026-08-06):
+                            só remove da seleção atual/futuras — não afeta campanha já enviada
+                            (sem FK/CASCADE pra contatos, ver removerContatoDaPreview). */}
+                        <button
+                          type="button"
+                          title="Remover contato"
+                          disabled={removendoContatoId === c.id}
+                          onClick={() => removerContatoDaPreview(c.id, c.nome)}
+                          className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive disabled:opacity-50"
+                        >
+                          {removendoContatoId === c.id
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Trash2 className="h-3.5 w-3.5" />}
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
                 {filteredPreview.length === 0 && (
-                  <tr><td colSpan={6} className="px-3 py-4 text-center text-xs text-muted-foreground">Nenhum contato corresponde à busca.</td></tr>
+                  <tr><td colSpan={7} className="px-3 py-4 text-center text-xs text-muted-foreground">Nenhum contato corresponde à busca.</td></tr>
                 )}
               </tbody>
             </table>
@@ -2323,7 +2396,14 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       // contato — cada `Math.random()` roda de forma independente, então dois contatos com a
       // mesma mensagem-base podem sortear opções diferentes, sem precisar tocar em
       // `disparoProcessor.ts` (o backend só lê `mensagem_enviada` já pronta).
-      const logs = targetContacts.map(c => ({
+      // [AUDITORIA] FIX APLICADO (achado real do usuário, print em produção, 2026-08-06):
+      // segunda camada de proteção, defesa em profundidade — mesmo já filtrando na origem
+      // (`targetContacts`, ver comentário completo lá), filtra de novo aqui, imediatamente
+      // antes do `INSERT` que exige `telefone NOT NULL`. Nunca depende só de um ponto de
+      // filtragem: se `targetContacts` chegar aqui por algum caminho futuro que não passou
+      // pelo filtro de cima, a campanha ainda não quebra.
+      const contatosValidos = targetContacts.filter((c: any) => c.telefone && String(c.telefone).trim());
+      const logs = contatosValidos.map(c => ({
         disparo_id: campaignData.id,
         user_id: user?.id,
         contato_id: c.id,
@@ -2335,8 +2415,17 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
 
 
       const { error: logsError } = await api.from("disparo_logs").insert(logs);
-      if (logsError) throw logsError;
-      
+      if (logsError) {
+        // [AUDITORIA] FIX APLICADO (achado real do usuário — campanha órfã em produção,
+        // 2026-08-06): antes, se este INSERT falhasse por qualquer motivo, a linha em
+        // `disparos` (já criada acima, INSERT separado) ficava órfã pra sempre — existia sem
+        // nenhum `disparo_logs` correspondente, status preso em 'em_andamento'/'rascunho'.
+        // Desfaz a criação da campanha nesse caso, pra falhar de forma limpa (usuário só vê
+        // o erro e tenta de novo, sem lixo acumulando no banco a cada tentativa).
+        await api.from("disparos").delete().eq("id", campaignData.id).catch(() => {});
+        throw logsError;
+      }
+
       toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
       if (now) onStart(campaignData);
     } catch (err: any) {

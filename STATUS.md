@@ -1,5 +1,33 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-08-06 (cont.) — 🆕 Excluir contato na prévia de Disparos + 🔴 correção de premissa: excluir contato TAMBÉM apaga tarefas/chamadas/timeline em CASCADE — em PRODUÇÃO
+
+Adicionado botão de excluir por linha na tabela "Contatos selecionados" (na real, é no Passo 1 "Lista de Contatos", não no "Revisar e Agendar" como o pedido presumiu). Remove do estado local na hora (sem refetch completo), mesmo padrão já usado em Leads.tsx.
+
+**Achado que corrige a premissa do pedido**: o pedido dizia que não existe FK nenhuma de `contatos.id` — checado direto no banco e é **falso**: `chamadas`, `tarefas` e `timeline_eventos` têm `ON DELETE CASCADE` de verdade (só `disparo_logs` é `SET NULL`, essa parte da premissa estava certa). Excluir um contato aqui apaga de verdade tarefas de Kanban, chamadas e timeline associados — não é uma operação isolada. **Não é risco novo** — `Leads.tsx` já tem o mesmo botão com o mesmo comportamento em produção — mas corrigi o texto do `confirm()` pra avisar isso com precisão, em vez de repetir a premissa incompleta do pedido.
+
+Testado em homolog com dado real: contato "sujo" de teste excluído de verdade (confirmado via GET → 404), e confirmado que `disparo_logs` de uma campanha "já enviada" sobrevive intacto ao contato ser excluído (SET NULL, não CASCADE). Build limpo. **Deployado em homolog e, com o usuário já ciente do achado sobre CASCADE, em produção**, `sha256sum` idêntico nos 3 lugares. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🔴 Fix: contato sem telefone derrubava a criação inteira da campanha — em PRODUÇÃO
+
+Print real do usuário: erro `null value in column "telefone"... violates not-null constraint` ao disparar campanha de 247 contatos. Causa: **1 único contato** em produção com telefone vazio (`"zxc"`, criado manualmente em Leads.tsx em 03/07 — formulário manual só exige nome, nunca exigiu telefone) derrubava o `INSERT` multi-linha inteiro de `disparo_logs` (sem `ON CONFLICT`/tratamento por linha), mesma classe de bug já vista na importação. Efeito colateral: **5 campanhas órfãs** em produção (`disparos` sem `disparo_logs` — o INSERT de campanha é separado e roda antes), das tentativas repetidas do usuário — removidas com confirmação dele.
+
+**Corrigido** (`Disparos.tsx`): filtro de contato sem telefone em duas camadas (na montagem de `targetContacts`, com aviso não-bloqueante; de novo em `handleStart()` antes do INSERT) + rollback automático da campanha se `disparo_logs` falhar mesmo assim (nunca mais fica órfã). Decisão: `Leads.tsx` não passou a exigir telefone no formulário manual (contato só-email é caso de uso legítimo) — ficou só o filtro do lado de Disparos, que é onde telefone é realmente obrigatório.
+
+Testado em homolog com dado real: contato sem telefone excluído automaticamente (com aviso), campanha criada normalmente com os demais, **e reproduzido o crash original** (mesmo erro do print) pra confirmar a causa raiz com certeza. Build limpo. **Deployado em homolog e produção**, `sha256sum` idêntico nos 3 lugares. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-06 (cont.) — 🔴 Auditoria cética (6ª tentativa): fix de mídia do chat NUNCA foi aplicado — "SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md" era um plano escrito, não código executado
+
+Usuário pediu verificação independente e cética do fix de mídia (5 tentativas anteriores reportaram sucesso, problema reapareceu). **Resultado: o fix descrito em `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md` nunca foi aplicado ao código.** Confirmado por leitura direta de `webhook.ts` (a condição `if (MIDIA_TIPOS.has(tipo) && midia.url)` — exatamente a linha apontada como bug — segue lá, idêntica, local/homolog/produção) e por `git log`, que não mostra nenhum commit tocando essa condição em nenhum momento. O documento da sprint existe em `diagnosticos/` como se fosse um "achado" investigado, mas o item 2 ("Aplicar o fix") do próprio documento nunca foi executado.
+
+**Achados adicionais da auditoria:**
+- Item 3 do plano original (checar o mesmo problema no bloco de mensagens `fromMe=true`) também nunca foi feito — pior que isso, esse bloco (`webhook.ts` ~linha 986) **nem tenta** persistir mídia local nenhuma (sem `media_url`/`salvarMidiaWhatsapp()` ali) — mensagem de mídia enviada diretamente do celular do atendente (não pelo composer do CRM) nunca ganha mídia local.
+- Item 6 (polish — esconder o texto cru `[Mídia - Imagem: "..."]` quando a imagem real já aparece) também não foi aplicado — `WhatsAppInterface.tsx` ainda renderiza os dois blocos de forma independente (imagem real + texto cru embaixo, quando ambos existem).
+- Extensão real do problema (produção, hoje): **148 de 5.922 mensagens de mídia (~2,5%) com `media_url` nulo ou cru** — a maioria (97,5%) já funciona hoje, o que explica por que o bug "parece resolvido às vezes" mesmo sem o fix. Ainda ocorrendo em datas recentes (04, 05 e 06/08/2026), incluindo hoje mesmo.
+- Padrão exato que causa `midia.url` vazio (item 5) **não pôde ser confirmado** — `whatsapp_messages.metadata` está vazio (`{}`) nas linhas quebradas, o payload bruto da Evolution nunca é persistido, e reproduzir os formatos suspeitos (forward, reply, sticker) exige mandar mensagem real de um celular de verdade, que esta sessão não tem como originar sozinha.
+
+**Nada foi corrigido nesta sprint** (era pra ser só verificação, conforme pedido) — ver `diagnosticos/AUDITORIA_LOG.md` pra lista clara do que falta pra uma sprint de continuação real.
+
 ## Sessão 2026-08-06 (cont.) — 🆕 Cooldown vira filtro automático, sem checkbox obrigatório — em PRODUÇÃO
 
 Checkbox de confirmação de cooldown (`StepReview`, Disparos) nunca teve efeito real — quem sempre bloqueou de verdade contato em cooldown foi o backend (`disparoProcessor.ts`), independente da tela. Removido o bloqueio dos botões e o checkbox; aviso vira informativo puro. Bônus: contador de "Destinatários" agora mostra quantos serão efetivamente enviados vs. pulados por cooldown.

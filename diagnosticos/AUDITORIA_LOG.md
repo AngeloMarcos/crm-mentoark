@@ -1,5 +1,82 @@
 # Auditoria de Código — Log
 
+### 🆕 Excluir contato direto na tabela "Contatos selecionados" (prévia de Disparos) + 🔴 correção de premissa errada sobre FK — em PRODUÇÃO
+
+**Contexto:** usuário reportou (print, "Todos os Leads", 571 contatos) registros claramente corrompidos (telefone com 18 dígitos, sem nome) na tabela de prévia de Disparos, sem forma de remover ali mesmo. **Localização real reconfirmada**: a tabela fica em `StepContacts` (Passo 1 "Lista de Contatos"), não em `StepReview` como o pedido original presumiu — só a descrição das colunas batia, a sprint tinha o step errado.
+
+**Implementado:** ícone de lixeira por linha (mesmo padrão de `removerLista()`/`Leads.tsx`: `confirm()` nativo + `api.from("contatos").delete().eq("id", id)`). `setTargetContacts` passado como prop nova de `DisparosPage` pra `StepContacts` — ao excluir, filtra o contato do estado do componente pai direto (`prev.filter(c => c.id !== id)`), sem refetch completo (a seleção pode ter centenas/milhares de linhas). `filteredPreview` é um `.filter()` puro recalculado a cada render (não memoizado com dependência estática), então tabela e contador ("X de Y totais") refletem a remoção imediatamente, confirmado por leitura do código.
+
+**🔴 Achado que corrige a premissa do pedido original**: o pedido afirmava, "confirmado por leitura de `migrations.ts`: não existe nenhuma `FOREIGN KEY ... REFERENCES contatos(id)`" — **checado direto no banco via `information_schema` (não só o arquivo de migração) e é falso**. Existem FKs reais de `contatos(id)`:
+
+| Tabela | `ON DELETE` |
+|---|---|
+| `chamadas` | CASCADE |
+| `tarefas` | CASCADE |
+| `timeline_eventos` | CASCADE |
+| `disparo_logs` | SET NULL |
+| `deals` (só homolog) | SET NULL |
+| `conversations` (só homolog) | CASCADE |
+
+Ou seja: excluir um contato pela prévia de Disparos **apaga de verdade** chamadas, tarefas de Kanban e eventos de timeline associados a ele — não é uma operação isolada só da seleção de campanha. A única parte da premissa original que se confirmou correta foi sobre `disparo_logs` especificamente (`SET NULL`, não `CASCADE`) — testado com dado real: criei um `disparo_logs` de uma campanha "já enviada" referenciando um contato de teste, excluí o contato, e o log sobreviveu **intacto** (nome/telefone/mensagem/status preservados via cópia denormalizada, só `contato_id` virou `null`).
+
+**Este não é um risco novo introduzido aqui** — `Leads.tsx` (`removerContato()`) já tem exatamente o mesmo botão, mesmo comportamento, em produção, há tempo. A sprint só adiciona mais um ponto de entrada pro mesmo comportamento já existente. Ainda assim, corrigido o texto do `confirm()` pra refletir o alcance real (antes dizia "não afeta campanhas já enviadas", o que é verdade mas omitia o resto): agora avisa explicitamente que tarefas/chamadas/timeline também são apagadas, e que só o histórico de campanha (`disparo_logs`) é preservado.
+
+**Testado em homolog com dado real** (dentro do container, JWT do próprio container): 3 contatos de teste criados (2 válidos, 1 "sujo" — sem nome, telefone com 21 dígitos). `DELETE` real via API confirmado (204), contato realmente sumiu de `contatos` (`GET` → 404 depois). Simulada uma campanha "já enviada" referenciando o contato sujo — confirmado que o `disparo_logs` sobrevive intacto ao excluir o contato. Dados de teste limpos ao final.
+
+Build (`vite build`) limpo. **Deployado em homolog e, após confirmação explícita do usuário (já ciente do achado sobre CASCADE), em produção** — `/health`→200 nos dois, `sha256sum` idêntico nos 3 lugares.
+
+### 🔴 Fix: contato sem telefone derrubava a criação inteira da campanha (`disparo_logs.telefone NOT NULL`) — em PRODUÇÃO
+
+**Achado real do usuário** (print, erro em produção ao clicar "Disparar Agora" numa campanha de 247 contatos): `"null value in column \"telefone\" of relation \"disparo_logs\" violates not-null constraint"`.
+
+**Causa raiz confirmada com dado real:** exatamente **1** contato em produção com `telefone` nulo/vazio — `"zxc"` (nome claramente de teste), `origem='Manual'`, criado em 2026-07-03. Rastreado até `Leads.tsx`, `salvarContato()`: só valida `contatoForm.nome.trim()` antes de salvar — `telefone` nunca foi obrigatório no formulário manual de contato. `StepReview.handleStart()` (`Disparos.tsx`) monta `logs = targetContacts.map(...)` e insere tudo num único `INSERT` multi-linha via `makeCrud` genérico (sem `ON CONFLICT`/tratamento por linha) — 1 contato ruim nos 247 derrubava o lote inteiro, mesma classe de bug já corrigida na importação (`SPRINT_IMPORTACAO_INTELIGENTE_UPSERT.md`), agora achada num ponto diferente do sistema.
+
+**Efeito colateral confirmado em produção:** como `disparos` é um `INSERT` separado ANTES de `disparo_logs`, cada tentativa falha deixava uma campanha órfã (status `em_andamento`, zero `disparo_logs`). **5 campanhas órfãs encontradas** (todas `"teste"`, 247 leads, criadas entre 16:37 e 16:52 de hoje — o usuário tentando repetidamente antes do fix) — removidas com confirmação explícita do usuário.
+
+**Decisão sobre `Leads.tsx`:** o formulário manual de contato **não** foi alterado para exigir telefone — um contato só com e-mail (sem WhatsApp) é um caso de uso legítimo de CRM (ex: lead de formulário web). Ficou só o filtro defensivo do lado de Disparos, que é o ponto real do sistema onde telefone é estritamente necessário (campanha de WhatsApp). Decisão de produto, não revisitada sem pedido explícito.
+
+**Fix aplicado (`Disparos.tsx`), duas camadas + rollback:**
+1. **Origem** — logo após montar `list` a partir das 4 fontes de alvo (tag/estágio/lista/"Todos os Leads"), filtra `c.telefone && String(c.telefone).trim()` antes de virar `targetContacts`, com `toast.warning` não-bloqueante avisando quantos foram excluídos.
+2. **Defesa em profundidade** — filtra de novo em `handleStart()`, imediatamente antes de montar `logs`, independente de a camada 1 já ter filtrado.
+3. **Rollback** — se mesmo assim o `INSERT` de `disparo_logs` falhar, `handleStart()` agora desfaz a linha de `disparos` recém-criada (`DELETE ... WHERE id = campaignData.id`) antes de propagar o erro — nunca mais deixa campanha órfã pra trás, qualquer que seja o motivo da falha.
+
+**Testado em homolog com dado real** (dentro do container, JWT do próprio container, sem WhatsApp envolvido): criados 2 contatos válidos + 1 com `telefone: null` numa lista de teste. Aplicando a lógica nova do fix contra a API real: contato sem telefone excluído corretamente (aviso "1 contato(s) sem telefone válido foram excluídos da seleção"), `disparo_logs` criado com sucesso só para os 2 válidos (sem erro de `NOT NULL`). **Reproduzido também o crash original** (mesmo payload, sem aplicar o filtro) — erro idêntico ao do print do usuário, confirmando a causa raiz com certeza, não suposição. Dados de teste limpos ao final.
+
+Build (`vite build`) limpo. **Deployado em homolog e, após confirmação explícita, em produção** — `/health`→200 nos dois, `sha256sum` idêntico nos 3 lugares.
+
+### 🔴 Auditoria cética: fix de mídia do chat (6º ciclo) NUNCA foi aplicado ao código (2026-08-06)
+
+**Contexto:** `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md` documentou um achado real (condição `&& midia.url` desnecessária impedindo `salvarMidiaWhatsapp()` de rodar) e pediu pra aplicar o fix. Usuário, já cansado de 5 ciclos anteriores "resolvidos" que voltaram, pediu esta sprint só pra confirmar com evidência direta — sem aceitar a palavra do relatório anterior (nem desta mesma sprint de fix).
+
+**Item 1 — código:** `webhook.ts` linha 1227 (local, homolog E produção — os 3 lugares checados) segue **exatamente**:
+```ts
+if (MIDIA_TIPOS.has(tipo) && midia.url) {
+```
+Não foi alterado de forma nenhuma. `git log --all -i --grep="midia|media" -- backend/src/routes/webhook.ts` não mostra nenhum commit tocando essa condição — os únicos commits recentes no arquivo são sobre grupo (nome/foto, ON CONFLICT, tarefa por grupo), nada sobre este bug. **O documento da sprint é um plano nunca executado, não um achado aplicado.**
+
+**Item 2 — deploy:** irrelevante confirmar deploy de um fix que não existe — mas por completude, `sha256sum` confirma homolog=local (`f078e3e...`), produção diverge (`ab49e1a...`, por causa da feature "Tarefa por Grupo" ainda não promovida a produção, já documentado — a linha 1227 em si é idêntica nos 2 ambientes, confirmado via `grep` direto nos arquivos remotos).
+
+**Item 3 — teste real com variantes:** **não executado nesta sprint.** Reproduzir imagem encaminhada/citada/sticker/documento/áudio exige originar mensagens reais de um celular de verdade — esta sessão não tem como enviar WhatsApp de um telefone físico. Testar contra o código atual seria redundante de qualquer forma: como o fix nunca foi aplicado, o comportamento é idêntico ao já documentado (funciona quando `midia.url` vem preenchido no payload, falha quando não vem — ver item 4 pra frequência real).
+
+**Item 4 — extensão real do problema (produção, hoje):**
+| Tipo | URL nula | URL crua nunca trocada | URL local OK | Total |
+|---|---|---|---|---|
+| audio | 86 | 12 | 1.216 | 1.314 |
+| document | 5 | 0 | 1 | 6 |
+| image | 23 | 4 | 2.186 | 2.213 |
+| sticker | 3 | 2 | 1.875 | 1.880 |
+| video | 10 | 3 | 496 | 509 |
+
+**148 de 5.922 mensagens de mídia (~2,5%) quebradas** — a grande maioria (97,5%) já funciona normalmente hoje (explica por que o bug parece "não acontecer sempre"/"parece corrigido às vezes"). Quebras recentes confirmadas: 06/08 (1 sticker, hoje), 05/08 (1 documento), 04/08 (4 imagens, mesmo segundo — provável rajada de teste). Só **6 mensagens quebradas nos últimos 3 dias** — universo pequeno pra um eventual backfill.
+
+**Item 5 — padrão causador de `midia.url` vazio:** **não identificado, mesmo estado da sprint anterior.** `whatsapp_messages.metadata` (JSONB) está vazio (`{}`) em todas as linhas quebradas verificadas — o payload bruto da Evolution nunca é persistido em lugar nenhum, então não dá pra inspecionar retroativamente qual campo/variante causou cada quebra específica. Confirmar isso exige teste ao vivo (celular real mandando forward/reply/sticker enquanto se observa o payload chegando) ou instrumentar um log temporário capturando o payload bruto sempre que `tipo` for mídia e `midia.url` vier falsy — nenhum dos dois foi feito aqui (fora do escopo desta sprint, que era só verificação, não correção/instrumentação).
+
+**Item 6 — polish (esconder texto cru duplicado):** **não aplicado.** `WhatsAppInterface.tsx` ~linha 3256-3284: bloco de mídia (`<img>`/`<audio>`/etc, condicional a `m.midia_url`) e bloco de texto (`m.content`, condicional só a não ser mensagem apagada) são dois `if`s independentes — quando os dois existem (imagem real presente E a descrição de Vision salva como `content`), os dois renderizam, um embaixo do outro, exatamente o problema descrito no plano original.
+
+**Conclusão, sem suavizar:** nenhum dos 5 itens do plano de fix original foi executado. O único trabalho real feito foi a INVESTIGAÇÃO (identificar a causa), documentada no próprio `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md` — mas ela nunca virou código. **Esta é a explicação mais provável pra por que a "6ª tentativa" (na visão do usuário) na real nunca aconteceu de verdade — a sprint de fix rodou até a fase de diagnóstico e parou antes da fase de implementação, e algum relatório anterior aparentemente registrou isso como concluído sem essa distinção ficar clara.**
+
+**Nada corrigido nesta sprint** (propositalmente — era só auditoria). Recomendo uma sprint de continuação dedicada, cobrindo, nesta ordem: (1) aplicar de fato os itens 2-3 do plano original (remover `&& midia.url`, cobrir o bloco `fromMe=true`); (2) aplicar o item 6 (esconder texto duplicado); (3) rodar o backfill das 6 mensagens recentes quebradas; (4) só depois, com o fix em produção há alguns dias, tentar de novo identificar o padrão do item 5 — dessa vez com dado real acontecendo organicamente (ou pedindo ao usuário pra mandar um forward/reply/sticker de teste enquanto alguém observa o log).
+
 ### 🆕 Cooldown vira filtro automático (descarta silenciosamente), não bloqueio com checkbox obrigatório (2026-08-06)
 
 **Contexto:** aviso de cooldown (`StepReview`, `Disparos.tsx`) exigia marcar um checkbox pra habilitar os botões de disparo — mas o checkbox nunca teve efeito real no envio: o bloqueio de verdade sempre foi (e continua sendo) o backend (`disparoProcessor.ts` + `get_next_disparo_batch()`), que descarta silenciosamente qualquer contato em cooldown (`status='cooldown'` no log) independente do que estivesse marcado na tela. Marcar o checkbox não forçava envio pros contatos em cooldown — só liberava os botões pros demais, sem problema nenhum, poderem receber a campanha. Trava de UI sem efeito prático, só atrapalhando o operador.
