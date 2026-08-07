@@ -1,5 +1,41 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-08-07 (cont.) — 🆕 Motor nativo de mensagens do Disparo (itens 1+2+3+5, sem IA) — em PRODUÇÃO
+
+Pedido direto do usuário, paralelo ao plano multi-agente: reduzir dependência de "Humanizar com IA" no módulo de Disparo com um motor 100% determinístico. Escopo dividido em 2 blocos (confirmado com o usuário) — este é o primeiro, sem chamada de IA nenhuma.
+
+**Implementado:**
+- Item 1 — biblioteca curada de variações prontas (Saudação/Transição/Fechamento-CTA/Despedida), botão de inserção com 1 clique em `StepMessage`, mesmo padrão de append dos botões de placeholder já existentes.
+- Item 2 — mensagens-base COMPLETAS (não só spintax por palavra): campanha pode ter 2+ mensagens inteiras diferentes, escolhidas por contato (round-robin). Editor colapsável em `StepMessage` (`VariantesMensagem`), com 0 ou 1 variante preenchida o comportamento é 100% igual ao de sempre.
+- Item 3 — regra de seleção por tag do contato (`contatos.tags`, já existente): de-para simples tag→variante; contato sem tag mapeada cai no round-robin normal, nunca fica sem mensagem.
+- Item 5 — copy do toggle "Humanizar com IA" reforçada: motor nativo (Passo 2) é o caminho recomendado/default; humanização por IA vira claramente a opção avançada/paga por cima.
+- Achado de arquitetura confirmado antes de codar: toda a personalização (placeholders + spintax + agora variantes/regra) roda 100% no FRONTEND, no momento de criar a campanha (`StepReview.handleStart`) — `disparoProcessor.ts` só lê `disparo_logs.mensagem_enviada` já pronta, nunca precisou ser tocado.
+- Schema: `disparos`/`disparo_templates` ganham `mensagens_variantes TEXT[]`, `distribuicao_variantes TEXT`, `regra_variante_por_tag JSONB` — só informativas/auditoria (mesmo padrão de `mensagem_template`), não lidas pelo backend de envio. Templates salvos (`disparo_templates`) preservam as variantes/regra no round-trip carregar/salvar.
+
+**Testado em homolog** (mirror exato das funções de `Disparos.tsx` rodado contra contatos reais + INSERT real de campanha de teste em `disparo_logs`, removida ao final via CASCADE): round-robin alterna corretamente entre as variantes; regra por tag escolhe a variante certa pras tags mapeadas e cai pro round-robin pras demais, nunca deixa contato sem mensagem; placeholders+spintax continuam resolvendo corretamente por cima da variante escolhida.
+
+Build limpo (frontend+backend). Deployado em homolog e produção — `/health`→200 nos dois, sem `ERROR` nos logs, schema confirmado nas 2 bases via `information_schema`. **Item 4 (botão "Gerar variações com IA", chamada única por campanha) fica para o próximo bloco desta mesma sprint** — testado/deployado separadamente por ser o único com risco real de chamar IA por engano. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-07 (cont.) — 📋 Sprint 3 do plano multi-agente: `lead_context` estruturado — avaliado, decisão de NÃO implementar por economia
+
+Ticket pedia estimar o custo líquido da Opção B (extração via LLM a cada mensagem) antes de implementar — feito antes de escrever qualquer código. Confirmado primeiro: as 2 contas reais ativas (`mentoark`, `angelobispofilho`) estão hoje configuradas pra `gpt-4o-mini` (`agentes.modelo`) — o mix `gpt-4o-mini`/`gpt-4.1` visto na amostra de 2 semanas do Loki (Sprint 2) reflete tráfego de ANTES da unificação da Sprint 1, não o estado atual.
+
+Como a chamada de extração usaria o mesmo modelo da chamada principal, a comparação vira pura contagem de tokens (sem depender de tabela de preço): extrair/atualizar `lead_context` a cada mensagem custaria **~550-750 tokens** (contexto atual + troca recente como entrada, JSON estruturado como saída) contra uma economia de **~350-450 tokens** ao cortar a janela crua de histórico de ~15,9 (média real, Sprint 2) pra 5-8 mensagens. **Opção B, do jeito especificado no ticket, custa ~1,3-1,7x mais tokens do que economiza.** Opção A (determinística/regex) tem custo zero mas não captura nuance real (interesse, objeção, etapa do funil) — só campos triviais já conhecidos por outra via.
+
+**Decisão confirmada com o usuário: não implementar nesta sprint por motivo de economia** — se um dia fizer sentido, seria por continuidade de conversas muito longas (produto), não por redução de custo. Nenhum código alterado, nenhum schema criado, nada deployado. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
+## Sessão 2026-08-07 (cont.) — 🆕 Sprint 2 do plano multi-agente: medição real de tokens + tools MCP desabilitadas nas 2 contas reais ativas — em PRODUÇÃO
+
+Achado inicial: dos "5 contas ativas" citados no plano, só **2 estão realmente ativas com prompt real** hoje (`mentoark`, `angelobispofilho`) — as outras 3 já estavam desativadas antes da Sprint 1 (não é regressão). Os 2 diagnósticos de custo que o plano cita como "já feitos" nunca foram executados (confirmado, zero menção em `STATUS.md`) — medição feita do zero nesta sprint.
+
+**Medição real (Loki, 2 semanas de produção, 148-153 chamadas reais amostradas):** média de 2108 tokens de entrada/chamada — `prompt_sistema` ~700 tokens (~33%), definições das 9 tools MCP sempre mandadas inteiras (~800-1500 tokens estimados, provavelmente o maior bloco), histórico variável. Loop agêntico: **`iter=0` em 100% das chamadas** (nunca chega perto do teto de 5). Histórico: **64% das chamadas (98/153) já usam a janela cheia de 20 mensagens** — dado que argumenta CONTRA reduzir o `LIMIT 20` (cortaria contexto real da maioria das conversas, não só desperdício). **Nenhuma tool MCP foi chamada de verdade em 148 amostras** — as 9 ferramentas são pagas em token toda chamada, nunca usadas por essas 2 contas.
+
+**Decisões (confirmadas com o usuário):** não reduzir `LIMIT 20` (dado não sustenta); desabilitar as tools MCP das 2 contas reais ativas (`agentes.mcp_tools = '{}'`, mecanismo da Sprint 1); resumo estruturado de conversa (item 3 do ticket) fica pra Sprint 3, não implementado agora.
+
+**Resultado real, medido (antes/depois na mesma conta, mesmo tipo de pergunta):** 2108 tokens (média histórica) → **1015 tokens** (chamada de teste pós-mudança) — **~52% de redução**, resposta gerada normalmente, sem perda de qualidade perceptível. Testado com `processarMensagem` direto, `IA_TEST_MODE=true`, sem envio real, limpeza de histórico de teste ao final.
+
+Nenhuma mudança de código nesta sprint — só dado de configuração (`mcp_tools`) das 2 contas reais, aplicado direto em produção após confirmação explícita. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
 ## Sessão 2026-08-07 (cont.) — 🔴 Sprint 1 do plano multi-agente: unificar `agent_configs` → `agentes` — em PRODUÇÃO
 
 Sprint marcada "risco alto" pelo próprio ticket. Investigação obrigatória antes de codar achou o raio de impacto real **bem maior** que a premissa do ticket (que assumia só `agentEngine.ts` como consumidor): `agent_configs` era lida/escrita em **13 arquivos, 121 ocorrências**, incluindo `webhook.ts` (nível 1 de 4 na cadeia de resolução de userId de TODA mensagem recebida) e `integracoes.ts`/`evolutionReconciliation.ts` (escrevem credenciais Evolution a cada conexão/reconciliação). Escopo expandido com confirmação do usuário pra cobrir os 3 além de `agentEngine.ts`, em vez de deixar esses lendo uma tabela cada vez mais desatualizada depois do corte.

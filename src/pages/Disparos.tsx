@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -16,7 +17,7 @@ import {
   Clock, Calendar, MessageSquare, Image as ImageIcon,
   FileText, Headphones, AlertTriangle, CheckCircle2,
   Table as TableIcon, Send, XCircle, Activity, AlertCircle,
-  LayoutTemplate, Loader2, Save, Trash2, Pencil
+  LayoutTemplate, Loader2, Save, Trash2, Pencil, Plus
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, getFreshToken } from "@/integrations/database/client";
@@ -482,6 +483,45 @@ function mensagemSemPersonalizacao(texto: string): boolean {
   return !temPlaceholder && !textoTemSpintax(texto);
 }
 
+// [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): biblioteca curada de blocos de
+// variação prontos por intenção comum — zero IA, dicionário fixo em PT-BR. Resolve o achado real
+// desta sessão de que a maioria dos operadores não vai escrever `{a|b|c}` manualmente do zero;
+// o botão em StepMessage insere o bloco pronto no fim do texto (mesmo padrão de
+// append já usado pelos botões de placeholder `{{nome}}` etc., logo abaixo).
+const BIBLIOTECA_VARIACOES: { label: string; spintax: string }[] = [
+  { label: "Saudação", spintax: "{Olá|Oi|E aí|Tudo bem?}" },
+  { label: "Transição", spintax: "{Aproveitando|Já que estou aqui|Passando rápido}" },
+  { label: "Fechamento/CTA", spintax: "{Me chama|Qualquer dúvida me avisa|Fico à disposição|Combinamos assim?}" },
+  { label: "Despedida", spintax: "{Abraço|Até mais|Fico no aguardo|Um abraço}" },
+];
+
+// [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): escolhe a mensagem-base
+// COMPLETA pra este contato (item 2/3) — chamada uma vez por contato dentro do mesmo `.map()` que
+// já monta `disparo_logs`, ANTES de `substituirPlaceholders`/`resolverSpintax` rodarem em cima do
+// resultado (mesma ordem de sempre: variante completa primeiro, placeholders depois, spintax por
+// cima). `variantes` vazio preserva 100% do comportamento atual (chamada só acontece quando há
+// 2+ variantes configuradas, ver handleStart). Modo 'regra': percorre as tags do contato na ordem
+// em que vêm gravadas e usa a primeira que bater no mapa — sem tag configurada bater, cai pro
+// round-robin (nunca deixa o contato sem mensagem por falta de regra).
+function escolherVariante(
+  variantes: string[],
+  distribuicao: "round_robin" | "regra",
+  regraPorTag: Record<string, number>,
+  contato: { tags?: string[] | null },
+  indice: number,
+): string {
+  if (!variantes.length) return "";
+  if (distribuicao === "regra" && Array.isArray(contato.tags)) {
+    for (const tag of contato.tags) {
+      if (Object.prototype.hasOwnProperty.call(regraPorTag, tag)) {
+        const idx = regraPorTag[tag];
+        if (idx >= 0 && idx < variantes.length) return variantes[idx];
+      }
+    }
+  }
+  return variantes[indice % variantes.length];
+}
+
 const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
 
 export default function DisparosPage() {
@@ -542,6 +582,18 @@ export default function DisparosPage() {
     // já criadas/agendadas não são afetadas (cada uma já tem `humanizar_ia` gravado no próprio
     // registro em `disparos`, só o valor inicial do formulário de campanha NOVA muda).
     humanizar_ia: false,
+    // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): variação por mensagens-base
+    // COMPLETAS (item 2), mais forte que só spintax por palavra — array vazio = comportamento
+    // atual inalterado (só `form.mensagem`/`legenda_midia`, resolvido por
+    // substituirPlaceholders+resolverSpintax como sempre). Com 2+ entradas, StepReview.handleStart
+    // sorteia/alterna uma por contato ANTES de aplicar as mesmas 2 funções — zero mudança de
+    // comportamento pra quem não usar isso.
+    mensagens_variantes: [] as string[],
+    // 'round_robin' (default, alterna em sequência) ou 'regra' (usa regra_variante_por_tag, com
+    // fallback pra round_robin quando nenhuma tag do contato bate com a regra).
+    distribuicao_variantes: "round_robin" as "round_robin" | "regra",
+    // Mapa tag (texto exato de contatos.tags) -> índice da variante em mensagens_variantes.
+    regra_variante_por_tag: {} as Record<string, number>,
   });
 
   // Live contact count — recalcula sempre que os filtros mudam
@@ -589,7 +641,11 @@ export default function DisparosPage() {
         const data = await fetchAllContatos(() =>
           api
             .from("contatos")
-            .select("id, nome, telefone, empresa, opt_out, ultimo_disparo_em, funil_estagio_id")
+            // [AUDITORIA] FIX APLICADO (Sprint Motor Nativo de Disparo, 2026-08-07): `tags`
+            // adicionado ao select — necessário pra regra de variante por tag (ver item 3,
+            // StepReview.handleStart) funcionar independente de qual dos 3 modos (tag/estágio/
+            // lista) selecionou o contato, não só quando a busca em si foi por tag.
+            .select("id, nome, telefone, empresa, tags, opt_out, ultimo_disparo_em, funil_estagio_id")
             .in("funil_estagio_id", form.estagios_selecionados)
         );
         list = [...list, ...data];
@@ -608,14 +664,15 @@ export default function DisparosPage() {
           // instâncias do anti-ban nesta mesma tela). Operador ainda pode incluir esses contatos
           // de propósito atribuindo tag/lista/estágio manualmente — os outros 2 modos continuam
           // trazendo qualquer contato, sem essa exclusão.
-          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem"));
+          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem"));
           const semGrupo = data.filter((c: any) => c.origem !== "Grupo WhatsApp");
           list = [...list, ...semGrupo];
         } else {
           const data = await fetchAllContatos(() =>
             api
               .from("contatos")
-              .select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id")
+              // tags adicionado — ver comentário no bloco de estágio acima (mesmo motivo)
+              .select("id, nome, telefone, empresa, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id")
               .in("lista_id", form.listas_selecionadas)
           );
           list = [...list, ...data];
@@ -1627,6 +1684,144 @@ const TIPO_MIDIA_PARA_UPLOAD: Record<string, string> = { imagem: "image", audio:
 // novo, independente desta validação de UI.
 const DELAY_MIN_ABSOLUTO_MINUTOS = 5 / 60;
 
+// [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): editor de mensagens-base
+// completas (item 2) + regra de seleção por tag (item 3) — seção own colapsável, separada do
+// campo de mensagem única acima, porque é um modo de uso mais avançado (a maioria das campanhas
+// continua usando só uma mensagem + spintax). Com 0 ou 1 variante preenchida, `handleStart`
+// (StepReview) ignora completamente esta seção e usa o campo único de sempre — zero risco pra
+// quem não abrir isso.
+function VariantesMensagem({ form, setForm }: any) {
+  const [aberto, setAberto] = useState(false);
+  const variantes: string[] = form.mensagens_variantes;
+  const variantesValidas = variantes.filter((v: string) => v.trim()).length;
+
+  const atualizarVariante = (i: number, valor: string) => {
+    const novas = [...variantes];
+    novas[i] = valor;
+    setForm({ ...form, mensagens_variantes: novas });
+  };
+  const removerVariante = (i: number) => {
+    const novas = variantes.filter((_: string, idx: number) => idx !== i);
+    // Remove também qualquer regra de tag que apontava pro índice removido/deslocado — evita
+    // regra órfã apontando pra uma variante que não existe mais.
+    const regra: Record<string, number> = {};
+    for (const [tag, idx] of Object.entries(form.regra_variante_por_tag) as [string, number][]) {
+      if (idx === i) continue;
+      regra[tag] = idx > i ? idx - 1 : idx;
+    }
+    setForm({ ...form, mensagens_variantes: novas, regra_variante_por_tag: regra });
+  };
+  const adicionarVariante = () => setForm({ ...form, mensagens_variantes: [...variantes, ""] });
+
+  const adicionarRegra = () => {
+    // chave temporária vazia — o operador preenche a tag no input; usar índice como placeholder
+    // evita colidir chaves quando duas linhas novas são adicionadas antes de preencher a tag.
+    const regra = { ...form.regra_variante_por_tag, [`__nova_${Date.now()}`]: 0 };
+    setForm({ ...form, regra_variante_por_tag: regra });
+  };
+  const atualizarRegraTag = (tagAntiga: string, tagNova: string) => {
+    const regra = { ...form.regra_variante_por_tag };
+    const idx = regra[tagAntiga];
+    delete regra[tagAntiga];
+    regra[tagNova] = idx;
+    setForm({ ...form, regra_variante_por_tag: regra });
+  };
+  const atualizarRegraIndice = (tag: string, idx: number) => {
+    setForm({ ...form, regra_variante_por_tag: { ...form.regra_variante_por_tag, [tag]: idx } });
+  };
+  const removerRegra = (tag: string) => {
+    const regra = { ...form.regra_variante_por_tag };
+    delete regra[tag];
+    setForm({ ...form, regra_variante_por_tag: regra });
+  };
+
+  return (
+    <div className="border rounded-lg">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between p-3 text-sm font-medium"
+        onClick={() => setAberto(!aberto)}
+      >
+        <span className="flex items-center gap-2">
+          🧩 Múltiplas mensagens-base (avançado, opcional)
+          {variantesValidas >= 2 && <Badge variant="secondary" className="text-[10px]">{variantesValidas} ativas</Badge>}
+        </span>
+        <span className="text-xs text-muted-foreground">{aberto ? "Ocultar" : "Configurar"}</span>
+      </button>
+      {aberto && (
+        <div className="p-3 pt-0 space-y-3 border-t">
+          <p className="text-[10px] text-muted-foreground">
+            Em vez de UMA mensagem com spintax por dentro, cadastre {"2+"} mensagens completas diferentes — o motor alterna entre elas por contato. Precisa de pelo menos 2 preenchidas pra ativar; com 0 ou 1, a campanha usa só o campo "Mensagem" acima, normalmente.
+          </p>
+          {variantes.map((v: string, i: number) => (
+            <div key={i} className="flex gap-2 items-start">
+              <span className="text-[10px] text-muted-foreground mt-2 w-4">{i + 1}.</span>
+              <Textarea
+                className="min-h-[80px] font-mono text-xs"
+                value={v}
+                onChange={e => atualizarVariante(i, e.target.value)}
+                placeholder={`Mensagem-base ${i + 1}...`}
+              />
+              <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => removerVariante(i)}>
+                <Trash2 className="h-3.5 w-3.5 text-destructive" />
+              </Button>
+            </div>
+          ))}
+          <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1" onClick={adicionarVariante}>
+            <Plus className="h-3 w-3" /> Adicionar mensagem-base
+          </Button>
+
+          {variantesValidas >= 2 && (
+            <div className="space-y-2 pt-2 border-t">
+              <Label className="text-[10px]">Como escolher qual mensagem cada contato recebe</Label>
+              <Select value={form.distribuicao_variantes} onValueChange={(v: any) => setForm({ ...form, distribuicao_variantes: v })}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="round_robin">Alternar em sequência (round-robin)</SelectItem>
+                  <SelectItem value="regra">Por tag do contato (regra abaixo)</SelectItem>
+                </SelectContent>
+              </Select>
+
+              {form.distribuicao_variantes === "regra" && (
+                <div className="space-y-2 pt-1">
+                  <p className="text-[10px] text-muted-foreground">
+                    Contato sem nenhuma tag da lista abaixo cai no round-robin normal, entre as variantes.
+                  </p>
+                  {Object.entries(form.regra_variante_por_tag).map(([tag, idx]: [string, any]) => (
+                    <div key={tag} className="flex gap-2 items-center">
+                      <Input
+                        className="h-7 text-xs"
+                        placeholder="nome exato da tag"
+                        defaultValue={tag.startsWith("__nova_") ? "" : tag}
+                        onBlur={e => e.target.value.trim() && atualizarRegraTag(tag, e.target.value.trim())}
+                      />
+                      <span className="text-[10px] text-muted-foreground shrink-0">→</span>
+                      <Select value={String(idx)} onValueChange={v => atualizarRegraIndice(tag, Number(v))}>
+                        <SelectTrigger className="h-7 text-xs w-40"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {variantes.map((_: string, i: number) => (
+                            <SelectItem key={i} value={String(i)}>Mensagem-base {i + 1}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => removerRegra(tag)}>
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1" onClick={adicionarRegra}>
+                    <Plus className="h-3 w-3" /> Adicionar regra por tag
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepMessage({ form, setForm }: any) {
   const { user } = useAuth();
   const mediaTypes = [
@@ -1680,6 +1875,12 @@ function StepMessage({ form, setForm }: any) {
       mensagem: tpl.tipo_midia === "texto" ? tpl.mensagem : "",
       legenda_midia: tpl.tipo_midia === "texto" ? "" : (tpl.legenda_midia || tpl.mensagem || ""),
       url_midia: tpl.url_midia || "",
+      // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): round-trip das
+      // mensagens-base/regra — `|| []`/`|| {}` cobre templates salvos antes desta sprint
+      // (colunas novas, ainda sem valor gravado neles).
+      mensagens_variantes: tpl.mensagens_variantes || [],
+      distribuicao_variantes: tpl.distribuicao_variantes || "round_robin",
+      regra_variante_por_tag: tpl.regra_variante_por_tag || {},
     });
     setLoadedTemplateId(tpl.id);
     setLoadedTemplateNome(tpl.nome);
@@ -1753,6 +1954,9 @@ function StepMessage({ form, setForm }: any) {
       mensagem: form.tipo_midia === "texto" ? form.mensagem : "",
       url_midia: form.url_midia || null,
       legenda_midia: form.tipo_midia === "texto" ? null : form.legenda_midia,
+      mensagens_variantes: form.mensagens_variantes.filter((v: string) => v.trim()),
+      distribuicao_variantes: form.distribuicao_variantes,
+      regra_variante_por_tag: form.regra_variante_por_tag,
       updated_at: new Date().toISOString(),
     };
     const { data, error } = (!comoNovo && loadedTemplateId)
@@ -1849,6 +2053,17 @@ function StepMessage({ form, setForm }: any) {
               }}>+{v}</Button>
             ))}
           </div>
+          {/* [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): biblioteca curada de
+              variações prontas (item 1) — mesmo padrão de append dos botões de placeholder acima,
+              pra quem não vai lembrar/saber escrever a sintaxe `{a|b|c}` na mão. */}
+          <div className="flex gap-2 flex-wrap items-center">
+            <span className="text-[10px] text-muted-foreground">Variar:</span>
+            {BIBLIOTECA_VARIACOES.map(v => (
+              <Button key={v.label} size="sm" variant="outline" className="text-[10px] h-7" onClick={() => {
+                setTextoAtivo(textoAtivo ? `${textoAtivo} ${v.spintax}` : v.spintax);
+              }}>🎲 {v.label}</Button>
+            ))}
+          </div>
           {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): dica de sintaxe do
               spintax, perto dos atalhos de placeholder — mesmo lugar que `DisparoTemplates.tsx`
               usa pro texto de ajuda equivalente. */}
@@ -1867,6 +2082,8 @@ function StepMessage({ form, setForm }: any) {
             </p>
           )}
         </div>
+
+        <VariantesMensagem form={form} setForm={setForm} />
 
         {/* Preview Card */}
         <div className="p-4 border rounded-lg bg-emerald-50/30 dark:bg-emerald-950/10">
@@ -2237,17 +2454,18 @@ function StepAntiBan({ form, setForm }: any) {
         </Card>
 
         {/* Humanização IA */}
-        {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): texto atualizado pra
-            deixar o trade-off explícito — antes sugeria que "reduzir risco de bloqueio" exigia
-            IA, sem mencionar que o sistema já faz variação sem custo (placeholders + spintax,
-            ver StepMessage). Card continua funcional (toggle liga/desliga normalmente) — só o
-            texto e o default (acima) mudaram, nenhuma mudança no comportamento de quem ligar. */}
+        {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06; copy reforçada na Sprint
+            Motor Nativo de Disparo, 2026-08-07 — item 5): texto deixa explícito que o motor
+            nativo (placeholders + spintax + mensagens-base múltiplas, Passo 2) é o caminho
+            recomendado/default, e "Humanizar com IA" é a opção avançada/paga por cima disso —
+            não a única forma de variar mensagem. Card continua funcional (toggle liga/desliga
+            normalmente) — só o texto e o default (acima) mudaram. */}
         <Card className="p-4 space-y-3 border-primary/30 bg-primary/5">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <Label className="font-bold">Humanizar com IA</Label>
+              <Label className="font-bold">Humanizar com IA <span className="font-normal text-[10px] text-muted-foreground">(avançado)</span></Label>
               <p className="text-[11px] text-muted-foreground">
-                Reescreve cada mensagem via IA (OpenAI) para variação adicional — tem custo por envio. O sistema já varia mensagens com placeholders/spintax sem custo (Passo 2); use isto só se quiser um nível extra de variação.
+                Reescreve cada mensagem via IA a cada envio — tem custo por contato. <strong>O motor nativo do Passo 2 (placeholders, spintax, mensagens-base múltiplas) já resolve variação sem custo nenhum e é o caminho recomendado</strong> — use isto só se quiser um nível extra de variação, por cima do que o motor nativo já faz.
               </p>
             </div>
             <Switch
@@ -2357,6 +2575,13 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         limite_diario_mensagens: form.limite_diario_mensagens,
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
         humanizar_ia: form.humanizar_ia,
+        // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): gravado por
+        // auditoria/reuso (mesmo espírito informativo de `mensagem_template`, não lido por
+        // `disparoProcessor.ts` — a personalização já roda aqui embaixo, no `.map()` de
+        // `disparo_logs`, igual sempre funcionou pro spintax/placeholders).
+        mensagens_variantes: form.mensagens_variantes.filter(v => v.trim()),
+        distribuicao_variantes: form.distribuicao_variantes,
+        regra_variante_por_tag: form.regra_variante_por_tag,
         cooldown_horas: form.cooldown_horas,
         // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): sempre preenchido
         // pra campanhas novas (arredondado pra segundo inteiro) — `disparoProcessor.ts` usa estes
@@ -2403,15 +2628,27 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       // filtragem: se `targetContacts` chegar aqui por algum caminho futuro que não passou
       // pelo filtro de cima, a campanha ainda não quebra.
       const contatosValidos = targetContacts.filter((c: any) => c.telefone && String(c.telefone).trim());
-      const logs = contatosValidos.map(c => ({
-        disparo_id: campaignData.id,
-        user_id: user?.id,
-        contato_id: c.id,
-        telefone: c.telefone,
-        nome: c.nome,
-        mensagem_enviada: resolverSpintax(substituirPlaceholders(form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia, c)),
-        status: 'pending'
-      }));
+      // [AUDITORIA] FIX APLICADO (Sprint Motor Nativo de Disparo, 2026-08-07): variantes completas
+      // (item 2/3) só entram em jogo com 2+ mensagens-base configuradas — com 0 ou 1, `textoBase`
+      // cai exatamente no comportamento de sempre (`form.mensagem`/`legenda_midia`), sem mudança
+      // nenhuma pra campanha que não usa essa aba. `escolherVariante` roda ANTES de
+      // substituirPlaceholders/resolverSpintax — mesma ordem de composição de sempre, só com uma
+      // camada nova por baixo.
+      const variantesValidas = form.mensagens_variantes.filter(v => v.trim());
+      const logs = contatosValidos.map((c, i) => {
+        const textoBase = variantesValidas.length >= 2
+          ? escolherVariante(variantesValidas, form.distribuicao_variantes, form.regra_variante_por_tag, c, i)
+          : (form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia);
+        return {
+          disparo_id: campaignData.id,
+          user_id: user?.id,
+          contato_id: c.id,
+          telefone: c.telefone,
+          nome: c.nome,
+          mensagem_enviada: resolverSpintax(substituirPlaceholders(textoBase, c)),
+          status: 'pending'
+        };
+      });
 
 
       const { error: logsError } = await api.from("disparo_logs").insert(logs);

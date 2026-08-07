@@ -1805,5 +1805,26 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'agentes colunas Sprint 1 (unificação agent_configs) OK');
 
+  // ── Motor nativo de mensagens do Disparo (Sprint Motor Nativo de Disparo, 2026-08-07) ──
+  // [AUDITORIA] LÓGICA: colunas só informativas/auditoria — mesmo espírito de `mensagem_template`
+  // já existente (comentário original: "coluna é só informativa/auditoria... sem impacto no envio
+  // real"). A personalização de verdade roda no FRONTEND (Disparos.tsx, StepReview.handleStart),
+  // que grava o resultado já pronto em `disparo_logs.mensagem_enviada` — `disparoProcessor.ts`
+  // nunca lê `mensagens_variantes`/`distribuicao_variantes`/`regra_variante_por_tag`, só lê
+  // `disparo_logs` (confirmado por grep antes desta migração). DEFAULT vazio/round_robin não
+  // muda nenhum comportamento de campanha existente — só passa a existir a coluna.
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS mensagens_variantes TEXT[] DEFAULT '{}'`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS distribuicao_variantes TEXT DEFAULT 'round_robin'`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS regra_variante_por_tag JSONB DEFAULT '{}'`).catch(() => {});
+  // Mesmas 3 colunas em disparo_templates, pra um template salvo preservar as variantes/regra
+  // configuradas (StepMessage.confirmarSalvarTemplate/carregarTemplate) — sem isso, salvar como
+  // template e recarregar perderia silenciosamente as mensagens-base extras, só trazendo de volta
+  // a mensagem única.
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS mensagens_variantes TEXT[] DEFAULT '{}'`).catch(() => {});
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS distribuicao_variantes TEXT DEFAULT 'round_robin'`).catch(() => {});
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS regra_variante_por_tag JSONB DEFAULT '{}'`).catch(() => {});
+
+  log.info('MIGRATIONS', 'motor nativo de mensagens do Disparo (variantes/regra) OK');
+
   log.info('MIGRATIONS', 'OK');
 }
