@@ -209,6 +209,35 @@ export default function whatsappRouter(pool: Pool): Router {
     }
   }
 
+  // [AUDITORIA] BUG (achado 2026-08-07, a pedido do usuário — "não consigo ver o número
+  // conectado na aba Instâncias"): as 3 rotas que tentavam expor `phoneNumber` (GET /evo/status,
+  // POST /status, POST /connect) todas liam `data?.instance?.profileName || instance?.number ||
+  // instance?.owner` da resposta de `GET /instance/connectionState/:instance` — mas essa rota da
+  // Evolution devolve só `{ instance: { instanceName, state } }`, sem NENHUM desses campos
+  // (confirmado com chamada real em produção). `phoneNumber` sempre voltava vazio; o frontend só
+  // não mostrava nada (nem erro), então passou despercebido até o usuário reparar visualmente.
+  // [AUDITORIA] FIX APLICADO: quem realmente devolve o número é `GET /instance/fetchInstances`
+  // (aceita `?instanceName=` e filtra no servidor, confirmado com chamada real) — cada item tem
+  // `ownerJid` ("55...@s.whatsapp.net", a fonte mais confiável), `profileName` e `number` (este
+  // último às vezes null mesmo com a instância aberta, confirmado em produção). Helper único,
+  // usado pelas 3 rotas — chamada extra e best-effort (falha aqui nunca deve derrubar o status/
+  // connect/send, que já funcionavam sem o número).
+  async function buscarPhoneNumberInstancia(base: string, apiKey: string, instancia: string): Promise<string> {
+    try {
+      const r = await evolutionFetch(`${base}/instance/fetchInstances?instanceName=${encodeURIComponent(instancia)}`, {
+        headers: { apikey: apiKey },
+      });
+      if (!r.ok) return '';
+      const data: any = await r.json().catch(() => null);
+      const info = Array.isArray(data) ? data[0] : null;
+      if (!info) return '';
+      if (info.ownerJid) return String(info.ownerJid).split('@')[0];
+      return info.number || info.profileName || '';
+    } catch {
+      return '';
+    }
+  }
+
   async function saveEvolutionConfig(
     userId: string, agenteId: string | null,
     url: string, api_key: string, instancia: string
@@ -1140,9 +1169,12 @@ export default function whatsappRouter(pool: Pool): Router {
 
       const data: any = await r.json().catch(() => ({}));
       const state = data?.instance?.state || data?.state || data?.status || 'close';
-      const phoneNumber = data?.instance?.profileName || data?.instance?.number || data?.instance?.owner || '';
+      // [AUDITORIA] FIX APLICADO (2026-08-07): ver buscarPhoneNumberInstancia() — connectionState
+      // não devolve profile/owner, essa extração sempre voltava vazia antes.
+      const isOpen = state === 'open' || state === 'connected' || state === 'CONNECTED';
+      const phoneNumber = isOpen ? await buscarPhoneNumberInstancia(base, cfg.api_key, instancia) : '';
 
-      if (state === 'open' || state === 'connected' || state === 'CONNECTED') {
+      if (isOpen) {
         registrarWebhook(base, cfg.api_key, instancia).catch(() => {});
       }
 
@@ -1265,13 +1297,20 @@ export default function whatsappRouter(pool: Pool): Router {
         const stateData: any = await stateRes.json().catch(() => ({}));
         const state = stateData?.instance?.state || stateData?.state || stateData?.status || 'close';
         if (state === 'open' || state === 'CONNECTED' || state === 'connected') {
-          const hasPhone = !!(stateData?.instance?.profileName || stateData?.instance?.number || stateData?.instance?.owner || stateData?.instance?.profile);
-          if (hasPhone) {
+          // [AUDITORIA] FIX APLICADO (2026-08-07): ver buscarPhoneNumberInstancia() —
+          // connectionState não devolve profile/owner/number, `hasPhone` sempre dava falso aqui
+          // (mesma causa raiz do phoneNumber vazio na aba Instâncias), fazendo este branch cair
+          // sempre no "sem conta vinculada, reconecte" abaixo mesmo pra instância genuinamente
+          // aberta e vinculada — só não era mais visível porque este caminho (POST /connect com
+          // a instância já aberta) é raro no uso normal (status/polling usam GET /evo/status ou
+          // POST /status, não /connect).
+          const phoneNumber = await buscarPhoneNumberInstancia(base, cfg.api_key, cfg.instancia);
+          if (phoneNumber) {
             await registrarWebhook(base, cfg.api_key, cfg.instancia);
             await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.instancia);
             return res.json({
               state: 'open',
-              phoneNumber: stateData?.instance?.profileName || stateData?.instance?.number || stateData?.instance?.owner || '',
+              phoneNumber,
               instancia: cfg.instancia,
             });
           } else {
@@ -2127,7 +2166,12 @@ export default function whatsappRouter(pool: Pool): Router {
         });
       }
       const d: any = await r.json().catch(() => ({}));
-      return res.json({ state: d?.instance?.state || d?.state || 'close', instancia, ...sync });
+      const state = d?.instance?.state || d?.state || 'close';
+      // [AUDITORIA] FIX APLICADO (2026-08-07): ver buscarPhoneNumberInstancia() — connectionState
+      // não devolve profile/owner, então isso sempre voltava vazio antes. Só busca quando
+      // realmente conectada (evita bater fetchInstances à toa pra instância fechada).
+      const phoneNumber = state === 'open' ? await buscarPhoneNumberInstancia(base, cfg.api_key, instancia) : '';
+      return res.json({ state, phoneNumber, instancia, ...sync });
     } catch (err: any) {
       return res.status(502).json({ message: err.message });
     }

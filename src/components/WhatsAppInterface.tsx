@@ -421,6 +421,9 @@ export function WhatsAppInterface() {
   const [contatoSearch, setContatoSearch] = useState("");
   const [contatoResults, setContatoResults] = useState<{id: string; nome: string; telefone: string; push_name?: string}[]>([]);
   const [searchingContatos, setSearchingContatos] = useState(false);
+  // Número (instância) que vai enviar a primeira mensagem de uma conversa nova — "" deixa o
+  // backend decidir (instância padrão do tenant), só relevante quando há mais de um número.
+  const [novaConversaInstancia, setNovaConversaInstancia] = useState("");
   // Foto de perfil — ampliar
   const [photoModal, setPhotoModal] = useState<string | null>(null);
   // [AUDITORIA] LÓGICA: photoModal pode guardar um marcador `local-pic://...` (foto salva
@@ -481,6 +484,30 @@ export function WhatsAppInterface() {
   const [globalSearchResults, setGlobalSearchResults] = useState<any[]>([]);
   const [isGlobalSearching, setIsGlobalSearching] = useState(false);
   const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
+
+  // [AUDITORIA] LÓGICA (multi-número — filtro de conversas + seleção de instância no envio,
+  // 2026-08-07): lista de instâncias conectadas do tenant (agentes com evolution_instancia
+  // preenchido), usada tanto para filtrar a lista de conversas por número quanto para escolher
+  // por qual número uma nova conversa/mensagem sai. Buscada uma vez ao montar — não muda com
+  // frequência o suficiente para justificar polling.
+  const [instanciasDisponiveis, setInstanciasDisponiveis] = useState<{ id: string; nome: string; evolution_instancia: string }[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/agentes`, { headers: await apiHeaders() });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => []);
+        const lista: any[] = Array.isArray(data) ? data : data?.data || [];
+        setInstanciasDisponiveis(
+          lista
+            .filter((a: any) => !!a.evolution_instancia)
+            .map((a: any) => ({ id: a.id, nome: a.nome, evolution_instancia: a.evolution_instancia }))
+        );
+      } catch { /* silencioso — filtro/seletor de instância só some da UI */ }
+    })();
+  }, []);
+  // Filtro ativo da lista de conversas (instância/número) — "" = todos os números
+  const [instanciaFiltro, setInstanciaFiltro] = useState("");
 
 
   // Estados para seleção múltipla
@@ -740,13 +767,20 @@ export function WhatsAppInterface() {
       list = list.filter(c => c.is_archived);
     }
 
+    // [AUDITORIA] LÓGICA (multi-número — filtro por instância, 2026-08-07): `c.source` é a
+    // instância da última mensagem da conversa (ver fetchConversas, row.instancia) — filtro
+    // simples e direto, sem endpoint novo.
+    if (instanciaFiltro) {
+      list = list.filter(c => c.source === instanciaFiltro);
+    }
+
     // Ordenação: Fixados primeiro, depois por timestamp
     return list.sort((a, b) => {
       if (a.is_pinned && !b.is_pinned) return -1;
       if (!a.is_pinned && b.is_pinned) return 1;
       return (b.rawTimestamp || "").localeCompare(a.rawTimestamp || "");
     });
-  }, [chats, globalSearchTerm, activeTab]);
+  }, [chats, globalSearchTerm, activeTab, instanciaFiltro]);
 
 
   // [AUDITORIA] LÓGICA — Camada 3 (rastreio "mensagens não atualizam", 2026-07-08): esta função
@@ -1657,10 +1691,17 @@ export function WhatsAppInterface() {
     if (existing) {
       setActiveChatId(existing.id);
     } else {
+      // [AUDITORIA] LÓGICA (multi-número — seleção de instância no envio, 2026-08-07): antes,
+      // `source` nunca era setado numa conversa nova — handleSendMessage manda `instancia:
+      // chat?.source` pro backend, então toda primeira mensagem para um contato novo saía
+      // sempre pela instância padrão do tenant, sem chance de escolher outro número já
+      // conectado. `novaConversaInstancia` vem do seletor no modal "Nova Conversa" (só aparece
+      // quando há mais de uma instância conectada).
       const newChat: Chat = {
         id: cleanPhone,
         name: nomeOverride || rawPhone,
         phone: cleanPhone,
+        source: novaConversaInstancia || undefined,
         lastMessage: '',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         rawTimestamp: new Date().toISOString(),
@@ -1675,6 +1716,7 @@ export function WhatsAppInterface() {
     setNewMessagePhone("");
     setContatoSearch("");
     setContatoResults([]);
+    setNovaConversaInstancia("");
   };
 
   // [AUDITORIA] LÓGICA (achado 2026-07-27, relevante ao pedido do usuário de "navegar/pesquisar"):
@@ -2198,14 +2240,45 @@ export function WhatsAppInterface() {
                   ? <Loader2 className="h-4 w-4 animate-spin" />
                   : <ImageIcon className="h-4 w-4" />}
               </Button>
-              {/* [AUDITORIA] BUG (achado 2026-07-27): botão sem onClick — não faz nada ao clicar.
-                  Não existe nenhum estado de filtro/ordenação da lista de conversas neste arquivo
-                  pra ligar aqui (diferente do ícone de sync de fotos ao lado, que já tem handler
-                  real). [AUDITORIA] FIX PENDENTE (motivo: precisa de decisão de produto — filtrar
-                  por quê? tag, instância, não-lidas? — e UI de opções nova, não é fix isolado). */}
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                <SlidersHorizontal className="h-4 w-4" />
-              </Button>
+              {/* [AUDITORIA] FIX APLICADO (2026-08-07): botão era só visual, sem onClick — ver nota
+                  antiga abaixo. Filtro por instância/número implementado (o outro filtro citado
+                  ali, "por tag/não-lidas", segue fora de escopo — pendência de produto à parte).
+                  [AUDITORIA] BUG (achado 2026-07-27, histórico): botão sem onClick — não fazia
+                  nada ao clicar. Não existia nenhum estado de filtro/ordenação da lista de
+                  conversas neste arquivo pra ligar aqui. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-8 w-8 relative ${instanciaFiltro ? "text-primary" : "text-muted-foreground"}`}
+                    title="Filtrar por número"
+                  >
+                    <SlidersHorizontal className="h-4 w-4" />
+                    {instanciaFiltro && <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-primary rounded-full" />}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onClick={() => setInstanciaFiltro("")} className="cursor-pointer">
+                    <span className={!instanciaFiltro ? "font-bold" : ""}>Todos os números</span>
+                    {!instanciaFiltro && <Check className="h-3.5 w-3.5 ml-auto" />}
+                  </DropdownMenuItem>
+                  {instanciasDisponiveis.length > 0 && <DropdownMenuSeparator />}
+                  {instanciasDisponiveis.map(inst => (
+                    <DropdownMenuItem
+                      key={inst.evolution_instancia}
+                      onClick={() => setInstanciaFiltro(inst.evolution_instancia)}
+                      className="cursor-pointer"
+                    >
+                      <span className={`truncate ${instanciaFiltro === inst.evolution_instancia ? "font-bold" : ""}`}>{inst.nome}</span>
+                      {instanciaFiltro === inst.evolution_instancia && <Check className="h-3.5 w-3.5 ml-auto shrink-0" />}
+                    </DropdownMenuItem>
+                  ))}
+                  {instanciasDisponiveis.length === 0 && (
+                    <DropdownMenuItem disabled>Nenhuma instância conectada</DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
@@ -2238,7 +2311,18 @@ export function WhatsAppInterface() {
               precisa de decisão de produto sobre quais filtros existem de fato, mesma pendência do
               ícone de filtro). */}
           {/* Filter chip */}
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            {instanciaFiltro && (
+              <div
+                className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95"
+                onClick={() => setInstanciaFiltro("")}
+                title="Remover filtro de número"
+              >
+                <Phone className="h-3 w-3" />
+                {instanciasDisponiveis.find(i => i.evolution_instancia === instanciaFiltro)?.nome || instanciaFiltro}
+                <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
+              </div>
+            )}
             <div className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95">
               Status Especial
               <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
@@ -2477,7 +2561,7 @@ export function WhatsAppInterface() {
         {/* Modal Nova Mensagem */}
         <Dialog open={showNewMessageModal} onOpenChange={(o) => {
           setShowNewMessageModal(o);
-          if (!o) { setContatoSearch(""); setContatoResults([]); setNewMessagePhone(""); }
+          if (!o) { setContatoSearch(""); setContatoResults([]); setNewMessagePhone(""); setNovaConversaInstancia(""); }
         }}>
           <DialogContent className="sm:max-w-[460px] p-0 rounded-2xl overflow-hidden">
             <DialogHeader className="px-6 pt-6 pb-4 border-b">
@@ -2556,6 +2640,42 @@ export function WhatsAppInterface() {
                   Código do Brasil (+55) adicionado automaticamente se necessário.
                 </p>
               </div>
+
+              {/* [AUDITORIA] LÓGICA (multi-número — seleção de instância no envio, 2026-08-07):
+                  só aparece com 2+ instâncias conectadas — com uma só, não há o que escolher. */}
+              {instanciasDisponiveis.length > 1 && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-muted-foreground">Enviar pelo número</label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button className="w-full h-10 rounded-xl border bg-background/50 px-3 flex items-center gap-2 text-sm hover:bg-muted/50 transition-colors">
+                        <Smartphone className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <span className="truncate flex-1 text-left">
+                          {instanciasDisponiveis.find(i => i.evolution_instancia === novaConversaInstancia)?.nome || "Número padrão"}
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-72">
+                      <DropdownMenuItem onClick={() => setNovaConversaInstancia("")} className="cursor-pointer">
+                        <span className={!novaConversaInstancia ? "font-bold" : ""}>Número padrão</span>
+                        {!novaConversaInstancia && <Check className="h-3.5 w-3.5 ml-auto" />}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {instanciasDisponiveis.map(inst => (
+                        <DropdownMenuItem
+                          key={inst.evolution_instancia}
+                          onClick={() => setNovaConversaInstancia(inst.evolution_instancia)}
+                          className="cursor-pointer"
+                        >
+                          <span className={`truncate ${novaConversaInstancia === inst.evolution_instancia ? "font-bold" : ""}`}>{inst.nome}</span>
+                          {novaConversaInstancia === inst.evolution_instancia && <Check className="h-3.5 w-3.5 ml-auto shrink-0" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
             </div>
 
             <DialogFooter className="px-5 pb-5 pt-0 gap-2">
@@ -3715,6 +3835,48 @@ export function WhatsAppInterface() {
                   campanhaNome={statusEnvioPorTelefone[chaveTelefone(activeChat.phone)]?.campanha_nome}
                   className="mt-1"
                 />
+                {/* [AUDITORIA] LÓGICA (multi-número — seleção de instância no envio, 2026-08-07):
+                    handleSendMessage manda `instancia: chat?.source` em todo envio desta
+                    conversa — antes não havia como trocar, ficava travado na instância da
+                    última mensagem recebida/enviada (ver fetchConversas). Só aparece com 2+
+                    instâncias conectadas. Muda só o estado local (`chats`); volta a refletir a
+                    instância real assim que a próxima mensagem for enviada e o polling
+                    releitura `row.instancia` do backend. */}
+                {instanciasDisponiveis.length > 1 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="flex items-center gap-1.5 bg-muted/50 hover:bg-muted rounded-full pl-3 pr-2 py-1 mt-1 transition-colors"
+                        title="Número que envia as mensagens desta conversa"
+                      >
+                        <Smartphone className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-[10px] font-bold text-foreground/70">
+                          {instanciasDisponiveis.find(i => i.evolution_instancia === activeChat.source)?.nome || "Selecionar número"}
+                        </span>
+                        <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center" className="w-56">
+                      <DropdownMenuItem disabled className="text-[10px] uppercase font-bold text-muted-foreground opacity-100">
+                        Enviar mensagens via
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {instanciasDisponiveis.map(inst => (
+                        <DropdownMenuItem
+                          key={inst.evolution_instancia}
+                          onClick={() => {
+                            const chatId = activeChat.id;
+                            setChats(prev => prev.map(c => c.id === chatId ? { ...c, source: inst.evolution_instancia } : c));
+                          }}
+                          className="cursor-pointer"
+                        >
+                          <span className={`truncate ${activeChat.source === inst.evolution_instancia ? "font-bold" : ""}`}>{inst.nome}</span>
+                          {activeChat.source === inst.evolution_instancia && <Check className="h-3.5 w-3.5 ml-auto shrink-0" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
             </div>
 

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getAuthToken } from "@/lib/api-token";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
+import { formatPhoneDisplay } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,6 +56,10 @@ import {
   Power,
   Download,
   Trash2,
+  Pencil,
+  Check,
+  X,
+  Phone,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
@@ -119,10 +124,46 @@ export function InstanceManagementPanel() {
   const [agentes, setAgentes] = useState<Agente[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [statuses, setStatuses] = useState<Record<string, ConnState>>({});
+  const [phoneNumbers, setPhoneNumbers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Agente | null>(null);
   const [saving, setSaving] = useState(false);
   const [calculating, setCalculating] = useState<string | null>(null);
+
+  // ─── Renomear instância (inline, sem abrir a modal de configuração inteira) ───
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
+
+  const startRename = (a: Agente) => {
+    setRenamingId(a.id);
+    setRenameValue(a.nome);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+    setRenameValue("");
+  };
+
+  const confirmRename = async (a: Agente) => {
+    const novoNome = renameValue.trim();
+    if (!novoNome || novoNome === a.nome) {
+      cancelRename();
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      const { error } = await api.from("agentes").update({ nome: novoNome }).eq("id", a.id);
+      if (error) throw error;
+      toast.success("Instância renomeada");
+      cancelRename();
+      carregar();
+    } catch (e: any) {
+      toast.error(`Erro ao renomear: ${e.message}`);
+    } finally {
+      setRenameSaving(false);
+    }
+  };
 
   // ─── Conectar nova instância ───
   const [showConnectModal, setShowConnectModal] = useState(false);
@@ -522,16 +563,19 @@ export function InstanceManagementPanel() {
   // diagnosticos/AUDITORIA_LOG.md, Sprint 1/2), cada card busca o próprio status, em paralelo.
   const carregarStatus = async (lista: Agente[]) => {
     const map: Record<string, ConnState> = {};
+    const phones: Record<string, string> = {};
     await Promise.all(lista.map(async (a) => {
       if (!a.evolution_instancia) return;
       try {
         const st = await fetchConnectionStatus(a.evolution_instancia);
         map[a.id] = (st.state ?? "close") as ConnState;
+        if (st.phoneNumber) phones[a.id] = st.phoneNumber;
       } catch (error) {
         console.error(`[WhatsApp] Erro ao buscar status de ${a.evolution_instancia}:`, error);
       }
     }));
     setStatuses(map);
+    setPhoneNumbers(phones);
   };
 
   useEffect(() => {
@@ -680,11 +724,63 @@ export function InstanceManagementPanel() {
                       <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
                         <Smartphone className="h-4 w-4 text-primary" />
                       </div>
-                      <div className="min-w-0">
-                        <h3 className="font-bold truncate">{a.nome}</h3>
+                      <div className="min-w-0 flex-1">
+                        {renamingId === a.id ? (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") confirmRename(a);
+                                if (e.key === "Escape") cancelRename();
+                              }}
+                              disabled={renameSaving}
+                              autoFocus
+                              className="h-7 text-sm"
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0 text-emerald-600"
+                              onClick={() => confirmRename(a)}
+                              disabled={renameSaving}
+                              title="Salvar nome"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0"
+                              onClick={cancelRename}
+                              disabled={renameSaving}
+                              title="Cancelar"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1 group/name">
+                            <h3 className="font-bold truncate">{a.nome}</h3>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-5 w-5 shrink-0 opacity-0 group-hover/name:opacity-100"
+                              onClick={() => startRename(a)}
+                              title="Renomear instância"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        )}
                         <p className="text-[10px] font-mono text-muted-foreground truncate">
                           {a.evolution_instancia}
                         </p>
+                        {phoneNumbers[a.id] && (
+                          <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                            <Phone className="h-3 w-3" /> {formatPhoneDisplay(phoneNumbers[a.id]) || phoneNumbers[a.id]}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
