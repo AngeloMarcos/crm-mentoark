@@ -1826,5 +1826,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'motor nativo de mensagens do Disparo (variantes/regra) OK');
 
+  // ── Motor nativo de texto v2 — variação automática por sinônimo (Sprint Motor Nativo v2, 2026-08-08) ──
+  // [AUDITORIA] LÓGICA: mesmo espírito informativo/auditoria das 3 colunas acima — não lida por
+  // `disparoProcessor.ts`, a personalização (incluindo esta camada nova) roda 100% no FRONTEND
+  // (`src/lib/motorTexto.ts`, `personalizarMensagem`), que já grava o resultado pronto em
+  // `disparo_logs.mensagem_enviada`. DEFAULT true bate com o comportamento novo (variação
+  // automática LIGADA por padrão pra campanha nova) sem quebrar nenhuma campanha já criada — essas
+  // já têm `mensagem_enviada` gravado, nunca recalculado depois do envio.
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS variacao_automatica BOOLEAN DEFAULT true`).catch(() => {});
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS variacao_automatica BOOLEAN DEFAULT true`).catch(() => {});
+
+  log.info('MIGRATIONS', 'motor nativo de texto v2 (variação automática por sinônimo) OK');
+
   log.info('MIGRATIONS', 'OK');
 }

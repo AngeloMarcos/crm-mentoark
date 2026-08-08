@@ -25,6 +25,26 @@ import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
 import { useStatusEnvio, chaveTelefone } from "@/hooks/useStatusEnvio";
 import { TagStatusEnvio } from "@/components/TagStatusEnvio";
+// [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08): `substituirPlaceholders`,
+// `resolverSpintax`, `textoTemSpintax`, `mensagemSemPersonalizacao`, `BIBLIOTECA_VARIACOES` e
+// `escolherVariante` viviam inline neste arquivo desde as Sprints "Variação sem IA" (2026-08-06) e
+// "Motor Nativo de Disparo" (2026-08-07) — extraídas pra `src/lib/motorTexto.ts` (módulo
+// compartilhado) pra serem reaproveitadas fora de Disparos (Respostas Rápidas,
+// `WhatsAppInterface.tsx`, e qualquer feature futura que precise variar texto sem IA). Histórico
+// completo de cada bug/fix já documentado nos comentários `[AUDITORIA]` do próprio módulo — não
+// duplicado aqui. `personalizarMensagem`/`temTermoVariavel` são a camada nova (item 2, variação
+// automática por sinônimo, ligada por padrão).
+import {
+  substituirPlaceholders,
+  resolverSpintax,
+  textoTemSpintax,
+  mensagemSemPersonalizacao,
+  BIBLIOTECA_VARIACOES,
+  escolherVariante,
+  personalizarMensagem,
+  temTermoVariavel,
+  TAMANHO_DICIONARIO_VARIACAO,
+} from "@/lib/motorTexto";
 import {
   Dialog,
   DialogContent,
@@ -382,146 +402,6 @@ async function fetchAllContatos(build: () => any): Promise<any[]> {
   return all;
 }
 
-// [AUDITORIA] BUG (achado na Sprint Placeholders/Upload, 2026-07-30): dos 5 atalhos de
-// personalização oferecidos em StepMessage ({{nome}}, {{primeiro_nome}}, {{telefone}}, {{data}},
-// {{empresa}}), só {{nome}}/{{primeiro_nome}} eram de fato substituídos (em StepReview.handleStart,
-// via `.replace()` simples) — {{telefone}}/{{data}}/{{empresa}} chegavam LITERALMENTE escritos
-// (com as chaves) na mensagem real recebida pelo cliente, sem nenhum erro visível pro operador.
-// Confirmado que `disparoProcessor.ts` não faz nenhuma substituição adicional — ele só lê
-// `disparo_logs.mensagem_enviada` já pronta (preenchida por `handleStart` abaixo). [AUDITORIA] FIX
-// APLICADO: função única compartilhada entre a prévia (StepMessage) e o envio real
-// (StepReview.handleStart) — evita que a prévia prometa uma substituição que o envio real não
-// cumpre (ou vice-versa). `.replaceAll()` em vez de `.replace()` cobre múltiplas ocorrências do
-// mesmo placeholder na mesma mensagem (antes, só a 1ª ocorrência era trocada).
-// [AUDITORIA] LÓGICA (Sprint Fix Nome/Telefone na Saudação, 2026-08-05): remove um placeholder
-// vazio (sem valor real pra usar) sem deixar pontuação solta ao redor — "Oi {{primeiro_nome}},
-// tudo bem?" vira "Oi, tudo bem?" (vírgula preservada, colada na saudação), não "Oi , tudo
-// bem?" (vírgula solta) nem "Oi tudo bem?" (perde a pausa da vírgula). Ordem das regras importa:
-// mais específica primeiro (espaço+vírgula) até a mais genérica (placeholder bare, sem espaço/
-// vírgula ao redor) — cada `replaceAll` só bate no que sobrou depois da regra anterior.
-// Conferido contra os templates reais em produção (`disparo_templates`/`disparos.mensagem_template`):
-// cobre tanto "Oi {{primeiro_nome}}, tudo bem?" (vírgula) quanto "Oi {{primeiro_nome}}! Vi que..."
-// (exclamação, cai na regra de espaço sem vírgula — "Oi!", sem espaço duplo).
-function removerPlaceholderVazio(texto: string, placeholder: string): string {
-  return texto
-    .replaceAll(` ${placeholder},`, ",")  // "Oi {{p}}, tudo bem?" -> "Oi, tudo bem?"
-    .replaceAll(`${placeholder}, `, "")   // "{{p}}, tudo bem?" (placeholder no início) -> "tudo bem?"
-    .replaceAll(` ${placeholder}`, "")    // "Oi {{p}}!" / "seu pedido {{p}} chegou" -> "Oi!" / "seu pedido chegou"
-    .replaceAll(`${placeholder} `, "")    // "{{p}} chegou" (placeholder no início, sem vírgula) -> "chegou"
-    .replaceAll(placeholder, "");         // sobra bare, sem espaço/vírgula ao redor
-}
-
-function substituirPlaceholders(mensagem: string, contato: { nome?: string; telefone?: string; empresa?: string }): string {
-  // [AUDITORIA] BUG (achado real — campanha "Importação cnpj_biz" já enviada em produção,
-  // 2026-08-05): contato importado sem coluna de nome de pessoa (só CNPJ/razão social) tinha
-  // `nome` igual ao próprio `telefone` (fallback antigo de `analisarLinhasImportacao`, corrigido
-  // acima pra tentar `empresa` primeiro) — sem nenhuma proteção aqui, `{{primeiro_nome}}`/
-  // `{{nome}}` substituíam pelo telefone cru: mensagem real saiu como "Oi 5511984849872, tudo
-  // tranquilo?". [AUDITORIA] FIX APLICADO: `nome === telefone` é tratado como "sem nome real" —
-  // NÃO cai no fallback "cliente" (esse continua só pra quando `nome` está genuinamente vazio,
-  // caso inalterado) nem usa o telefone como saudação; o placeholder é removido com limpeza de
-  // pontuação (`removerPlaceholderVazio`, acima) em vez de virar texto vazio no meio da frase.
-  // Segunda camada de proteção — a primeira é o fallback de importação (nome || empresa ||
-  // telefone) — cobre contatos já contaminados na base antes deste fix e qualquer outro caminho
-  // de criação de contato que possa gravar nome === telefone no futuro.
-  const semNomeReal = !!contato.telefone && contato.nome === contato.telefone;
-  const nome = semNomeReal ? "" : (contato.nome || "cliente");
-  const primeiroNome = semNomeReal ? "" : nome.split(" ")[0];
-  const dataHoje = new Date().toLocaleDateString("pt-BR");
-
-  let resultado = mensagem;
-  if (semNomeReal) {
-    resultado = removerPlaceholderVazio(resultado, "{{nome}}");
-    resultado = removerPlaceholderVazio(resultado, "{{primeiro_nome}}");
-  } else {
-    resultado = resultado.replaceAll("{{nome}}", nome).replaceAll("{{primeiro_nome}}", primeiroNome);
-  }
-  return resultado
-    .replaceAll("{{telefone}}", contato.telefone || "")
-    .replaceAll("{{data}}", dataHoje)
-    .replaceAll("{{empresa}}", contato.empresa || "");
-}
-
-// [AUDITORIA] LÓGICA (Sprint Variação sem IA, 2026-08-06): motor de variação determinística
-// (spintax) — zero custo de IA, decisão explícita pra reduzir a dependência de "Humanizar com IA"
-// (que chama OpenAI uma vez por contato). Sintaxe `{opção 1|opção 2|opção 3}` (chave SIMPLES +
-// pelo menos um `|` dentro) — nunca confundir com `{{placeholder}}` (chave DUPLA, nunca tem `|`).
-// A regex abaixo casa qualquer bloco `{...sem chaves aninhadas...}`, inclusive — por construção
-// de regex, não por checagem explícita de posição — o miolo de um `{{placeholder}}` (ex: bateria
-// em `{primeiro_nome}` dentro de `{{primeiro_nome}}`). Isso é INOFENSIVO de propósito: como esse
-// miolo nunca tem `|`, a regra "sem pipe = texto literal, devolve o próprio trecho casado sem
-// mudar nada" reconstrói o placeholder duplo exatamente como era — as chaves externas nunca
-// fazem parte de nenhum match, só sobram no lugar. Testado (ver AUDITORIA_LOG.md) com
-// `{{primeiro_nome}}` ao lado de spintax real na mesma mensagem — cada um resolve certo, sem
-// vazar um no outro. Escolha independente por chamada (`Math.random()`) — chamado uma vez por
-// contato (`StepReview.handleStart`, depois de `substituirPlaceholders`), então cada destinatário
-// sorteia sua própria combinação.
-function resolverSpintax(texto: string): string {
-  return texto.replace(/\{([^{}]+)\}/g, (match, conteudo: string) => {
-    if (!conteudo.includes("|")) return match; // sem pipe — não é spintax, mantém literal (cobre {{placeholder}} e chave simples usada por outro motivo)
-    const opcoes = conteudo.split("|").map(o => o.trim());
-    return opcoes[Math.floor(Math.random() * opcoes.length)];
-  });
-}
-
-// [AUDITORIA] LÓGICA (Sprint Variação sem IA, 2026-08-06): extraído do meio de
-// `mensagemSemPersonalizacao` pra ser reaproveitado também na prévia (avisar que "esta prévia
-// mostra só um exemplo" quando a mensagem realmente tem spintax) — mesma regex, um único lugar
-// que sabe o que "conta como spintax de verdade" (bloco `{...}` com `|` dentro).
-function textoTemSpintax(texto: string): boolean {
-  return /\{([^{}]*\|[^{}]*)\}/.test(texto);
-}
-
-// [AUDITORIA] LÓGICA (Sprint Variação sem IA, 2026-08-06): usado tanto no aviso de "mensagem sem
-// personalização" (StepMessage) quanto, potencialmente, em telas futuras que precisem da mesma
-// checagem — mensagem sem NENHUM placeholder nem bloco spintax sai byte-idêntica pra todo mundo,
-// o sinal de risco de spam mais citado na pesquisa desta sessão (política WhatsApp Business
-// Platform 2026 + guias de anti-ban pra API não-oficial), mais forte que "ausência de IA".
-function mensagemSemPersonalizacao(texto: string): boolean {
-  if (!texto) return false; // mensagem vazia não é "sem personalização", é só vazia — StepMessage já valida isso separado
-  const temPlaceholder = /\{\{\s*(nome|primeiro_nome|telefone|data|empresa)\s*\}\}/.test(texto);
-  return !temPlaceholder && !textoTemSpintax(texto);
-}
-
-// [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): biblioteca curada de blocos de
-// variação prontos por intenção comum — zero IA, dicionário fixo em PT-BR. Resolve o achado real
-// desta sessão de que a maioria dos operadores não vai escrever `{a|b|c}` manualmente do zero;
-// o botão em StepMessage insere o bloco pronto no fim do texto (mesmo padrão de
-// append já usado pelos botões de placeholder `{{nome}}` etc., logo abaixo).
-const BIBLIOTECA_VARIACOES: { label: string; spintax: string }[] = [
-  { label: "Saudação", spintax: "{Olá|Oi|E aí|Tudo bem?}" },
-  { label: "Transição", spintax: "{Aproveitando|Já que estou aqui|Passando rápido}" },
-  { label: "Fechamento/CTA", spintax: "{Me chama|Qualquer dúvida me avisa|Fico à disposição|Combinamos assim?}" },
-  { label: "Despedida", spintax: "{Abraço|Até mais|Fico no aguardo|Um abraço}" },
-];
-
-// [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): escolhe a mensagem-base
-// COMPLETA pra este contato (item 2/3) — chamada uma vez por contato dentro do mesmo `.map()` que
-// já monta `disparo_logs`, ANTES de `substituirPlaceholders`/`resolverSpintax` rodarem em cima do
-// resultado (mesma ordem de sempre: variante completa primeiro, placeholders depois, spintax por
-// cima). `variantes` vazio preserva 100% do comportamento atual (chamada só acontece quando há
-// 2+ variantes configuradas, ver handleStart). Modo 'regra': percorre as tags do contato na ordem
-// em que vêm gravadas e usa a primeira que bater no mapa — sem tag configurada bater, cai pro
-// round-robin (nunca deixa o contato sem mensagem por falta de regra).
-function escolherVariante(
-  variantes: string[],
-  distribuicao: "round_robin" | "regra",
-  regraPorTag: Record<string, number>,
-  contato: { tags?: string[] | null },
-  indice: number,
-): string {
-  if (!variantes.length) return "";
-  if (distribuicao === "regra" && Array.isArray(contato.tags)) {
-    for (const tag of contato.tags) {
-      if (Object.prototype.hasOwnProperty.call(regraPorTag, tag)) {
-        const idx = regraPorTag[tag];
-        if (idx >= 0 && idx < variantes.length) return variantes[idx];
-      }
-    }
-  }
-  return variantes[indice % variantes.length];
-}
-
 const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
 
 export default function DisparosPage() {
@@ -594,6 +474,13 @@ export default function DisparosPage() {
     distribuicao_variantes: "round_robin" as "round_robin" | "regra",
     // Mapa tag (texto exato de contatos.tags) -> índice da variante em mensagens_variantes.
     regra_variante_por_tag: {} as Record<string, number>,
+    // [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08): camada de variação automática por
+    // sinônimo (item 2, `aplicarVariacaoAutomatica` em `motorTexto.ts`) — LIGADA por padrão pra
+    // toda campanha nova. Fecha o gap real do print do usuário: template salvo sem `{{nome}}` nem
+    // `{a|b}` (a maioria dos templates reais em produção) passa a variar de verdade sem o operador
+    // precisar fazer nada. Só desliga se o operador explicitamente decidir um texto 100% fixo (ver
+    // toggle em StepMessage) — nesse caso volta ao comportamento de antes desta sprint.
+    variacao_automatica: true,
   });
 
   // Live contact count — recalcula sempre que os filtros mudam
@@ -1933,6 +1820,13 @@ function StepMessage({ form, setForm }: any) {
       mensagens_variantes: tpl.mensagens_variantes || [],
       distribuicao_variantes: tpl.distribuicao_variantes || "round_robin",
       regra_variante_por_tag: tpl.regra_variante_por_tag || {},
+      // [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08): `?? true` (não `||`) — template
+      // salvo ANTES desta sprint não tem a coluna preenchida (`undefined`/`null`), e o default
+      // correto pra esse caso é LIGADO (mesmo comportamento de qualquer campanha nova). `|| true`
+      // teria o mesmo efeito aqui, mas `??` deixa explícito que só `undefined`/`null` cai no
+      // default — um `false` gravado de propósito (operador desligou e salvou) tem que persistir
+      // como `false` ao recarregar, não virar `true` de novo.
+      variacao_automatica: tpl.variacao_automatica ?? true,
     });
     setLoadedTemplateId(tpl.id);
     setLoadedTemplateNome(tpl.nome);
@@ -2009,6 +1903,7 @@ function StepMessage({ form, setForm }: any) {
       mensagens_variantes: form.mensagens_variantes.filter((v: string) => v.trim()),
       distribuicao_variantes: form.distribuicao_variantes,
       regra_variante_por_tag: form.regra_variante_por_tag,
+      variacao_automatica: form.variacao_automatica,
       updated_at: new Date().toISOString(),
     };
     const { data, error } = (!comoNovo && loadedTemplateId)
@@ -2122,12 +2017,40 @@ function StepMessage({ form, setForm }: any) {
           <p className="text-[10px] text-muted-foreground">
             💡 Use <code className="px-1 rounded bg-muted">{"{opção 1|opção 2|opção 3}"}</code> pra variar o texto por contato sem custo de IA — ex: <code className="px-1 rounded bg-muted">{"{Oi|Olá|E aí}"}</code>.
           </p>
+          {/* [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08, item 2): indicador + controle
+              da camada de variação automática por sinônimo — LIGADA por padrão (ver default do
+              form). Só relevante quando a mensagem NÃO tem spintax manual: se tiver, a camada
+              automática nunca roda em cima dela (`personalizarMensagem`, motorTexto.ts, respeita o
+              que o operador já configurou à mão) — mostrar o toggle nesse caso seria enganoso,
+              então mostra uma explicação em vez do controle. */}
+          {textoTemSpintax(textoAtivo) ? (
+            <p className="text-[10px] text-muted-foreground italic">
+              Variação automática por sinônimo desligada nesta mensagem — você já configurou variação manual (spintax) acima, ela tem prioridade.
+            </p>
+          ) : (
+            <div className="flex items-center justify-between gap-3 p-2 rounded border bg-muted/30">
+              <div className="flex items-center gap-2 min-w-0">
+                <Badge variant={form.variacao_automatica ? "default" : "outline"} className="text-[10px] gap-1 shrink-0">
+                  🔀 {form.variacao_automatica ? "Variação automática ativa" : "Variação automática desligada"}
+                </Badge>
+                <span className="text-[10px] text-muted-foreground">
+                  Troca palavras/expressões por sinônimos equivalentes ({TAMANHO_DICIONARIO_VARIACAO} termos no dicionário), sem IA e sem mudar o sentido — cada contato recebe uma combinação diferente, mesmo sem {"{{nome}}"} nem spintax.
+                </span>
+              </div>
+              <Switch checked={form.variacao_automatica} onCheckedChange={v => setForm({ ...form, variacao_automatica: v })} />
+            </div>
+          )}
           {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): aviso NÃO bloqueante
               (mesmo espírito da decisão já tomada na sprint de importação — avisa, não trava) —
               mensagem sem nenhum placeholder nem spintax sai byte-idêntica pra todo mundo, o
               sinal de risco de spam mais citado na pesquisa desta sessão (política WhatsApp
-              Business Platform 2026), mais forte que "sem humanização por IA". */}
-          {mensagemSemPersonalizacao(textoAtivo) && (
+              Business Platform 2026), mais forte que "sem humanização por IA".
+              [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08, item 3): passa
+              `form.variacao_automatica` — mensagem sem `{{nome}}`/spintax manual mas com termo
+              reconhecido pelo dicionário (e a camada ligada) não dispara mais este aviso, porque a
+              variação real está acontecendo por outra via (ver `mensagemSemPersonalizacao` em
+              motorTexto.ts). */}
+          {mensagemSemPersonalizacao(textoAtivo, form.variacao_automatica) && (
             <p className="text-[10px] text-amber-700 dark:text-amber-500 flex items-start gap-1">
               <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
               Esta mensagem vai sair idêntica para todos os destinatários — considere usar {"{{primeiro_nome}}"} ou variações {"{a|b}"} para reduzir risco de bloqueio.
@@ -2159,15 +2082,24 @@ function StepMessage({ form, setForm }: any) {
                 encadeado por cima — mostra UMA resolução possível (a prévia já ajuda o operador a
                 visualizar o formato), não promete que é o texto exato que todo mundo vai receber
                 (aviso explícito logo abaixo, já que cada contato sorteia sua própria combinação
-                no envio real). */}
+                no envio real).
+                [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08): `personalizarMensagem`
+                (motorTexto.ts) no lugar de `resolverSpintax(substituirPlaceholders(...))` direto —
+                compõe as 3 camadas (placeholder → spintax manual → variação automática) na mesma
+                ordem usada no envio real (StepReview.handleStart), incluindo a camada nova (item 2)
+                respeitando `form.variacao_automatica`. */}
             <p className="text-sm whitespace-pre-wrap">
-              {resolverSpintax(substituirPlaceholders(textoAtivo, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" }))}
+              {personalizarMensagem(textoAtivo, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" }, form.variacao_automatica)}
             </p>
-            {textoTemSpintax(textoAtivo) && (
+            {textoTemSpintax(textoAtivo) ? (
               <p className="text-[10px] text-muted-foreground italic mt-1">
                 🎲 Mensagem tem variação (spintax) — cada contato recebe uma combinação sorteada de verdade; esta prévia mostra só um exemplo.
               </p>
-            )}
+            ) : form.variacao_automatica && temTermoVariavel(textoAtivo) ? (
+              <p className="text-[10px] text-muted-foreground italic mt-1">
+                🔀 Variação automática por sinônimo ativa — cada contato recebe uma combinação diferente de palavras equivalentes; esta prévia mostra só um exemplo.
+              </p>
+            ) : null}
             <span className="text-[10px] text-muted-foreground float-right">10:45</span>
           </div>
         </div>
@@ -2634,6 +2566,10 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         mensagens_variantes: form.mensagens_variantes.filter(v => v.trim()),
         distribuicao_variantes: form.distribuicao_variantes,
         regra_variante_por_tag: form.regra_variante_por_tag,
+        // [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08): mesmo espírito informativo das
+        // 3 colunas acima — não lido por `disparoProcessor.ts`, a variação automática já roda
+        // aqui embaixo, no `.map()` de `disparo_logs` (via `personalizarMensagem`).
+        variacao_automatica: form.variacao_automatica,
         cooldown_horas: form.cooldown_horas,
         // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): sempre preenchido
         // pra campanhas novas (arredondado pra segundo inteiro) — `disparoProcessor.ts` usa estes
@@ -2673,6 +2609,11 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       // contato — cada `Math.random()` roda de forma independente, então dois contatos com a
       // mesma mensagem-base podem sortear opções diferentes, sem precisar tocar em
       // `disparoProcessor.ts` (o backend só lê `mensagem_enviada` já pronta).
+      // [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08, item 2): `resolverSpintax(
+      // substituirPlaceholders(...))` trocado por `personalizarMensagem(...)` (motorTexto.ts) —
+      // mesmas 2 camadas de sempre, mais a camada nova de variação automática por sinônimo (só
+      // roda quando `textoBase` original não tem spintax manual, ver `personalizarMensagem`).
+      // Continua chamado uma vez por contato dentro do `.map()`, mesmo padrão de sempre.
       // [AUDITORIA] FIX APLICADO (achado real do usuário, print em produção, 2026-08-06):
       // segunda camada de proteção, defesa em profundidade — mesmo já filtrando na origem
       // (`targetContacts`, ver comentário completo lá), filtra de novo aqui, imediatamente
@@ -2697,7 +2638,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           contato_id: c.id,
           telefone: c.telefone,
           nome: c.nome,
-          mensagem_enviada: resolverSpintax(substituirPlaceholders(textoBase, c)),
+          mensagem_enviada: personalizarMensagem(textoBase, c, form.variacao_automatica),
           status: 'pending'
         };
       });

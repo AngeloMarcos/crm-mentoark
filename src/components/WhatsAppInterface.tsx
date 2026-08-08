@@ -57,6 +57,13 @@ import { getFreshToken } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useStatusEnvio, chaveTelefone } from "@/hooks/useStatusEnvio";
 import { TagStatusEnvio } from "@/components/TagStatusEnvio";
+// [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08, item 4): motor nativo de texto
+// compartilhado (`src/lib/motorTexto.ts`, extraído de `Disparos.tsx` nesta mesma sprint) —
+// `aplicarRespostaRapida` (abaixo) usa `personalizarMensagem` pra resolver {{placeholder}}/
+// spintax manual/variação automática com o dado do contato da conversa aberta, em vez de inserir
+// o texto canônico cru no composer. Baixo risco: é só o texto que entra no campo de digitação, o
+// atendente ainda revisa/edita antes de enviar de verdade.
+import { personalizarMensagem } from "@/lib/motorTexto";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 // [AUDITORIA] FIX APLICADO (2026-07-10): apiHeaders() lia o token cru do localStorage sem checar
@@ -546,8 +553,23 @@ export function WhatsAppInterface() {
     }
   };
 
+  // [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08, item 4): antes inseria
+  // `r.mensagem` cru no composer — mesma resposta rápida usada repetidamente pro mesmo tipo de
+  // pergunta gerava padrão repetitivo (mesmo risco de detecção de spam do Disparo, em escala
+  // menor, por ser 1 mensagem de cada vez em vez de campanha em massa). Agora resolve
+  // {{placeholder}}/spintax manual/variação automática (`personalizarMensagem`, motorTexto.ts)
+  // com o dado do CONTATO DA CONVERSA ABERTA (`activeChat`, declarado mais abaixo no componente —
+  // closure resolve `activeChat` no momento do clique, não da declaração desta função). Sem
+  // `activeChat` (nenhuma conversa aberta — não deveria acontecer, o composer só existe dentro de
+  // uma conversa) cai num objeto vazio, equivalente ao comportamento anterior pra placeholders,
+  // com variação automática ainda ativa. Variação automática sempre LIGADA aqui (sem toggle
+  // visível, ao contrário de Disparos) — risco baixo o suficiente (1 mensagem, atendente revisa
+  // antes de enviar) pra não justificar mais um controle na UI do chat.
   const aplicarRespostaRapida = (r: RespostaRapida) => {
-    setMessageInput(r.mensagem);
+    const contatoConversa = activeChat
+      ? { nome: activeChat.is_group ? undefined : activeChat.name, telefone: activeChat.phone }
+      : {};
+    setMessageInput(personalizarMensagem(r.mensagem, contatoConversa, true));
     setShowQR(false);
     setQrSearch('');
     textareaRef.current?.focus();
