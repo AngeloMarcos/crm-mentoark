@@ -1,5 +1,42 @@
 # Auditoria de Código — Log
 
+### 🔧 Fix: número de telefone ausente na aba Instâncias + renomear inline + filtro de conversas por número — em PRODUÇÃO
+
+**Contexto:** código já existia no working directory (implementado numa parte anterior desta sessão, com comentários `[AUDITORIA]` confirmando teste real contra a Evolution API), mas nunca tinha sido commitado nem deployado — achado ao rodar `git status` antes de commitar o diagnóstico de gasto de token, verificado como trabalho legítimo e completo antes de incluir.
+
+**Causa raiz confirmada**: `GET /instance/connectionState/:instance` (usada por `GET /evo/status`, `POST /status`, `POST /connect`) devolve só `{ instance: { instanceName, state } }` — nenhum campo de perfil/número. As 3 rotas tentavam ler `profileName`/`number`/`owner` dali, sempre vazio. Fix: `buscarPhoneNumberInstancia()`, helper único usado pelas 3, chama `GET /instance/fetchInstances?instanceName=` (que devolve `ownerJid`, a fonte mais confiável) — best-effort, falha aqui nunca derruba status/connect/send. Efeito colateral corrigido de graça: `POST /connect` numa instância já aberta sempre caía no branch de erro por causa da mesma extração quebrada (`hasPhone` sempre `false`).
+
+**Frontend**: renomear instância inline em `InstanceManagementPanel.tsx` (sem abrir a modal inteira); em `WhatsAppInterface.tsx`, filtro de lista de conversas por número (`instanciaFiltro`) e seletor de instância ao iniciar conversa nova (`novaConversaInstancia` — antes toda mensagem nova saía pela instância padrão do tenant, sem opção de escolher outro número já conectado).
+
+**Deploy:** build limpo. Homolog e produção — `/health`→200 nos dois, `buscarPhoneNumberInstancia` confirmado presente no `dist` de ambos via grep. Durante o deploy em homolog, o Postgres compartilhado (prod+homolog) reiniciou de forma independente bem no mesmo minuto — ~4s de erros de conexão nos logs (`Connection terminated unexpectedly`, `the database system is in recovery mode`), confirmado não relacionado a este deploy (parou sozinho, containers já saudáveis logo depois).
+
+### 🔴 Diagnóstico: por que ainda gastava token no Disparo — causa real diferente das 2 hipóteses do ticket — em PRODUÇÃO
+### 🔴 Diagnóstico: por que ainda gastava token no Disparo — causa real diferente das 2 hipóteses do ticket — em PRODUÇÃO
+
+**Contexto:** usuário relatou que, mesmo com o motor nativo de Disparo (sprint anterior) em produção, o sistema ainda gastava token na hora de disparar. Ticket levantava 2 hipóteses (`humanizar_ia` ligado numa campanha real; Vision/Whisper sem checar pausa, achado pendente de `SPRINT_VISTORIA_COMPLETA_GASTO_IA.md`) e pedia investigação com dado real antes de qualquer correção.
+
+**Investigação (dado real, não presumido):**
+- Campanhas dos últimos 14 dias: só 3 de 6 com `humanizar_ia=true`, todas antigas/canceladas (`~20` envios humanizados no total). Contribuição real, mas pequena — não explica o padrão relatado sozinha.
+- Reconfirmado por leitura direta que `webhook.ts` (linhas do bloco de áudio/imagem) segue **sem nenhuma checagem de pausa** antes de chamar Whisper/Vision — item 0 de `SPRINT_VISTORIA_COMPLETA_GASTO_IA.md` nunca foi aplicado. Quantificado: `fmakonee03` (pausada, sem prompt real) recebeu **2.000 imagens + 37 áudios** em 14 dias; `stefanocatedral` (mesma situação) recebeu **1.160 áudios + 164 imagens** — cada mídia pagando IA incondicionalmente, sem nenhum atendimento acontecendo depois (as duas contas não têm nenhum `agentes.ativo=true`).
+- **Achado NOVO, não previsto no ticket original**: investigando uma campanha de teste real (`mentoark`, disparada durante a sessão), um contato específico com `atendente_pausou_ia=true` ("Rafael") enviou 3 áudios reais que apareceram **6 vezes** em `whatsapp_messages` — cada áudio com o MESMO `message_id`, mas `instance_name` diferente (`crm_435ee4720fc3` e `crm_435ee4720fc3_2`, as 2 instâncias Evolution simultaneamente `conectado` da conta). Confirmado com o usuário: são 2 números reais distintos (não uma duplicata acidental) — mas a mesma mensagem física do contato está sendo entregue às duas, e cada entrega paga Whisper/Vision independentemente, porque o dedup existente (`webhook_mensagens_processadas`, chave `(message_id, instancia)`) não pega esse caso — ele é por instância, não por mensagem. Cruzando os últimos 14 dias: **294 `message_id` duplicados entre instâncias da mesma conta, 15 deles áudio/imagem** — 15 chamadas de IA puramente redundantes, mensuráveis e reais.
+- Reconfirmado também: item 1 do mesmo documento (`custo_usd` nunca calculado em `ai_uso_diario`) segue pendente — mesmo grep de antes, sem mudança desde então.
+
+**Fixes aplicados** (`backend/src/routes/webhook.ts`, `backend/src/services/agentEngine.ts`):
+1. **Gate de pausa antes de Whisper/Vision**: nova query (`EXISTS agentes ativo` + `contatos.atendente_pausou_ia`) antes de cada uma das 2 chamadas — se a conta não tem nenhum agente ativo OU o contato específico está pausado, pula a transcrição/descrição (mídia continua salva normalmente via o fluxo já existente, só sem `content` preenchido). `agentEngine.ts` já checava pausa depois — a mudança é só não pagar ANTES de saber que não vai ser usado.
+2. **Dedup por `message_id` entre instâncias**: antes de cada chamada de Whisper/Vision, verifica se já existe uma linha em `whatsapp_messages` com o mesmo `message_id` (independente de `instancia`) já processada (`content LIKE '[Áudio Transcrito:%'`/`'[Mídia - Imagem:%'`) — se achar, reaproveita o texto em vez de pagar de novo. **Achado ao testar**: a query inicial usava `pool.query()` direto; `whatsapp_messages` tem um piloto de RLS só em homolog (ver entrada 2026-07-21) que esconderia a linha sem `withTenantContext` — corrigido antes do deploy, mesmo padrão já usado em todo outro acesso a essa tabela no arquivo.
+3. **`custo_usd` calculado** (`agentEngine.ts`): tabela de preço por 1M tokens, hardcoded, cobrindo `gpt-4.1`/`gpt-4o`/`gpt-4o-mini`/Claude (referência de preço: 2026-08-07 — documentado no comentário do código pra próxima sessão saber se precisa atualizar). Modelo não reconhecido cai no preço do `gpt-4o-mini` (subestima em vez de superestimar) e loga aviso. Calculado e somado no `INSERT ... ON CONFLICT DO UPDATE` de `ai_uso_diario`, junto com `tokens_entrada`/`tokens_saida`.
+
+**Testes reais antes do deploy:**
+- Gate de pausa: query rodada contra um contato sintético pausado (`conta_ativa=true, contato_pausado=true` → resultado esperado, Whisper pularia) e um contato normal (`contato_pausado=false` → resultado esperado, Whisper rodaria).
+- Dedup: linha sintética inserida numa instância, query da OUTRA instância encontrou e reaproveitou o `content` corretamente (só depois de corrigir o `withTenantContext`, ver achado acima).
+- `custo_usd`: chamada real via `processarMensagem` (homolog, `IA_TEST_MODE=true`) — `tokensIn=1724, tokensOut=124, modelo=gpt-4o` gerou `custo_usd=0.00555`, batendo exato com `1724×$2,50/1M + 124×$10,00/1M`.
+- Backfill retroativo (script separado, roda uma vez, não é migração automática): homolog 16 linhas/$0,10; **produção 22 linhas/$0,44** — dashboard de custo (`GET /api/ai/uso/resumo`) agora mostra gasto histórico real pela primeira vez, em vez de sempre $0.
+
+**Deploy:** build limpo. Homolog e produção — `/health`→200 nos dois, sem `ERROR` nos logs.
+
+**Raio-x pra próxima sessão:** o achado da duplicação entre instâncias (item novo desta sprint) foi corrigido só no ponto de custo (Whisper/Vision) — vale conferir se `agentEngine.ts`/`n8n_chat_histories` também duplicam entrada de histórico quando a mesma mensagem chega 2x (2 linhas de histórico em vez de 1, poluindo o contexto mandado pra IA na conversa, não só o custo de mídia). Não investigado nesta sprint, escopo era especificamente "gasto no Disparo".
+
+### 🆕 Motor nativo de Disparo, bloco 2: "Gerar variações com IA" (item 4) — em PRODUÇÃO, sprint encerrada
 ### 🆕 Motor nativo de Disparo, bloco 2: "Gerar variações com IA" (item 4) — em PRODUÇÃO, sprint encerrada
 
 **Contexto:** fecha a sprint do motor nativo de mensagens do Disparo (bloco 1, entrada abaixo). Único item com risco real de chamar IA por engano — ticket exigia confirmar "exatamente 1 chamada por clique, nunca por contato" com evidência de log antes de considerar pronto.

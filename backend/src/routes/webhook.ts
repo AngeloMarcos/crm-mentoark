@@ -1064,33 +1064,76 @@ export default function webhookRouter(pool: Pool): Router {
       // pro Whisper, não áudio real. Usa o mesmo endpoint de decrypt da Evolution
       // (getBase64FromMediaMessage) já usado por salvarMidiaWhatsapp() para outros tipos de
       // mídia, via baixarMidiaDecriptografada() (extraída daquela função nesta sprint).
+      // [AUDITORIA] BUG (achado real, 2026-08-07 — Sprint Diagnóstico "ainda gastando token no
+      // disparo"): confirmado com dado real de produção que este bloco (e o de imagem, abaixo)
+      // rodava incondicionalmente — sem checar se a conta tem algum `agentes.ativo=true` nem se
+      // `contatos.atendente_pausou_ia`. 2 contas hoje pausadas (sem prompt real) receberam 2000+
+      // imagens e 1160+ áudios em 14 dias, cada um pagando Whisper/Vision à toa, sem NENHUM
+      // atendimento acontecendo depois (agentEngine.ts já checava pausa, mas só DEPOIS da
+      // transcrição já ter sido paga). Achado colateral, mesmo dado real: um contato específico
+      // (`atendente_pausou_ia=true`) recebeu o MESMO áudio processado 2x, uma vez por cada
+      // instância Evolution conectada à mesma conta (mesmo `message_id`, `instancia` diferente —
+      // o dedup de `webhook_mensagens_processadas` acima é por `(message_id, instancia)`, não
+      // pega esse caso). [AUDITORIA] FIX APLICADO: (1) reaproveita transcrição já feita por OUTRA
+      // instância pro mesmo `message_id` antes de pagar de novo; (2) pula Whisper/Vision quando a
+      // conta não tem nenhum agente ativo OU o contato está com IA pausada — mídia continua sendo
+      // salva normalmente (só sem transcrição/descrição), `agentEngine.ts` nunca chamaria o LLM
+      // pra esses casos de qualquer forma.
       if (!fromMe && tipo === 'audio' && userId && process.env.OPENAI_API_KEY) {
         try {
-          const cfgAudio = await pool.query(
-            `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-             FROM agentes WHERE user_id = $1 AND ativo = true
-               AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
-             ORDER BY updated_at DESC LIMIT 1`,
-            [userId]
-          ).catch(() => ({ rows: [] as any[] }));
-          const evoUrlAudio = cfgAudio.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
-          const evoKeyAudio = cfgAudio.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+          // [AUDITORIA] LÓGICA: withTenantContext (não pool.query direto) — mesmo motivo de todo
+          // outro acesso a whatsapp_messages neste arquivo: piloto de RLS só em homolog (ver
+          // AUDITORIA_LOG.md, 2026-07-21) esconderia esta linha da SELECT sem o contexto de
+          // sessão certo, mesmo a linha existindo de verdade — achado real ao testar este fix.
+          const jaTranscrito = await withTenantContext({ userId, isAdmin: false }, client => client.query(
+            `SELECT content FROM whatsapp_messages
+             WHERE message_id = $1 AND user_id = $2 AND content LIKE '[Áudio Transcrito:%'
+             LIMIT 1`,
+            [messageId, userId]
+          )).catch(() => ({ rows: [] as any[] }));
 
-          const midiaDecriptografada = await baixarMidiaDecriptografada({
-            evoUrl: evoUrlAudio, apiKey: evoKeyAudio, instancia, messageId, remoteJid, fromMe,
-          });
+          if (jaTranscrito.rows.length) {
+            texto = jaTranscrito.rows[0].content;
+            log.info('WEBHOOK', 'Áudio já transcrito por outra instância — reaproveitando (evita Whisper duplicado)', { traceId, msgId: messageId });
+          } else {
+            const estadoIa = await pool.query(
+              `SELECT
+                 EXISTS (SELECT 1 FROM agentes WHERE user_id = $1 AND ativo = true) AS conta_ativa,
+                 COALESCE((SELECT atendente_pausou_ia FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1), false) AS contato_pausado`,
+              [userId, `%${telefone.slice(-11)}`]
+            ).catch(() => ({ rows: [{ conta_ativa: true, contato_pausado: false }] }));
+            const { conta_ativa, contato_pausado } = estadoIa.rows[0];
 
-          if (midiaDecriptografada) {
-            const textoGerado = await transcreverAudio(
-              midiaDecriptografada.buffer,
-              midiaDecriptografada.mimetype || midia.mime || 'audio/ogg',
-              process.env.OPENAI_API_KEY,
-            );
-            if (textoGerado) {
-              texto = `[Áudio Transcrito: "${textoGerado}"]`;
-              log.info('WEBHOOK', 'Áudio transcrito com sucesso', { traceId, tamanho: textoGerado.length });
+            if (!conta_ativa || contato_pausado) {
+              log.info('WEBHOOK', 'Whisper pulado — conta sem agente ativo ou contato com IA pausada', { traceId, msgId: messageId, conta_ativa, contato_pausado });
             } else {
-              log.warn('WEBHOOK', 'Transcrição de áudio não retornou texto', { traceId, msgId: messageId });
+              const cfgAudio = await pool.query(
+                `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+                 FROM agentes WHERE user_id = $1 AND ativo = true
+                   AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+                 ORDER BY updated_at DESC LIMIT 1`,
+                [userId]
+              ).catch(() => ({ rows: [] as any[] }));
+              const evoUrlAudio = cfgAudio.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
+              const evoKeyAudio = cfgAudio.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+
+              const midiaDecriptografada = await baixarMidiaDecriptografada({
+                evoUrl: evoUrlAudio, apiKey: evoKeyAudio, instancia, messageId, remoteJid, fromMe,
+              });
+
+              if (midiaDecriptografada) {
+                const textoGerado = await transcreverAudio(
+                  midiaDecriptografada.buffer,
+                  midiaDecriptografada.mimetype || midia.mime || 'audio/ogg',
+                  process.env.OPENAI_API_KEY,
+                );
+                if (textoGerado) {
+                  texto = `[Áudio Transcrito: "${textoGerado}"]`;
+                  log.info('WEBHOOK', 'Áudio transcrito com sucesso', { traceId, tamanho: textoGerado.length });
+                } else {
+                  log.warn('WEBHOOK', 'Transcrição de áudio não retornou texto', { traceId, msgId: messageId });
+                }
+              }
             }
           }
         } catch (err: any) {
@@ -1106,33 +1149,60 @@ export default function webhookRouter(pool: Pool): Router {
       // WhatsApp (não a Evolution) — baixarMidiaDecriptografada() é usada em vez de um fetch
       // direto na URL com o header apikey (não decriptografaria nada; a Evolution só decripta
       // via POST /chat/getBase64FromMediaMessage, mesmo endpoint já usado no fluxo de áudio).
+      // [AUDITORIA] FIX APLICADO — mesmo achado/fix do bloco de áudio acima (dedup por
+      // message_id entre instâncias + gate de pausa antes de pagar Vision).
       if (!fromMe && tipo === 'image' && userId && process.env.OPENAI_API_KEY) {
         try {
-          const cfgImagem = await pool.query(
-            `SELECT evolution_server_url AS url, evolution_api_key AS api_key
-             FROM agentes WHERE user_id = $1 AND ativo = true
-               AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
-             ORDER BY updated_at DESC LIMIT 1`,
-            [userId]
-          ).catch(() => ({ rows: [] as any[] }));
-          const evoUrlImagem = cfgImagem.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
-          const evoKeyImagem = cfgImagem.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+          // [AUDITORIA] LÓGICA: withTenantContext — mesmo motivo do bloco de áudio acima.
+          const jaAnalisada = await withTenantContext({ userId, isAdmin: false }, client => client.query(
+            `SELECT content FROM whatsapp_messages
+             WHERE message_id = $1 AND user_id = $2 AND content LIKE '[Mídia - Imagem:%'
+             LIMIT 1`,
+            [messageId, userId]
+          )).catch(() => ({ rows: [] as any[] }));
 
-          const midiaDecriptografadaImg = await baixarMidiaDecriptografada({
-            evoUrl: evoUrlImagem, apiKey: evoKeyImagem, instancia, messageId, remoteJid, fromMe,
-          });
+          if (jaAnalisada.rows.length) {
+            texto = jaAnalisada.rows[0].content;
+            log.info('WEBHOOK', 'Imagem já analisada por outra instância — reaproveitando (evita Vision duplicado)', { traceId, msgId: messageId });
+          } else {
+            const estadoIa = await pool.query(
+              `SELECT
+                 EXISTS (SELECT 1 FROM agentes WHERE user_id = $1 AND ativo = true) AS conta_ativa,
+                 COALESCE((SELECT atendente_pausou_ia FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1), false) AS contato_pausado`,
+              [userId, `%${telefone.slice(-11)}`]
+            ).catch(() => ({ rows: [{ conta_ativa: true, contato_pausado: false }] }));
+            const { conta_ativa, contato_pausado } = estadoIa.rows[0];
 
-          if (midiaDecriptografadaImg) {
-            const descricaoGerada = await analisarImagem(
-              midiaDecriptografadaImg.buffer,
-              midiaDecriptografadaImg.mimetype || midia.mime || 'image/jpeg',
-              process.env.OPENAI_API_KEY,
-            );
-            if (descricaoGerada) {
-              texto = `[Mídia - Imagem: "${descricaoGerada}"]`;
-              log.info('WEBHOOK', 'Imagem analisada com sucesso', { traceId, tamanho: descricaoGerada.length });
+            if (!conta_ativa || contato_pausado) {
+              log.info('WEBHOOK', 'Vision pulado — conta sem agente ativo ou contato com IA pausada', { traceId, msgId: messageId, conta_ativa, contato_pausado });
             } else {
-              log.warn('WEBHOOK', 'Análise de imagem não retornou descrição', { traceId, msgId: messageId });
+              const cfgImagem = await pool.query(
+                `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+                 FROM agentes WHERE user_id = $1 AND ativo = true
+                   AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+                 ORDER BY updated_at DESC LIMIT 1`,
+                [userId]
+              ).catch(() => ({ rows: [] as any[] }));
+              const evoUrlImagem = cfgImagem.rows[0]?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
+              const evoKeyImagem = cfgImagem.rows[0]?.api_key || process.env.EVOLUTION_API_KEY || '';
+
+              const midiaDecriptografadaImg = await baixarMidiaDecriptografada({
+                evoUrl: evoUrlImagem, apiKey: evoKeyImagem, instancia, messageId, remoteJid, fromMe,
+              });
+
+              if (midiaDecriptografadaImg) {
+                const descricaoGerada = await analisarImagem(
+                  midiaDecriptografadaImg.buffer,
+                  midiaDecriptografadaImg.mimetype || midia.mime || 'image/jpeg',
+                  process.env.OPENAI_API_KEY,
+                );
+                if (descricaoGerada) {
+                  texto = `[Mídia - Imagem: "${descricaoGerada}"]`;
+                  log.info('WEBHOOK', 'Imagem analisada com sucesso', { traceId, tamanho: descricaoGerada.length });
+                } else {
+                  log.warn('WEBHOOK', 'Análise de imagem não retornou descrição', { traceId, msgId: messageId });
+                }
+              }
             }
           }
         } catch (err: any) {

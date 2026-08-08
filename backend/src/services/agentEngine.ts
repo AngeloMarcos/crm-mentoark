@@ -185,6 +185,33 @@ async function buscarConfigEvolutionFallback(pool: Pool, userId: string): Promis
   }
 }
 
+// [AUDITORIA] LÓGICA (Sprint Diagnóstico "ainda gastando token no disparo", 2026-08-07 — item 1
+// de SPRINT_VISTORIA_COMPLETA_GASTO_IA.md, achado confirmado ainda pendente): `ai_uso_diario`
+// tem coluna `custo_usd` e até dashboard pronto (`GET /api/ai/uso/resumo`), mas o único INSERT
+// que escreve na tabela nunca preenchia esse campo — o dashboard sempre mostrou $0, mesmo com
+// gasto real. Tabela de preço por 1M tokens, hardcoded (preços mudam; referência: 2026-08-07,
+// conferir contra a página oficial de pricing do provider antes de confiar cegamente daqui a
+// alguns meses). Match por prefixo (`startsWith`) cobre variantes com sufixo de data
+// (ex: `gpt-4o-mini-2024-07-18`) sem precisar listar cada uma. Modelo não reconhecido cai no
+// preço do gpt-4o-mini (mais barato conhecido, subestima em vez de superestimar) e loga aviso —
+// nunca lança erro nem bloqueia o registro de uso por causa de preço desconhecido.
+const PRECO_POR_1M_TOKENS: { prefixo: string; input: number; output: number }[] = [
+  { prefixo: 'gpt-4.1',              input: 2.00,  output: 8.00  },
+  { prefixo: 'gpt-4o-mini',          input: 0.15,  output: 0.60  },
+  { prefixo: 'gpt-4o',               input: 2.50,  output: 10.00 },
+  { prefixo: 'claude-3-5-haiku',     input: 0.80,  output: 4.00  },
+  { prefixo: 'claude-3-5-sonnet',    input: 3.00,  output: 15.00 },
+  { prefixo: 'claude-3-opus',        input: 15.00, output: 75.00 },
+];
+function estimarCustoUsd(modelo: string, tokensIn: number, tokensOut: number): number {
+  const preco = PRECO_POR_1M_TOKENS.find(p => modelo?.startsWith(p.prefixo));
+  if (!preco) {
+    log.warn('ENGINE', 'Modelo sem preço conhecido para custo_usd — usando preço de gpt-4o-mini como estimativa mínima', { modelo });
+  }
+  const { input, output } = preco || PRECO_POR_1M_TOKENS.find(p => p.prefixo === 'gpt-4o-mini')!;
+  return (tokensIn / 1_000_000) * input + (tokensOut / 1_000_000) * output;
+}
+
 // ── Divide resposta em até 2 partes para simular digitação humana ─────────────
 function dividirMensagem(texto: string): string[] {
   const partes = texto.split(/\n\n+/).filter(p => p.trim());
@@ -1011,16 +1038,18 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   // 13. Registrar uso de tokens
   if (tokensEntrada || tokensSaida) {
+    const custoUsd = estimarCustoUsd(modelo, tokensEntrada, tokensSaida);
     await pool.query(
       `INSERT INTO ai_uso_diario
-         (user_id, data, provider_slug, modelo, total_mensagens, tokens_entrada, tokens_saida)
-       VALUES ($1, CURRENT_DATE, $2, $3, 1, $4, $5)
+         (user_id, data, provider_slug, modelo, total_mensagens, tokens_entrada, tokens_saida, custo_usd)
+       VALUES ($1, CURRENT_DATE, $2, $3, 1, $4, $5, $6)
        ON CONFLICT (user_id, data, provider_slug, modelo) DO UPDATE
        SET total_mensagens = ai_uso_diario.total_mensagens + 1,
            tokens_entrada  = ai_uso_diario.tokens_entrada  + $4,
            tokens_saida    = ai_uso_diario.tokens_saida    + $5,
+           custo_usd       = ai_uso_diario.custo_usd       + $6,
            updated_at = now()`,
-      [userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida]
+      [userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida, custoUsd]
     ).catch(err => log.error('ENGINE INSERT ai_uso_diario', 'Falha ao registrar uso de tokens', { err: err?.message, stack: err?.stack }));
   }
 

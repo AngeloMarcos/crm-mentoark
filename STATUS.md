@@ -1,5 +1,31 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-08-07 (cont.) — 🔧 Fix: número de telefone não aparecia na aba Instâncias + renomear instância inline + filtro de conversas por número — em PRODUÇÃO
+
+Trabalho implementado antes na sessão, testado (comentários `[AUDITORIA]` confirmam chamada real contra a Evolution API), mas nunca commitado/deployado — encontrado e fechado agora junto com o commit do diagnóstico de gasto de token.
+
+- **Causa raiz do número não aparecer**: as 3 rotas que tentavam extrair `phoneNumber` liam campos (`profileName`/`number`/`owner`) da resposta de `GET /instance/connectionState`, que não devolve nenhum desses campos. Corrigido usando `GET /instance/fetchInstances?instanceName=`, que devolve `ownerJid` (fonte confiável). Efeito colateral corrigido de brinde: `POST /connect` pra uma instância já aberta sempre caía no branch de erro ("sem conta vinculada, reconecte") por causa da mesma extração quebrada.
+- **Renomear instância inline** no painel de gerenciamento, sem abrir a modal inteira de configuração.
+- **Filtro de conversas por número + seletor de instância ao iniciar conversa nova** em `WhatsAppInterface.tsx` — antes toda mensagem nova saía sempre pela instância padrão do tenant, sem opção de escolher outro número já conectado.
+
+Build limpo (frontend+backend). Deployado em homolog e produção — `/health`→200 nos dois. (Durante o deploy em homolog, um restart independente do Postgres compartilhado causou ~4s de erros transitórios de conexão nos logs — confirmado não relacionado a este deploy, containers já estáveis logo em seguida.)
+
+## Sessão 2026-08-07 (cont.) — 🔴 Diagnóstico: por que ainda gastava token no Disparo — causa real diferente das 2 hipóteses do ticket, 3 fixes aplicados — em PRODUÇÃO
+
+Usuário relatou gasto de token mesmo com o motor nativo de Disparo em produção. Investigação com dado real (não presumido) achou uma causa **maior e diferente** das 2 hipóteses do ticket (`humanizar_ia` ligado / Vision-Whisper sem checar pausa) — as duas existiam, mas o achado dominante foi outro.
+
+**Causa real, com números:**
+1. **Vision/Whisper roda incondicional, sem checar pausa (item 0 de `SPRINT_VISTORIA_COMPLETA_GASTO_IA.md`, confirmado ainda pendente)** — 2 contas hoje pausadas (`fmakonee03`, `stefanocatedral`, sem prompt real) receberam **2.000 imagens + 37 áudios** e **1.160 áudios + 164 imagens** respectivamente, nos últimos 14 dias — cada mídia pagando IA à toa, sem nenhum atendimento acontecendo depois.
+2. **Achado NOVO, fora do escopo original: duplicação por 2 instâncias Evolution na mesma conta.** Confirmado caso real — 3 áudios de um contato pausado foram entregues a 2 instâncias diferentes da conta `mentoark` (mesmo `message_id`, `instancia` diferente), pagando Whisper 2x pelo mesmo áudio. Cruzando 14 dias: **294 mensagens com `message_id` duplicado entre instâncias, 15 delas áudio/imagem** — 15 chamadas de IA puramente redundantes.
+3. `humanizar_ia`: só 3 campanhas antigas/canceladas com o toggle ligado, ~20 envios humanizados no total — contribuição real, mas pequena.
+
+**3 fixes aplicados** (`webhook.ts`, `agentEngine.ts`):
+- Gate de pausa antes de Whisper/Vision: pula a chamada de IA quando a conta não tem nenhum `agentes.ativo=true` OU o contato tem `atendente_pausou_ia=true` — mídia continua sendo salva normalmente, só sem transcrição/descrição.
+- Dedup por `message_id` entre instâncias: antes de pagar Whisper/Vision, checa se OUTRA instância da mesma conta já processou essa mensagem (mesmo `message_id`) e reaproveita o resultado em vez de pagar de novo. Confirmado com o usuário que as 2 instâncias da conta `mentoark` são 2 números reais distintos — não desconectada nenhuma, só corrigido o desperdício de custo quando a mesma mensagem ecoa nas duas.
+- `custo_usd` (item 1 do mesmo documento, confirmado ainda pendente): tabela de preço por modelo (`gpt-4.1`, `gpt-4o`, `gpt-4o-mini`, Claude), calculado e gravado a cada chamada de conversa. Testado com chamada real: `1724 tokens in × $2,50/1M + 124 tokens out × $10,00/1M = $0,00555` — bate exato com o valor gravado. Backfill retroativo rodado em produção: 22 linhas históricas atualizadas, **$0,44 de custo total agora visível** (era sempre $0 no dashboard antes deste fix).
+
+Testado em homolog antes de produção (query de estado, dedup, cálculo de custo — os 3 com dado real, incluindo um achado próprio: a checagem de dedup inicialmente não usava `withTenantContext`, ficaria invisível pro RLS piloto de homolog — corrigido antes do deploy). `/health`→200 em homolog e produção, sem `ERROR` nos logs. Detalhe completo em `diagnosticos/AUDITORIA_LOG.md`.
+
 ## Sessão 2026-08-07 (cont.) — 🆕 Motor nativo de Disparo, bloco 2: "Gerar variações com IA" (item 4, 1 chamada por campanha) — em PRODUÇÃO
 
 Fecha a sprint do motor nativo (bloco 1 abaixo). `POST /api/disparos/gerar-variacoes` (novo, `routes/disparos.ts`) — reaproveita `criarProvider()` (mesmo helper de `agentEngine.ts`, provider/modelo da conta, fallback pro `.env` sem `ai_providers` próprio), 1 chamada por clique, nunca por contato. Preserva `{{placeholder}}` intacto (regra explícita no prompt), devolve JSON array de variantes completas. Botão em `StepMessage`/`VariantesMensagem`, texto explícito "roda 1 vez só, agora" pra não passar a falsa impressão de custo por envio — resultado alimenta `mensagens_variantes` (bloco 1), depois disso zero chamada de IA no envio real.
