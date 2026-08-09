@@ -258,8 +258,14 @@ export default function whatsappRouter(pool: Pool): Router {
     }
 
     if (agenteId) {
+      // [AUDITORIA] FIX APLICADO (Sprint Score Real, 2026-08-09): `evolution_conectado_em`
+      // preenchido só na PRIMEIRA vez (COALESCE — nunca sobrescreve uma data já gravada) — usado
+      // como "maturidade real" no cálculo de score (`instanceScore.ts`), em vez do
+      // `Math.random()` que existia antes. Reconectar um número já conhecido não deve resetar a
+      // idade da conta pro cálculo de saúde.
       await pool.query(
-        `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2, evolution_instancia=$3, updated_at=NOW()
+        `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2, evolution_instancia=$3,
+                             evolution_conectado_em = COALESCE(evolution_conectado_em, NOW()), updated_at=NOW()
          WHERE id=$4 AND user_id=$5`,
         [url, api_key, instancia, agenteId, userId]
       );
@@ -272,7 +278,8 @@ export default function whatsappRouter(pool: Pool): Router {
       // instância nova (ainda sem linha em agentes) cai no INSERT abaixo, criando uma linha
       // própria em vez de roubar a de outro chip.
       const updAg = await pool.query(
-        `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2, updated_at=NOW()
+        `UPDATE agentes SET evolution_server_url=$1, evolution_api_key=$2,
+                             evolution_conectado_em = COALESCE(evolution_conectado_em, NOW()), updated_at=NOW()
          WHERE user_id=$4 AND evolution_instancia=$3 AND ativo=true`,
         [url, api_key, instancia, userId]
       );
@@ -285,8 +292,8 @@ export default function whatsappRouter(pool: Pool): Router {
       // respondendo) se não existir nenhuma pra sincronizar.
       if (!updAg.rowCount) {
         await pool.query(
-          `INSERT INTO agentes (user_id, nome, evolution_server_url, evolution_api_key, evolution_instancia, ativo_motor)
-           VALUES ($1, 'Conexão WhatsApp', $2, $3, $4, false)`,
+          `INSERT INTO agentes (user_id, nome, evolution_server_url, evolution_api_key, evolution_instancia, ativo_motor, evolution_conectado_em)
+           VALUES ($1, 'Conexão WhatsApp', $2, $3, $4, false, NOW())`,
           [userId, url, api_key, instancia]
         );
       }

@@ -61,15 +61,20 @@ export default function integracoesRouter(pool: Pool): Router {
     // configurar persona/prompt. [AUDITORIA] FIX APLICADO (preservado na unificação): o UPDATE
     // abaixo nunca toca `ativo`; só o INSERT do caminho "linha nova" a define, e como `false` —
     // nunca desativa um agente que o usuário já ligou de propósito depois de configurar.
+    // [AUDITORIA] FIX APLICADO (Sprint Score Real, 2026-08-09): `evolution_conectado_em`
+    // preenchido (UPDATE: só se ainda NULL, via COALESCE; INSERT: sempre, é a primeira vez) —
+    // usado como "maturidade real" no cálculo de score (`instanceScore.ts`), ver mesmo padrão em
+    // `routes/whatsapp.ts` (`saveEvolutionConfig`).
     const upd = await pool.query(
-      `UPDATE agentes SET evolution_server_url = $1, evolution_api_key = $2, updated_at = NOW()
+      `UPDATE agentes SET evolution_server_url = $1, evolution_api_key = $2,
+                           evolution_conectado_em = COALESCE(evolution_conectado_em, NOW()), updated_at = NOW()
        WHERE user_id = $3 AND evolution_instancia = $4`,
       [url, apiKey, userId, instancia]
     ).catch(err => { log.warn('INTEGRACOES', 'sync agentes (update)', { err: err?.message, stack: err?.stack }); return null; });
     if (upd && !upd.rowCount) {
       await pool.query(
-        `INSERT INTO agentes (user_id, nome, evolution_instancia, evolution_server_url, evolution_api_key, ativo, ativo_motor)
-         VALUES ($1, 'Conexão WhatsApp', $2, $3, $4, false, false)`,
+        `INSERT INTO agentes (user_id, nome, evolution_instancia, evolution_server_url, evolution_api_key, ativo, ativo_motor, evolution_conectado_em)
+         VALUES ($1, 'Conexão WhatsApp', $2, $3, $4, false, false, NOW())`,
         [userId, instancia, url, apiKey]
       ).catch(err => log.warn('INTEGRACOES', 'sync agentes (insert)', { err: err?.message, stack: err?.stack }));
     }

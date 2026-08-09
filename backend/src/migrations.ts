@@ -782,7 +782,15 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   // Colunas de score em agentes
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS evolution_instancia TEXT`).catch(() => {});
+  // [AUDITORIA] BUG (achado real do usuário, Sprint Score Real + Maturador, 2026-08-09): esta
+  // coluna nasceu com `DEFAULT 100` — uma linha nova nunca calculada de verdade já vinha com
+  // "100/Saudável" gravado no banco, então mesmo o antigo fallback do frontend (`?? 100`) não
+  // era a única fonte do problema, o próprio DEFAULT reforçava. [AUDITORIA] FIX APLICADO:
+  // `ALTER COLUMN ... DROP DEFAULT` — linha nova nasce `NULL` (o frontend já trata `NULL`/
+  // `score_updated_at IS NULL` como "ainda não calculado", nunca mais como "saudável" por
+  // engano). Não altera linhas já existentes (`ALTER COLUMN DEFAULT` só afeta INSERTs futuros).
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS whatsapp_score INTEGER DEFAULT 100`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ALTER COLUMN whatsapp_score DROP DEFAULT`).catch(() => {});
 
   // ── Tabela de Workflows ──────────────────────────────────────────────────
   await pool.query(`
@@ -1837,6 +1845,66 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS variacao_automatica BOOLEAN DEFAULT true`).catch(() => {});
 
   log.info('MIGRATIONS', 'motor nativo de texto v2 (variação automática por sinônimo) OK');
+
+  // ── Score de Saúde real (Sprint Score Real + Maturador, 2026-08-09) ──────────────────────────
+  // [AUDITORIA] BUG GRAVE (achado real do usuário — 2 números banidos na mesma semana, score
+  // mostrava 100/100 "Saudável" nos dois): `InstanceManagementPanel.tsx.updateScore()` sempre foi
+  // mock (`Math.random()` pra volume/taxa/reclamações/tempo, só rodando quando o usuário clicava
+  // manualmente) e o fallback de exibição era `a.whatsapp_score ?? 100` — sem cálculo NENHUM
+  // rodado, o número mostrado era sempre 100. Ver `backend/src/services/instanceScore.ts` (novo)
+  // para o cálculo real que substitui o mock. `evolution_conectado_em` é usado como "maturidade"
+  // real (dias desde a conexão) em vez de `Math.random()` — só é preenchido a partir de agora
+  // (conexões futuras); linhas já existentes recebem `created_at` como aproximação (backfill
+  // abaixo, best-effort, documentado como tal na UI — não há como saber a data real de conexão de
+  // instâncias já conectadas antes desta coluna existir).
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS evolution_conectado_em TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`
+    UPDATE agentes SET evolution_conectado_em = created_at
+    WHERE evolution_conectado_em IS NULL AND evolution_instancia IS NOT NULL
+  `).catch(() => {});
+
+  log.info('MIGRATIONS', 'Score de Saúde real (evolution_conectado_em) OK');
+
+  // ── Maturador de Números (Sprint Score Real + Maturador, 2026-08-09, item 2) ─────────────────
+  // [AUDITORIA] LÓGICA: tabela de pares em maturação — 2 instâncias da MESMA conta trocando
+  // mensagens automáticas pré-escritas (banco de diálogo em
+  // `backend/src/services/maturadorDialogos.ts`) pra simular tráfego orgânico em número novo/
+  // recém-conectado, zero IA/token externo (mesma filosofia do motor nativo de Disparo,
+  // `src/lib/motorTexto.ts`). `ativo` nasce `false` sempre (nunca liga sozinho) — ativação é ação
+  // explícita do usuário por par, depois de confirmar que nenhuma das duas instâncias tem agente
+  // de IA ativo (ver validação em `routes/maturador.ts`, esse é o guard-rail contra a IA real
+  // responder a uma mensagem do maturador e gerar custo/comportamento inesperado).
+  // `contador_dia`/`contador_resetado_em`: reset à meia-noite (mesmo padrão citado pelo usuário no
+  // print de referência) — verificado no motor a cada tick, não por cron separado (mais simples:
+  // "se a data salva for diferente de hoje, zera antes de checar o teto").
+  // `linha_atual`: posição no banco de diálogo (`maturadorDialogos.ts`) — avança a cada mensagem
+  // trocada, cicla de volta ao início ao chegar no fim, pra parecer uma conversa contínua real em
+  // vez de mensagens soltas repetidas.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_pares (
+      id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id               UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      agente_a_id           UUID        NOT NULL REFERENCES agentes(id) ON DELETE CASCADE,
+      agente_b_id           UUID        NOT NULL REFERENCES agentes(id) ON DELETE CASCADE,
+      ativo                 BOOLEAN     NOT NULL DEFAULT false,
+      data_inicio           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ultimo_remetente      TEXT,
+      ultima_mensagem_em    TIMESTAMPTZ,
+      linha_atual           INTEGER     NOT NULL DEFAULT 0,
+      contador_dia          INTEGER     NOT NULL DEFAULT 0,
+      contador_resetado_em  DATE        NOT NULL DEFAULT CURRENT_DATE,
+      banido_em             TIMESTAMPTZ,
+      banido_agente_id      UUID        REFERENCES agentes(id) ON DELETE SET NULL,
+      created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT chk_maturador_pares_distintos CHECK (agente_a_id <> agente_b_id),
+      CONSTRAINT uq_maturador_par UNIQUE (agente_a_id, agente_b_id)
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_pares_user ON maturador_pares(user_id)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_pares_ativo ON maturador_pares(ativo) WHERE ativo = true`).catch(() => {});
+
+  log.info('MIGRATIONS', 'Maturador de Números (schema) OK');
 
   log.info('MIGRATIONS', 'OK');
 }

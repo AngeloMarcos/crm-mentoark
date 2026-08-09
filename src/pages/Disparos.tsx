@@ -633,8 +633,23 @@ export default function DisparosPage() {
     return null;
   }, [stepValid, step, form]);
 
+  // [AUDITORIA] BUG (achado real do usuário, Sprint Monitor de Disparo — Layout/Controle,
+  // 2026-08-08): este `return` ficava ANTES de qualquer `<CRMLayout>` — o resto da página (o
+  // wizard normal, abaixo) é que fica dentro dele. Resultado: com uma campanha ativa,
+  // `MonitoringDashboard` renderizava sozinho, fora do layout do CRM — sem sidebar/navegação,
+  // "tomando a tela inteira" e impedindo o operador de navegar pra outro módulo sem perder o
+  // monitor (só dava pra sair fechando a aba/dando refresh, o que também derruba `activeCampaign`,
+  // estado só em memória — ver `SPRINT_MONITOR_CAMPANHAS_DISPARO.md`, ainda pendente, para o
+  // problema relacionado de não existir nenhum jeito de voltar a essa campanha depois disso).
+  // [AUDITORIA] FIX APLICADO: envolvido em `<CRMLayout>`, mesmo padrão já usado pelo wizard
+  // logo abaixo — sidebar/navegação voltam a aparecer com o monitor aberto, confirmado
+  // visualmente em homolog.
   if (activeCampaign) {
-    return <MonitoringDashboard campaign={activeCampaign} onCancel={() => setActiveCampaign(null)} />;
+    return (
+      <CRMLayout>
+        <MonitoringDashboard campaign={activeCampaign} onCancel={() => setActiveCampaign(null)} />
+      </CRMLayout>
+    );
   }
 
   return (
@@ -2786,6 +2801,138 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
   );
 }
 
+// [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08, item 3): editor de
+// configuração da campanha, só renderizado quando `status === 'pausado'` (ver `MonitoringDashboard`
+// abaixo). `disparoProcessor.ts` lê `perfil_velocidade`/`delay_min_segundos`/`delay_max_segundos`
+// (a cada mensagem, dentro do loop de envio) e `horario_inicio`/`horario_fim`/`pausa_fins_semana`/
+// `limite_diario_mensagens` (a cada troca de campanha dentro de um lote) DIRETO da tabela
+// `disparos`, sem cache de vida longa — confirmado por leitura do arquivo antes de implementar
+// (`instanciasDisponiveisHojeCache`, o único cache module-level relevante ali, guarda só a lista de
+// instâncias elegíveis pro teto diário, não estes campos). Um `PATCH disparos` aqui já tem efeito
+// real no próximo ciclo do motor, sem precisar de nada novo no backend — mesmo endpoint genérico
+// (`makeCrud`) já usado por `handleStatusChange`.
+// Estado inicializado com um lazy initializer (`useState(() => ...)`) — só roda no PRIMEIRO mount
+// deste componente. Como ele só é montado/desmontado quando `status` alterna de/pra 'pausado' (ver
+// render condicional abaixo), os polls de 3s de `MonitoringDashboard` (que trocam a prop `campaign`
+// a cada request) NUNCA sobrescrevem uma edição não salva do operador no meio do caminho.
+// Mensagem da campanha (`mensagem`/`mensagens_variantes`) DELIBERADAMENTE fora deste formulário —
+// decisão explícita do pedido: editar o texto exigiria re-resolver `disparo_logs.mensagem_enviada`
+// pendente por pendente (regenerar a personalização/variação já aplicada na criação), risco e
+// escopo maior — ver "O que NÃO fazer" do prompt desta sprint. Se o usuário quiser isso no futuro,
+// é sprint separada.
+function EditarConfiguracaoPausada({ campaign, onSaved }: { campaign: any; onSaved: (fields: any) => void }) {
+  const [editForm, setEditForm] = useState(() => ({
+    perfil_velocidade: campaign.perfil_velocidade || "safe",
+    delay_min_minutos: campaign.delay_min_segundos != null ? Number(campaign.delay_min_segundos) / 60 : 0.5,
+    delay_max_minutos: campaign.delay_max_segundos != null ? Number(campaign.delay_max_segundos) / 60 : 1,
+    horario_inicio: campaign.horario_inicio || "08:00",
+    horario_fim: campaign.horario_fim || "21:00",
+    limite_diario_mensagens: campaign.limite_diario_mensagens ?? 200,
+    pausa_fins_semana: campaign.pausa_fins_semana ?? true,
+  }));
+  const [salvando, setSalvando] = useState(false);
+
+  // Mesmo piso de segurança já usado no wizard (StepAntiBan) — reaproveitado aqui de propósito
+  // pra não deixar o operador configurar, editando uma campanha já em produção, um intervalo mais
+  // arriscado do que a tela de criação jamais permitiria.
+  const intervaloInvalido = editForm.delay_min_minutos < DELAY_MIN_ABSOLUTO_MINUTOS
+    || editForm.delay_max_minutos < DELAY_MIN_ABSOLUTO_MINUTOS
+    || editForm.delay_min_minutos > editForm.delay_max_minutos;
+
+  const salvar = async () => {
+    if (intervaloInvalido) {
+      toast.error("Corrija o intervalo de delay antes de salvar (mínimo não pode ser maior que o máximo, nem menor que o piso de segurança).");
+      return;
+    }
+    setSalvando(true);
+    const payload = {
+      perfil_velocidade: editForm.perfil_velocidade,
+      delay_min_segundos: Math.round(Number(editForm.delay_min_minutos) * 60),
+      delay_max_segundos: Math.round(Number(editForm.delay_max_minutos) * 60),
+      horario_inicio: editForm.horario_inicio,
+      horario_fim: editForm.horario_fim,
+      limite_diario_mensagens: Number(editForm.limite_diario_mensagens) || 200,
+      pausa_fins_semana: editForm.pausa_fins_semana,
+    };
+    const { error } = await api.from("disparos").update(payload).eq("id", campaign.id);
+    setSalvando(false);
+    if (error) {
+      toast.error("Erro ao salvar configuração: " + error.message);
+      return;
+    }
+    toast.success("Configuração atualizada — vale a partir do próximo envio.");
+    onSaved(payload);
+  };
+
+  return (
+    <Card className="p-4 space-y-4 border-primary/30">
+      <div className="flex items-center justify-between">
+        <Label className="font-bold flex items-center gap-2"><Settings2 className="h-4 w-4" /> Editar configuração (campanha pausada)</Label>
+        <Badge variant="outline" className="text-[10px]">Aplica no próximo envio, sem reiniciar a fila</Badge>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="space-y-1">
+          <span className="text-[10px] uppercase text-muted-foreground">Perfil de velocidade</span>
+          <Select value={editForm.perfil_velocidade} onValueChange={v => setEditForm({ ...editForm, perfil_velocidade: v })}>
+            <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="safe">Seguro (30-60s)</SelectItem>
+              <SelectItem value="moderate">Moderado (15-30s)</SelectItem>
+              <SelectItem value="fast">Rápido (5-15s)</SelectItem>
+              <SelectItem value="ultra_safe">Ultra Seguro (8-12min)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <span className="text-[10px] uppercase text-muted-foreground">Intervalo mínimo (min)</span>
+          <Input type="number" step="0.1" min={DELAY_MIN_ABSOLUTO_MINUTOS} className="h-8"
+            value={editForm.delay_min_minutos}
+            onChange={e => setEditForm({ ...editForm, delay_min_minutos: parseFloat(e.target.value) })} />
+        </div>
+        <div className="space-y-1">
+          <span className="text-[10px] uppercase text-muted-foreground">Intervalo máximo (min)</span>
+          <Input type="number" step="0.1" min={DELAY_MIN_ABSOLUTO_MINUTOS} className="h-8"
+            value={editForm.delay_max_minutos}
+            onChange={e => setEditForm({ ...editForm, delay_max_minutos: parseFloat(e.target.value) })} />
+        </div>
+      </div>
+      {intervaloInvalido && (
+        <p className="text-[10px] text-destructive font-medium">
+          O mínimo não pode ser maior que o máximo, e nenhum dos dois pode ser menor que {DELAY_MIN_ABSOLUTO_MINUTOS.toFixed(2)} min (5s).
+        </p>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="space-y-1">
+          <span className="text-[10px] uppercase text-muted-foreground">Início da janela</span>
+          <Input type="time" className="h-8" value={editForm.horario_inicio} onChange={e => setEditForm({ ...editForm, horario_inicio: e.target.value })} />
+        </div>
+        <div className="space-y-1">
+          <span className="text-[10px] uppercase text-muted-foreground">Fim da janela</span>
+          <Input type="time" className="h-8" value={editForm.horario_fim} onChange={e => setEditForm({ ...editForm, horario_fim: e.target.value })} />
+        </div>
+        <div className="space-y-1">
+          <span className="text-[10px] uppercase text-muted-foreground">Limite diário (mensagens)</span>
+          <Input type="number" min={1} className="h-8" value={editForm.limite_diario_mensagens} onChange={e => setEditForm({ ...editForm, limite_diario_mensagens: e.target.value })} />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <span className="text-xs">Pausar nos fins de semana</span>
+        <Switch checked={editForm.pausa_fins_semana} onCheckedChange={v => setEditForm({ ...editForm, pausa_fins_semana: v })} />
+      </div>
+
+      <div className="flex justify-end">
+        <Button size="sm" onClick={salvar} disabled={salvando || intervaloInvalido}>
+          {salvando && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+          Salvar configuração
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: () => void }) {
   const [currentCampaign, setCurrentCampaign] = useState(campaign);
   const [logs, setLogs] = useState<any[]>([]);
@@ -2835,12 +2982,47 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
       .from("disparos")
       .update({ status: newStatus })
       .eq("id", campaign.id);
-    
+
     if (error) {
       toast.error("Erro ao alterar status: " + error.message);
     } else {
-      toast.success(`Campanha ${newStatus === 'pausado' ? 'pausada' : 'cancelada'}!`);
+      toast.success(`Campanha ${newStatus === 'pausado' ? 'pausada' : newStatus === 'em_andamento' ? 'retomada' : 'cancelada'}!`);
+      // [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08): atualiza o
+      // estado local na hora, em vez de esperar o próximo poll de 3s — o badge de status (e o
+      // formulário de edição condicionado a `status === 'pausado'`, logo abaixo) reagem
+      // imediatamente ao clique, sem lag visual.
+      setCurrentCampaign((prev: any) => ({ ...prev, status: newStatus }));
       if (newStatus === 'cancelado') onCancel();
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08, item 4): remove
+  // um contato ainda `pending` da fila enquanto a campanha está em andamento/pausada. Usa
+  // PATCH status='cancelado' (não DELETE) — mesmo espírito do resto do sistema (cooldown/opt-out
+  // já usam status em vez de apagar linha, mantendo histórico auditável). `get_next_disparo_batch()`
+  // (migrations.ts) só enfileira `status = 'pending'`, então um log 'cancelado' nunca mais é
+  // processado — efeito imediato e seguro, confirmado por leitura do SQL antes de implementar.
+  // `disparos.total_leads` decrementado junto (2º PATCH, mesmo clique) pra o card "Enviados X/Y"
+  // continuar batendo com o que realisticamente ainda vai ser enviado — sem isso, a campanha
+  // nunca "fecharia" visualmente em 100% depois de uma remoção manual.
+  const [removendoId, setRemovendoId] = useState<string | null>(null);
+  const removerContatoPendente = async (log: any) => {
+    if (!confirm(`Remover ${log.nome || log.telefone} desta campanha? Esse contato não vai receber a mensagem.`)) return;
+    setRemovendoId(log.id);
+    try {
+      const novoTotal = Math.max(0, (Number(currentCampaign.total_leads) || 0) - 1);
+      const [{ error: errLog }, { error: errTotal }] = await Promise.all([
+        api.from("disparo_logs").update({ status: 'cancelado', erro: 'Removido manualmente pelo operador' }).eq("id", log.id),
+        api.from("disparos").update({ total_leads: novoTotal }).eq("id", campaign.id),
+      ]);
+      if (errLog || errTotal) throw new Error(errLog?.message || errTotal?.message);
+      setLogs(prev => prev.filter(l => l.id !== log.id));
+      setCurrentCampaign((prev: any) => ({ ...prev, total_leads: novoTotal }));
+      toast.success(`${log.nome || log.telefone} removido da campanha.`);
+    } catch (err: any) {
+      toast.error("Erro ao remover contato: " + err.message);
+    } finally {
+      setRemovendoId(null);
     }
   };
 
@@ -2865,6 +3047,17 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
           <Button variant="destructive" onClick={() => handleStatusChange('cancelado')}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
         </div>
       </div>
+
+      {/* [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08, item 3): só
+          renderizado com a campanha pausada — editar velocidade/janela/limite/etc enquanto ela
+          está `em_andamento` seria editar algo que o motor pode estar lendo no exato meio de um
+          ciclo; pausar primeiro garante uma janela segura e previsível pra aplicar a mudança. */}
+      {currentCampaign.status === 'pausado' && (
+        <EditarConfiguracaoPausada
+          campaign={currentCampaign}
+          onSaved={(fields) => setCurrentCampaign((prev: any) => ({ ...prev, ...fields }))}
+        />
+      )}
 
       {failureRate > 10 && (
         <Alert variant={failureRate > 25 ? "destructive" : "default"} className={`animate-bounce ${failureRate <= 25 ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950/20' : ''}`}>
@@ -2916,6 +3109,9 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
                 <th className="p-3 text-left font-bold">Status</th>
                 <th className="p-3 text-left font-bold">Erro</th>
                 <th className="p-3 text-left font-bold">Horário</th>
+                {/* [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08,
+                    item 4): coluna nova, só usada pra ação de remover contato ainda pending. */}
+                <th className="p-3 text-left font-bold w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -2927,16 +3123,24 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
                     {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): sem um
                         case explícito, 'cooldown' caía no fallback 'outline'/"Pendente" — enganoso,
                         já que um log em cooldown nunca vai ser processado (não é "pendente" de
-                        verdade, foi bloqueado por design). */}
+                        verdade, foi bloqueado por design).
+                        [AUDITORIA] FIX APLICADO (Sprint Monitor de Disparo — Layout/Controle,
+                        2026-08-08): mesmo raciocínio pro status 'cancelado' (novo, item 4) — sem
+                        um case explícito cairia no fallback 'outline'/"Pendente", o que seria
+                        ativamente enganoso aqui (o operador acabou de remover o contato de
+                        propósito, ele nunca mais vai ser processado; rotular como "Pendente"
+                        sugeriria o oposto). */}
                     <Badge variant={
                       log.status === 'sent' ? 'secondary' :
                       log.status === 'failed' ? 'destructive' :
                       log.status === 'cooldown' ? 'outline' :
+                      log.status === 'cancelado' ? 'outline' :
                       log.status === 'sending' ? 'default' : 'outline'
-                    } className={`text-[10px] px-2 py-0 ${log.status === 'cooldown' ? 'border-amber-500 text-amber-600' : ''}`}>
+                    } className={`text-[10px] px-2 py-0 ${log.status === 'cooldown' ? 'border-amber-500 text-amber-600' : ''} ${log.status === 'cancelado' ? 'border-muted-foreground/40 text-muted-foreground' : ''}`}>
                       {log.status === 'sent' ? 'Enviado' :
                        log.status === 'failed' ? 'Falha' :
                        log.status === 'cooldown' ? 'Bloqueado (cooldown)' :
+                       log.status === 'cancelado' ? 'Removido' :
                        log.status === 'sending' ? 'Enviando...' : 'Pendente'}
                     </Badge>
                   </td>
@@ -2946,11 +3150,31 @@ function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: 
                   <td className="p-3 text-xs text-muted-foreground">
                     {new Date(log.enviado_at || log.created_at).toLocaleTimeString()}
                   </td>
+                  <td className="p-3">
+                    {/* [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08,
+                        item 4): remover só disponível pra 'pending' — nunca pra sending/sent/
+                        failed/cooldown/cancelado, que já são histórico real (pedido explícito do
+                        usuário, `get_next_disparo_batch()` só reprocessa 'pending' de qualquer
+                        forma, então remover um log que já saiu do estado pending não teria efeito
+                        nenhum no envio real, só confundiria o operador). */}
+                    {log.status === 'pending' && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        disabled={removendoId === log.id}
+                        onClick={() => removerContatoPendente(log)}
+                        title="Remover contato desta campanha"
+                      >
+                        {removendoId === log.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      </Button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {logs.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-muted-foreground italic">
+                  <td colSpan={6} className="p-8 text-center text-muted-foreground italic">
                     Nenhum envio registrado ainda.
                   </td>
                 </tr>

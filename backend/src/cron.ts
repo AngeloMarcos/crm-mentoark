@@ -3,6 +3,8 @@ import { pool, withTenantContext } from './db';
 import { log } from './logger';
 import { reconciliarInstanciasEvolution } from './services/evolutionReconciliation';
 import { retentarMidiaPendente } from './services/mediaRetry';
+import { recalcularTodosScores } from './services/instanceScore';
+import { processarMaturador } from './services/maturadorProcessor';
 
 export function initCronJobs() {
   // Todo dia às 03:00 (horário de Brasília) — Limpeza diária de tabelas de crescimento
@@ -129,6 +131,44 @@ export function initCronJobs() {
       log.error('CRON', 'Erro na reconciliação de instâncias Evolution', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
+
+  // [AUDITORIA] FIX APLICADO (Sprint Score Real, 2026-08-09): Score de Saúde deixou de ser
+  // 100% mock (Math.random(), só rodava com clique manual, fallback de exibição sem cálculo
+  // nenhum = 100/"Saudável" — achado grave: 2 números banidos na semana e o score mostrava
+  // 100/100 nos dois). Recalcula TODAS as instâncias conectadas a cada 15min (mesma cadência da
+  // reconciliação Evolution logo acima — não precisa ser mais frequente, é uma métrica de
+  // tendência, não algo que precise de segundo-a-segundo) com dado real (`instanceScore.ts`,
+  // ver comentário completo lá). Botão "Recalcular score" (frontend) chama o cálculo sob
+  // demanda pra feedback imediato sem esperar o próximo tick deste cron.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { atualizados, falhas } = await recalcularTodosScores(pool);
+      if (atualizados > 0 || falhas > 0) {
+        log.info('CRON', 'Score de Saúde recalculado', { atualizados, falhas });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro ao recalcular Score de Saúde', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09, item 2): motor do Maturador
+  // de Números — mesmo espírito de `disparoProcessor.ts` (ciclo com delay variável, nunca
+  // rajada), mas trocando mensagem PRÉ-ESCRITA (zero IA/token) entre 2 instâncias da MESMA
+  // conta, pra simular tráfego orgânico em número novo. Cadência de 1min (bem mais lenta que os
+  // 2s do disparoProcessor de propósito — aqui não tem fila de contatos reais esperando, só
+  // pares `ativo=true`, o motor só precisa checar se já passou tempo suficiente desde a última
+  // troca daquele par). `ativo` nasce sempre `false` (ver migrations.ts) — este cron não faz
+  // nada até o usuário ativar pelo menos 1 par manualmente na UI.
+  cron.schedule('*/1 * * * *', async () => {
+    try {
+      const { processados, enviados } = await processarMaturador(pool);
+      if (enviados > 0) {
+        log.info('CRON', 'Maturador de Números: mensagens trocadas', { processados, enviados });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro no motor do Maturador de Números', { err: err.message });
+    }
+  });
 
   // Todo dia às 04:00 (horário de Brasília) — Sprint A do plano de mídia (ver
   // diagnosticos/AUDITORIA_LOG.md): retenta decriptografar/salvar mídia cuja media_url ainda

@@ -41,6 +41,8 @@ import { makeCrud } from './crud';
 import authRouter from './auth';
 import contatosRouter from './routes/contatos';
 import disparosRouter from './routes/disparos';
+import instanceScoreRouter from './routes/instanceScore';
+import maturadorRouter from './routes/maturador';
 import agentPromptsRouter from './routes/agent_prompts';
 import agentConfigRouter from './routes/agent-config';
 import documentsRouter from './routes/documents';
@@ -330,6 +332,12 @@ for (const table of SHARED_TABLES) {
 // Specialized routes
 app.use('/api/contatos', contatosRouter(pool));
 app.use('/api/disparos', disparosRouter(pool));
+// [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): prefixo próprio
+// (`/api/instancias`), não `/api/agentes/...` — evita qualquer colisão de rota com o CRUD
+// genérico já montado em `/api/agentes` (makeCrud, abaixo) e deixa claro que estas rotas são
+// sobre a INSTÂNCIA WhatsApp em si (score, maturador), não sobre a config do agente de IA.
+app.use('/api/instancias', instanceScoreRouter(pool));
+app.use('/api/maturador', maturadorRouter(pool));
 app.use('/api/agent_prompts', agentPromptsRouter(pool));
 app.use('/api/agent-config',  agentConfigRouter(pool));
 app.use('/api/documents', documentsRouter(pool));

@@ -85,6 +85,12 @@ interface Agente {
   evolution_instancia: string | null;
   whatsapp_score: number | null;
   score_fatores: ScoreFatores | null;
+  // [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): `null` = nunca calculado de
+  // verdade (cron de 15min ainda não passou por esta instância) — usado pra distinguir "sem dado
+  // real ainda" de "score baixo calculado de verdade", em vez do fallback antigo (`?? 100`) que
+  // mascarava os dois casos como "Saudável".
+  score_updated_at: string | null;
+  created_at: string;
   fallback_owner: string | null;
   filial: string | null;
   reject_calls: boolean | null;
@@ -599,41 +605,27 @@ export function InstanceManagementPanel() {
     [agentes]
   );
 
-  const updateScore = async (id: string, mockData?: any) => {
+  // [AUDITORIA] BUG GRAVE CORRIGIDO (Sprint Score Real + Maturador, 2026-08-09): achado real do
+  // usuário — 2 números banidos na mesma semana, "Score de Saúde" mostrando 100/100 "Saudável"
+  // nos dois. Causa raiz confirmada por leitura do código: esta função nunca calculou nada real —
+  // `Math.random()` pra volume/taxa/reclamações/tempo, só rodava com clique manual, e o fallback
+  // de exibição sem cálculo nenhum era `whatsapp_score ?? 100`. [AUDITORIA] FIX APLICADO: chama o
+  // backend de verdade (`POST /api/instancias/:id/score`, `backend/src/services/instanceScore.ts`)
+  // que consulta `whatsapp_messages`/`disparo_logs`/`disparo_optouts` reais — mesma função usada
+  // pelo cron de 15min que agora recalcula automaticamente todas as instâncias conectadas (este
+  // botão só força um recálculo imediato, pra quem acabou de mudar algo e não quer esperar).
+  const updateScore = async (id: string) => {
     setCalculating(id);
     try {
-      // Em um cenário real, isso seria uma chamada para /api/agentes/:id/score
-      // que consultaria o histórico real de disparos, taxas e logs de ban.
-      // Aqui simulamos o cálculo baseado nas regras fornecidas.
-      
-      const data = mockData || {
-        volume_diario: Math.floor(Math.random() * 200),
-        taxa_resposta: Math.floor(Math.random() * 50),
-        reclamacoes: Math.floor(Math.random() * 5),
-        tempo_dias: Math.floor(Math.random() * 120),
-      };
-
-      let v_score = data.volume_diario < 50 ? 25 : data.volume_diario <= 150 ? 15 : 5;
-      let r_score = data.taxa_resposta > 30 ? 25 : data.taxa_resposta >= 10 ? 15 : 5;
-      let b_score = data.reclamacoes === 0 ? 25 : data.reclamacoes <= 3 ? 10 : 0;
-      let m_score = data.tempo_dias > 90 ? 25 : data.tempo_dias >= 30 ? 15 : 5;
-
-      const total = v_score + r_score + b_score + m_score;
-      const fatores: ScoreFatores = {
-        volume_diario: v_score,
-        taxa_resposta: r_score,
-        reclamacoes: b_score,
-        tempo_conta: m_score
-      };
-
-      const { error } = await api.from("agentes").update({
-        whatsapp_score: total,
-        score_fatores: fatores,
-        score_updated_at: new Date().toISOString()
-      }).eq("id", id);
-
-      if (error) throw error;
-      toast.success("Score atualizado com sucesso");
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/instancias/${id}/score`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.message || "Falha ao calcular score");
+      toast.success(`Score recalculado: ${json.total}/100`);
       carregar();
     } catch (err: any) {
       toast.error(`Falha ao calcular score: ${err.message}`);
@@ -711,10 +703,22 @@ export function InstanceManagementPanel() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {instancias.map(a => {
-            const score = a.whatsapp_score ?? 100;
-            const fatores = a.score_fatores || { volume_diario: 25, taxa_resposta: 25, reclamacoes: 25, tempo_conta: 25 };
+            // [AUDITORIA] FIX APLICADO (Sprint Score Real + Maturador, 2026-08-09): `?? 100` era a
+            // causa raiz do achado do usuário — sem NENHUM cálculo real, o fallback mostrava
+            // "Saudável" pra qualquer instância nunca avaliada (inclusive uma já banida). Agora
+            // `naoCalculado` é tratado como estado PRÓPRIO (nem "saudável" nem "crítico" — ver
+            // `ScoreInstancia.tsx`), e `score`/`fatores` só são realmente exibidos quando existe
+            // dado de verdade (`score_updated_at` preenchido pelo cálculo real, cron ou botão).
+            const naoCalculado = !a.score_updated_at;
+            const score = a.whatsapp_score ?? 0;
+            const fatores = a.score_fatores || { volume_diario: 0, taxa_resposta: 0, reclamacoes: 0, tempo_conta: 0 };
             const state: ConnState = statuses[a.id] ?? "close";
-            const isCritical = score < 40;
+            // Override crítico do achado original: desconectada/banida nunca é "saudável",
+            // independente do score calculado (pode estar desatualizado em até 15min) — mesmo
+            // raciocínio se aplica ao badge "Score crítico"/botão "Novo Disparo" abaixo, não só
+            // ao componente ScoreInstancia.
+            const desconectada = state !== "open";
+            const isCritical = desconectada || (!naoCalculado && score < 40);
 
             return (
               <Card key={a.id} className={`p-5 space-y-4 hover:shadow-lg transition-all border-2 ${isCritical ? 'border-red-500/50 bg-red-50/30' : 'border-transparent'}`}>
@@ -862,16 +866,24 @@ export function InstanceManagementPanel() {
                   )}
                 </div>
 
+                {/* [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): texto
+                    diferenciado — "desconectada" e "score crítico" são achados diferentes, não
+                    faz sentido usar a mesma frase pros dois. Nenhum dos dois casos realmente
+                    PAUSA disparos automaticamente no backend hoje (achado lateral, fora do escopo
+                    desta sprint — só o botão "Novo Disparo" fica desabilitado NESTA tela; ver
+                    diagnosticos/AUDITORIA_LOG.md pro registro completo). */}
                 {isCritical && (
                   <div className="flex items-center gap-2 p-2 bg-red-500 text-white rounded-md text-[11px] font-bold animate-pulse">
                     <AlertOctagon className="h-3 w-3" />
-                    Score crítico — disparos pausados automaticamente
+                    {desconectada ? "Desconectada — não deve receber disparos" : "Score crítico — evite disparar por este número"}
                   </div>
                 )}
 
-                <ScoreInstancia 
-                  score={score} 
-                  fatores={fatores} 
+                <ScoreInstancia
+                  score={score}
+                  fatores={fatores}
+                  desconectado={desconectada}
+                  naoCalculado={naoCalculado}
                 />
 
                 <div className="flex flex-wrap gap-1.5 pt-1">
