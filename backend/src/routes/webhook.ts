@@ -71,7 +71,9 @@ import { withTenantContext } from '../db';
 import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
 import { analisarImagem } from '../utils/vision';
+import { registrarUsoIA, estimarCustoUsd, estimarCustoWhisperUsd, orcamentoDiarioExcedido } from '../utils/aiCusto';
 import { log } from '../logger';
+import { registrarLogoutEvent, verificarLoopDeLogout } from '../services/logoutCircuitBreaker';
 
 const MIDIA_TIPOS = new Set(['image', 'audio', 'video', 'document', 'sticker']);
 
@@ -275,14 +277,36 @@ export default function webhookRouter(pool: Pool): Router {
   const processados = new Set<string>();
 
   // [AUDITORIA] LÓGICA: Manipula eventos `messages.update` para refletir recibos de entrega (DELIVERY_ACK) e leitura (READ).
+  // [AUDITORIA] BUG GRAVE CORRIGIDO (achado 2026-08-10 — cliente real reportou "mensagem aparece
+  // como enviada no CRM mas não chega ao usuário"): a suposição original — `payload.data.update`
+  // como ARRAY de `{id, status}` — nunca bateu com o formato real desta versão da Evolution
+  // (v2.3.7). `Array.isArray(updates)` dava false toda vez, `return` imediato, função nunca
+  // chegava no INSERT. Confirmado ao vivo (payload real capturado por log temporário): `data` é
+  // um OBJETO PLANO — `{ keyId, remoteJid, fromMe, status, instanceId, messageId }`, sem
+  // aninhamento nenhum, um evento por atualização (não em lote). Resultado prático: a tabela
+  // `whatsapp_message_status` ficou 100% vazia desde sempre, pra CONTA NENHUMA do sistema — o
+  // CRM nunca soube distinguir "entregue" de "erro real de entrega" (confirmado via
+  // `chat/findMessages` direto na Evolution: mensagens enviadas pela IA/API deste cliente
+  // voltaram `MessageUpdate:[{status:'ERROR'}]` — falha real de entrega do lado do WhatsApp,
+  // nunca refletida em lugar nenhum do CRM). [AUDITORIA] FIX APLICADO: parser reescrito pro
+  // formato real (`data.keyId`/`data.status` direto), com fallback pro formato antigo em array
+  // (`data.update`) caso uma versão futura da Evolution volte a mandar em lote — não custa nada
+  // manter os dois caminhos. Além de gravar em `whatsapp_message_status` (auditoria bruta),
+  // agora também espelha em `whatsapp_messages.status` quando o status é ERROR — coluna e índice
+  // (`idx_wa_messages_status_pending`) já existiam prontos pra esse valor, só nunca eram
+  // escritos por ninguém.
   async function handleStatusUpdate(payload: EvolutionPayload): Promise<void> {
     // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
     // as queries abaixo usam payload.instance sem checar presença — payload malformado sem esse
     // campo faria as queries falharem silenciosamente (mascarado pelos .catch(() => {})) em vez
     // de simplesmente não processar o evento. Guarda defensiva explícita no início da função.
     if (!payload?.instance) return;
-    const updates = payload.data?.update;
-    if (!Array.isArray(updates)) return;
+
+    const rawData = payload.data as any;
+    const arrayShape = Array.isArray(rawData?.update) ? rawData.update : null;
+    // Formato real confirmado ao vivo: objeto único, sem array — normaliza pro mesmo shape do
+    // loop abaixo pra não duplicar a lógica de gravação.
+    const updates: any[] = arrayShape ?? (rawData && typeof rawData === 'object' ? [rawData] : []);
 
     for (const upd of updates) {
       // [AUDITORIA] BUG (achado 3 da revisão externa/Google AI Studio, sprint seguinte à
@@ -292,8 +316,8 @@ export default function webhookRouter(pool: Pool): Router {
       // do handler, sem processar o resto do array).
       // [AUDITORIA] FIX APLICADO: guarda defensiva no início do loop.
       if (!upd || typeof upd !== 'object') continue;
-      const messageId = (upd as any).id || payload.data?.key?.id;
-      const status = (upd as any).status || upd.status;
+      const messageId = upd.keyId || upd.id || upd.key?.id || rawData?.key?.id;
+      const status = upd.status;
       if (!messageId || !status) continue;
 
       // [AUDITORIA] LÓGICA: Registra a atualização bruta de status (sent, delivery, read, etc) com UPSERT por instância.
@@ -304,6 +328,17 @@ export default function webhookRouter(pool: Pool): Router {
            SET status = EXCLUDED.status, updated_at = NOW()`,
         [messageId, payload.instance, status]
       ).catch(() => {});
+
+      // [AUDITORIA] FIX APLICADO: espelha falha real de entrega em `whatsapp_messages.status`
+      // (coluna que a UI do chat lê) — sem isso, uma mensagem que o WhatsApp rejeitou continuava
+      // marcada 'sent' pra sempre, indistinguível de uma entrega bem-sucedida.
+      if (status === 'ERROR' || status === 0 || status === '0') {
+        await withTenantContext({ isAdmin: true }, client => client.query(
+          `UPDATE whatsapp_messages SET status = 'failed'
+           WHERE message_id = $1 AND instance_name = $2 AND from_me = true`,
+          [messageId, payload.instance]
+        )).catch(() => {});
+      }
 
       // [AUDITORIA] FIX APLICADO: além das strings literais 'READ'/'PLAYED', normaliza os códigos
       // numéricos do enum oficial WebMessageInfo.Status do Baileys/WhatsApp (verificado no proto
@@ -593,7 +628,22 @@ export default function webhookRouter(pool: Pool): Router {
       // deste handler) o backfill das últimas mensagens via sincronizarHistoricoDireto — resolve
       // o caso real já diagnosticado (stefanocatedral@hotmail.com, ver AUDITORIA_LOG.md) sem
       // depender de um script manual.
-      if (eventClean === 'connectionupdate' && (payload.data as any)?.connection === 'open') {
+      // [AUDITORIA] BUG CORRIGIDO (achado 2026-08-10, Sprint Circuit-Breaker LOGOUT — payload
+      // real capturado ao vivo em homolog, log temporário forçando um connect/logout de teste):
+      // o campo real que a Evolution manda em `connection.update` é `data.state` ('open' /
+      // 'connecting' / 'close'), NÃO `data.connection` — confirmado com 2 amostras reais
+      // (`{state:'connecting', statusReason:200}` e `{state:'close', statusReason:401}`,
+      // instância `crm_435ee4720fc3_3`, homolog). A checagem original só testava
+      // `data.connection === 'open'`, que nunca bate nesta versão da Evolution — o backfill
+      // automático ao reconectar provavelmente nunca disparou desde que foi escrito. [AUDITORIA]
+      // FIX APLICADO: checa `state` como campo primário, `connection` como fallback (não
+      // remove o caminho antigo — se alguma config/versão diferente da Evolution realmente
+      // mandar `connection`, continua funcionando).
+      const connUpdateState = eventClean === 'connectionupdate'
+        ? ((payload.data as any)?.state || (payload.data as any)?.connection)
+        : null;
+
+      if (connUpdateState === 'open') {
         log.info('WEBHOOK', 'Instância conectada — disparando sincronização automática de histórico', { traceId, instance: payload.instance });
         const instanciaConectada = payload.instance;
         if (instanciaConectada) {
@@ -611,6 +661,30 @@ export default function webhookRouter(pool: Pool): Router {
           } else {
             log.info('WEBHOOK', 'connection.update: userId não resolvido para a instância, sincronização não disparada', { traceId, instancia: instanciaConectada });
           }
+        }
+        return;
+      }
+
+      // [AUDITORIA] LÓGICA (Sprint Circuit-Breaker LOGOUT, 2026-08-10 — continuação direta do
+      // incidente Serenovlogs067): grava TODO evento real de LOGOUT/close — é o dado que faltava
+      // pro sistema ter visão em tempo real de uma instância entrando em padrão de derrubadas
+      // repetidas, em vez de só descobrir via investigação manual depois do estrago (como nos 2
+      // incidentes reais). Enforcement do bloqueio em si vive em `whatsapp.ts` (`POST /connect`,
+      // cobre `nova_conexao` E `force_reconnect`) — aqui só grava o evento e, quando o padrão já
+      // bate o limite (`verificarLoopDeLogout`), loga um alerta destacado (`WHATSAPP_LOGOUT_LOOP`)
+      // pro operador ver na hora, não reconstituir a timeline na unha depois.
+      if (connUpdateState === 'close' && payload.instance) {
+        const statusReason = Number.isFinite((payload.data as any)?.statusReason)
+          ? Number((payload.data as any).statusReason)
+          : null;
+        await registrarLogoutEvent(pool, payload.instance, statusReason);
+        const loopStatus = await verificarLoopDeLogout(pool, payload.instance);
+        if (loopStatus.emLoop) {
+          const userIdLoop = await resolverUserIdPorInstancia(payload.instance).catch(() => null);
+          log.error('WHATSAPP_LOGOUT_LOOP', `Instância "${payload.instance}" com ${loopStatus.totalRecente} LOGOUTs na última hora — padrão de risco de banimento, circuit-breaker deve estar bloqueando novas tentativas de conexão`, {
+            traceId, instancia: payload.instance, userId: userIdLoop, totalRecente: loopStatus.totalRecente,
+            minutosRestantes: loopStatus.minutosRestantes, statusReason,
+          });
         }
         return;
       }
@@ -1053,6 +1127,47 @@ export default function webhookRouter(pool: Pool): Router {
       const ts       = payload.data.messageTimestamp || Math.floor(Date.now() / 1000);
       const tsVal    = ts > 1e10 ? Math.floor(ts / 1000) : ts;
 
+      // [AUDITORIA] BUG (achado real, 2026-08-14 — crédito OpenAI zerado, "$0,08" na cobrança,
+      // 429 insufficient_quota em produção): os gates de Whisper/Vision aplicados em 07/08
+      // (conta sem agente ativo / contato com IA pausada, ver blocos abaixo) NUNCA checam se a
+      // mensagem é de GRUPO nem se aquele grupo está autorizado em `grupos_ia_permitidos` — o
+      // portão de grupo (mais abaixo, `if (isGroup)`) só bloqueia a RESPOSTA de texto; a
+      // transcrição/descrição já rodou e já foi paga bem antes disso. Confirmado com dado real
+      // de produção, não suposição: as 3 contas reais ativas hoje têm **0 grupos autorizados**
+      // em `grupos_ia_permitidos`, mas somaram **4.239 imagens/áudios de grupo em 14 dias**
+      // (1548 stefanocatedral, 1373 serenovlogs067, 1318 mentoark) — 100% desperdício, nenhum
+      // desses grupos teria uma resposta de IA de qualquer forma. Ficou invisível no dashboard
+      // de custo porque só `agentEngine.ts` grava `custo_usd`; Whisper/Vision nunca entraram
+      // nessa contagem — provável maior causa real do esgotamento de crédito.
+      // [AUDITORIA] FIX APLICADO: gate extra, só pra grupo — pula Whisper/Vision inteiramente
+      // quando é grupo E não está em `grupos_ia_permitidos` (ativo=true). Mídia continua salva
+      // normalmente (sem transcrição/descrição), mesmo comportamento já usado pro caso de conta
+      // pausada logo abaixo.
+      let grupoMidiaNaoAutorizada = false;
+      if (isGroup && userId) {
+        const permissaoMidia = await pool.query(
+          `SELECT 1 FROM grupos_ia_permitidos WHERE user_id = $1 AND group_jid = $2 AND ativo = true LIMIT 1`,
+          [userId, remoteJid]
+        ).catch(() => ({ rows: [] as any[] }));
+        grupoMidiaNaoAutorizada = permissaoMidia.rows.length === 0;
+        if (grupoMidiaNaoAutorizada && (tipo === 'audio' || tipo === 'image')) {
+          log.info('WEBHOOK', 'Whisper/Vision pulado — mídia de grupo fora do portão de grupos_ia_permitidos', { traceId, msgId: messageId, tipo, remoteJid });
+        }
+      }
+
+      // [AUDITORIA] LÓGICA (achado 2026-09-02, freio geral de gasto de IA pedido pelo usuário
+      // antes de reconectar a chave da OpenAI — ver comentário completo em
+      // `orcamentoDiarioExcedido()`, aiCusto.ts): checado uma vez aqui, reaproveitado pelos 3
+      // pontos de entrada mais caros deste arquivo (Whisper, Vision, e o motor de conversa via
+      // `processarComDebounce` mais abaixo). Desligado por padrão (`AI_LIMITE_DIARIO_USD` não
+      // configurada) — não muda nada em quem não configurar o teto.
+      const orcamento = await orcamentoDiarioExcedido(pool);
+      if (orcamento.excedido) {
+        log.warn('WEBHOOK', 'Orçamento diário de IA excedido — pulando Whisper/Vision/resposta automática pro resto do dia', {
+          traceId, msgId: messageId, gastoHojeUsd: orcamento.gastoHojeUsd, limiteUsd: orcamento.limiteUsd,
+        });
+      }
+
       // ── Transcrição nativa de áudio recebido (Sprint 1 — Whisper API) ────────
       // Só para mensagens de voz recebidas de fora (fromMe=false, tipo=audio). Roda
       // ANTES do INSERT em whatsapp_messages e de processarComDebounce (aguardada aqui,
@@ -1079,7 +1194,7 @@ export default function webhookRouter(pool: Pool): Router {
       // conta não tem nenhum agente ativo OU o contato está com IA pausada — mídia continua sendo
       // salva normalmente (só sem transcrição/descrição), `agentEngine.ts` nunca chamaria o LLM
       // pra esses casos de qualquer forma.
-      if (!fromMe && tipo === 'audio' && userId && process.env.OPENAI_API_KEY) {
+      if (!fromMe && tipo === 'audio' && userId && process.env.OPENAI_API_KEY && !grupoMidiaNaoAutorizada && !orcamento.excedido) {
         try {
           // [AUDITORIA] LÓGICA: withTenantContext (não pool.query direto) — mesmo motivo de todo
           // outro acesso a whatsapp_messages neste arquivo: piloto de RLS só em homolog (ver
@@ -1096,16 +1211,70 @@ export default function webhookRouter(pool: Pool): Router {
             texto = jaTranscrito.rows[0].content;
             log.info('WEBHOOK', 'Áudio já transcrito por outra instância — reaproveitando (evita Whisper duplicado)', { traceId, msgId: messageId });
           } else {
+            // [AUDITORIA] BUG (achado real, Sprint Modalidades Opcionais, 2026-08-23 — pedido
+            // explícito do usuário: "deixe como opcional na configuração da IA... não tire essa
+            // funcionalidade"): `agentes.modalidade_audio`/`modalidade_imagem` e o toggle
+            // correspondente em `Agentes.tsx` já existiam desde 2026-08-07 (Sprint 1 de
+            // unificação), mas ficaram DELIBERADAMENTE inertes — sem coluna no banco, tirados via
+            // `stripFields` do CRUD genérico (`index.ts`), com aviso visível na tela avisando
+            // disso (ver AUDITORIA_LOG.md, entrada 2026-08-07, "sprint já grande" foi o motivo
+            // dado, não uma limitação técnica). [AUDITORIA] FIX APLICADO: coluna real adicionada
+            // (`migrations.ts`, default `true` — preserva o comportamento atual pra quem nunca
+            // mexeu no toggle), `stripFields` liberado, e o valor é lido aqui pelo MESMO critério
+            // de prioridade que `agentEngine.ts` usa pra resolver qual agente atende esta
+            // instância (match exato de `evolution_instancia` primeiro, senão o `ativo=true` mais
+            // recentemente atualizado do tenant) — o toggle reflete o agente que de fato
+            // responderia, não uma configuração arbitrária de outra instância do mesmo tenant.
+            // [AUDITORIA] BUG (achado real ao TESTAR este mesmo fix em homolog, não só leitura de
+            // código): a primeira versão comparava `evolution_instancia` cru, sem `COALESCE` —
+            // pra qualquer conta com mais de 1 agente `ativo=true` e a maioria com
+            // `evolution_instancia IS NULL` (comum: várias linhas legadas de teste/histórico
+            // nunca vinculadas a uma instância real), `NULL = '...'` avalia pra NULL, e
+            // `ORDER BY <expressão> DESC` no Postgres ordena NULL ANTES de true/false por padrão
+            // — as linhas com instância NULL "venciam" a única linha que de fato batia com a
+            // instância real, escolhendo o `modalidade_audio` errado (de um agente não
+            // relacionado) na maioria das contas com mais de uma linha. `COALESCE(evolution_
+            // instancia, '')` garante que a comparação nunca produz NULL, corrigindo o sort.
+            // [AUDITORIA] BUG (achado real, `SPRINT_GATE_MIDIA_PROMPT_E_TOGGLE_MODALIDADE.md`,
+            // nunca corrigido até agora): `conta_ativa` confirma que existe um agente LIGADO
+            // (`ativo=true`), mas nunca confirmou que ele está CONFIGURADO (`prompt_sistema`
+            // real) — uma conta `ativo=true` com prompt vazio passava neste gate normalmente e
+            // pagava Whisper, mesmo `agentEngine.ts` já tendo um guard-rail que aborta sem
+            // responder nada nesse caso (`if (!systemPromptBase) return`). Exatamente o padrão
+            // vivido nesta sessão: 2 contas reais (`fmakonee03`, `stefanocatedral`) nesse estado
+            // — desativadas manualmente no mesmo dia, mas o GATE em si nunca protegia contra o
+            // PRÓXIMO caso igual. [AUDITORIA] FIX APLICADO: `conta_configurada` — mesmo critério
+            // do guard-rail de `agentEngine.ts` (prompt não-nulo e não-vazio, aparado).
+            // [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas, 2026-09-04):
+            // `fallback_transcricao_falha` segue o MESMO critério de prioridade que
+            // `modalidade_audio_habilitada` logo abaixo (match exato de `evolution_instancia`
+            // primeiro, senão o `ativo=true` mais recente do tenant) — é o texto configurado na
+            // aba Configurações (`Agentes.tsx`) do agente que de fato responderia esta conversa,
+            // não de um agente qualquer do mesmo tenant. NULL/vazio = comportamento de sempre
+            // (áudio que falha na transcrição simplesmente não gera resposta).
             const estadoIa = await pool.query(
               `SELECT
                  EXISTS (SELECT 1 FROM agentes WHERE user_id = $1 AND ativo = true) AS conta_ativa,
-                 COALESCE((SELECT atendente_pausou_ia FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1), false) AS contato_pausado`,
-              [userId, `%${telefone.slice(-11)}`]
-            ).catch(() => ({ rows: [{ conta_ativa: true, contato_pausado: false }] }));
-            const { conta_ativa, contato_pausado } = estadoIa.rows[0];
+                 EXISTS (SELECT 1 FROM agentes WHERE user_id = $1 AND ativo = true AND prompt_sistema IS NOT NULL AND trim(prompt_sistema) <> '') AS conta_configurada,
+                 COALESCE((SELECT atendente_pausou_ia FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1), false) AS contato_pausado,
+                 COALESCE(
+                   (SELECT modalidade_audio FROM agentes WHERE user_id = $1 AND ativo = true
+                    ORDER BY (LOWER(COALESCE(evolution_instancia, '')) = LOWER($3)) DESC, updated_at DESC LIMIT 1),
+                   true
+                 ) AS modalidade_audio_habilitada,
+                 (SELECT NULLIF(trim(fallback_transcricao_falha), '') FROM agentes WHERE user_id = $1 AND ativo = true
+                  ORDER BY (LOWER(COALESCE(evolution_instancia, '')) = LOWER($3)) DESC, updated_at DESC LIMIT 1
+                 ) AS fallback_transcricao_falha`,
+              [userId, `%${telefone.slice(-11)}`, instancia]
+            ).catch(() => ({ rows: [{ conta_ativa: true, conta_configurada: true, contato_pausado: false, modalidade_audio_habilitada: true, fallback_transcricao_falha: null }] }));
+            const { conta_ativa, conta_configurada, contato_pausado, modalidade_audio_habilitada, fallback_transcricao_falha } = estadoIa.rows[0];
 
             if (!conta_ativa || contato_pausado) {
               log.info('WEBHOOK', 'Whisper pulado — conta sem agente ativo ou contato com IA pausada', { traceId, msgId: messageId, conta_ativa, contato_pausado });
+            } else if (!conta_configurada) {
+              log.info('WEBHOOK', 'Whisper pulado — agente ativo mas sem prompt configurado (IA nunca responderia mesmo assim)', { traceId, msgId: messageId });
+            } else if (!modalidade_audio_habilitada) {
+              log.info('WEBHOOK', 'Whisper pulado — transcrição de áudio desligada nas configurações do agente', { traceId, msgId: messageId });
             } else {
               const cfgAudio = await pool.query(
                 `SELECT evolution_server_url AS url, evolution_api_key AS api_key
@@ -1122,17 +1291,41 @@ export default function webhookRouter(pool: Pool): Router {
               });
 
               if (midiaDecriptografada) {
-                const textoGerado = await transcreverAudio(
+                const resultadoTranscricao = await transcreverAudio(
                   midiaDecriptografada.buffer,
                   midiaDecriptografada.mimetype || midia.mime || 'audio/ogg',
                   process.env.OPENAI_API_KEY,
                 );
-                if (textoGerado) {
-                  texto = `[Áudio Transcrito: "${textoGerado}"]`;
-                  log.info('WEBHOOK', 'Áudio transcrito com sucesso', { traceId, tamanho: textoGerado.length });
+                if (resultadoTranscricao) {
+                  texto = `[Áudio Transcrito: "${resultadoTranscricao.texto}"]`;
+                  log.info('WEBHOOK', 'Áudio transcrito com sucesso', { traceId, tamanho: resultadoTranscricao.texto.length });
+                  // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): Whisper
+                  // nunca gravava custo_usd — ficava invisível no dashboard (mesma causa que
+                  // deixou o desperdício de mídia de grupo passar despercebido até o saldo
+                  // zerar). Whisper cobra por minuto de áudio, não por token.
+                  await registrarUsoIA(pool, {
+                    userId, providerSlug: 'openai', modelo: 'whisper-1',
+                    tokensEntrada: 0, tokensSaida: 0,
+                    custoUsd: estimarCustoWhisperUsd(resultadoTranscricao.duracaoSegundos),
+                  });
                 } else {
                   log.warn('WEBHOOK', 'Transcrição de áudio não retornou texto', { traceId, msgId: messageId });
+                  // [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas, 2026-09-04): sem
+                  // fallback configurado, comportamento de sempre — `texto` continua vazio,
+                  // `agentEngine.ts` nunca chama o LLM pra isso (guard-rail de texto vazio já
+                  // existente). Com fallback, o texto configurado age como se fosse a mensagem do
+                  // cliente — dá pro agente reagir (ex: pedir que reescreva em texto) em vez de
+                  // simplesmente não responder. Cobre tanto "transcrição não retornou texto"
+                  // quanto qualquer áudio longo demais pra `transcreverAudio()` processar (mesmo
+                  // sintoma: chega aqui sem `resultadoTranscricao`).
+                  if (fallback_transcricao_falha) texto = fallback_transcricao_falha;
                 }
+              } else if (fallback_transcricao_falha) {
+                // Mesmo fallback pro caso de o DOWNLOAD/decriptografia do áudio falhar (Evolution
+                // fora do ar, mídia expirada no CDN do WhatsApp etc.) — sintoma idêntico pro
+                // cliente (mandou áudio, IA não reagiu), mesma correção se aplica.
+                texto = fallback_transcricao_falha;
+                log.info('WEBHOOK', 'Download de áudio falhou — usando fallback configurado do agente', { traceId, msgId: messageId });
               }
             }
           }
@@ -1151,7 +1344,7 @@ export default function webhookRouter(pool: Pool): Router {
       // via POST /chat/getBase64FromMediaMessage, mesmo endpoint já usado no fluxo de áudio).
       // [AUDITORIA] FIX APLICADO — mesmo achado/fix do bloco de áudio acima (dedup por
       // message_id entre instâncias + gate de pausa antes de pagar Vision).
-      if (!fromMe && tipo === 'image' && userId && process.env.OPENAI_API_KEY) {
+      if (!fromMe && tipo === 'image' && userId && process.env.OPENAI_API_KEY && !grupoMidiaNaoAutorizada && !orcamento.excedido) {
         try {
           // [AUDITORIA] LÓGICA: withTenantContext — mesmo motivo do bloco de áudio acima.
           const jaAnalisada = await withTenantContext({ userId, isAdmin: false }, client => client.query(
@@ -1165,16 +1358,34 @@ export default function webhookRouter(pool: Pool): Router {
             texto = jaAnalisada.rows[0].content;
             log.info('WEBHOOK', 'Imagem já analisada por outra instância — reaproveitando (evita Vision duplicado)', { traceId, msgId: messageId });
           } else {
+            // [AUDITORIA] FIX APLICADO (Sprint Modalidades Opcionais, 2026-08-23) — mesmo achado
+            // do bloco de áudio acima: `modalidade_imagem` finalmente lido de verdade, mesmo
+            // critério de prioridade (instância exata primeiro, senão o mais recente do tenant).
+            // Mesmo bug de sort com NULL (ver comentário completo no bloco de áudio) — `COALESCE`
+            // aqui também, achado no mesmo teste real.
+            // [AUDITORIA] FIX APLICADO (mesmo achado do bloco de áudio acima,
+            // `SPRINT_GATE_MIDIA_PROMPT_E_TOGGLE_MODALIDADE.md`): `conta_configurada` exige
+            // prompt real, não só `ativo=true`.
             const estadoIa = await pool.query(
               `SELECT
                  EXISTS (SELECT 1 FROM agentes WHERE user_id = $1 AND ativo = true) AS conta_ativa,
-                 COALESCE((SELECT atendente_pausou_ia FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1), false) AS contato_pausado`,
-              [userId, `%${telefone.slice(-11)}`]
-            ).catch(() => ({ rows: [{ conta_ativa: true, contato_pausado: false }] }));
-            const { conta_ativa, contato_pausado } = estadoIa.rows[0];
+                 EXISTS (SELECT 1 FROM agentes WHERE user_id = $1 AND ativo = true AND prompt_sistema IS NOT NULL AND trim(prompt_sistema) <> '') AS conta_configurada,
+                 COALESCE((SELECT atendente_pausou_ia FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1), false) AS contato_pausado,
+                 COALESCE(
+                   (SELECT modalidade_imagem FROM agentes WHERE user_id = $1 AND ativo = true
+                    ORDER BY (LOWER(COALESCE(evolution_instancia, '')) = LOWER($3)) DESC, updated_at DESC LIMIT 1),
+                   true
+                 ) AS modalidade_imagem_habilitada`,
+              [userId, `%${telefone.slice(-11)}`, instancia]
+            ).catch(() => ({ rows: [{ conta_ativa: true, conta_configurada: true, contato_pausado: false, modalidade_imagem_habilitada: true }] }));
+            const { conta_ativa, conta_configurada, contato_pausado, modalidade_imagem_habilitada } = estadoIa.rows[0];
 
             if (!conta_ativa || contato_pausado) {
               log.info('WEBHOOK', 'Vision pulado — conta sem agente ativo ou contato com IA pausada', { traceId, msgId: messageId, conta_ativa, contato_pausado });
+            } else if (!conta_configurada) {
+              log.info('WEBHOOK', 'Vision pulado — agente ativo mas sem prompt configurado (IA nunca responderia mesmo assim)', { traceId, msgId: messageId });
+            } else if (!modalidade_imagem_habilitada) {
+              log.info('WEBHOOK', 'Vision pulado — análise de imagem desligada nas configurações do agente', { traceId, msgId: messageId });
             } else {
               const cfgImagem = await pool.query(
                 `SELECT evolution_server_url AS url, evolution_api_key AS api_key
@@ -1191,14 +1402,21 @@ export default function webhookRouter(pool: Pool): Router {
               });
 
               if (midiaDecriptografadaImg) {
-                const descricaoGerada = await analisarImagem(
+                const resultadoVisao = await analisarImagem(
                   midiaDecriptografadaImg.buffer,
                   midiaDecriptografadaImg.mimetype || midia.mime || 'image/jpeg',
                   process.env.OPENAI_API_KEY,
                 );
-                if (descricaoGerada) {
-                  texto = `[Mídia - Imagem: "${descricaoGerada}"]`;
-                  log.info('WEBHOOK', 'Imagem analisada com sucesso', { traceId, tamanho: descricaoGerada.length });
+                if (resultadoVisao) {
+                  texto = `[Mídia - Imagem: "${resultadoVisao.descricao}"]`;
+                  log.info('WEBHOOK', 'Imagem analisada com sucesso', { traceId, tamanho: resultadoVisao.descricao.length });
+                  // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): mesmo
+                  // fix do bloco de áudio acima — Vision nunca gravava custo_usd.
+                  await registrarUsoIA(pool, {
+                    userId, providerSlug: 'openai', modelo: 'gpt-4o-mini',
+                    tokensEntrada: resultadoVisao.tokensEntrada, tokensSaida: resultadoVisao.tokensSaida,
+                    custoUsd: estimarCustoUsd('gpt-4o-mini', resultadoVisao.tokensEntrada, resultadoVisao.tokensSaida),
+                  });
                 } else {
                   log.warn('WEBHOOK', 'Análise de imagem não retornou descrição', { traceId, msgId: messageId });
                 }
@@ -1274,7 +1492,21 @@ export default function webhookRouter(pool: Pool): Router {
         // tocavam/abriam. Assíncrono e não-bloqueante (mesmo padrão IIFE já usado pra foto de
         // perfil logo abaixo) — se falhar, a mensagem já foi salva com a URL crua como fallback,
         // nada trava.
-        if (MIDIA_TIPOS.has(tipo) && midia.url) {
+        // [AUDITORIA] BUG (achado real, `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md`, 6ª tentativa —
+        // nunca de fato aplicado apesar de relatado como corrigido em sessões anteriores,
+        // confirmado agora por leitura direta do código, não por relatório antigo): a condição
+        // `&& midia.url` exige a URL crua do CDN vinda no payload, mas `salvarMidiaWhatsapp()`
+        // (via `baixarMidiaDecriptografada()`) NUNCA usa `midia.url` — decripta direto pelo
+        // `messageId`/`instancia`/`remoteJid` na Evolution. Prova de que isso é o problema: o
+        // bloco de Vision (mais acima, mesmo arquivo) usa a mesma função de decrypt SEM exigir
+        // `midia.url`, e funciona. Sempre que a Evolution manda o payload sem essa URL (padrão
+        // exato ainda não confirmado — suspeita de mensagem encaminhada/citada/figurinha), a
+        // Vision consegue descrever a imagem mas a mídia REAL nunca era salva — `media_url`
+        // ficava nulo, e o chat mostrava só o texto `[Mídia - Imagem: "..."]` gerado pela IA no
+        // lugar da imagem de verdade. [AUDITORIA] FIX APLICADO: removida a exigência de
+        // `midia.url` — `salvarMidiaWhatsapp()` já lida sozinha com falha (retorna `null`, não
+        // quebra nada, mesmo padrão do bloco de Vision ao lado).
+        if (MIDIA_TIPOS.has(tipo)) {
           void (async () => {
             try {
               const cfgMidia = await pool.query(
@@ -1655,6 +1887,15 @@ export default function webhookRouter(pool: Pool): Router {
       // resposta automática (N8N ou motor de IA embutido) fica bloqueada pra remetentes fora da
       // whitelist — evita que um cliente real receba resposta do robô de teste. Grupo nunca
       // chega aqui (sempre retorna no bloco acima, autorizado ou não).
+      // [AUDITORIA] LÓGICA: mesmo freio geral checado no topo (`orcamento`, ver comentário lá) —
+      // aqui é o ponto mais caro de todos (motor de conversa completo, histórico + tool calling,
+      // não só uma transcrição/descrição pontual), então é o mais importante dos 3 de fato parar.
+      // Mensagem já foi salva normalmente acima — só a resposta automática que não sai.
+      if (orcamento.excedido) {
+        log.warn('WEBHOOK', 'processarComDebounce pulado — orçamento diário de IA excedido', { traceId, msgId: messageId });
+        return;
+      }
+
       if (process.env.DATABASE_URL_MIGRATIONS) {
         const HOMOLOG_IA_WHITELIST = ['5511979579548', '5511946650482'];
         const remetenteNormalizado = (telefone || '').replace(/\D/g, '');

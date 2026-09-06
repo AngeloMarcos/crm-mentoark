@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, Response, NextFunction } from 'express';
 import { Pool } from 'pg';
 import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
@@ -343,6 +343,54 @@ REGRAS ESTRITAS:
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
+  });
+
+  // [AUDITORIA] BUG (achado real, Sprint Continuidade — Vistoria de Problemas, 2026-08-25 —
+  // investigando `SPRINT_DISPARO_TRAVANDO_FILA_GLOBAL_SERIAL.md`): `get_next_disparo_batch()`
+  // marca linhas como `sending` ao dequeueá-las (`migrations.ts`); se o motor processa a
+  // mensagem com sucesso, vira `sent`; se falha, vira `failed`. Mas se a CAMPANHA for
+  // pausada/cancelada enquanto uma linha está no meio desse processamento (pelo operador na UI,
+  // ou por uma intervenção direta como a desta mesma sessão em 10/08 — 3 campanhas pausadas
+  // direto no banco por um achado urgente), essa linha específica fica presa em `sending` **pra
+  // sempre**: `get_next_disparo_batch()` só busca `pending`, e nada mais nunca toca `sending`.
+  // Confirmado com dado real de produção: 25 linhas de 2 campanhas já pausada/cancelada,
+  // travadas em `sending` desde 07/08 (18 dias), miscontando o progresso real da campanha
+  // (`enviados`/`falhas` nunca bateram com `total_leads`).
+  // [AUDITORIA] FIX APLICADO: ao transicionar pra `pausado`/`cancelado` (via este mesmo PUT
+  // genérico que a UI já usa, `MonitoringDashboard.tsx` → `handleStatusChange`), reseta
+  // qualquer `disparo_logs.status='sending'` daquela campanha de volta pra `pending` — 100%
+  // seguro contra reenvio duplicado porque `get_next_disparo_batch()` só enfileira linhas de
+  // campanhas com `disparos.status='em_andamento'` (confirmado lendo a função SQL,
+  // `migrations.ts`): campanha cancelada nunca mais processa essas linhas (inertes, mas agora
+  // contabilizadas corretamente como "não enviadas" em vez de presas num limbo); campanha
+  // pausada e depois retomada as reprocessa do zero — mesmo comportamento já usado e testado
+  // pra `requeuePendentes()` (`disparoProcessor.ts`) no caso irmão (motor aborta o lote antes
+  // de processar todas as linhas já dequeueadas).
+  router.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
+    const novoStatus = req.body?.status;
+    if (novoStatus === 'pausado' || novoStatus === 'cancelado') {
+      // [AUDITORIA] BUG DE SEGURANÇA CORRIGIDO (achado 2026-09-04, revisão pós-Sprint Grupos/
+      // Template): este UPDATE rodava só com `req.params.id`, sem checar dono nenhum — qualquer
+      // usuário autenticado mandando PUT /api/disparos/<id de OUTRO tenant> com
+      // {status:'cancelado'} já resetava as linhas `sending` daquele disparo alheio pra `pending`
+      // ANTES do `next()` chegar no PUT genérico (`base`, logo abaixo) que aí sim rejeita a
+      // mudança de status de verdade por dono (`WHERE id=$1 AND user_id=$2` em `crud.ts`). O
+      // dano não é leitura de dado (nada vaza), é escrita: linha marcada `sending` costuma
+      // significar requisição já em voo pra Evolution — resetá-la pra `pending` sem autorização
+      // arrisca reenvio duplicado real pro contato quando o motor do dono de verdade retomar
+      // aquele lote (mesmo mecanismo que este bloco existe pra corrigir, só que virado arma
+      // contra outro tenant). [AUDITORIA] FIX APLICADO: mesmo padrão de escopo por dono que
+      // `crud.ts`/o resto deste router já usa (`user_id = req.userId`, sem admin bypass — nenhuma
+      // tabela deste projeto usa bypass hoje) — `EXISTS` confirma que o disparo_id pedido
+      // realmente pertence ao caller antes de tocar em `disparo_logs`.
+      await pool.query(
+        `UPDATE disparo_logs SET status = 'pending'
+         WHERE disparo_id = $1 AND status = 'sending'
+           AND EXISTS (SELECT 1 FROM disparos d WHERE d.id = $1 AND d.user_id = $2)`,
+        [req.params.id, req.userId]
+      ).catch(err => log.warn('DISPARO', 'Falha ao resetar disparo_logs travados em sending', { disparoId: req.params.id, err: err?.message }));
+    }
+    next();
   });
 
   router.use('/', base);

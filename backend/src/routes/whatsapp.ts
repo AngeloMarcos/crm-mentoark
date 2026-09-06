@@ -17,7 +17,10 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest } from '../middleware';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
-import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, garantirMidiaEstavel, MAX_OUTBOUND_MEDIA_BYTES, extensaoParaArquivo, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
+import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, garantirMidiaEstavel, MAX_OUTBOUND_MEDIA_BYTES, extensaoParaArquivo, buscarInfoGrupo, buscarNomesParticipantesGrupo, buscarNomeViaFetchProfile } from '../utils/whatsappMediaStorage';
+import { buscarPreviewLink } from '../utils/linkPreview';
+import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
+import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
 import { log } from '../logger';
 
 // [AUDITORIA] LÓGICA: mesmo diretório/rota estática (`/uploads`, montado em index.ts) e mesmo
@@ -469,8 +472,34 @@ export default function whatsappRouter(pool: Pool): Router {
   // necessariamente a conectada), enquanto o agente ativo de verdade usa `crm_435ee4720fc3_2`.
   // Ações de grupo (que dependem de uma sessão WhatsApp real e conectada) usam a mesma fonte que
   // `grupoTarefaEngine.ts`/`webhook.ts` já usam pra esse fim.
-  async function resolverConfigGrupoAtivo(userId: string): Promise<{ url: string; api_key: string; instancia: string } | null> {
+  // [AUDITORIA] BUG (achado real, `SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`, aberta
+  // desde 2026-08-09, nunca corrigida — usuário reportou "Importar para CRM" falhando com
+  // "Evolution não retornou nada sobre grupos"): esta função sempre pegava QUALQUER instância
+  // ativa do tenant mais recentemente atualizada, nunca necessariamente a instância que é
+  // membro do grupo que o usuário está tentando consultar/importar. Uma conta com 2+ instâncias
+  // reais (comum — confirmado em várias contas nesta sessão) pega a instância errada e a
+  // Evolution genuinamente não acha o grupo (não é bug de permissão nem de IA — confirmado que
+  // este caminho inteiro nunca chama nenhum provider de IA). [AUDITORIA] FIX APLICADO:
+  // `instanciaSolicitada` opcional — o frontend já sabe qual instância originou aquela conversa
+  // de grupo (`activeChat.source`, mesmo campo já usado em outros envios) e agora manda
+  // explicitamente; só cai no fallback "mais recente" se não vier nada (não quebra nenhum
+  // chamador antigo que não mande o parâmetro).
+  async function resolverConfigGrupoAtivo(userId: string, instanciaSolicitada?: string): Promise<{ url: string; api_key: string; instancia: string } | null> {
     const tenantId = await resolveOwnerId(userId);
+    if (instanciaSolicitada) {
+      const cfgExata = await pool.query(
+        `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
+         FROM agentes WHERE user_id = $1 AND ativo = true AND LOWER(evolution_instancia) = LOWER($2)
+           AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+         LIMIT 1`,
+        [tenantId, instanciaSolicitada]
+      );
+      const exata = cfgExata.rows[0];
+      if (exata?.url && exata?.api_key && exata?.instancia) {
+        return { url: exata.url, api_key: exata.api_key, instancia: exata.instancia };
+      }
+      log.warn('WHATSAPP', 'Instância solicitada pra grupo não encontrada/sem credenciais — caindo no fallback', { tenantId, instanciaSolicitada });
+    }
     const cfgRes = await pool.query(
       `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
        FROM agentes WHERE user_id = $1 AND ativo = true
@@ -483,10 +512,284 @@ export default function whatsappRouter(pool: Pool): Router {
     return { url: cfg.url, api_key: cfg.api_key, instancia: cfg.instancia };
   }
 
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, 2026-08-26 — pedido explícito do
+  // usuário: "o mais importante além do número é o nome... preciso captar o nome ou pelo menos
+  // a tag do whatsapp que está registrado"): a Evolution nunca devolveu nome de participante de
+  // grupo pelo endpoint já usado (`findGroupInfos`) — nome sempre nascia igual ao telefone
+  // (enganoso num CSV/Excel exportado pra fora do sistema). Cadeia de resolução testada ao vivo
+  // contra produção antes de implementar (leitura, 4 grupos reais, ~38 participantes — ver
+  // `AUDITORIA_LOG.md`/`STATUS.md` pro resultado completo), por ordem de confiabilidade/custo,
+  // parando na primeira que resolver:
+  //   1. Contato já existe no CRM com nome real (mesmo telefone, `nome IS NOT NULL AND nome <>
+  //      telefone`) — zero custo, zero chamada externa.
+  //   2. `push_name` de uma conversa INDIVIDUAL (1:1, não de grupo) já registrada em
+  //      `whatsapp_messages` pra esse telefone — também zero chamada externa. Medido 0% de
+  //      cobertura adicional na amostra de teste (grupos de prospecção sem sobreposição com
+  //      conversa 1:1), mas mantido porque é gratuito e não é 0% em todo cenário (contato de
+  //      grupo que depois vira conversa direta, por exemplo).
+  //   3. `buscarNomesParticipantesGrupo()` (`group/participants`, ver whatsappMediaStorage.ts) —
+  //      cobertura real medida 11%-21% (majoritariamente admin), 1 chamada por GRUPO (não por
+  //      participante, não escala mal). Passado como mapa já resolvido pelo chamador (evita
+  //      buscar 2x quando esta função roda em loop pra cada participante do mesmo grupo).
+  //   4. Sem nome resolvido → `null`. NUNCA usar o telefone como nome aqui (decisão deliberada:
+  //      quem chama decide o fallback de exibição, esta função só devolve nome real ou nada).
+  // `POST /chat/fetchProfile` (1 chamada HTTP por participante) foi deliberadamente deixado de
+  // fora da cadeia automática — já documentado como não confiável em
+  // `SPRINT_NOME_REAL_CONTATOS_GRUPO.md` e caro demais pra grupo grande (233 participantes no
+  // caso real já testado "Poá negócios").
+  async function resolverNomeParticipante(
+    tenantId: string, telefone: string, nomesDoGrupo: Map<string, string>,
+  ): Promise<string | null> {
+    // [AUDITORIA] BUG (achado em revisão própria, antes de deployar): a 1ª versão checava
+    // `nomesDoGrupo` (camada 3, mais barata — já em memória) antes do contato existente (camada
+    // 1) só por conveniência de implementação, invertendo a ordem de confiabilidade documentada
+    // acima. Sem efeito em `/importar-contatos` (participante que chega aqui já foi filtrado como
+    // NÃO sendo contato existente antes de chamar esta função), mas em `/participantes`
+    // (export — roda pra TODOS os participantes, inclusive quem já é contato curado no CRM) um
+    // admin com nome de exibição de grupo diferente do nome real já salvo no CRM tinha o nome
+    // curado silenciosamente substituído pelo nome do WhatsApp. Corrigido: contato existente
+    // sempre vence.
+    const r = await pool.query(
+      `SELECT nome, push_name FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+      [tenantId, `%${telefone.slice(-11)}`]
+    );
+    const contato = r.rows[0];
+    if (contato?.nome && contato.nome.replace(/\D/g, '') !== telefone.slice(-11) && contato.nome.trim().length > 0) {
+      return contato.nome;
+    }
+
+    // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-26): cache de
+    // resolução via `fetchProfile` (ver `resolverNomesEmBackground` abaixo) — camada explícita e
+    // recente, mais confiável que push_name de conversa ou nome de exibição do grupo, então
+    // checada antes das duas. Populada só sob ação deliberada do operador (nunca automática),
+    // mas uma vez resolvida vale pra qualquer export/import futuro do mesmo telefone.
+    const rCache = await pool.query(
+      `SELECT nome FROM whatsapp_nomes_resolvidos WHERE user_id = $1 AND telefone = $2 LIMIT 1`,
+      [tenantId, telefone]
+    );
+    const nomeCache = rCache.rows[0]?.nome as string | undefined;
+    if (nomeCache && nomeCache.trim()) return nomeCache.trim();
+
+    const rMsg = await pool.query(
+      `SELECT push_name FROM whatsapp_messages
+       WHERE user_id = $1 AND remote_jid ILIKE $2 AND remote_jid NOT LIKE '%@g.us' AND push_name IS NOT NULL
+       ORDER BY timestamp_wa DESC NULLS LAST LIMIT 1`,
+      [tenantId, `%${telefone.slice(-11)}@%`]
+    );
+    const pushName = rMsg.rows[0]?.push_name as string | undefined;
+    if (pushName && pushName.trim()) return pushName.trim();
+
+    const doGrupo = nomesDoGrupo.get(telefone);
+    if (doGrupo) return doGrupo;
+
+    return null;
+  }
+
+  // [AUDITORIA] LÓGICA (achado real do usuário, 2026-08-27 — "tentei importar um grupo e não
+  // consegui"): mensagem única, reaproveitada pelas 3 rotas que dependem de `buscarInfoGrupo`
+  // (participantes/importar-contatos/resolver-nomes) — antes cada uma tinha sua própria versão
+  // genérica de "não retornou participantes", sem dizer POR QUE. `info.erro` (ver
+  // whatsappMediaStorage.ts) agora distingue "instância não é mais membro deste grupo"
+  // (`sem_acesso`, confirmado ao vivo — `Error: forbidden` da Evolution) de qualquer outra falha.
+  function mensagemFalhaGrupo(info: { erro: 'sem_acesso' | 'outro' | null; size: number | null }, groupJid: string): string {
+    if (info.erro === 'sem_acesso') {
+      return 'Este número/instância não é mais membro deste grupo no WhatsApp (alguém removeu, ou o número saiu) — não é possível ler os participantes até ser adicionado de novo ao grupo.';
+    }
+    if (info.erro === 'outro') {
+      return 'A Evolution retornou erro ao consultar este grupo — pode ser instância desconectada, ou o grupo não existir mais. Veja os logs do servidor para o detalhe técnico.';
+    }
+    return (info.size ?? 0) > 0
+      ? `O grupo tem ${info.size} participantes, mas nenhum teve o telefone resolvido pela Evolution (privacidade "Linked ID" ativa) — nada foi feito.`
+      : 'A Evolution não retornou participantes para este grupo — nada foi feito.';
+  }
+
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-26): job em memória
+  // (não persistido — processo único nesta VPS, mesmo pressuposto de outras rotinas em memória
+  // do projeto) rastreando "resolução via fetchProfile em andamento" por grupo, pra: (1) impedir
+  // clique duplo iniciar 2 jobs concorrentes batendo na Evolution ao mesmo tempo (justamente o
+  // tipo de rajada que o delay anti-ban existe pra evitar), (2) o frontend poder perguntar
+  // "ainda tá rodando?" sem precisar de tabela nova só pra status — progresso real (quantos já
+  // resolveram) é sempre recalculado direto de `whatsapp_nomes_resolvidos`, nunca guardado aqui.
+  // [AUDITORIA] LÓGICA: `telefones` guardado no job (não só o total) pra `/status` contar
+  // progresso só DESTE grupo — sem isso, um usuário resolvendo 2 grupos ao mesmo tempo (jobs
+  // concorrentes em grupos diferentes, permitido) contaminaria a contagem de um com resoluções
+  // do outro (mesmo `tenantId`, `resolvido_em` não distingue grupo de origem).
+  const jobsResolucaoNome = new Map<string, { rodando: boolean; total: number; iniciadoEm: number; telefones: string[] }>();
+
+  // [AUDITORIA] LÓGICA: delay entre chamadas ao `fetchProfile` reaproveita literalmente a faixa
+  // do perfil "Rápido" já usado e já validado pelo motor de Disparos (`disparoProcessor.ts`,
+  // `FAIXAS_DELAY_MS.fast = [5000, 15000]`) — decisão deliberada de não inventar um número novo
+  // pra pausa anti-ban; é o mesmo risco de padrão de automação, mesmo remédio.
+  const DELAY_FETCH_PROFILE_MS: [number, number] = [5000, 15000];
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // [AUDITORIA] LÓGICA: roda em background (chamador não aguarda) — percorre os participantes
+  // AINDA sem nome resolvido pela cadeia gratuita (evita gastar chamada em quem já tem nome via
+  // contato existente/push_name/group-participants), chama `fetchProfile` um de cada vez com
+  // delay anti-ban entre cada, grava no cache (`whatsapp_nomes_resolvidos`) e, se o telefone já
+  // for um contato existente sem nome verificado, atualiza `contatos` também — assim um grupo
+  // já importado sem nome ganha nome sem precisar reimportar.
+  async function resolverNomesEmBackground(
+    tenantId: string, groupJid: string, cfg: { url: string; api_key: string; instancia: string },
+    participantes: { telefone: string }[], nomesDoGrupo: Map<string, string>,
+  ) {
+    const chave = `${tenantId}:${groupJid}`;
+    let resolvidos = 0;
+    let tentados = 0;
+    try {
+      for (const p of participantes) {
+        const jaTemNome = await resolverNomeParticipante(tenantId, p.telefone, nomesDoGrupo);
+        if (jaTemNome) continue; // não gasta fetchProfile em quem a cadeia gratuita já resolveu
+
+        tentados++;
+        const nome = await buscarNomeViaFetchProfile(cfg.url, cfg.api_key, cfg.instancia, p.telefone);
+        if (nome) {
+          resolvidos++;
+          await pool.query(
+            `INSERT INTO whatsapp_nomes_resolvidos (user_id, telefone, nome)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, telefone) DO UPDATE SET nome = EXCLUDED.nome, resolvido_em = now()`,
+            [tenantId, p.telefone, nome]
+          );
+          // Contato já existente sem nome verificado ganha o nome agora, sem precisar reimportar.
+          await pool.query(
+            `UPDATE contatos SET nome = $1, nome_verificado = true
+             WHERE user_id = $2 AND telefone ILIKE $3 AND (nome_verificado IS DISTINCT FROM true)`,
+            [nome, tenantId, `%${p.telefone.slice(-11)}`]
+          ).catch(() => {});
+        }
+
+        // Delay anti-ban entre cada chamada — inclusive depois da última (custo pequeno, evita
+        // qualquer padrão "rajada seguida de silêncio total" que também pode chamar atenção).
+        const [min, max] = DELAY_FETCH_PROFILE_MS;
+        await sleep(Math.floor(Math.random() * (max - min) + min));
+      }
+    } catch (err: any) {
+      log.error('WA_RESOLVER_NOMES', 'Erro no job de resolução de nomes', { groupJid, err: err?.message, stack: err?.stack });
+    } finally {
+      log.info('WA_RESOLVER_NOMES', 'Job de resolução de nomes concluído', { groupJid, tentados, resolvidos, totalParticipantes: participantes.length });
+      const job = jobsResolucaoNome.get(chave);
+      if (job) job.rodando = false;
+    }
+  }
+
+  // POST /api/whatsapp/grupos/:groupJid/resolver-nomes — inicia (não bloqueia a resposta) a
+  // resolução via fetchProfile pra quem ainda não tem nome. Ação explícita e separada do
+  // export/import — nunca automática, por causa do custo/risco de rajada já documentado acima.
+  router.post('/grupos/:groupJid/resolver-nomes', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const tenantId = await resolveOwnerId(userId);
+      const groupJid = req.params.groupJid.endsWith('@g.us') ? req.params.groupJid : `${req.params.groupJid}@g.us`;
+      const chave = `${tenantId}:${groupJid}`;
+
+      const jobAtual = jobsResolucaoNome.get(chave);
+      if (jobAtual?.rodando) {
+        return res.status(409).json({ message: 'Já existe uma resolução de nomes em andamento para este grupo.', total: jobAtual.total });
+      }
+
+      const cfg = await resolverConfigGrupoAtivo(userId, req.body?.instancia as string | undefined);
+      if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
+
+      const info = await buscarInfoGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
+      if (!info.participantes.length) {
+        return res.status(502).json({ message: mensagemFalhaGrupo(info, groupJid) });
+      }
+      const nomesDoGrupo = await buscarNomesParticipantesGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
+
+      jobsResolucaoNome.set(chave, {
+        rodando: true,
+        total: info.participantes.length,
+        iniciadoEm: Date.now(),
+        telefones: info.participantes.map((p) => p.telefone),
+      });
+      // Fire-and-forget deliberado — resposta volta na hora, job roda em background (pode levar
+      // minutos a dezenas de minutos num grupo grande, de propósito, pelo delay anti-ban).
+      resolverNomesEmBackground(tenantId, groupJid, cfg, info.participantes, nomesDoGrupo);
+
+      return res.json({
+        iniciado: true,
+        totalParticipantes: info.participantes.length,
+        estimativaSegundosMax: info.participantes.length * (DELAY_FETCH_PROFILE_MS[1] / 1000),
+      });
+    } catch (err: any) {
+      log.error('WA_RESOLVER_NOMES', 'Erro ao iniciar resolução de nomes', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/grupos/:groupJid/resolver-nomes/status — progresso real (recalculado do
+  // cache, nunca de um contador em memória) + se o job ainda está rodando.
+  router.get('/grupos/:groupJid/resolver-nomes/status', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const tenantId = await resolveOwnerId(userId);
+      const groupJid = req.params.groupJid.endsWith('@g.us') ? req.params.groupJid : `${req.params.groupJid}@g.us`;
+      const chave = `${tenantId}:${groupJid}`;
+      const job = jobsResolucaoNome.get(chave);
+      if (!job) return res.json({ emAndamento: false, total: 0, resolvidos: 0 });
+
+      const r = await pool.query(
+        `SELECT COUNT(*) AS n FROM whatsapp_nomes_resolvidos
+         WHERE user_id = $1 AND resolvido_em >= to_timestamp($2 / 1000.0) AND telefone = ANY($3::text[])`,
+        [tenantId, job.iniciadoEm, job.telefones]
+      );
+      return res.json({
+        emAndamento: job.rodando,
+        total: job.total,
+        resolvidos: parseInt(r.rows[0]?.n ?? '0', 10),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/grupos/:groupJid/participantes — lista crua dos participantes (telefone +
+  // admin + nome resolvido, quando possível), sem tocar no banco. [AUDITORIA] LÓGICA (Sprint
+  // Exportar Leads de Grupo, 2026-08-23, pedido explícito do usuário: "quero que baixe em csv ou
+  // excel e dê pra importar pra fora do sistema"): até aqui só existia POST /importar-contatos,
+  // que sempre GRAVA no CRM (contatos + lista nova) — não tinha como pegar a lista crua sem
+  // criar registro nenhum. Rota somente leitura, mesmo dado que a importação já busca
+  // (`buscarInfoGrupo`, sempre fresco na Evolution, nunca cacheado), só que devolvido pro
+  // frontend em vez de virar INSERT — o CSV/Excel é montado no cliente (mesmo padrão de
+  // exportação já usado em `Leads.tsx`), sem gerar arquivo nem gravar nada no servidor.
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, 2026-08-26): resolve nome pela
+  // cadeia de `resolverNomeParticipante()` (ver comentário completo lá) — não grava nada no
+  // banco, só enriquece a resposta.
+  router.get('/grupos/:groupJid/participantes', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const tenantId = await resolveOwnerId(userId);
+      const groupJid = req.params.groupJid.endsWith('@g.us') ? req.params.groupJid : `${req.params.groupJid}@g.us`;
+      const cfg = await resolverConfigGrupoAtivo(userId, req.query.instancia as string | undefined);
+      if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
+
+      const info = await buscarInfoGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
+      const nomesDoGrupo = await buscarNomesParticipantesGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
+      const totalNoGrupo = info.size ?? info.participantes.length;
+      const semNumeroResolvido = Math.max(0, totalNoGrupo - info.participantes.length);
+      const participantes = await Promise.all(info.participantes.map(async p => {
+        const nome = await resolverNomeParticipante(tenantId, p.telefone, nomesDoGrupo);
+        return { telefone: p.telefone, admin: !!p.admin, nome, nomeVerificado: !!nome };
+      }));
+      return res.json({
+        grupoNome: info.subject || groupJid,
+        totalNoGrupo,
+        semNumeroResolvido,
+        participantes,
+        mensagemErro: participantes.length === 0 ? mensagemFalhaGrupo(info, groupJid) : null,
+      });
+    } catch (err: any) {
+      log.error('WA_GROUP_EXPORT', 'Erro ao buscar participantes do grupo para exportação', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/whatsapp/grupos/:groupJid/info — info fresca do grupo direto na Evolution (nunca
   // cacheada) pro painel de detalhes: descrição, quantidade de participantes, data de criação —
   // tudo que `buscarInfoGrupo()` já buscava e ficava descartado. Não expõe a lista de
-  // participantes aqui (só o resumo) — a lista completa só sai no POST de importação abaixo.
+  // participantes aqui (só o resumo) — a lista completa sai em GET /participantes (exportação) e
+  // no POST de importação abaixo.
   router.get('/grupos/:groupJid/info', async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.userId!;
@@ -501,7 +804,7 @@ export default function whatsappRouter(pool: Pool): Router {
       // não há ambiguidade real sobre a intenção; pior caso de um id não-grupo chegar aqui por
       // engano é a Evolution devolver erro de "grupo não encontrado", não um risco de segurança.
       const groupJid = req.params.groupJid.endsWith('@g.us') ? req.params.groupJid : `${req.params.groupJid}@g.us`;
-      const cfg = await resolverConfigGrupoAtivo(userId);
+      const cfg = await resolverConfigGrupoAtivo(userId, req.query.instancia as string | undefined);
       if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
 
       const info = await buscarInfoGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
@@ -512,9 +815,128 @@ export default function whatsappRouter(pool: Pool): Router {
         size: info.size,
         creation: info.creation,
         totalParticipantes: info.participantes.length,
+        // [AUDITORIA] LÓGICA (achado real do usuário, 2026-08-27): exposto pro frontend poder
+        // mostrar "sem acesso a este grupo" em vez de só ficar com os campos vazios sem
+        // explicação nenhuma — ver `mensagemFalhaGrupo()` acima pro texto usado nas outras rotas.
+        erro: info.erro,
       });
     } catch (err: any) {
       log.error('WA_GROUP_INFO', 'Erro ao buscar info do grupo', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/whatsapp/grupos/entrar — Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do
+  // usuário. [AUDITORIA] LÓGICA: endpoints confirmados lendo o código-fonte real da Evolution
+  // rodando em produção (`whatsapp.baileys.service.js` dentro do container `evolution`, não
+  // documentação de terceiro) — `GET /group/acceptInviteCode/:instance?inviteCode=` (aceita só o
+  // CÓDIGO do convite, não a URL inteira; `groupAcceptInvite(e.inviteCode)` do Baileys por baixo)
+  // e devolve `{accepted, groupJid}`. Aceita tanto a URL colada (`https://chat.whatsapp.com/XXX`)
+  // quanto o código bruto, pra não depender do operador saber que precisa extrair só o código.
+  router.post('/grupos/entrar', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const bruto = String(req.body?.link || '').trim();
+      if (!bruto) return res.status(400).json({ message: 'Cole o link de convite do grupo.' });
+
+      const match = bruto.match(/chat\.whatsapp\.com\/([A-Za-z0-9]+)/i);
+      const inviteCode = (match ? match[1] : bruto).replace(/[^A-Za-z0-9]/g, '');
+      if (!inviteCode) return res.status(400).json({ message: 'Não foi possível reconhecer um código de convite válido nesse link.' });
+
+      const cfg = await resolverConfigGrupoAtivo(userId, req.body?.instancia as string | undefined);
+      if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
+
+      const base = sanitizeEvolutionUrl(cfg.url);
+      const r = await evolutionFetch(`${base}/group/acceptInviteCode/${cfg.instancia}?inviteCode=${encodeURIComponent(inviteCode)}`, {
+        headers: { apikey: cfg.api_key },
+      });
+      if (!r.ok) {
+        const corpoErro = await r.text().catch(() => '');
+        log.warn('WA_GROUP_JOIN', 'Evolution recusou entrar no grupo', { status: r.status, corpoErro: corpoErro.slice(0, 300) });
+        return res.status(409).json({ message: 'Não foi possível entrar no grupo — o link pode estar expirado, revogado, ou o grupo não aceita mais esse convite.' });
+      }
+      const data: any = await r.json().catch(() => ({}));
+      const groupJid: string | null = data?.groupJid || null;
+
+      // Busca nome/foto reais pra devolver já prontos (mesma fonte que GET /grupos/:jid/info usa)
+      // e grava em `contatos` — sem isso, o grupo só ganharia nome/foto reais na PRÓXIMA vez que
+      // alguém mandasse mensagem nele (fix orgânico já existente em webhook.ts); entrar deliberado
+      // merece feedback imediato, não depender de esperar uma mensagem alheia.
+      let nome: string | null = null;
+      let foto: string | null = null;
+      if (groupJid) {
+        const info = await buscarInfoGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
+        nome = info.subject;
+        foto = info.pictureUrl;
+        if (nome) {
+          const grupoId = groupJid.split('@')[0];
+          // [AUDITORIA] LÓGICA: `idx_contatos_user_tel_unique` é um índice único PARCIAL (`WHERE
+          // telefone IS NOT NULL`, migrations.ts) — o `ON CONFLICT` só casa com ele repetindo a
+          // mesma condição aqui, senão o Postgres recusa a query em runtime ("no unique or
+          // exclusion constraint matching").
+          await pool.query(
+            `INSERT INTO contatos (user_id, telefone, nome, profile_pic_url, origem)
+             VALUES ($1, $2, $3, $4, 'Grupo WhatsApp')
+             ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO UPDATE
+               SET nome = EXCLUDED.nome, profile_pic_url = COALESCE(EXCLUDED.profile_pic_url, contatos.profile_pic_url), updated_at = NOW()`,
+            [userId, grupoId, nome, foto]
+          ).catch(err => log.warn('WA_GROUP_JOIN', 'Falha ao gravar nome/foto do grupo em contatos', { err: err?.message }));
+        }
+      }
+
+      return res.json({ entrou: true, groupJid, nome, foto });
+    } catch (err: any) {
+      log.error('WA_GROUP_JOIN', 'Erro ao entrar no grupo', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // DELETE /api/whatsapp/grupos/:groupJid/sair — Sprint Grupos Entrar/Sair, 2026-09-06.
+  // [AUDITORIA] LÓGICA: `DELETE /group/leaveGroup/:instance?groupJid=` confirmado no código-fonte
+  // da Evolution (`groupLeave()` do Baileys por baixo) — sai de verdade do grupo no WhatsApp, a
+  // conversa/histórico local NÃO é apagado (operador continua vendo o que já foi trocado, só não
+  // recebe mensagens novas dali — mesmo espírito de "sair de uma conversa" no WhatsApp real, que
+  // não apaga o histórico de quem saiu).
+  router.delete('/grupos/:groupJid/sair', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const groupJid = req.params.groupJid.endsWith('@g.us') ? req.params.groupJid : `${req.params.groupJid}@g.us`;
+      const cfg = await resolverConfigGrupoAtivo(userId, req.query.instancia as string | undefined);
+      if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
+
+      const base = sanitizeEvolutionUrl(cfg.url);
+      const r = await evolutionFetch(`${base}/group/leaveGroup/${cfg.instancia}?groupJid=${encodeURIComponent(groupJid)}`, {
+        method: 'DELETE',
+        headers: { apikey: cfg.api_key },
+      });
+      if (!r.ok) {
+        const corpoErro = await r.text().catch(() => '');
+        log.warn('WA_GROUP_LEAVE', 'Evolution recusou sair do grupo', { status: r.status, corpoErro: corpoErro.slice(0, 300) });
+        return res.status(409).json({ message: 'Não foi possível sair do grupo — a instância pode já não ser membro, ou estar desconectada.' });
+      }
+      return res.json({ saiu: true, groupJid });
+    } catch (err: any) {
+      log.error('WA_GROUP_LEAVE', 'Erro ao sair do grupo', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/whatsapp/link-preview?url= — Sprint Grupos — melhorias WhatsApp, 2026-09-06, pedido
+  // explícito do usuário. [AUDITORIA] LÓGICA: sem `?instancia`/dono nenhum a validar aqui de
+  // propósito — só precisa do JWT válido (já garantido pelo middleware global) pra evitar abrir
+  // esta busca pra fora da aplicação; o preview em si (metadado Open Graph de uma URL pública) não
+  // é dado de tenant nenhum, por isso o cache em `link_previews_cache` é global entre contas (ver
+  // comentário completo na migration). Proteção real de SSRF vive em `buscarPreviewLink()`
+  // (utils/linkPreview.ts) — nunca lança, sempre devolve `erro` no corpo pro frontend cair pro
+  // texto cru sem quebrar o chat.
+  router.get('/link-preview', async (req: AuthRequest, res: Response) => {
+    try {
+      const url = String(req.query.url || '').trim();
+      if (!url) return res.status(400).json({ message: 'Parâmetro url é obrigatório.' });
+      const preview = await buscarPreviewLink(pool, url);
+      return res.json(preview);
+    } catch (err: any) {
+      log.error('LINK_PREVIEW', 'Erro inesperado ao buscar preview', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });
     }
   });
@@ -529,9 +951,10 @@ export default function whatsappRouter(pool: Pool): Router {
   // de 'WhatsApp'/'Importado (Disparos)') marca a procedência — usado por StepContacts/
   // Disparos.tsx pra excluir esses contatos por padrão da opção "Todas as listas" (ver fix em
   // Disparos.tsx), sem impedir que o operador inclua explicitamente via tag/lista/estágio manual,
-  // que já exige ação deliberada. Evolution não devolve nome de participante (só telefone) — nome
-  // nasce igual ao telefone, mesma convenção já usada em `upsertContato()`/importação CSV quando
-  // não há nome disponível.
+  // que já exige ação deliberada. [AUDITORIA] ATUALIZADO (Sprint Nome Real de Leads de Grupo,
+  // 2026-08-26): nome agora passa pela cadeia de `resolverNomeParticipante()` antes de cair no
+  // fallback antigo (nome = telefone, mesma convenção de `upsertContato()`/importação CSV quando
+  // não há nome disponível) — `nome_verificado` grava explicitamente qual dos dois casos foi.
   // [AUDITORIA] FIX APLICADO (achado do usuário, 2026-08-06 — "não consigo encontrar eles nas
   // lista do CRM"): a importação nunca setava `lista_id`, então os contatos ficavam órfãos de
   // qualquer lista — apareciam em Leads/contatos, mas invisíveis na aba "Por Lista" de Disparos.
@@ -546,10 +969,11 @@ export default function whatsappRouter(pool: Pool): Router {
       // [AUDITORIA] BUG/FIX APLICADO (mesmo achado do GET /grupos/:groupJid/info acima, ver
       // comentário completo lá — session_id de GET /conversas nunca tem @g.us, nem pra grupo).
       const groupJid = req.params.groupJid.endsWith('@g.us') ? req.params.groupJid : `${req.params.groupJid}@g.us`;
-      const cfg = await resolverConfigGrupoAtivo(userId);
+      const cfg = await resolverConfigGrupoAtivo(userId, req.body?.instancia as string | undefined);
       if (!cfg) return res.status(409).json({ message: 'Nenhuma instância WhatsApp ativa configurada para esta conta.' });
 
       const info = await buscarInfoGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
+      const nomesDoGrupo = await buscarNomesParticipantesGrupo(cfg.url, cfg.api_key, cfg.instancia, groupJid);
       // [AUDITORIA] LÓGICA (achado do teste real em homolog, 2026-08-04): `info.participantes`
       // já vem filtrado só pra quem tem `phoneNumber` resolvido (ver buscarInfoGrupo) — pode ser
       // bem menor que `info.size` (total real do grupo) em grupos com "Linked ID"/privacidade
@@ -558,16 +982,13 @@ export default function whatsappRouter(pool: Pool): Router {
       const totalNoGrupo = info.size ?? info.participantes.length;
       const semNumeroResolvido = Math.max(0, totalNoGrupo - info.participantes.length);
       if (!info.participantes.length) {
-        return res.status(502).json({
-          message: totalNoGrupo > 0
-            ? `O grupo tem ${totalNoGrupo} participantes, mas nenhum teve o telefone resolvido pela Evolution (privacidade "Linked ID" ativa) — nada foi importado.`
-            : 'A Evolution não retornou participantes para este grupo — nada foi importado.',
-        });
+        return res.status(502).json({ message: mensagemFalhaGrupo(info, groupJid) });
       }
 
       let novos = 0;
       let jaExistiam = 0;
       let descartados = 0;
+      let nomesResolvidos = 0;
       let listaId: string | null = null;
       let listaNome: string | null = null;
       for (const p of info.participantes) {
@@ -594,26 +1015,36 @@ export default function whatsappRouter(pool: Pool): Router {
           listaId = listaRes.rows[0].id;
         }
 
+        // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, 2026-08-26): antes disso, nome
+        // nascia sempre igual ao telefone (Evolution não devolvia nome nenhum). Agora tenta a
+        // cadeia de resolução primeiro — `contatos` já foi checado acima (linha ~697), então a
+        // 1ª camada da cadeia é sempre um no-op aqui (participante novo por definição não é
+        // contato existente); as camadas que importam de fato neste ponto são push_name de
+        // conversa individual e o nome vindo de `group/participants`. Sem fonte nenhuma, cai no
+        // telefone (comportamento antigo, preservado como último recurso) — mas agora
+        // `nome_verificado` deixa explícito pro resto do sistema (export, Disparos) que esse
+        // "nome" não é confiável.
+        const nomeResolvido = await resolverNomeParticipante(tenantId, p.telefone, nomesDoGrupo);
         const notas = p.admin ? `Admin do grupo "${info.subject || groupJid}"` : '';
         const inserted = await pool.query(
-          `INSERT INTO contatos (user_id, nome, telefone, origem, status, notas, lista_id)
-           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4, $5)
+          `INSERT INTO contatos (user_id, nome, telefone, origem, status, notas, lista_id, nome_verificado)
+           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4, $5, $6)
            ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
            RETURNING id`,
-          [tenantId, p.telefone, p.telefone, notas, listaId]
+          [tenantId, nomeResolvido || p.telefone, p.telefone, notas, listaId, !!nomeResolvido]
         ).catch(err => {
           log.warn('WA_GROUP_IMPORT', 'Falha ao inserir participante', { telefone: p.telefone, err: err?.message });
           return { rows: [] as any[] };
         });
-        if (inserted.rows.length) novos++; else jaExistiam++; // corrida com outro insert concorrente — trata como "já existia"
+        if (inserted.rows.length) { novos++; if (nomeResolvido) nomesResolvidos++; } else jaExistiam++; // corrida com outro insert concorrente — trata como "já existia"
       }
 
       log.info('WA_GROUP_IMPORT', 'Importação de contatos de grupo concluída', {
-        userId: tenantId, groupJid, novos, jaExistiam, descartados, semNumeroResolvido, totalNoGrupo, listaId, listaNome,
+        userId: tenantId, groupJid, novos, jaExistiam, descartados, semNumeroResolvido, totalNoGrupo, listaId, listaNome, nomesResolvidos,
       });
 
       return res.json({
-        novos, jaExistiam, descartados, semNumeroResolvido,
+        novos, jaExistiam, descartados, semNumeroResolvido, nomesResolvidos,
         totalParticipantes: info.participantes.length,
         totalNoGrupo,
         grupoNome: info.subject,
@@ -686,6 +1117,15 @@ export default function whatsappRouter(pool: Pool): Router {
          SELECT
            r.phone AS session_id,
            r.instance_name AS instancia,
+           -- [AUDITORIA] LÓGICA (Sprint Grupos Somem com Instância Duplicada, 2026-09-04):
+           -- instancia acima é só o instance_name cru da última mensagem — não sobrevive a
+           -- reconexão sob um nome novo pro mesmo número (ver comentário completo na migration de
+           -- whatsapp_instance_numeros). numero aqui é a identidade estável (resolvida pelo
+           -- ledger, populado pelo cron de reconciliação a cada 15min); cai pro próprio
+           -- instance_name quando o ledger ainda não tem esse registro (instância nunca vista
+           -- pela reconciliação, ou dado histórico anterior a esta sprint) — nunca fica nulo, pra
+           -- não quebrar o filtro por número no frontend.
+           COALESCE(win.numero, r.instance_name) AS numero,
            r.created_at AS ultima_atividade,
            r.total::int AS total,
            r.content AS ultima_mensagem,
@@ -703,6 +1143,7 @@ export default function whatsappRouter(pool: Pool): Router {
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          LEFT JOIN grupo_unico gu ON gu.grupo_id = r.phone AND r.is_group
+         LEFT JOIN whatsapp_instance_numeros win ON win.instance_name = r.instance_name
          WHERE r.rn = 1
            AND COALESCE(cu.is_archived, false) = $2
          ORDER BY cu.is_pinned DESC NULLS LAST, r.created_at DESC
@@ -723,6 +1164,7 @@ export default function whatsappRouter(pool: Pool): Router {
         return {
           session_id: row.session_id,
           instancia: row.instancia,
+          numero: row.numero,
           is_group: isGroup,
           nome: nomeFormatado,
           push_name: isGroup ? (row.last_sender || null) : (row.push_name || null),
@@ -1226,7 +1668,84 @@ export default function whatsappRouter(pool: Pool): Router {
       // nunca muda — só entra sufixo `_2`, `_3`... quando já existe a anterior.
       const tenantId = await resolveOwnerId(userId);
       const conhecidas = await instanciasConhecidas(tenantId);
-      if (req.body?.nova_conexao === true) {
+
+      // [AUDITORIA] BUG GRAVE CORRIGIDO (achado 2026-08-10 — cliente real em loop de LOGOUT 401
+      // na Evolution, número caindo repetidamente): `nova_conexao:true` é o ÚNICO caminho que
+      // sobra na UI quando o card antigo em `agentes` já não existe mais (ex: apagado sem
+      // querer, ou nunca sincronizado) — "Conectar nova instância" manda essa flag, mesmo quando
+      // a intenção real é só RECONECTAR o número que a pessoa já tem. Sem este guard,
+      // `proximaInstanciaLivre()` sempre mintava um nome novo (_2, _3...) cegamente, sem checar
+      // se o número já tinha uma sessão aberta sob outro nome. Cada nome novo = um "aparelho
+      // conectado" novo pro MESMO número WhatsApp — confirmado nos logs do container `evolution`
+      // (mesmo `ownerJid`, 6 instâncias diferentes em ~75min, todas derrubadas com
+      // `LOGOUT statusReason:401`, padrão clássico de conflito de multi-dispositivo). [AUDITORIA]
+      // FIX APLICADO: antes de mintar um nome novo, verifica se alguma instância JÁ CONHECIDA do
+      // tenant está `connectionStatus:'open'` de verdade na Evolution (dado real, não confiamos
+      // no `status` do banco que só é reconciliado a cada 15min) — se estiver, e o telefone
+      // pedido (quando informado) bater com o `ownerJid` dela, REAPROVEITA essa instância
+      // (reconecta/gera QR novo nela) em vez de criar mais uma. Só cria instância genuinamente
+      // nova quando nenhuma conhecida está aberta pra aquele número — não muda o fluxo legítimo
+      // de somar um SEGUNDO número diferente ao mesmo tenant.
+      // [AUDITORIA] FIX APLICADO (achado 2026-08-10, segunda rodada — o guard acima só cobria
+      // `connectionStatus:'open'`): mesmo com o fix, o loop voltou a acontecer — cliques
+      // repetidos em "Conectar" enquanto a instância anterior ainda estava em `connecting`
+      // (QR/pairing code gerado, ainda sem `ownerJid` porque o parceamento não terminou) não
+      // eram pegos pelo guard, porque `connecting` ≠ `open`. Cada clique nesse meio-tempo minta
+      // outra instância nova, do mesmo jeito que o bug original. `connecting` sem `ownerJid`
+      // ainda não sabe qual número vai ser — não dá pra comparar com `phoneDigits`, então só
+      // reaproveita esse caso quando NENHUM telefone foi pedido explicitamente (evita bloquear
+      // o fluxo legítimo de "conectar um número diferente enquanto o primeiro ainda pareia").
+      let instanciaReaproveitada: string | null = null;
+      if (req.body?.nova_conexao === true && conhecidas.size > 0) {
+        const reais = await fetchInstancesFromServer(cfg.url, cfg.api_key).catch(() => null);
+        if (reais) {
+          const phoneDigits = String(req.body?.phoneNumber || '').replace(/\D/g, '');
+          const candidata = reais.find(i => {
+            if (!conhecidas.has(i.name)) return false;
+            if (i.connectionStatus === 'open') {
+              return !phoneDigits || (i.ownerJid || '').replace(/\D/g, '').endsWith(phoneDigits.slice(-11));
+            }
+            if (i.connectionStatus === 'connecting') {
+              return !phoneDigits; // ainda sem ownerJid pra comparar — só reaproveita se ninguém pediu número específico
+            }
+            return false;
+          });
+          if (candidata) {
+            instanciaReaproveitada = candidata.name;
+            log.warn('WHATSAPP', 'nova_conexao pedida mas já existe instância aberta/conectando — reaproveitando em vez de duplicar sessão', {
+              tenantId, instanciaExistente: instanciaReaproveitada, statusExistente: candidata.connectionStatus, phoneDigits: phoneDigits || null,
+            });
+          }
+        }
+      }
+
+      if (instanciaReaproveitada) {
+        cfg.instancia = instanciaReaproveitada;
+        cfg.stableInstancia = instanciaReaproveitada;
+      } else if (req.body?.nova_conexao === true) {
+        // [AUDITORIA] BUG GRAVE CORRIGIDO (achado no TESTE REAL desta sprint em homolog, não só
+        // teórico — ver `verificarLoopDeLogoutTenant` em `services/logoutCircuitBreaker.ts` pro
+        // relato completo): o guard abaixo (`verificarLoopDeLogout`, escopo por NOME de
+        // instância) não protege este ramo específico — aqui `proximaInstanciaLivre()` sempre
+        // minta um nome NUNCA VISTO, sem histórico de LOGOUT próprio, então passaria mesmo se o
+        // tenant já tivesse acabado de derrubar 5 nomes diferentes na última hora (exatamente o
+        // padrão real dos 2 incidentes). [AUDITORIA] FIX APLICADO: antes de mintar, soma os
+        // LOGOUTs recentes de TODAS as instâncias já conhecidas do tenant — só bloqueia MINTAR
+        // mais um nome novo enquanto esse padrão persistir; reconectar um nome já conhecido e
+        // saudável (sem LOGOUT recente) continua liberado normalmente pelo guard de baixo.
+        const loopTenant = await verificarLoopDeLogoutTenant(pool, Array.from(conhecidas));
+        if (loopTenant.emLoop) {
+          log.warn('WHATSAPP_LOGOUT_LOOP', 'Nova instância bloqueada pelo circuit-breaker (padrão do tenant, não de uma instância específica)', {
+            userId, tenantId, totalRecente: loopTenant.totalRecente, minutosRestantes: loopTenant.minutosRestantes,
+          });
+          return res.status(429).json({
+            error: true,
+            code: 'LOGOUT_LOOP',
+            message: `Suas instâncias tiveram ${loopTenant.totalRecente} desconexões seguidas nos últimos 60 minutos — criar mais uma agora aumenta o risco de bloqueio pelo WhatsApp. Aguarde ${loopTenant.minutosRestantes} min antes de tentar de novo.`,
+            minutosRestantes: loopTenant.minutosRestantes,
+            totalRecente: loopTenant.totalRecente,
+          });
+        }
         const instanciaAlvo = await proximaInstanciaLivre(cfg.stableInstancia, conhecidas);
         cfg.instancia = instanciaAlvo;
         cfg.stableInstancia = instanciaAlvo;
@@ -1236,6 +1755,37 @@ export default function whatsappRouter(pool: Pool): Router {
         // nome da instância daquele card — sem isso, reconectar qualquer card sempre mexia na
         // instância padrão do tenant, nunca na que o usuário realmente clicou.
         await resolverInstanciaExplicita(tenantId, req.body?.instancia as string | undefined, cfg);
+      }
+
+      // [AUDITORIA] BUG GRAVE CORRIGIDO (achado 2026-08-10, continuação direta do incidente
+      // Serenovlogs067 + um segundo usuário banido no mesmo dia): o guard de reaproveitamento
+      // de instância acima (`instanciaReaproveitada`) só age dentro do branch `nova_conexao` —
+      // não cobria `force_reconnect` (botão "Forçar Reinicialização"), que DELETA a instância de
+      // propósito e recria do zero a cada clique, por desenho — nem cobria repetir a mesma
+      // reconexão explícita várias vezes seguidas. Não existia nenhum limite de QUANTAS vezes
+      // isso podia se repetir numa janela de tempo, só um lock de 30s contra 2 cliques
+      // SIMULTÂNEOS (`connectingUsers`, acima) — não protege contra 10 tentativas sequenciais ao
+      // longo de alguns minutos, exatamente o padrão dos 2 incidentes reais (número derrubado em
+      // LOGOUT repetido pelo próprio WhatsApp, `statusReason:401`, até ficar banido). [AUDITORIA]
+      // FIX APLICADO: ponto único, DEPOIS que `cfg.instancia`/`cfg.stableInstancia` já está
+      // resolvido por QUALQUER um dos 3 caminhos acima (nova_conexao/reaproveitada, nova_conexao
+      // mintando nome novo, ou reconexão explícita) e ANTES do bloco `force_reconnect` logo
+      // abaixo — cobre os 3 de uma vez, sem duplicar a checagem em cada branch. Janela deslizante
+      // (`verificarLoopDeLogout`, `services/logoutCircuitBreaker.ts`): 3+ LOGOUTs reais da MESMA
+      // instância nos últimos 60min já bloqueia, independente de qual caminho gerou a tentativa.
+      const loopStatus = await verificarLoopDeLogout(pool, cfg.stableInstancia);
+      if (loopStatus.emLoop) {
+        log.warn('WHATSAPP_LOGOUT_LOOP', 'Tentativa de conexão bloqueada pelo circuit-breaker', {
+          userId, instancia: cfg.stableInstancia, totalRecente: loopStatus.totalRecente,
+          minutosRestantes: loopStatus.minutosRestantes, forceReconnect: req.body?.force_reconnect === true,
+        });
+        return res.status(429).json({
+          error: true,
+          code: 'LOGOUT_LOOP',
+          message: `Esta instância teve ${loopStatus.totalRecente} desconexões seguidas nos últimos 60 minutos — novas tentativas agora aumentam o risco de bloqueio pelo WhatsApp. Aguarde ${loopStatus.minutosRestantes} min antes de tentar de novo.`,
+          minutosRestantes: loopStatus.minutosRestantes,
+          totalRecente: loopStatus.totalRecente,
+        });
       }
 
       // [AUDITORIA] FIX APLICADO (Sprint 6): Se a flag force_reconnect for fornecida, realiza a
@@ -1576,12 +2126,22 @@ export default function whatsappRouter(pool: Pool): Router {
       // e n8n_chat_histories deste array — a segunda apagava a memória de conversa da IA a
       // cada desconexão/reconexão da mesma instância, decisão explícita do usuário de manter
       // esse contexto vivo entre reconexões (ver AUDITORIA_LOG.md).
+      // [AUDITORIA] BUG GRAVE CORRIGIDO (achado 2026-08-10 — cliente real, contato pausado por
+      // falha real de LLM (429 da OpenAI) foi reativado sozinho horas depois): as duas UPDATEs
+      // de `contatos`/`dados_cliente` abaixo usavam `WHERE user_id = $1` — sem filtro de
+      // instância (`contatos` nem tem essa coluna, é por telefone/tenant) — ou seja,
+      // desconectar UMA instância reativava a IA pra TODOS OS CONTATOS do tenant, inclusive os
+      // que um atendente humano pausou de propósito ou que o gate de segurança
+      // (`pausarPorFalhaLLM`, agentEngine.ts) pausou por falha real na chamada à LLM. Não existe
+      // relação lógica entre "esta instância desconectou" e "todo contato deve voltar a
+      // responder automático" — [AUDITORIA] FIX APLICADO: removido. A reativação de um contato
+      // pausado agora só acontece por ação explícita (atendente reativando manualmente, ou
+      // reconexão bem-sucedida da MESMA instância que ele estava conversando, já tratado em
+      // outro ponto do código).
       const queries = [
         (await req.getDb!()).query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, instancia]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [instancia]),
         pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia = $2`, [userId, instancia]),
-        pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
-        pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
         pool.query(
           `UPDATE agentes
            SET evolution_instancia = NULL,
@@ -1595,9 +2155,9 @@ export default function whatsappRouter(pool: Pool): Router {
 
       await Promise.allSettled(queries);
 
-      return res.json({ 
-        ok: true, 
-        message: 'WhatsApp desconectado, instância removida e estado limpo com sucesso.' 
+      return res.json({
+        ok: true,
+        message: 'WhatsApp desconectado, instância removida e estado limpo com sucesso.'
       });
     } catch (err: any) {
       log.error('WHATSAPP', 'Erro fatal no disconnect', { err: err?.message, stack: err?.stack });
@@ -2000,11 +2560,13 @@ export default function whatsappRouter(pool: Pool): Router {
         // e n8n_chat_histories deste array — a segunda apagava a memória de conversa da IA a
         // cada desconexão/reconexão da mesma instância, decisão explícita do usuário de manter
         // esse contexto vivo entre reconexões (ver AUDITORIA_LOG.md).
+        // [AUDITORIA] BUG GRAVE CORRIGIDO (achado 2026-08-10 — mesmo padrão do endpoint
+        // /disconnect, ver comentário completo lá): as duas UPDATEs de `contatos`/`dados_cliente`
+        // sem filtro de instância reativavam a IA pra TODOS os contatos do tenant, inclusive os
+        // pausados de propósito (atendente humano) ou por falha real de LLM. Removido.
         (await req.getDb!()).query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, name]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [name]),
         pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia = $2`, [userId, name]),
-        pool.query(`UPDATE contatos SET atendente_pausou_ia = false WHERE user_id = $1`, [userId]),
-        pool.query(`UPDATE dados_cliente SET atendimento_ia = 'ativo' WHERE user_id = $1`, [userId]),
         pool.query(
           `UPDATE agentes
            SET evolution_instancia = NULL,

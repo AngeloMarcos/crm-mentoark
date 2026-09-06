@@ -14,6 +14,7 @@ import {
 } from '../functionCallingSecurity';
 import { gerarEmbedding } from '../../utils/embeddings';
 import { enviarCorridaParaSistemaCliente } from '../corridasService';
+import { registrarUsoIA, estimarCustoUsd } from '../../utils/aiCusto';
 import { log } from '../../logger';
 
 // Dados do contato da conversa atual — usados por ferramentas que precisam do telefone/id
@@ -155,13 +156,26 @@ export const MCP_TOOLS: MCPTool[] = [
   },
 ];
 
+// [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2 "Teste", 2026-09-04):
+// `opcoes.dryRun` cobre as 4 ferramentas que ESCREVEM dado real ou disparam efeito externo
+// (`criar_ou_atualizar_contato`, `registrar_pausa`, `criar_agendamento`, `criar_corrida`) — cada
+// uma valida os argumentos normalmente (zod), mas devolve um preview textual em vez de rodar
+// `pool.query`/fetch externo. As 5 ferramentas só de LEITURA (`buscar_contato`,
+// `buscar_historico`, `buscar_produtos`, `consultar_faq`, `buscar_documentos`) ignoram a flag —
+// ler dado real do próprio tenant durante um teste é seguro e é justamente o que dá utilidade ao
+// modo Teste (ver dado real respondido pela IA). `registrar_pausa` ainda devolve
+// `PAUSA_ATIVADA:...` mesmo em dry-run — é sinal de CONTROLE que `agentEngine.ts` usa pra
+// interromper o loop, preservar isso é o que faz o teste mostrar fielmente que o agente pausaria
+// aqui, só sem o UPDATE em `dados_cliente` nem o webhook real pro Kanban.
 export async function executarFerramenta(
   pool: Pool,
   userId: string,
   nome: string,
   args: Record<string, any>,
   contexto?: ContextoConversa,
+  opcoes?: { dryRun?: boolean },
 ): Promise<string> {
+  const dryRun = opcoes?.dryRun === true;
   try {
     // Validação de segurança: userId deve ser UUID (isolamento multi-tenant)
     validateUserIdIsolation(userId);
@@ -190,16 +204,28 @@ export async function executarFerramenta(
         // Valida argumentos com zod schema
         const validatedArgs = CriarOuAtualizarContatoArgsSchema.parse(args);
         const { telefone, nome, email, observacao, estagio } = validatedArgs;
+        // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-27): antes,
+        // `nome` salvo por aqui nunca marcava `nome_verificado` — mesmo quando a IA acabara de
+        // aprender o nome real da pessoa perguntando diretamente (ver instrução injetada em
+        // `agentEngine.ts`), o contato continuava indistinguível de um sem nome nenhum pro resto
+        // do sistema (export, `Disparos.tsx`). `nome !== telefone` é o mesmo sinal já usado em
+        // toda parte do projeto pra "isto parece um nome de verdade, não o telefone repetido".
+        const nomeReal = !!nome && nome.trim() !== telefone.trim();
+        if (dryRun) {
+          return `[PREVIEW — modo teste, nada gravado] Criaria/atualizaria contato: ${nome || telefone} ` +
+            `(telefone ${telefone}${email ? `, email ${email}` : ''}${estagio ? `, estágio ${estagio}` : ''}${observacao ? `, obs: ${observacao}` : ''}).`;
+        }
         await pool.query(
-          `INSERT INTO contatos (user_id, telefone, nome, email, observacoes, status)
-           VALUES ($1, $2, $3, $4, $5, $6)
+          `INSERT INTO contatos (user_id, telefone, nome, email, observacoes, status, nome_verificado)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            ON CONFLICT (user_id, telefone) DO UPDATE
            SET nome       = COALESCE(EXCLUDED.nome, contatos.nome),
                email      = COALESCE(EXCLUDED.email, contatos.email),
                observacoes = COALESCE(EXCLUDED.observacoes, contatos.observacoes),
                status     = COALESCE(EXCLUDED.status, contatos.status),
+               nome_verificado = CASE WHEN $7 THEN true ELSE contatos.nome_verificado END,
                updated_at = NOW()`,
-          [userId, telefone, nome || telefone, email || null, observacao || null, estagio || 'novo']
+          [userId, telefone, nome || telefone, email || null, observacao || null, estagio || 'novo', nomeReal]
         );
         return `Contato ${nome || telefone} salvo com sucesso.`;
       }
@@ -225,6 +251,7 @@ export async function executarFerramenta(
       case 'registrar_pausa': {
         // Valida argumentos com zod schema
         const validatedArgs = RegistrarPausaArgsSchema.parse(args);
+        if (dryRun) return `PAUSA_ATIVADA:${validatedArgs.motivo}`;
         await pool.query(
           `UPDATE dados_cliente SET atendimento_ia = 'pause',
              pausa_timestamp = NOW(), pausa_duracao_min = 60
@@ -287,6 +314,7 @@ export async function executarFerramenta(
       case 'criar_agendamento': {
         // Valida argumentos com zod schema
         const validatedArgs = CriarAgendamentoArgsSchema.parse(args);
+        if (dryRun) return `[PREVIEW — modo teste, nada gravado] Criaria agendamento de ${validatedArgs.tipo} para ${validatedArgs.data_hora}${validatedArgs.observacao ? ` (obs: ${validatedArgs.observacao})` : ''}.`;
         await pool.query(
           `INSERT INTO follow_ups (user_id, contato_id, data_retorno, motivo, observacao, status)
            SELECT $1, c.id, $2, $3, $4, 'pendente'
@@ -316,6 +344,26 @@ export async function executarFerramenta(
         // Valida argumentos com zod schema
         const validatedArgs = BuscarDocumentosArgsSchema.parse(args);
 
+        // [AUDITORIA] BUG (achado real, Sprint Vistoria de Gasto de IA, 2026-08-14): confirmado
+        // com dado real de produção que `documents` está 100% vazia, em TODAS as contas, sem
+        // exceção — mas a ferramenta fica disponível pra IA (via `mcp_tools`, inclusive no
+        // default legado NULL="todas habilitadas") de qualquer forma. Toda vez que o modelo
+        // decide chamá-la, paga um embedding (`text-embedding-3-large`, o tier mais caro) pra
+        // garantidamente não achar nada — mesmo padrão do desperdício de mídia de grupo corrigido
+        // no mesmo dia em webhook.ts (gasto certo, resultado zero, invisível no dashboard porque
+        // esta chamada nunca gravava custo_usd).
+        // [AUDITORIA] FIX APLICADO: checa se o tenant tem QUALQUER documento antes de pagar o
+        // embedding — se não tem, retorna direto pra IA sem gastar nada (a IA simplesmente não
+        // tem base de conhecimento pra consultar ainda; o caminho volta a funcionar sozinho
+        // assim que o tenant subir o primeiro documento, nenhuma reativação manual necessária).
+        const temDocumentos = await pool.query(
+          `SELECT 1 FROM documents WHERE user_id = $1 LIMIT 1`,
+          [userId]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (!temDocumentos.rows.length) {
+          return 'Nenhum documento cadastrado na base de conhecimento ainda.';
+        }
+
         // [AUDITORIA] LÓGICA: usa a OPENAI_API_KEY global do ambiente (não a chave por-tenant
         // de ai_providers) para gerar o embedding — decisão explícita: o RAG do CRM roda sobre
         // um único modelo de embeddings fixo, independente de qual provider/modelo o tenant
@@ -325,14 +373,21 @@ export async function executarFerramenta(
           return 'Busca de documentos indisponível: OPENAI_API_KEY não configurada no servidor.';
         }
 
-        const embedding = await gerarEmbedding(validatedArgs.query, apiKey);
-        if (!embedding) {
+        const resultadoEmbedding = await gerarEmbedding(validatedArgs.query, apiKey);
+        if (!resultadoEmbedding) {
           return 'Não foi possível processar a busca de documentos no momento.';
         }
+        // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): embeddings
+        // nunca gravavam custo_usd, mesma causa raiz do achado acima.
+        await registrarUsoIA(pool, {
+          userId, providerSlug: 'openai', modelo: 'text-embedding-3-large',
+          tokensEntrada: resultadoEmbedding.tokensEntrada, tokensSaida: 0,
+          custoUsd: estimarCustoUsd('text-embedding-3-large', resultadoEmbedding.tokensEntrada, 0),
+        });
 
         // Distância cosseno via pgvector (<=>), isolamento estrito por user_id — mesmo padrão
         // de todas as outras ferramentas deste arquivo.
-        const vectorStr = `[${embedding.join(',')}]`;
+        const vectorStr = `[${resultadoEmbedding.embedding.join(',')}]`;
         const r = await pool.query(
           `SELECT content FROM documents
            WHERE user_id = $1
@@ -350,6 +405,12 @@ export async function executarFerramenta(
       case 'criar_corrida': {
         // Valida argumentos com zod schema
         const validatedArgs = CriarCorridaArgsSchema.parse(args);
+
+        if (dryRun) {
+          return `[PREVIEW — modo teste, nada gravado nem enviado] Registraria corrida ` +
+            `(confiança: ${validatedArgs.confianca}, origem: ${validatedArgs.origem || '—'}, destino: ${validatedArgs.destino || '—'}, ` +
+            `horário: ${validatedArgs.horario_solicitado || '—'})${validatedArgs.confianca === 'alta' && validatedArgs.origem && validatedArgs.destino && validatedArgs.horario_solicitado ? ' — enviaria automaticamente ao sistema do cliente.' : ' — ficaria na fila para confirmação humana.'}`;
+        }
 
         const telefoneContato = contexto?.telefone;
         if (!telefoneContato) {

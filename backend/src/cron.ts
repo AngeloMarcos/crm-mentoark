@@ -5,6 +5,19 @@ import { reconciliarInstanciasEvolution } from './services/evolutionReconciliati
 import { retentarMidiaPendente } from './services/mediaRetry';
 import { recalcularTodosScores } from './services/instanceScore';
 import { processarMaturador } from './services/maturadorProcessor';
+import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
+
+// [AUDITORIA] FIX APLICADO (Sprint Limpeza de Disco, 2026-08-23): dias de retenção pra mídia
+// recebida (áudio/imagem/vídeo/documento) salva em disco — configurável via env pra poder
+// apertar/afrouxar sem novo deploy, default 30 dias (decisão explícita do usuário, ver
+// AUDITORIA_LOG.md). Ver `limparMidiaExpirada()` (utils/whatsappMediaStorage.ts) pro porquê.
+const DIAS_RETENCAO_MIDIA = Number(process.env.DIAS_RETENCAO_MIDIA_WHATSAPP) || 30;
+
+// [AUDITORIA] FIX APLICADO (Sprint Grupos/Template, 2026-09-04): retenção bem mais curta que a
+// de mídia recebida — arquivo de variação (`gerarVariacaoImagem()`, `variar_imagem` em
+// Disparos) é gerado um por MENSAGEM e descartável assim que a Evolution buscou a URL pra
+// entregar; poucas horas já é folga generosa contra retry lento.
+const HORAS_RETENCAO_VARIANTES = Number(process.env.HORAS_RETENCAO_VARIANTES_IMAGEM) || 12;
 
 export function initCronJobs() {
   // Todo dia às 03:00 (horário de Brasília) — Limpeza diária de tabelas de crescimento
@@ -43,6 +56,25 @@ export function initCronJobs() {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // A cada 6 horas — limpeza das variações de imagem geradas por `variar_imagem` (Disparos).
+  // [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, revisão pós-Sprint Grupos/Template):
+  // `gerarVariacaoImagem()` grava um arquivo novo POR MENSAGEM enviada com essa opção ligada,
+  // sem nenhuma limpeza — campanha de milhares de destinatários acumulava milhares de arquivos
+  // pra sempre em disco (a limpeza de mídia semanal, `limparMidiaExpirada` abaixo, só cobre
+  // mídia RECEBIDA rastreada em `whatsapp_messages`, não isso). Retenção curta (12h default,
+  // ver `HORAS_RETENCAO_VARIANTES_IMAGEM`) e cadência mais frequente que a limpeza semanal —
+  // proporcional ao volume real (pode chegar a milhares de arquivos/dia numa campanha grande).
+  cron.schedule('0 */6 * * *', async () => {
+    try {
+      const r = await limparVariantesExpiradas(HORAS_RETENCAO_VARIANTES);
+      if (r.arquivosRemovidos) {
+        log.info('CRON', 'Limpeza de variações de imagem concluída', r);
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro na limpeza de variações de imagem', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Todo domingo às 02:00 (horário de Brasília) — limpeza de retenção LGPD (longo prazo)
   cron.schedule('0 2 * * 0', async () => {
     try {
@@ -77,11 +109,23 @@ export function initCronJobs() {
         "DELETE FROM whatsapp_messages WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '90 days'"
       )).catch(() => ({ rowCount: 0 }));
 
+      // 6. Mídia de WhatsApp em disco (áudio/imagem/vídeo/documento) mais velha que
+      // DIAS_RETENCAO_MIDIA — ver [AUDITORIA] em whatsappMediaStorage.ts. Achado real: 9GB/mês
+      // acumulando sem nenhuma limpeza, na mesma VPS que já teve disco cheio derrubar o Postgres
+      // 2x. Só o ARQUIVO é removido — a mensagem continua no histórico, só sem anexo.
+      const midia = await limparMidiaExpirada(pool, DIAS_RETENCAO_MIDIA).catch((err: any) => {
+        log.error('CRON', 'Erro na limpeza de mídia expirada', { err: err?.message });
+        return { arquivosRemovidos: 0, bytesLiberados: 0, mensagensAtualizadas: 0 };
+      });
+
       log.info('CRON', 'Limpeza semanal concluída', {
         disparos: logs.rowCount,
         catalogos: catLogs.rowCount,
         chats: chats.rowCount,
         waMessagesExpurgadas: waMessages.rowCount,
+        midiaArquivosRemovidos: midia.arquivosRemovidos,
+        midiaBytesLiberados: midia.bytesLiberados,
+        diasRetencaoMidia: DIAS_RETENCAO_MIDIA,
       });
     } catch (err: any) {
       log.error('CRON', 'Erro na limpeza semanal', { err: err.message });

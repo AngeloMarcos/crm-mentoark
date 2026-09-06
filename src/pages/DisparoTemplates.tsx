@@ -1,19 +1,10 @@
-import { useState, useEffect, useMemo, useCallback, type ChangeEvent } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogDescription,
-} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,81 +27,41 @@ import {
   Image as ImageIcon,
   Headphones,
   FileText,
-  Upload,
-  Link as LinkIcon,
-  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
-import { getAuthToken } from "@/lib/api-token";
 
-// [AUDITORIA] LÓGICA (Sprint Integração Galeria↔Templates, 2026-08-04): mesmo padrão de
-// fetch cru + token síncrono já usado em Galeria.tsx pra upload multipart — o QueryBuilder
-// genérico (`api.from(...)`) não faz upload de arquivo, só CRUD de linha.
-const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
-const token = () => getAuthToken();
-
-// tipo_midia (disparo_templates, pt-BR) → media_type (galeria_midias, en) — a Galeria não
-// distingue "imagem" com legenda de outra coisa, e não tem tipo próprio pra vídeo hoje.
-const TIPO_MIDIA_PARA_GALERIA: Record<string, string | null> = {
-  imagem: "image",
-  documento: "pdf",
-  audio: "audio",
-  texto: null,
-};
-
-interface MidiaGaleria {
-  id: string;
-  url: string;
-  titulo: string | null;
-  filename: string;
-  media_type: string;
-}
+// [AUDITORIA] LÓGICA (Sprint Editor Template WhatsApp, 2026-09-04): esta tela ficou só com
+// listar/buscar/excluir — criar e editar viraram uma página própria (`DisparoTemplateEditor.tsx`,
+// rota `/disparos/templates/:id`, `:id === "novo"` pra criação) por causa do tamanho novo do
+// formulário (header/corpo/footer/botões/preview lado a lado não cabe razoavelmente num modal).
+// O modal antigo (upload de galeria embutido, campos de mensagem/legenda) saiu inteiro daqui.
 
 interface DisparoTemplate {
   id: string;
   nome: string;
   tipo_midia: "texto" | "imagem" | "audio" | "documento";
   mensagem: string;
-  url_midia: string | null;
   legenda_midia: string | null;
+  footer: string | null;
+  botoes: unknown[] | null;
   created_at: string;
 }
 
-const MEDIA_TYPES = [
-  { id: "texto", label: "Texto", icon: MessageSquare },
-  { id: "imagem", label: "Imagem", icon: ImageIcon },
-  { id: "audio", label: "Áudio", icon: Headphones },
-  { id: "documento", label: "Documento", icon: FileText },
-] as const;
+const MEDIA_ICONS: Record<string, typeof MessageSquare> = {
+  texto: MessageSquare,
+  imagem: ImageIcon,
+  audio: Headphones,
+  documento: FileText,
+};
 
 export default function DisparoTemplatesPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [templates, setTemplates] = useState<DisparoTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
-  const [modal, setModal] = useState(false);
-  const [editando, setEditando] = useState<DisparoTemplate | null>(null);
-  const [salvando, setSalvando] = useState(false);
-  const [form, setForm] = useState({
-    nome: "",
-    tipo_midia: "texto" as DisparoTemplate["tipo_midia"],
-    mensagem: "",
-    url_midia: "",
-    legenda_midia: "",
-  });
-  // [AUDITORIA] LÓGICA (Sprint Integração Galeria↔Templates, 2026-08-04): antes disto, o campo
-  // "URL do Arquivo" era um <input type="text"> cru — o operador precisava ter hospedado a
-  // imagem em outro lugar e colar o link manualmente, sem nenhuma ligação com a Galeria de
-  // Mídias que o próprio CRM já tem. Agora busca as mídias já cadastradas (filtradas pelo tipo
-  // escolhido) pra seleção com um clique, e permite subir um arquivo novo direto por aqui —
-  // ambos preenchem `url_midia` automaticamente. O input manual continua disponível (link
-  // externo é um caso de uso legítimo), só não é mais o único caminho.
-  const [galeriaItens, setGaleriaItens] = useState<MidiaGaleria[]>([]);
-  const [loadingGaleria, setLoadingGaleria] = useState(false);
-  const [uploadingGaleria, setUploadingGaleria] = useState(false);
-  const [mostrarUrlManual, setMostrarUrlManual] = useState(false);
 
   const carregar = async () => {
     if (!user) return;
@@ -126,58 +77,6 @@ export default function DisparoTemplatesPage() {
 
   useEffect(() => { carregar(); }, [user?.id]);
 
-  // Busca as mídias da Galeria já filtradas pelo media_type equivalente ao tipo_midia atual —
-  // roda de novo sempre que o modal abre ou o operador troca o tipo de mídia dentro dele.
-  const carregarGaleria = useCallback(async (tipoMidia: string) => {
-    const tipoGaleria = TIPO_MIDIA_PARA_GALERIA[tipoMidia];
-    if (!tipoGaleria) { setGaleriaItens([]); return; }
-    setLoadingGaleria(true);
-    try {
-      const r = await fetch(`${API_BASE}/api/galeria?tipo=${tipoGaleria}&limit=24`, {
-        headers: { Authorization: `Bearer ${token()}` },
-      });
-      if (r.ok) {
-        const d = await r.json();
-        setGaleriaItens(d.images ?? []);
-      }
-    } catch {
-      // Falha ao carregar a galeria não deve travar o modal — operador ainda pode colar uma
-      // URL manual (ver mostrarUrlManual) ou tentar de novo.
-    } finally {
-      setLoadingGaleria(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (modal && form.tipo_midia !== "texto") carregarGaleria(form.tipo_midia);
-  }, [modal, form.tipo_midia, carregarGaleria]);
-
-  const handleUploadGaleria = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setUploadingGaleria(true);
-    try {
-      const formData = new FormData();
-      formData.append("imagens", file); // campo aceito pelo backend pra qualquer tipo, ver galeria.ts
-      const r = await fetch(`${API_BASE}/api/galeria/upload`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token()}` },
-        body: formData,
-      });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || "Erro no upload");
-      const novo = await r.json();
-      const item: MidiaGaleria = Array.isArray(novo) ? novo[0] : novo;
-      setGaleriaItens(prev => [item, ...prev]);
-      setForm(f => ({ ...f, url_midia: item.url }));
-      toast.success("Arquivo enviado e selecionado para o template");
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao enviar arquivo");
-    } finally {
-      setUploadingGaleria(false);
-    }
-  };
-
   const filtrados = useMemo(() => {
     const t = searchTerm.toLowerCase();
     if (!t) return templates;
@@ -186,59 +85,6 @@ export default function DisparoTemplatesPage() {
       tpl.mensagem.toLowerCase().includes(t)
     );
   }, [templates, searchTerm]);
-
-  const abrirNovo = () => {
-    setEditando(null);
-    setForm({ nome: "", tipo_midia: "texto", mensagem: "", url_midia: "", legenda_midia: "" });
-    setMostrarUrlManual(false);
-    setModal(true);
-  };
-
-  const abrirEdicao = (tpl: DisparoTemplate) => {
-    setEditando(tpl);
-    setForm({
-      nome: tpl.nome,
-      tipo_midia: tpl.tipo_midia,
-      mensagem: tpl.mensagem,
-      url_midia: tpl.url_midia ?? "",
-      legenda_midia: tpl.legenda_midia ?? "",
-    });
-    // [AUDITORIA] LÓGICA: se o template já tem uma URL (caso comum pra templates criados antes
-    // desta sprint, só com o input manual antigo), abre o campo manual já visível — evita que o
-    // operador ache que perdeu o valor só porque agora o seletor de galeria é o destaque.
-    setMostrarUrlManual(!!tpl.url_midia);
-    setModal(true);
-  };
-
-  const salvar = async () => {
-    if (!user) return;
-    if (!form.nome.trim()) {
-      toast.error("Nome do template é obrigatório");
-      return;
-    }
-    if (form.tipo_midia === "texto" && !form.mensagem.trim()) {
-      toast.error("Mensagem é obrigatória para templates de texto");
-      return;
-    }
-    setSalvando(true);
-    const payload = {
-      user_id: user.id,
-      nome: form.nome.trim(),
-      tipo_midia: form.tipo_midia,
-      mensagem: form.mensagem,
-      url_midia: form.url_midia.trim() || null,
-      legenda_midia: form.legenda_midia.trim() || null,
-      updated_at: new Date().toISOString(),
-    };
-    const { error } = editando
-      ? await (api as any).from("disparo_templates").update(payload).eq("id", editando.id)
-      : await (api as any).from("disparo_templates").insert(payload);
-    setSalvando(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success(editando ? "Template atualizado!" : "Template criado!");
-    setModal(false);
-    carregar();
-  };
 
   const deletar = async (id: string) => {
     const { error } = await (api as any).from("disparo_templates").delete().eq("id", id);
@@ -257,7 +103,7 @@ export default function DisparoTemplatesPage() {
               Salve mensagens prontas para reaproveitar em novas campanhas de Disparos, sem digitar tudo de novo.
             </p>
           </div>
-          <Button onClick={abrirNovo} className="gap-2">
+          <Button onClick={() => navigate("/disparos/templates/novo")} className="gap-2">
             <Plus className="h-4 w-4" />
             Novo Template
           </Button>
@@ -290,7 +136,7 @@ export default function DisparoTemplatesPage() {
                 </p>
               </div>
               {!searchTerm && (
-                <Button onClick={abrirNovo} className="gap-2">
+                <Button onClick={() => navigate("/disparos/templates/novo")} className="gap-2">
                   <Plus className="h-4 w-4" /> Criar primeiro template
                 </Button>
               )}
@@ -299,28 +145,42 @@ export default function DisparoTemplatesPage() {
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filtrados.map(tpl => {
-              const MediaIcon = MEDIA_TYPES.find(m => m.id === tpl.tipo_midia)?.icon ?? MessageSquare;
+              const MediaIcon = MEDIA_ICONS[tpl.tipo_midia] ?? MessageSquare;
               return (
-                <Card key={tpl.id} className="group hover:border-primary/30 transition-colors">
+                <Card
+                  key={tpl.id}
+                  className="group hover:border-primary/30 transition-colors cursor-pointer"
+                  onClick={() => navigate(`/disparos/templates/${tpl.id}`)}
+                >
                   <CardContent className="p-4 space-y-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold text-sm truncate">{tpl.nome}</p>
-                        <Badge variant="outline" className="text-[10px] gap-1 mt-1 capitalize">
-                          <MediaIcon className="h-2.5 w-2.5" />{tpl.tipo_midia}
-                        </Badge>
+                        <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                          <Badge variant="outline" className="text-[10px] gap-1 capitalize">
+                            <MediaIcon className="h-2.5 w-2.5" />{tpl.tipo_midia}
+                          </Badge>
+                          {!!tpl.footer && <Badge variant="outline" className="text-[10px]">footer</Badge>}
+                          {!!tpl.botoes?.length && <Badge variant="outline" className="text-[10px]">{tpl.botoes.length} botão(ões)</Badge>}
+                        </div>
                       </div>
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => abrirEdicao(tpl)} title="Editar">
+                        <Button
+                          variant="ghost" size="icon" className="h-7 w-7" title="Editar"
+                          onClick={e => { e.stopPropagation(); navigate(`/disparos/templates/${tpl.id}`); }}
+                        >
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Excluir">
+                            <Button
+                              variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Excluir"
+                              onClick={e => e.stopPropagation()}
+                            >
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </AlertDialogTrigger>
-                          <AlertDialogContent>
+                          <AlertDialogContent onClick={e => e.stopPropagation()}>
                             <AlertDialogHeader>
                               <AlertDialogTitle>Excluir template?</AlertDialogTitle>
                               <AlertDialogDescription>"{tpl.nome}" será removido permanentemente.</AlertDialogDescription>
@@ -346,146 +206,6 @@ export default function DisparoTemplatesPage() {
           </div>
         )}
       </div>
-
-      <Dialog open={modal} onOpenChange={setModal}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editando ? "Editar Template" : "Novo Template"}</DialogTitle>
-            <DialogDescription>
-              Templates ficam disponíveis para carregar direto no passo "Mensagem" de uma nova campanha de Disparos.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Nome do Template *</Label>
-              <Input
-                value={form.nome}
-                onChange={e => setForm(f => ({ ...f, nome: e.target.value }))}
-                placeholder="Ex: Promoção mensal"
-                autoFocus
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>Tipo de Mídia</Label>
-              <div className="flex gap-2 p-1 bg-muted rounded-lg w-fit">
-                {MEDIA_TYPES.map(t => (
-                  <Button
-                    key={t.id}
-                    type="button"
-                    variant={form.tipo_midia === t.id ? "default" : "ghost"}
-                    size="sm"
-                    className="h-8 gap-2"
-                    onClick={() => setForm(f => ({ ...f, tipo_midia: t.id }))}
-                  >
-                    <t.icon className="h-4 w-4" /> {t.label}
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            {form.tipo_midia !== "texto" && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>Arquivo</Label>
-                  <label className="inline-flex items-center gap-1.5 text-xs font-medium text-primary cursor-pointer hover:underline">
-                    {uploadingGaleria ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                    Fazer upload
-                    <input type="file" accept="image/*,application/pdf,audio/*" className="hidden" disabled={uploadingGaleria} onChange={handleUploadGaleria} />
-                  </label>
-                </div>
-
-                {loadingGaleria ? (
-                  <div className="flex justify-center py-6"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
-                ) : galeriaItens.length > 0 ? (
-                  <div className="grid grid-cols-6 gap-2 max-h-40 overflow-y-auto p-1 border rounded-lg">
-                    {galeriaItens.map(item => {
-                      const selecionado = form.url_midia === item.url;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          title={item.titulo || item.filename}
-                          onClick={() => setForm(f => ({ ...f, url_midia: item.url }))}
-                          className={`relative aspect-square rounded-md overflow-hidden border-2 transition-all ${
-                            selecionado ? "border-primary ring-2 ring-primary/30" : "border-transparent hover:border-muted-foreground/30"
-                          }`}
-                        >
-                          {item.media_type === "image" ? (
-                            <img src={item.url} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-muted">
-                              {item.media_type === "audio" ? <Headphones className="h-4 w-4 text-muted-foreground" /> : <FileText className="h-4 w-4 text-muted-foreground" />}
-                            </div>
-                          )}
-                          {selecionado && (
-                            <div className="absolute top-0.5 right-0.5 bg-primary text-primary-foreground rounded-full p-0.5">
-                              <Check className="h-2.5 w-2.5" />
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground/70 py-1">
-                    Nenhuma mídia deste tipo na Galeria ainda — faça upload acima.
-                  </p>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setMostrarUrlManual(v => !v)}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-                >
-                  <LinkIcon className="h-3 w-3" />
-                  {mostrarUrlManual ? "Ocultar link manual" : "Ou colar um link externo"}
-                </button>
-                {mostrarUrlManual && (
-                  <Input
-                    value={form.url_midia}
-                    onChange={e => setForm(f => ({ ...f, url_midia: e.target.value }))}
-                    placeholder="https://..."
-                  />
-                )}
-              </div>
-            )}
-
-            <div className="space-y-1.5">
-              <Label>{form.tipo_midia === "texto" ? "Mensagem *" : "Legenda (opcional)"}</Label>
-              <Textarea
-                value={form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia}
-                onChange={e => setForm(f => (
-                  f.tipo_midia === "texto"
-                    ? { ...f, mensagem: e.target.value }
-                    : { ...f, legenda_midia: e.target.value }
-                ))}
-                placeholder="Olá {{primeiro_nome}}, tudo bem?"
-                className="min-h-[140px] resize-y font-mono text-sm"
-              />
-              <p className="text-xs text-muted-foreground">
-                Use <code className="bg-muted px-1 rounded">{"{{nome}}"}</code>, <code className="bg-muted px-1 rounded">{"{{primeiro_nome}}"}</code>, <code className="bg-muted px-1 rounded">{"{{telefone}}"}</code>, <code className="bg-muted px-1 rounded">{"{{empresa}}"}</code> — as mesmas variáveis do passo Mensagem em Disparos.
-              </p>
-              {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): mesma dica de
-                  spintax que StepMessage (Disparos.tsx) — um template salvo com spintax funciona
-                  normalmente quando carregado numa campanha (a resolução acontece no wizard, na
-                  hora do envio real, não aqui). */}
-              <p className="text-xs text-muted-foreground">
-                💡 Use <code className="bg-muted px-1 rounded">{"{opção 1|opção 2|opção 3}"}</code> pra variar o texto por contato sem custo de IA (resolvido quando este template for usado numa campanha).
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setModal(false)}>Cancelar</Button>
-            <Button onClick={salvar} disabled={salvando}>
-              {salvando && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              {editando ? "Salvar alterações" : "Criar template"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </CRMLayout>
   );
 }

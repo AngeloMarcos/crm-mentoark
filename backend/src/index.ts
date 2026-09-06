@@ -67,6 +67,7 @@ import subPerfisRouter from './routes/subperfis';
 import kanbanRouter, { kanbanWebhookN8n } from './routes/kanban';
 import funisRouter from './routes/funis';
 import conversasRouter from './routes/conversas';
+import { testarAgentePlayground } from './services/agentEngine';
 import aiProvidersRouter from './routes/ai-providers';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
@@ -293,6 +294,88 @@ for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
 
+// [AUDITORIA] BUG GRAVE CORRIGIDO (achado 2026-08-10 — cliente real, número caiu da tela do
+// CRM repetidas vezes no mesmo dia): `DELETE /api/agentes/:id` genérico (makeCrud, abaixo) apaga
+// a linha sem nenhuma noção de que ela é o único vínculo entre o CRM e uma instância WhatsApp
+// REALMENTE conectada na Evolution — a sessão continua viva no servidor (não desconecta o
+// WhatsApp de verdade), mas o número some de Instâncias/Disparos/Score/Maturador, todos os
+// quais leem de `agentes`. Rota dedicada de desconexão (`POST /whatsapp/disconnect`,
+// `DELETE /whatsapp/instances/:name`) já faz a limpeza coordenada certa (loga fora da Evolution
+// e só então limpa o banco) — o problema era só existir um atalho pelo CRUD genérico que pula
+// tudo isso. [AUDITORIA] FIX APLICADO: bloqueia especificamente o DELETE de uma linha com
+// `evolution_instancia` preenchida, direcionando pro fluxo de desconexão de verdade. Registrada
+// ANTES do `app.use('/api/agentes', makeCrud(...))` — Express casa a primeira rota que bate,
+// então esta intercepta o mesmo método+path sem precisar mexer no crud.ts genérico (usado por
+// outras ~20 tabelas que não têm essa mesma regra de negócio).
+app.delete('/api/agentes/:id', async (req: AuthRequest, res, next) => {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+  try {
+    const r = await pool.query(
+      `SELECT evolution_instancia FROM agentes WHERE id = $1 AND user_id = $2`,
+      [req.params.id, userId]
+    );
+    if (r.rows.length && r.rows[0].evolution_instancia) {
+      return res.status(409).json({
+        message: `Este agente está vinculado à instância WhatsApp "${r.rows[0].evolution_instancia}". ` +
+          `Apagar aqui deixaria o número conectado "órfão" (some do painel, mas continua ligado na Evolution). ` +
+          `Use "Desconectar" na aba Instâncias em vez de apagar o agente diretamente.`,
+      });
+    }
+  } catch (err: any) {
+    log.warn('AGENTES', 'Falha ao checar evolution_instancia antes de excluir agente', { err: err?.message });
+    // Falha na checagem não deve bloquear a exclusão — segue pro CRUD genérico normalmente.
+  }
+  next(); // sem vínculo ativo — segue pro DELETE genérico (makeCrud, registrado logo abaixo)
+});
+
+// [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): rota própria
+// (não cabe no CRUD genérico — é leitura de outra tabela, `agente_execucoes`, filtrada por
+// `agente_id`) pra aba "Execuções" (`Agentes.tsx`). Registrada ANTES do `app.use('/api/agentes',
+// makeCrud(...))` pelo mesmo motivo do DELETE acima — Express casa a rota mais específica
+// primeiro. Confirma que o agente pertence ao caller antes de listar (mesmo padrão de ownership
+// do resto do arquivo) — sem isso, `agente_id` de outro tenant vazaria histórico de execução
+// (prompt/resposta reais de cliente) pra quem não deveria ver.
+app.get('/api/agentes/:id/execucoes', async (req: AuthRequest, res) => {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+  try {
+    const dono = await pool.query(`SELECT 1 FROM agentes WHERE id = $1 AND user_id = $2`, [req.params.id, userId]);
+    if (!dono.rows.length) return res.status(404).json({ message: 'Agente não encontrado' });
+    const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
+    const r = await pool.query(
+      `SELECT id, trigger_origem, status, modelo, latencia_ms, tokens_entrada, tokens_saida,
+              custo_usd, entrada_texto, saida_texto, erro_msg, trace, created_at
+       FROM agente_execucoes WHERE agente_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [req.params.id, limit]
+    );
+    return res.json(r.rows);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
+});
+
+// [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): aba "Teste"
+// (`Agentes.tsx`) — roda uma mensagem através do MESMO motor de IA (`testarAgentePlayground`,
+// agentEngine.ts) mas isolado do fluxo real de WhatsApp: nunca envia mensagem de verdade, nunca
+// grava `whatsapp_messages`, e ferramentas que escrevem dado (criar contato/agendamento/corrida,
+// pausar IA) rodam em modo preview (`dryRun`, ver `mcp/tools.ts`) — nada é afetado no banco além
+// do próprio log de execução (`agente_execucoes`, `trigger_origem='playground'`). Checa dono do
+// agente antes de rodar, mesmo padrão do resto do arquivo.
+app.post('/api/agentes/:id/testar', async (req: AuthRequest, res) => {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+  const historico = Array.isArray(req.body?.historico) ? req.body.historico : [];
+  if (!historico.length) return res.status(400).json({ message: 'Envie ao menos uma mensagem no histórico.' });
+  try {
+    const resultado = await testarAgentePlayground(pool, userId, req.params.id, historico);
+    return res.json(resultado);
+  } catch (err: any) {
+    log.error('AGENTES TESTE', 'Falha ao rodar playground', { err: err?.message, stack: err?.stack });
+    return res.status(500).json({ message: err.message });
+  }
+});
+
 // Agentes: campos do Lovable que não existem na tabela são ignorados silenciosamente
 app.use('/api/agentes', makeCrud(pool, 'agentes', {
   stripFields: [
@@ -304,11 +387,14 @@ app.use('/api/agentes', makeCrud(pool, 'agentes', {
     // por ela. Antes disso, qualquer POST/PATCH que o frontend mandasse com `mcp_tools` era
     // descartado silenciosamente aqui — por isso o toggle da aba Motor nunca teve efeito nenhum,
     // mesmo antes da unificação (achado desta sprint, não só "não lido", também "nunca salvo").
-    // `modalidade_audio/imagem/video` continuam de fora de propósito — decisão desta sprint foi
-    // deixar esses 3 toggles inertes (sem coluna, sem leitura em agentEngine.ts) por enquanto;
-    // ver diagnosticos/AUDITORIA_LOG.md pra justificativa completa.
-    'provider', 'modelo_id', 'modalidade_audio', 'modalidade_imagem',
-    'modalidade_video', 'name', 'description',
+    // [AUDITORIA] FIX APLICADO (Sprint Modalidades Opcionais, 2026-08-23 — pedido explícito do
+    // usuário: "não tire essa funcionalidade... deixe como opcional"): `modalidade_audio`/
+    // `modalidade_imagem` SAÍRAM desta lista — mesmo caso do `mcp_tools` acima, viraram colunas
+    // reais (`migrations.ts`) lidas de verdade em `webhook.ts`/`agentEngine.ts` antes de pagar
+    // Whisper/Vision. `modalidade_video` continua stripada — vídeo não tem NENHUM processamento
+    // de IA implementado ainda (a própria UI mostra "em breve"), guardar essa config não faria
+    // nada de qualquer forma.
+    'provider', 'modelo_id', 'modalidade_video', 'name', 'description',
     'is_active', 'enabled', 'settings', 'metadata',
   ],
   transformRow: (row: any) => {

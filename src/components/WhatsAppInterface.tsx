@@ -32,6 +32,8 @@ import {
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
   Copy, Video, FileText, Trash2, Forward, Star,
   AlertCircle, Activity, ArrowLeft, Users,
+  Download, FileSpreadsheet, UserSearch, LogOut,
+  Link as LinkIcon,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -64,6 +66,7 @@ import { TagStatusEnvio } from "@/components/TagStatusEnvio";
 // o texto canônico cru no composer. Baixo risco: é só o texto que entra no campo de digitação, o
 // atendente ainda revisa/edita antes de enviar de verdade.
 import { personalizarMensagem } from "@/lib/motorTexto";
+import * as XLSX from "xlsx";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 // [AUDITORIA] FIX APLICADO (2026-07-10): apiHeaders() lia o token cru do localStorage sem checar
@@ -184,6 +187,13 @@ interface Chat {
   is_muted?: boolean;
   is_archived?: boolean;
   source?: string;
+  // [AUDITORIA] LÓGICA (Sprint Grupos Somem com Instância Duplicada, 2026-09-04): identidade
+  // estável do número real por trás de `source` (que é só o instance_name cru da última
+  // mensagem, e não sobrevive a uma reconexão sob nome novo pro mesmo número — ver GET
+  // /conversas, backend). Usado pelo filtro de número da Inbox no lugar de `source`; `source`
+  // continua existindo separadamente porque ações ao vivo (enviar mensagem, buscar info de
+  // grupo) precisam do instance_name atual de verdade, não do número.
+  numero?: string;
   push_name?: string;
   messages: Message[];
   notes?: string;
@@ -372,6 +382,71 @@ function AuthedVideo({ src, mime, className }: { src: string; mime?: string; cla
   );
 }
 
+// [AUDITORIA] LÓGICA (Sprint Grupos — melhorias WhatsApp, 2026-09-06): cache módulo-level (não
+// dentro do componente) — sobrevive a troca de conversa/desmontagem da lista de mensagens, então
+// a mesma URL vista em qualquer chat só busca uma vez por sessão do navegador, mesmo com o poll
+// de mensagens rodando a cada 3s. Camada extra ao cache de 7 dias que o backend já mantém em
+// `link_previews_cache` (esse aqui evita até a IDA HTTP pro nosso próprio backend a cada poll).
+const linkPreviewCache = new Map<string, { titulo: string | null; descricao: string | null; imagemUrl: string | null; siteNome: string | null; erro: string | null }>();
+
+interface LinkPreviewData {
+  titulo: string | null;
+  descricao: string | null;
+  imagemUrl: string | null;
+  siteNome: string | null;
+  erro: string | null;
+}
+
+// Card de preview genérico (qualquer link http/https) — mesmo espírito visual do card de convite
+// de grupo (link clicável, ícone/imagem + texto), mas com dado real da página de terceiro
+// (Open Graph, buscado via GET /api/whatsapp/link-preview). Enquanto carrega ou se falhar
+// (`erro` ou sem título nenhum pra mostrar), não renderiza nada — a mensagem já mostra o texto
+// cru do link normalmente logo abaixo, então nunca fica "faltando" alguma coisa visualmente.
+function LinkPreviewCard({ url, isOut }: { url: string; isOut: boolean }) {
+  const cacheado = linkPreviewCache.get(url);
+  const [dados, setDados] = useState<LinkPreviewData | null>(cacheado ?? null);
+  const [carregando, setCarregando] = useState(!cacheado);
+
+  useEffect(() => {
+    if (linkPreviewCache.has(url)) return;
+    let cancelado = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/whatsapp/link-preview?url=${encodeURIComponent(url)}`, { headers: await apiHeaders() });
+        const data = await res.json().catch(() => ({ titulo: null, descricao: null, imagemUrl: null, siteNome: null, erro: 'falha_busca' }));
+        linkPreviewCache.set(url, data);
+        if (!cancelado) { setDados(data); setCarregando(false); }
+      } catch {
+        if (!cancelado) setCarregando(false);
+      }
+    })();
+    return () => { cancelado = true; };
+  }, [url]);
+
+  if (carregando || !dados || dados.erro || !dados.titulo) return null;
+
+  return (
+    <a
+      href={url}
+      target="_blank" rel="noreferrer"
+      className={`flex items-center gap-2.5 mb-1.5 p-2.5 rounded-xl border overflow-hidden ${isOut ? 'bg-primary-foreground/10 border-primary-foreground/20' : 'bg-muted/40 border-border/50'} hover:opacity-80 transition-opacity`}
+    >
+      {dados.imagemUrl ? (
+        <img src={dados.imagemUrl} alt="" className="h-14 w-14 rounded-lg object-cover shrink-0" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+      ) : (
+        <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-primary-foreground/15' : 'bg-primary/10'}`}>
+          <LinkIcon className={`h-4 w-4 ${isOut ? 'text-primary-foreground' : 'text-primary'}`} />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-bold truncate">{dados.titulo}</p>
+        {dados.descricao && <p className="text-[11px] opacity-70 line-clamp-2">{dados.descricao}</p>}
+        <p className="text-[10px] opacity-50 truncate uppercase tracking-wide">{dados.siteNome}</p>
+      </div>
+    </a>
+  );
+}
+
 export function WhatsAppInterface() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -450,7 +525,21 @@ export function WhatsAppInterface() {
   const [grupoInfoExtra, setGrupoInfoExtra] = useState<{ desc: string | null; size: number | null; creation: number | null } | null>(null);
   const [showImportarGrupoModal, setShowImportarGrupoModal] = useState(false);
   const [importandoGrupo, setImportandoGrupo] = useState(false);
-  const [resultadoImportacaoGrupo, setResultadoImportacaoGrupo] = useState<{ novos: number; jaExistiam: number; descartados: number; semNumeroResolvido: number; listaNome: string | null } | null>(null);
+  const [resultadoImportacaoGrupo, setResultadoImportacaoGrupo] = useState<{ novos: number; jaExistiam: number; descartados: number; semNumeroResolvido: number; listaNome: string | null; nomesResolvidos: number } | null>(null);
+  // [AUDITORIA] LÓGICA (Sprint Exportar Leads de Grupo, 2026-08-23, pedido explícito do usuário:
+  // "quero que baixe em csv ou excel e dê pra importar pra fora do sistema"): 'csv'/'excel'
+  // enquanto aquele formato especificamente está sendo baixado (spinner só no botão certo, não
+  // trava os dois); `null` em repouso. Ação puramente de leitura (GET /participantes) — nunca
+  // grava nada no CRM, diferente de `importarContatosDoGrupo` acima.
+  const [exportandoGrupo, setExportandoGrupo] = useState<'csv' | 'excel' | null>(null);
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-26 — pedido explícito
+  // do usuário: "vamos ver a melhor forma de resolver isso [nome ainda aparecendo com número]"):
+  // ação separada e explícita da resolução via `fetchProfile` (~78-79% de cobertura real medida,
+  // ver comentário completo em `resolverNomesEmBackground`, whatsapp.ts) — deliberadamente NÃO
+  // automática no export/import por causa do delay anti-ban (pode levar minutos a dezenas de
+  // minutos num grupo grande). `progressoNomes = null` fora de uma resolução; enquanto
+  // `emAndamento`, um poll (ver `useEffect` abaixo) atualiza `resolvidos`/`total` periodicamente.
+  const [progressoNomes, setProgressoNomes] = useState<{ emAndamento: boolean; total: number; resolvidos: number } | null>(null);
   // Cache de sessão: phone → foto_perfil buscada (evita repetir chamadas)
   const prevConversasRef = useRef<Map<string, { ts: string; role: string }>>(new Map());
   const prevUltimaAtividadeRef = useRef<Map<string, string>>(new Map());
@@ -497,7 +586,7 @@ export function WhatsAppInterface() {
   // preenchido), usada tanto para filtrar a lista de conversas por número quanto para escolher
   // por qual número uma nova conversa/mensagem sai. Buscada uma vez ao montar — não muda com
   // frequência o suficiente para justificar polling.
-  const [instanciasDisponiveis, setInstanciasDisponiveis] = useState<{ id: string; nome: string; evolution_instancia: string }[]>([]);
+  const [instanciasDisponiveis, setInstanciasDisponiveis] = useState<{ id: string; nome: string; evolution_instancia: string; numero: string }[]>([]);
   useEffect(() => {
     (async () => {
       try {
@@ -505,15 +594,24 @@ export function WhatsAppInterface() {
         if (!res.ok) return;
         const data = await res.json().catch(() => []);
         const lista: any[] = Array.isArray(data) ? data : data?.data || [];
-        setInstanciasDisponiveis(
-          lista
-            .filter((a: any) => !!a.evolution_instancia)
-            .map((a: any) => ({ id: a.id, nome: a.nome, evolution_instancia: a.evolution_instancia }))
-        );
+        // [AUDITORIA] LÓGICA (Sprint Grupos Somem com Instância Duplicada, 2026-09-04):
+        // `numero` (numero_conectado, populado pelo cron de reconciliação a cada 15min) é a
+        // identidade estável usada pro filtro — cai pro próprio evolution_instancia enquanto o
+        // cron ainda não rodou pra essa instância (linha nova, conectada há <15min). Dedup por
+        // `numero`: 2 agentes com `evolution_instancia` diferente mas mesmo número real (exatamente
+        // o cenário do bug original — reconexão criou uma instância nova sem apagar a antiga) não
+        // devem virar 2 itens no seletor pro mesmo número; mantém o último (agente mais recente).
+        const porNumero = new Map<string, { id: string; nome: string; evolution_instancia: string; numero: string }>();
+        for (const a of lista) {
+          if (!a.evolution_instancia) continue;
+          const numero = a.numero_conectado || a.evolution_instancia;
+          porNumero.set(numero, { id: a.id, nome: a.nome, evolution_instancia: a.evolution_instancia, numero });
+        }
+        setInstanciasDisponiveis(Array.from(porNumero.values()));
       } catch { /* silencioso — filtro/seletor de instância só some da UI */ }
     })();
   }, []);
-  // Filtro ativo da lista de conversas (instância/número) — "" = todos os números
+  // Filtro ativo da lista de conversas (número real, ver Chat.numero) — "" = todos os números
   const [instanciaFiltro, setInstanciaFiltro] = useState("");
 
 
@@ -591,10 +689,17 @@ export function WhatsAppInterface() {
   // `fetchIaStatus` acima (uma vez por troca de chat, não fica em polling). `groupJid` já vem
   // com `@g.us` (é `activeChatId`/`chat.id` pra grupo). Nunca cacheada — sempre bate na
   // Evolution de novo (rota GET /grupos/:jid/info não persiste nada).
-  const fetchGrupoInfoExtra = useCallback(async (groupJid: string) => {
+  // [AUDITORIA] BUG (achado real, `SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`, aberta
+  // desde 2026-08-09): sem `instancia`, o backend resolvia credenciais de QUALQUER instância
+  // ativa do tenant (a mais recente), não necessariamente a que é membro deste grupo — conta com
+  // 2+ números reais conectados fazia a Evolution "não achar" um grupo que só existe na OUTRA
+  // instância. [AUDITORIA] FIX APLICADO: `instancia` (segundo parâmetro, `chat.source` — mesmo
+  // campo que `handleSendMessage` já manda em todo envio desta tela) agora vai explícita.
+  const fetchGrupoInfoExtra = useCallback(async (groupJid: string, instancia?: string) => {
     setGrupoInfoExtra(null);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(groupJid)}/info`, { headers: await apiHeaders() });
+      const qs = instancia ? `?instancia=${encodeURIComponent(instancia)}` : '';
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(groupJid)}/info${qs}`, { headers: await apiHeaders() });
       if (res.ok) {
         const d = await res.json();
         setGrupoInfoExtra({ desc: d.desc, size: d.size, creation: d.creation });
@@ -687,17 +792,21 @@ export function WhatsAppInterface() {
     if (!activeChatId) return;
     setImportandoGrupo(true);
     try {
+      // [AUDITORIA] FIX APLICADO (`SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`) — mesmo
+      // achado/fix de `fetchGrupoInfoExtra` acima: manda a instância certa explicitamente, não
+      // deixa o backend adivinhar "qualquer uma ativa".
       const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/importar-contatos`, {
         method: 'POST',
-        headers: await apiHeaders(),
+        headers: { ...(await apiHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instancia: activeChat?.source }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         toast.error(err.message || 'Erro ao importar contatos do grupo');
         return;
       }
-      const { novos, jaExistiam, descartados, semNumeroResolvido, listaNome } = await res.json();
-      setResultadoImportacaoGrupo({ novos, jaExistiam, descartados, semNumeroResolvido, listaNome });
+      const { novos, jaExistiam, descartados, semNumeroResolvido, listaNome, nomesResolvidos } = await res.json();
+      setResultadoImportacaoGrupo({ novos, jaExistiam, descartados, semNumeroResolvido, listaNome, nomesResolvidos: nomesResolvidos ?? 0 });
       // [AUDITORIA] FIX APLICADO (achado do usuário, 2026-08-06): antes o toast só dizia quantos
       // contatos entraram, sem dizer ONDE — usuário não achava os contatos depois, porque a
       // importação nunca tinha criado lista nenhuma (ver fix no backend, whatsapp.ts). Agora
@@ -714,6 +823,213 @@ export function WhatsAppInterface() {
       setShowImportarGrupoModal(false);
     }
   };
+
+  // [AUDITORIA] LÓGICA (Sprint Exportar Leads de Grupo, 2026-08-23): busca a lista crua de
+  // participantes (GET /participantes, só leitura — ver comentário completo na rota, whatsapp.ts)
+  // pra gerar CSV/Excel no cliente. Compartilhada pelos 2 formatos abaixo, evita 2 fetches pra
+  // clicar em "Baixar CSV" e depois "Baixar Excel" na mesma sessão do modal.
+  // [AUDITORIA] ATUALIZADO (Sprint Nome Real de Leads de Grupo, 2026-08-26): a rota agora resolve
+  // `nome`/`nomeVerificado` (cadeia de fontes — contato já conhecido, push_name de conversa
+  // individual, ou `group/participants` da Evolution). Ver comentário completo em
+  // `resolverNomeParticipante()`, backend/src/routes/whatsapp.ts.
+  const buscarParticipantesParaExportar = async (): Promise<{ grupoNome: string; participantes: { telefone: string; admin: boolean; nome: string | null; nomeVerificado: boolean }[]; mensagemErro: string | null } | null> => {
+    if (!activeChatId) return null;
+    // [AUDITORIA] FIX APLICADO (`SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`) — mesmo
+    // achado/fix de `fetchGrupoInfoExtra`/`importarContatosDoGrupo` acima.
+    const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
+    const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/participantes${qsInstancia}`, {
+      headers: await apiHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.message || 'Erro ao buscar participantes do grupo');
+      return null;
+    }
+    return res.json();
+  };
+
+  // [AUDITORIA] LÓGICA: mesmo padrão de exportação já usado em `Leads.tsx` (`exportarCsv`) —
+  // BOM (`﻿`) pra abrir corretamente com acentuação no Excel, campos entre aspas com escape
+  // de aspas internas, ponto-e-vírgula reservado como separador de tags noutras exportações mas
+  // aqui não há tags, então vírgula normal. Colunas em português, prontas pra importar em
+  // qualquer outro CRM/planilha ("de forma organizada e bem feita", pedido literal do usuário).
+  // [AUDITORIA] FIX APLICADO (Sprint Nome Real de Leads de Grupo, 2026-08-26 — achado do próprio
+  // usuário: "o mais importante além do número é o nome, aí mora o erro"): coluna Nome duplicava
+  // o telefone pra 100% dos participantes (Evolution não devolvia nome nenhum) — enganoso num
+  // CSV que sai do CRM, parece nome real sem ser. Agora usa o nome resolvido quando existe (célula
+  // vazia se não resolveu, nunca mais o telefone disfarçado de nome) e adiciona a coluna "Nome
+  // Verificado" pra quem for importar esse arquivo noutro sistema saber em quais linhas confiar.
+  const baixarParticipantesCsv = async () => {
+    setExportandoGrupo('csv');
+    try {
+      const dado = await buscarParticipantesParaExportar();
+      if (!dado) return;
+      if (!dado.participantes.length) { toast.error(dado.mensagemErro || 'Nenhum participante com telefone resolvido para exportar'); return; }
+      const dataFormatada = new Date().toLocaleDateString('pt-BR');
+      const headers = ['Nome', 'Nome Verificado', 'Telefone', 'Admin do Grupo', 'Grupo', 'Data da Extração'];
+      const rows = dado.participantes.map(p => [
+        p.nome || '', p.nomeVerificado ? 'Sim' : 'Não', p.telefone, p.admin ? 'Sim' : 'Não', dado.grupoNome, dataFormatada,
+      ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+      const csv = [headers.join(','), ...rows].join('\n');
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `leads_grupo_${dado.grupoNome.replace(/[^a-z0-9]+/gi, '_').slice(0, 40)}_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`${dado.participantes.length} participante(s) exportado(s) em CSV`);
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setExportandoGrupo(null);
+    }
+  };
+
+  const baixarParticipantesExcel = async () => {
+    setExportandoGrupo('excel');
+    try {
+      const dado = await buscarParticipantesParaExportar();
+      if (!dado) return;
+      if (!dado.participantes.length) { toast.error(dado.mensagemErro || 'Nenhum participante com telefone resolvido para exportar'); return; }
+      const dataFormatada = new Date().toLocaleDateString('pt-BR');
+      const linhas = dado.participantes.map(p => ({
+        Nome: p.nome || '',
+        'Nome Verificado': p.nomeVerificado ? 'Sim' : 'Não',
+        Telefone: p.telefone,
+        'Admin do Grupo': p.admin ? 'Sim' : 'Não',
+        Grupo: dado.grupoNome,
+        'Data da Extração': dataFormatada,
+      }));
+      const planilha = XLSX.utils.json_to_sheet(linhas);
+      // Larguras de coluna generosas — evita abrir no Excel com tudo cortado ("###")
+      planilha['!cols'] = [{ wch: 20 }, { wch: 15 }, { wch: 16 }, { wch: 14 }, { wch: 30 }, { wch: 16 }];
+      const livro = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(livro, planilha, 'Leads do Grupo');
+      XLSX.writeFile(livro, `leads_grupo_${dado.grupoNome.replace(/[^a-z0-9]+/gi, '_').slice(0, 40)}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      toast.success(`${dado.participantes.length} participante(s) exportado(s) em Excel`);
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setExportandoGrupo(null);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-26): confirmação
+  // nativa extra (além do modal "Leads do grupo" que já exige clique consciente) — diferente de
+  // CSV/Excel/Importar, esta ação pode levar minutos a dezenas de minutos (delay anti-ban
+  // deliberado, ~5-15s por participante sem nome) e é importante o operador saber disso ANTES de
+  // clicar, não descobrir só vendo a barra de progresso travada.
+  const iniciarResolucaoNomes = async () => {
+    if (!activeChatId) return;
+    const estimativaMin = grupoInfoExtra?.size ? Math.ceil((grupoInfoExtra.size * 15) / 60) : null;
+    if (!confirm(
+      `Resolver nomes reais via perfil do WhatsApp?\n\n` +
+      `Isso consulta o perfil de cada participante sem nome ainda, um de cada vez, com pausa entre ` +
+      `cada consulta pra não sobrecarregar/arriscar a conta` +
+      (estimativaMin ? ` — pode levar até ~${estimativaMin} min neste grupo.` : '.') +
+      `\n\nRoda em segundo plano; você pode fechar este painel e voltar depois pra conferir.`
+    )) return;
+
+    try {
+      const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/resolver-nomes`, {
+        method: 'POST',
+        headers: { ...(await apiHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instancia: activeChat?.source }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.message || 'Erro ao iniciar resolução de nomes');
+        return;
+      }
+      setProgressoNomes({ emAndamento: true, total: data.totalParticipantes ?? 0, resolvidos: 0 });
+      toast.success(`Resolução iniciada para ${data.totalParticipantes ?? 0} participante(s) — acompanhe o progresso no painel.`);
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do usuário):
+  // igual iniciarResolucaoNomes acima — confirmação nativa antes de uma ação irreversível-na-hora
+  // (sair de um grupo real do WhatsApp; entrar de novo depende de alguém mandar outro convite).
+  const [saindoDoGrupo, setSaindoDoGrupo] = useState(false);
+  const sairDoGrupo = async () => {
+    if (!activeChatId || !activeChat?.is_group) return;
+    if (!confirm(`Sair de "${activeChat.name}"?\n\nVocê para de receber mensagens novas deste grupo. O histórico já trocado continua salvo aqui — só quem administra o grupo pode te adicionar de volta.`)) return;
+    setSaindoDoGrupo(true);
+    try {
+      const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/sair${qsInstancia}`, {
+        method: 'DELETE',
+        headers: await apiHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.message || 'Erro ao sair do grupo');
+        return;
+      }
+      toast.success('Você saiu do grupo.');
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setSaindoDoGrupo(false);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06): modal simples (colar link, um
+  // botão) — mesmo padrão de estado local isolado já usado por outros modais desta tela (ex:
+  // `showImportarGrupoModal`), sem precisar de nenhum state global novo.
+  const [showEntrarGrupoModal, setShowEntrarGrupoModal] = useState(false);
+  const [linkConviteGrupo, setLinkConviteGrupo] = useState("");
+  const [entrandoNoGrupo, setEntrandoNoGrupo] = useState(false);
+  const entrarNoGrupo = async () => {
+    if (!linkConviteGrupo.trim()) return;
+    setEntrandoNoGrupo(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/entrar`, {
+        method: 'POST',
+        headers: { ...(await apiHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: linkConviteGrupo.trim(), instancia: instanciaFiltro || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.message || 'Erro ao entrar no grupo');
+        return;
+      }
+      toast.success(`Você entrou em "${data.nome || 'um novo grupo'}"! Ele aparece na lista assim que a primeira mensagem chegar.`);
+      setShowEntrarGrupoModal(false);
+      setLinkConviteGrupo("");
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setEntrandoNoGrupo(false);
+    }
+  };
+
+  // Poll de progresso enquanto uma resolução de nomes estiver em andamento neste grupo — para
+  // sozinho quando o job terminar (`emAndamento: false`) ou ao trocar de conversa.
+  useEffect(() => {
+    if (!progressoNomes?.emAndamento || !activeChatId) return;
+    const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
+    const grupoDoPoll = activeChatId;
+    const interval = setInterval(async () => {
+      try {
+        const headers = await apiHeaders();
+        const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(grupoDoPoll)}/resolver-nomes/status${qsInstancia}`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        setProgressoNomes((prev) => (prev ? { emAndamento: !!data.emAndamento, total: data.total ?? prev.total, resolvidos: data.resolvidos ?? prev.resolvidos } : prev));
+        if (!data.emAndamento) {
+          toast.success(`Resolução de nomes concluída: ${data.resolvidos} de ${data.total} participante(s) ganharam nome real.`);
+        }
+      } catch {
+        // falha de rede pontual no poll não é crítica — tenta de novo no próximo tick
+      }
+    }, 6000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progressoNomes?.emAndamento, activeChatId]);
 
   const salvarNomeContato = async () => {
     if (!activeChatId || !nameInput.trim()) return;
@@ -789,11 +1105,16 @@ export function WhatsAppInterface() {
       list = list.filter(c => c.is_archived);
     }
 
-    // [AUDITORIA] LÓGICA (multi-número — filtro por instância, 2026-08-07): `c.source` é a
-    // instância da última mensagem da conversa (ver fetchConversas, row.instancia) — filtro
-    // simples e direto, sem endpoint novo.
+    // [AUDITORIA] LÓGICA (multi-número — filtro por instância, 2026-08-07): filtro por número.
+    // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-04 — "não consigo ver os grupos
+    // do número X"): comparava contra `c.source`, o instance_name cru da última mensagem — uma
+    // reconexão sob um `instance_name` novo pro MESMO número (confirmado em produção:
+    // `crm_435ee4720fc3` → `crm_435ee4720fc3_2`) fazia toda conversa com última msg no nome
+    // antigo sumir do filtro, mesmo sendo o número certo. [AUDITORIA] FIX APLICADO: compara por
+    // `c.numero` (identidade estável resolvida no backend via ledger instância→número, GET
+    // /conversas) — sobrevive a qualquer quantidade de instâncias recriadas pro mesmo número.
     if (instanciaFiltro) {
-      list = list.filter(c => c.source === instanciaFiltro);
+      list = list.filter(c => c.numero === instanciaFiltro);
     }
 
     // Ordenação: Fixados primeiro, depois por timestamp
@@ -851,6 +1172,7 @@ export function WhatsAppInterface() {
             phone: row.session_id,
             is_group: row.is_group || false,
             source: row.instancia || undefined,
+            numero: row.numero || row.instancia || undefined,
             lastMessage: row.ultima_mensagem || '',
             timestamp: formatTime(row.ultima_atividade),
             rawTimestamp: row.ultima_atividade,
@@ -1311,8 +1633,9 @@ export function WhatsAppInterface() {
     if (chat) fetchMensagens(activeChatId, chatName, true);
     fetchIaStatus(activeChatId);
     if (chat && !chat.profile_pic) fetchProfilePic(activeChatId);
-    if (chat?.is_group) fetchGrupoInfoExtra(activeChatId); else setGrupoInfoExtra(null);
+    if (chat?.is_group) fetchGrupoInfoExtra(activeChatId, chat.source); else setGrupoInfoExtra(null);
     setResultadoImportacaoGrupo(null); // limpa resumo da importação anterior ao trocar de conversa
+    setProgressoNomes(null); // idem pro progresso de resolução de nomes — pertence à conversa anterior
     // [AUDITORIA] LÓGICA — Camada 4, Interval C: usa activeChatIdRef.current (não activeChatId
     // diretamente) dentro do setInterval — corretamente evita o bug de closure obsoleto (o ref
     // sempre reflete o valor mais atual, atualizado pelo useEffect de activeChatIdRef.current logo
@@ -2045,6 +2368,34 @@ export function WhatsAppInterface() {
   // nenhum comportamento de busca válido.
   const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+  // [AUDITORIA] LÓGICA (Sprint contínua, achado de `SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`,
+  // item 3, aberta desde 2026-08-09): link de convite de grupo (`chat.whatsapp.com/XXXX`)
+  // aparecia como texto cru no chat — o WhatsApp real mostra um card "Entrar no grupo". Regex
+  // simples client-side, sem nenhuma chamada de rede por mensagem renderizada (uma lista de
+  // mensagens de um grupo cheio de links geraria uma rajada de requests se buscássemos nome/foto
+  // reais — versão simples primeiro, mesmo escopo que a doc original definiu).
+  const LINK_CONVITE_GRUPO_REGEX = /https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+/;
+  const extrairLinkConviteGrupo = (texto: string): string | null => {
+    const m = texto.match(LINK_CONVITE_GRUPO_REGEX);
+    return m ? m[0] : null;
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Grupos — melhorias WhatsApp, 2026-09-06, pedido explícito do
+  // usuário: "links de outros grupos também virem preview/card, não só convite"): diferente do
+  // caso acima, QUALQUER link comum (YouTube, notícia, Instagram etc.) precisa de dado real da
+  // página de terceiro (título/imagem via Open Graph) — não dá pra saber isso só com regex, então
+  // aqui SIM existe uma chamada de rede por link único (nunca por mensagem — `LinkPreviewCard`
+  // abaixo cacheia por URL em `linkPreviewCache`, módulo-level, então a mesma URL repetida em
+  // várias mensagens/polls só busca uma vez por sessão do navegador; o backend também cacheia por
+  // 7 dias em `link_previews_cache`, compartilhado entre todas as contas). Só extrai o PRIMEIRO
+  // link genérico da mensagem — nunca o mesmo link já coberto pelo card de convite acima.
+  const URL_GENERICA_REGEX = /https?:\/\/[^\s<>"')]+/i;
+  const extrairLinkGenerico = (texto: string): string | null => {
+    if (extrairLinkConviteGrupo(texto)) return null; // já tem card de convite, não duplica
+    const m = texto.match(URL_GENERICA_REGEX);
+    return m ? m[0].replace(/[.,;:!?]+$/, '') : null; // tira pontuação de fim de frase colada no link
+  };
+
   const highlightText = (text: string, term: string) => {
     if (!term.trim()) return text;
     const parts = text.split(new RegExp(`(${escapeRegExp(term)})`, 'gi'));
@@ -2251,6 +2602,12 @@ export function WhatsAppInterface() {
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setShowNewMessageModal(true)} title="Nova Mensagem">
                 <UserPlus className="h-4.5 w-4.5" />
               </Button>
+              {/* [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do
+                  usuário): mesmo padrão dos outros botões de ação desta barra (ícone + modal
+                  simples). */}
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setShowEntrarGrupoModal(true)} title="Entrar em grupo">
+                <Users className="h-4.5 w-4.5" />
+              </Button>
               <Button
                 variant="ghost" size="icon"
                 className="h-8 w-8 text-muted-foreground"
@@ -2289,11 +2646,11 @@ export function WhatsAppInterface() {
                   {instanciasDisponiveis.map(inst => (
                     <DropdownMenuItem
                       key={inst.evolution_instancia}
-                      onClick={() => setInstanciaFiltro(inst.evolution_instancia)}
+                      onClick={() => setInstanciaFiltro(inst.numero)}
                       className="cursor-pointer"
                     >
-                      <span className={`truncate ${instanciaFiltro === inst.evolution_instancia ? "font-bold" : ""}`}>{inst.nome}</span>
-                      {instanciaFiltro === inst.evolution_instancia && <Check className="h-3.5 w-3.5 ml-auto shrink-0" />}
+                      <span className={`truncate ${instanciaFiltro === inst.numero ? "font-bold" : ""}`}>{inst.nome}</span>
+                      {instanciaFiltro === inst.numero && <Check className="h-3.5 w-3.5 ml-auto shrink-0" />}
                     </DropdownMenuItem>
                   ))}
                   {instanciasDisponiveis.length === 0 && (
@@ -2341,7 +2698,7 @@ export function WhatsAppInterface() {
                 title="Remover filtro de número"
               >
                 <Phone className="h-3 w-3" />
-                {instanciasDisponiveis.find(i => i.evolution_instancia === instanciaFiltro)?.nome || instanciaFiltro}
+                {instanciasDisponiveis.find(i => i.numero === instanciaFiltro)?.nome || instanciaFiltro}
                 <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
               </div>
             )}
@@ -3419,10 +3776,57 @@ export function WhatsAppInterface() {
                             <p className="text-sm italic text-muted-foreground/60 flex items-center gap-1.5 py-1">
                               <ShieldAlert className="h-3.5 w-3.5 opacity-50" /> Mensagem apagada
                             </p>
-                          ) : m.content && (
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">
-                              {highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}
-                            </p>
+                          ) : /* [AUDITORIA] BUG (achado real, `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md`,
+                                item 5 — "polish"): `m.content` pra mídia processada pela IA é o
+                                texto cru `[Mídia - Imagem: "..."]`/`[Áudio Transcrito: "..."]`
+                                gerado em `webhook.ts` só pra alimentar o prompt da IA — nunca foi
+                                pensado pra humano ler. Sem esta checagem aparecia como legenda
+                                duplicada embaixo da mídia real (que já renderiza acima, quando
+                                `media_url` existe). Ficou mais visível agora que o fix de
+                                persistência de mídia (mesma sprint) faz `media_url` preencher bem
+                                mais vezes — antes esse texto cru era, na prática, o ÚNICO conteúdo
+                                visível na maioria dos casos; agora duplicaria a mídia real quase
+                                sempre. [AUDITORIA] FIX APLICADO: nunca renderiza esse texto cru
+                                como legenda — a mídia (ou o placeholder "Áudio") já comunica o
+                                essencial visualmente. */
+                          m.content && !/^\[(Mídia - Imagem|Áudio Transcrito):/.test(m.content) && (
+                            <>
+                              {/* [AUDITORIA] FIX APLICADO (`SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`,
+                                  item 3): link de convite de grupo virava texto cru — agora
+                                  ganha um card clicável, mesmo espírito do preview real do
+                                  WhatsApp. Sem chamada de rede por mensagem (nome/foto reais do
+                                  grupo exigiriam bater na Evolution pra cada link renderizado —
+                                  fora de escopo da doc original, versão simples primeiro). Texto
+                                  original mantido embaixo, nada escondido. */}
+                              {extrairLinkConviteGrupo(m.content) && (
+                                <a
+                                  href={extrairLinkConviteGrupo(m.content)!}
+                                  target="_blank" rel="noreferrer"
+                                  className={`flex items-center gap-2.5 mb-1.5 p-2.5 rounded-xl border ${isOut ? 'bg-primary-foreground/10 border-primary-foreground/20' : 'bg-muted/40 border-border/50'} hover:opacity-80 transition-opacity`}
+                                >
+                                  <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-primary-foreground/15' : 'bg-primary/10'}`}>
+                                    <Users className={`h-4 w-4 ${isOut ? 'text-primary-foreground' : 'text-primary'}`} />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-bold">Convite para grupo do WhatsApp</p>
+                                    <p className="text-[11px] opacity-70 truncate">{extrairLinkConviteGrupo(m.content)}</p>
+                                  </div>
+                                  <ChevronRight className="h-4 w-4 opacity-50 shrink-0" />
+                                </a>
+                              )}
+                              {/* [AUDITORIA] LÓGICA (Sprint Grupos — melhorias WhatsApp,
+                                  2026-09-06, pedido explícito do usuário): mesmo espírito do card
+                                  de convite acima, mas pra QUALQUER link comum (YouTube, notícia,
+                                  Instagram etc.) — precisa de dado real da página de terceiro
+                                  (Open Graph), por isso vira componente próprio com busca/cache
+                                  (ver `LinkPreviewCard` no topo do arquivo), não regex puro. */}
+                              {extrairLinkGenerico(m.content) && (
+                                <LinkPreviewCard url={extrairLinkGenerico(m.content)!} isOut={isOut} />
+                              )}
+                              <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                                {highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}
+                              </p>
+                            </>
                           )}
 
                           <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
@@ -3949,23 +4353,44 @@ export function WhatsAppInterface() {
                 </DropdownMenu>
               </div>
 
-              {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): só aparece
-                  pra conversa de grupo — participante de grupo é dado de terceiro sem relação
-                  comercial direta, então a importação em massa exige confirmação explícita (ver
-                  modal abaixo), nunca acontece com um clique só. */}
+              {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04, rótulo
+                  atualizado na Sprint Exportar Leads de Grupo, 2026-08-23): só aparece pra
+                  conversa de grupo — participante de grupo é dado de terceiro sem relação
+                  comercial direta, então qualquer ação em massa (importar OU exportar) exige
+                  confirmação explícita no modal abaixo, nunca acontece com um clique só. */}
               {activeChat.is_group && (
                 <button
                   onClick={() => setShowImportarGrupoModal(true)}
                   className="w-full flex items-center justify-center gap-2 h-11 rounded-2xl border bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95"
                 >
                   <Users className="h-3.5 w-3.5" />
-                  Importar para CRM
+                  Leads do grupo
+                </button>
+              )}
+              {/* [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do
+                  usuário): mesma faixa de ações do grupo, cor de alerta pra diferenciar de uma
+                  ação neutra (mesma convenção de "Excluir agente"/outros botões destrutivos do
+                  app). */}
+              {activeChat.is_group && (
+                <button
+                  onClick={sairDoGrupo}
+                  disabled={saindoDoGrupo}
+                  className="w-full flex items-center justify-center gap-2 h-11 rounded-2xl border bg-red-50 border-red-200 text-red-700 hover:bg-red-100 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 disabled:opacity-60"
+                >
+                  {saindoDoGrupo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogOut className="h-3.5 w-3.5" />}
+                  Sair do grupo
                 </button>
               )}
               {resultadoImportacaoGrupo && (
                 <p className="text-[11px] text-center text-muted-foreground font-medium">
                   Última importação: {resultadoImportacaoGrupo.novos} novo(s), {resultadoImportacaoGrupo.jaExistiam} já existiam
                   {resultadoImportacaoGrupo.descartados > 0 ? `, ${resultadoImportacaoGrupo.descartados} descartado(s)` : ''}.
+                  {/* [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, 2026-08-26): cobertura
+                      real da cadeia de resolução de nome pra ESTE grupo, medida na hora — evita o
+                      operador achar que todo mundo ganhou nome real quando só uma fração ganhou. */}
+                  {resultadoImportacaoGrupo.novos > 0 && (
+                    <> {resultadoImportacaoGrupo.nomesResolvidos} de {resultadoImportacaoGrupo.novos} novo(s) com nome real identificado.</>
+                  )}
                   {resultadoImportacaoGrupo.listaNome && (
                     <> Lista: <span className="font-bold text-foreground">{resultadoImportacaoGrupo.listaNome}</span>.</>
                   )}
@@ -4176,36 +4601,137 @@ export function WhatsAppInterface() {
         </DialogContent>
       </Dialog>
 
-      {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): confirmação
-          explícita obrigatória antes de importar — participante de grupo é dado de terceiro sem
-          relação comercial direta, trazer centenas de contatos com um clique só (sem essa
-          barreira) seria fácil demais de disparar por engano. Mostra o total de participantes já
+      {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04, estendido na Sprint
+          Exportar Leads de Grupo, 2026-08-23 — pedido explícito do usuário: "atualmente ele só
+          baixa pra o CRM mas quero que baixe em CSV ou Excel e dê pra importar pra fora do
+          sistema"): confirmação explícita obrigatória antes de qualquer uma das 3 ações — mesmo a
+          exportação (só leitura, GET /participantes) usa este mesmo modal em vez de disparar
+          direto, pra manter uma única barreira de fricção consciente antes de lidar com dado de
+          terceiro (participante de grupo, não lead orgânico). Mostra o total de participantes já
           conhecido (`grupoInfoExtra`/`activeChat`, sem chamada nova à Evolution só pra exibir o
-          número — a importação em si sempre busca de novo, ver importarContatosDoGrupo). */}
+          número — cada ação abaixo sempre busca de novo na hora de agir). */}
       <Dialog open={showImportarGrupoModal} onOpenChange={setShowImportarGrupoModal}>
         <DialogContent className="sm:max-w-[440px] rounded-2xl">
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2">
               <Users className="h-4 w-4 text-violet-600" />
-              Importar para o CRM?
+              Leads do grupo
             </DialogTitle>
             <DialogDescription className="text-sm pt-2 leading-relaxed">
-              Isso vai importar {grupoInfoExtra?.size ? `os ${grupoInfoExtra.size} participantes` : 'os participantes'} de{' '}
-              <span className="font-semibold text-foreground">{activeChat?.name}</span> como contatos novos,
-              numa lista nova criada automaticamente com o nome e a data do grupo — é lá que você
-              encontra esses contatos depois, na aba "Por Lista" de Disparos ou em Leads.
-              Contatos que já existem não são alterados. Participantes de grupo entram marcados
-              com origem própria e ficam de fora de campanhas por padrão, a menos que você
-              inclua algum manualmente (tag, lista ou estágio).
+              {grupoInfoExtra?.size ? `${grupoInfoExtra.size} participantes` : 'Os participantes'} de{' '}
+              <span className="font-semibold text-foreground">{activeChat?.name}</span>. Escolha o
+              que fazer com eles: importar como contatos novos no CRM (numa lista nova, criada
+              automaticamente), ou baixar como CSV/Excel pra usar fora do sistema. Contatos que já
+              existem no CRM não são alterados pela importação; a exportação nunca grava nada, só
+              gera o arquivo.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="gap-2">
-            <Button variant="ghost" onClick={() => setShowImportarGrupoModal(false)} disabled={importandoGrupo} className="font-bold text-xs uppercase tracking-widest">
+          <DialogFooter className="flex-col sm:flex-col gap-2">
+            <div className="flex gap-2 w-full">
+              <Button
+                variant="outline"
+                onClick={baixarParticipantesCsv}
+                disabled={exportandoGrupo !== null || importandoGrupo}
+                className="flex-1 font-bold text-xs uppercase tracking-widest gap-2"
+              >
+                {exportandoGrupo === 'csv' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+                CSV
+              </Button>
+              <Button
+                variant="outline"
+                onClick={baixarParticipantesExcel}
+                disabled={exportandoGrupo !== null || importandoGrupo}
+                className="flex-1 font-bold text-xs uppercase tracking-widest gap-2"
+              >
+                {exportandoGrupo === 'excel' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
+                Excel
+              </Button>
+              <Button
+                onClick={importarContatosDoGrupo}
+                disabled={importandoGrupo || exportandoGrupo !== null}
+                className="flex-1 font-bold text-xs uppercase tracking-widest gap-2"
+              >
+                {importandoGrupo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                Importar
+              </Button>
+            </div>
+
+            {/* [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-26): ação
+                separada das 3 acima — não é sobre criar/exportar contato, é sobre MELHORAR o nome
+                de quem já existe/vai existir. Fica visualmente distinta (linha própria) porque o
+                custo de tempo é outra ordem de grandeza (minutos+, não segundos). Enquanto uma
+                resolução estiver rodando, mostra progresso real (poll a cada 6s); o botão só
+                aparece enquanto NÃO há job rodando neste grupo (evita iniciar um 2º concorrente —
+                o backend já recusaria com 409, mas nem precisa chegar a essa viagem de rede). */}
+            {progressoNomes ? (
+              <div className="w-full rounded-xl border border-border bg-muted/30 px-3 py-2.5 space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="flex items-center gap-1.5">
+                    {progressoNomes.emAndamento && <Loader2 className="h-3 w-3 animate-spin" />}
+                    Resolvendo nomes via perfil
+                  </span>
+                  <span className="text-muted-foreground">{progressoNomes.resolvidos} / {progressoNomes.total}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-border overflow-hidden">
+                  <div
+                    className="h-full bg-violet-600 transition-all"
+                    style={{ width: `${progressoNomes.total > 0 ? Math.min(100, (progressoNomes.resolvidos / progressoNomes.total) * 100) : 0}%` }}
+                  />
+                </div>
+                {!progressoNomes.emAndamento && (
+                  <p className="text-[11px] text-muted-foreground">Concluído — exporte/importe de novo para pegar os nomes novos.</p>
+                )}
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={iniciarResolucaoNomes}
+                disabled={importandoGrupo || exportandoGrupo !== null}
+                className="w-full font-bold text-xs uppercase tracking-widest gap-2 border-violet-200 text-violet-700 hover:bg-violet-50"
+              >
+                <UserSearch className="h-3.5 w-3.5" />
+                Resolver nomes via perfil (lento, mais completo)
+              </Button>
+            )}
+
+            <Button variant="ghost" onClick={() => setShowImportarGrupoModal(false)} disabled={importandoGrupo || exportandoGrupo !== null} className="w-full font-bold text-xs uppercase tracking-widest">
               Cancelar
             </Button>
-            <Button onClick={importarContatosDoGrupo} disabled={importandoGrupo} className="font-bold text-xs uppercase tracking-widest gap-2">
-              {importandoGrupo && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Importar
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do usuário):
+          modal simples — colar link de convite, um botão. Aceita tanto a URL completa
+          (https://chat.whatsapp.com/XXX) quanto só o código, o backend extrai o que precisar (ver
+          POST /api/whatsapp/grupos/entrar). */}
+      <Dialog open={showEntrarGrupoModal} onOpenChange={(o) => { setShowEntrarGrupoModal(o); if (!o) setLinkConviteGrupo(""); }}>
+        <DialogContent className="sm:max-w-[440px] rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" />
+              Entrar em grupo
+            </DialogTitle>
+            <DialogDescription className="text-sm pt-2 leading-relaxed">
+              Cole o link de convite do grupo (ex: https://chat.whatsapp.com/XXXXXXXX). O número
+              conectado agora entra nesse grupo do WhatsApp de verdade — o grupo aparece na lista
+              de conversas assim que a primeira mensagem chegar.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={linkConviteGrupo}
+            onChange={(e) => setLinkConviteGrupo(e.target.value)}
+            placeholder="https://chat.whatsapp.com/..."
+            onKeyDown={(e) => { if (e.key === 'Enter' && !entrandoNoGrupo) entrarNoGrupo(); }}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowEntrarGrupoModal(false)} disabled={entrandoNoGrupo} className="font-bold text-xs uppercase tracking-widest">
+              Cancelar
+            </Button>
+            <Button onClick={entrarNoGrupo} disabled={entrandoNoGrupo || !linkConviteGrupo.trim()} className="font-bold text-xs uppercase tracking-widest gap-2">
+              {entrandoNoGrupo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+              Entrar
             </Button>
           </DialogFooter>
         </DialogContent>

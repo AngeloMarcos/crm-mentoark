@@ -23,6 +23,7 @@ import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/r
 import { sintetizarVoz } from '../utils/elevenlabs';
 import { baixarMidiaDecriptografada } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
+import { registrarUsoIA, estimarCustoUsd, estimarCustoWhisperUsd } from '../utils/aiCusto';
 import { analisarImagem } from '../utils/vision';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
@@ -186,31 +187,14 @@ async function buscarConfigEvolutionFallback(pool: Pool, userId: string): Promis
 }
 
 // [AUDITORIA] LÓGICA (Sprint Diagnóstico "ainda gastando token no disparo", 2026-08-07 — item 1
-// de SPRINT_VISTORIA_COMPLETA_GASTO_IA.md, achado confirmado ainda pendente): `ai_uso_diario`
-// tem coluna `custo_usd` e até dashboard pronto (`GET /api/ai/uso/resumo`), mas o único INSERT
-// que escreve na tabela nunca preenchia esse campo — o dashboard sempre mostrou $0, mesmo com
-// gasto real. Tabela de preço por 1M tokens, hardcoded (preços mudam; referência: 2026-08-07,
-// conferir contra a página oficial de pricing do provider antes de confiar cegamente daqui a
-// alguns meses). Match por prefixo (`startsWith`) cobre variantes com sufixo de data
-// (ex: `gpt-4o-mini-2024-07-18`) sem precisar listar cada uma. Modelo não reconhecido cai no
-// preço do gpt-4o-mini (mais barato conhecido, subestima em vez de superestimar) e loga aviso —
-// nunca lança erro nem bloqueia o registro de uso por causa de preço desconhecido.
-const PRECO_POR_1M_TOKENS: { prefixo: string; input: number; output: number }[] = [
-  { prefixo: 'gpt-4.1',              input: 2.00,  output: 8.00  },
-  { prefixo: 'gpt-4o-mini',          input: 0.15,  output: 0.60  },
-  { prefixo: 'gpt-4o',               input: 2.50,  output: 10.00 },
-  { prefixo: 'claude-3-5-haiku',     input: 0.80,  output: 4.00  },
-  { prefixo: 'claude-3-5-sonnet',    input: 3.00,  output: 15.00 },
-  { prefixo: 'claude-3-opus',        input: 15.00, output: 75.00 },
-];
-function estimarCustoUsd(modelo: string, tokensIn: number, tokensOut: number): number {
-  const preco = PRECO_POR_1M_TOKENS.find(p => modelo?.startsWith(p.prefixo));
-  if (!preco) {
-    log.warn('ENGINE', 'Modelo sem preço conhecido para custo_usd — usando preço de gpt-4o-mini como estimativa mínima', { modelo });
-  }
-  const { input, output } = preco || PRECO_POR_1M_TOKENS.find(p => p.prefixo === 'gpt-4o-mini')!;
-  return (tokensIn / 1_000_000) * input + (tokensOut / 1_000_000) * output;
-}
+// de SPRINT_VISTORIA_COMPLETA_GASTO_IA.md): `ai_uso_diario` tem coluna `custo_usd` e dashboard
+// pronto (`GET /api/ai/uso/resumo`), mas o único INSERT que escrevia na tabela (aqui embaixo)
+// nunca preenchia esse campo — o dashboard sempre mostrou $0, mesmo com gasto real.
+// [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): tabela de preço +
+// `estimarCustoUsd` extraídos pra `utils/aiCusto.ts` (módulo compartilhado) — Vision, Whisper e
+// embeddings (RAG) pagavam de verdade e nunca apareciam nesse dashboard, mesma causa raiz que
+// deixou o desperdício de mídia de grupo invisível até o saldo da OpenAI zerar (ver webhook.ts).
+// Preço mantido em um único lugar em vez de duplicado por call-site novo.
 
 // ── Divide resposta em até 2 partes para simular digitação humana ─────────────
 function dividirMensagem(texto: string): string[] {
@@ -401,11 +385,18 @@ function parsearRespostaNativo(texto: string, sinalPausa: string): { messages: s
 }
 
 // ── Upsert de contato ─────────────────────────────────────────────────────────
+// [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-27 — pedido explícito
+// do usuário, depois de confirmado que `fetchProfile`/`group/participants` têm cobertura
+// dependente da reputação do número: "ainda não estamos conseguindo baixar o nome do lead"):
+// `nome`/`nome_verificado` agora voltam junto do upsert — usados por quem chama pra decidir se
+// injeta a instrução "pergunte o nome" no prompt (ver `systemPrompt` mais abaixo). Via mais
+// confiável que as automáticas: não depende de configuração de privacidade de ninguém, só do
+// lead responder pelo menos uma mensagem.
 async function upsertContato(
   pool: Pool, userId: string, telefone: string, nome: string
-): Promise<{ id: string; opt_out: boolean }> {
+): Promise<{ id: string; opt_out: boolean; nome: string; nome_verificado: boolean | null }> {
   const ex = await pool.query(
-    `SELECT id, opt_out FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+    `SELECT id, opt_out, nome, nome_verificado FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
     [userId, `%${telefone.slice(-11)}`]
   );
   if (ex.rows.length) return ex.rows[0];
@@ -419,7 +410,7 @@ async function upsertContato(
     `INSERT INTO contatos (user_id, nome, telefone, origem, status)
      VALUES ($1, $2, $3, 'WhatsApp', 'novo')
      ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
-     RETURNING id, opt_out`,
+     RETURNING id, opt_out, nome, nome_verificado`,
     [userId, nome || telefone, telefone]
   );
   if (novo.rows.length) return novo.rows[0];
@@ -427,7 +418,7 @@ async function upsertContato(
   // Conflito concorrente: outra chamada (ex: upsert antecipado do webhook.ts) venceu a
   // corrida e criou o contato entre o SELECT e o INSERT acima — busca o registro já existente.
   const pos = await pool.query(
-    `SELECT id, opt_out FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+    `SELECT id, opt_out, nome, nome_verificado FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
     [userId, `%${telefone.slice(-11)}`]
   );
   return pos.rows[0];
@@ -669,7 +660,16 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   const audioJaProcessado = entrada.tipo === 'audio' && !!entrada.texto?.includes('[Áudio Transcrito: "');
   const imagemJaProcessada = entrada.tipo === 'image' && !!entrada.texto?.includes('[Mídia - Imagem: "');
 
-  if (entrada.tipo === 'audio' && entrada.midiaUrl && !audioJaProcessado) {
+  // [AUDITORIA] FIX APLICADO (Sprint Modalidades Opcionais, 2026-08-23 — pedido explícito do
+  // usuário: manter a funcionalidade, só torná-la opcional): `agente.modalidade_audio`/
+  // `modalidade_imagem` já vêm carregados no `SELECT *` de `agente` lá em cima — `?? true`
+  // preserva o comportamento atual (sempre ligado) pra linha nunca configurada. Mesmo gate agora
+  // aplicado em webhook.ts (bloco principal); aqui cobre só o fallback local (webhook.ts não
+  // processou a mídia por algum motivo).
+  const modalidadeAudioHabilitada = agente.modalidade_audio ?? true;
+  const modalidadeImagemHabilitada = agente.modalidade_imagem ?? true;
+
+  if (entrada.tipo === 'audio' && entrada.midiaUrl && !audioJaProcessado && modalidadeAudioHabilitada) {
     const evo = await buscarConfigEvolutionFallback(pool, userIdFinal);
     const midiaDecriptografada = evo
       ? await baixarMidiaDecriptografada({
@@ -677,15 +677,23 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
           messageId: entrada.messageId, remoteJid: `${entrada.telefone}@s.whatsapp.net`, fromMe: false,
         })
       : null;
-    const transcrito = midiaDecriptografada
+    const resultadoTranscricao = midiaDecriptografada
       ? await transcreverAudio(midiaDecriptografada.buffer, midiaDecriptografada.mimetype || 'audio/ogg', openaiApiKey)
       : null;
-    if (!transcrito) { log.warn('ENGINE', 'Falha na transcrição (fallback local — webhook.ts não processou este áudio)'); return; }
+    if (!resultadoTranscricao) { log.warn('ENGINE', 'Falha na transcrição (fallback local — webhook.ts não processou este áudio)'); return; }
+    // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): este fallback local
+    // também paga Whisper de verdade — nunca gravava custo_usd, mesmo achado do bloco principal
+    // em webhook.ts.
+    await registrarUsoIA(pool, {
+      userId: userIdFinal, providerSlug: 'openai', modelo: 'whisper-1',
+      tokensEntrada: 0, tokensSaida: 0,
+      custoUsd: estimarCustoWhisperUsd(resultadoTranscricao.duracaoSegundos),
+    });
     // [AUDITORIA] FIX APLICADO (2026-07-29, preservado): concatena em vez de sobrescrever, pra
     // não descartar uma mensagem de texto puro que o debounce mesclou na mesma rajada.
-    textoFinal = entrada.texto ? `${entrada.texto}\n${transcrito}` : transcrito;
+    textoFinal = entrada.texto ? `${entrada.texto}\n${resultadoTranscricao.texto}` : resultadoTranscricao.texto;
     log.info('ENGINE', 'Áudio transcrito via fallback local (webhook.ts não havia processado)', { textoTranscrito: textoFinal.slice(0, 60) });
-  } else if (entrada.tipo === 'image' && entrada.midiaUrl && !imagemJaProcessada) {
+  } else if (entrada.tipo === 'image' && entrada.midiaUrl && !imagemJaProcessada && modalidadeImagemHabilitada) {
     const evo = await buscarConfigEvolutionFallback(pool, userIdFinal);
     const midiaDecriptografada = evo
       ? await baixarMidiaDecriptografada({
@@ -693,10 +701,19 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
           messageId: entrada.messageId, remoteJid: `${entrada.telefone}@s.whatsapp.net`, fromMe: false,
         })
       : null;
-    const descricao = midiaDecriptografada
+    const resultadoVisao = midiaDecriptografada
       ? await analisarImagem(midiaDecriptografada.buffer, midiaDecriptografada.mimetype || 'image/jpeg', openaiApiKey)
       : null;
-    textoFinal = descricao || entrada.texto || '[imagem]';
+    if (resultadoVisao) {
+      // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): mesmo fix do
+      // bloco de áudio acima — este fallback local também paga Vision de verdade.
+      await registrarUsoIA(pool, {
+        userId: userIdFinal, providerSlug: 'openai', modelo: 'gpt-4o-mini',
+        tokensEntrada: resultadoVisao.tokensEntrada, tokensSaida: resultadoVisao.tokensSaida,
+        custoUsd: estimarCustoUsd('gpt-4o-mini', resultadoVisao.tokensEntrada, resultadoVisao.tokensSaida),
+      });
+    }
+    textoFinal = resultadoVisao?.descricao || entrada.texto || '[imagem]';
     log.info('ENGINE', 'Imagem analisada via fallback local (webhook.ts não havia processado)');
   }
   if (!textoFinal) return;
@@ -747,8 +764,38 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     ? MCP_TOOLS
     : MCP_TOOLS.filter(t => (agente.mcp_tools as string[]).includes(t.name));
 
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-27 — pedido explícito
+  // do usuário, confirmado antes de implementar: "sim, implementar" pra TODAS as contas, não só
+  // leads de grupo): instrução genérica, injetada pelo motor — não depende do operador editar o
+  // próprio `prompt_sistema` customizado pra funcionar em nenhuma conta. Só entra quando (1) a
+  // ferramenta `criar_ou_atualizar_contato` está de fato habilitada pra este agente (senão a IA
+  // tentaria chamar uma tool que não existe pra ela) e (2) o contato ainda não tem nome real
+  // conhecido — `nome_verificado !== true` E `nome` ainda é literalmente o telefone (mesmo sinal
+  // já usado em `Disparos.tsx`/`substituirPlaceholders`; evita perguntar de novo pra quem já tem
+  // nome curado no CRM mas nunca passou pela cadeia nova, `nome_verificado` ainda NULL). Fica
+  // como orientação de tom ("num momento natural", "sem parecer formulário") de propósito — o
+  // objetivo é continuar a conversa, não virar uma pergunta robótica logo de cara.
+  const nomeAindaEhPlaceholder = contato.nome === entrada.telefone || contato.nome.replace(/\D/g, '') === entrada.telefone.replace(/\D/g, '').slice(-11);
+  const devePedirNome = nomeAindaEhPlaceholder && contato.nome_verificado !== true
+    && mcpToolsHabilitadas.some(t => t.name === 'criar_ou_atualizar_contato');
+  // [AUDITORIA] LÓGICA: esta instrução é reavaliada a CADA mensagem recebida (mesma conta,
+  // mesmo contato) até `nome_verificado` virar `true` — sem o aviso explícito de não repetir, o
+  // risco real é a IA perguntar o nome de novo a cada turno enquanto a pessoa não responde com o
+  // nome especificamente (ex: só respondeu a pergunta de negócio e ignorou a pergunta do nome),
+  // o que seria pior que nunca ter perguntado. O histórico (`historico`, mensagens anteriores já
+  // enviadas ao modelo) é a única forma da IA saber que já perguntou — instrução aponta isso
+  // explicitamente em vez de confiar que o modelo vai inferir sozinho.
+  const instrucaoNome = devePedirNome
+    ? `\n\nVocê ainda não sabe o nome verdadeiro desta pessoa (o CRM só tem o número de telefone). ` +
+      `Em algum momento natural da conversa — sem parecer formulário nem interromper o assunto — pergunte o nome dela, ` +
+      `UMA ÚNICA VEZ. Confira o histórico da conversa: se você já perguntou o nome antes e ela não respondeu ainda, ` +
+      `NÃO pergunte de novo — só volte a perguntar se um bom tempo depois surgir uma deixa natural. ` +
+      `Assim que ela responder com o nome, chame a ferramenta criar_ou_atualizar_contato com o nome (mesmo telefone, campo nome preenchido).`
+    : '';
+
   const systemPrompt = systemPromptBase +
-    `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
+    `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
+    instrucaoNome;
 
   // [AUDITORIA] LÓGICA (Sprint 7, 2026-07-23 — verificação de ordem do histórico enviado à
   // LLM, pedida pelo usuário): `ORDER BY created_at DESC` abaixo busca as 20 mais recentes
@@ -799,12 +846,42 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     apiKeyPresente: !!openaiApiKey,
   });
 
-  // 8. Loop agêntico — máximo 5 iterações
-  const MAX_ITER = 5;
+  // 8. Loop agêntico — máximo de iterações configurável por agente (Sprint Agentes
+  // Configurações Avançadas, 2026-09-04; campo "Limite de passos" na aba Configurações,
+  // `Agentes.tsx`). [AUDITORIA] LÓGICA: default 5 preserva o comportamento de sempre pra
+  // qualquer agente que nunca tocou nesse campo (coluna nova, começa NULL); clamp 1-20 evita
+  // tanto um valor inválido (0/negativo travaria a resposta) quanto um loop desproporcional
+  // (custo de IA por turno cresce direto com isso — mesma preocupação de gasto já documentada
+  // em SPRINT_DIAGNOSTICO_APROFUNDADO_CUSTO_IA.md).
+  const MAX_ITER = Math.min(Math.max(Number(agente.limite_passos) || 5, 1), 20);
   let respostaFinal = '';
   let tokensEntrada = 0;
   let tokensSaida = 0;
   let pausaAtivada = false;
+
+  // [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): base pra
+  // aba "Execuções" (`Agentes.tsx`) — mede só o loop agêntico (chamadas de IA + ferramentas), não
+  // o tempo de resolução do agente/RAG antes dele, pra bater com o que o operador entende como
+  // "quanto demorou pra responder". `traceLoop` acumula um resumo por iteração (não o payload
+  // bruto da API — ver comentário na migration) pro "Ver trace" da tela. `registrarExecucao` é
+  // chamado em todo caminho de saída do loop (sucesso ou erro) — ver os 3 pontos de retorno
+  // antecipado logo abaixo, e o caminho de sucesso lá no final da função.
+  const inicioExecucao = Date.now();
+  const traceLoop: any[] = [];
+  const registrarExecucao = (status: 'sucesso' | 'erro', extra: { saidaTexto?: string | null; erroMsg?: string } = {}) => {
+    pool.query(
+      `INSERT INTO agente_execucoes
+         (agente_id, user_id, trigger_origem, status, modelo, latencia_ms,
+          tokens_entrada, tokens_saida, custo_usd, entrada_texto, saida_texto, erro_msg, trace)
+       VALUES ($1,$2,'sistema',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        agente.id, userIdFinal, status, modelo, Date.now() - inicioExecucao,
+        tokensEntrada, tokensSaida, estimarCustoUsd(modelo, tokensEntrada, tokensSaida),
+        textoFinal?.slice(0, 4000) ?? null, extra.saidaTexto?.slice(0, 4000) ?? null,
+        extra.erroMsg?.slice(0, 2000) ?? null, JSON.stringify(traceLoop),
+      ]
+    ).catch(err => log.error('ENGINE', 'Falha ao gravar agente_execucoes', { err: err?.message }));
+  };
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
     // ── [RASTREIO IA] Log pré-chamada ────────────────────────────────────────
@@ -825,6 +902,8 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
           model: modelo,
           temperature: Number(agente.temperatura) || 0.7,
           maxTokens: agente.max_tokens || 1024,
+          serviceTier: agente.tier_servico || null,
+          reasoningEffort: agente.esforco_raciocinio || null,
         }),
         null,
         `ENGINE provider.complete (${modelo})`,
@@ -843,6 +922,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       // `finally` de `processarMensagem` liberar o lock. Cliente ficava sem resposta e sem
       // ninguém do lado humano ser avisado. Ver `pausarPorFalhaLLM` (declarada acima).
       await pausarPorFalhaLLM(pool, userIdFinal, entrada, err?.message || 'erro desconhecido na chamada à LLM');
+      registrarExecucao('erro', { erroMsg: err?.message || 'erro desconhecido na chamada à LLM' });
       return;
     }
 
@@ -857,6 +937,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       // cenários citados explicitamente na auditoria ("chave de API sem saldo, limite de
       // requisições excedido"). Antes só retornava em silêncio; ver `pausarPorFalhaLLM`.
       await pausarPorFalhaLLM(pool, userIdFinal, entrada, 'Provider retornou null — chave inválida (401) ou sem créditos/rate limit (429)');
+      registrarExecucao('erro', { erroMsg: 'Provider retornou null — chave inválida (401) ou sem créditos/rate limit (429)' });
       return;
     }
 
@@ -872,6 +953,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     tokensEntrada += resp.inputTokens;
     tokensSaida += resp.outputTokens;
     if (resp.text) respostaFinal = resp.text;
+    traceLoop.push({
+      iter, texto: resp.text?.slice(0, 500) ?? null,
+      toolCalls: resp.toolCalls.map(tc => ({ nome: tc.name, input: tc.input })),
+      finishReason: resp.finishReason,
+    });
 
     // Sem tool_calls → resposta final
     if (!resp.toolCalls.length) break;
@@ -905,6 +991,10 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       });
     }
 
+    // Anexa os resultados das tools ao trace desta mesma iteração (empurrado acima, logo após a
+    // resposta do modelo) — pro "Ver trace" mostrar entrada→ferramenta→resultado junto.
+    if (traceLoop.length) traceLoop[traceLoop.length - 1].toolResultados = toolResults.map(t => (typeof t.content === 'string' ? t.content.slice(0, 300) : null));
+
     if (pausaAtivada) break;
 
     mensagens.push({ role: 'assistant', content: respostaFinal || '[usando ferramentas]' });
@@ -913,6 +1003,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   if (!respostaFinal && !pausaAtivada) {
     log.warn('ENGINE', 'Sem resposta após loop agêntico');
+    registrarExecucao('erro', { erroMsg: 'Sem resposta após loop agêntico (limite de passos atingido sem resposta final)' });
     return;
   }
 
@@ -1038,20 +1129,15 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   // 13. Registrar uso de tokens
   if (tokensEntrada || tokensSaida) {
-    const custoUsd = estimarCustoUsd(modelo, tokensEntrada, tokensSaida);
-    await pool.query(
-      `INSERT INTO ai_uso_diario
-         (user_id, data, provider_slug, modelo, total_mensagens, tokens_entrada, tokens_saida, custo_usd)
-       VALUES ($1, CURRENT_DATE, $2, $3, 1, $4, $5, $6)
-       ON CONFLICT (user_id, data, provider_slug, modelo) DO UPDATE
-       SET total_mensagens = ai_uso_diario.total_mensagens + 1,
-           tokens_entrada  = ai_uso_diario.tokens_entrada  + $4,
-           tokens_saida    = ai_uso_diario.tokens_saida    + $5,
-           custo_usd       = ai_uso_diario.custo_usd       + $6,
-           updated_at = now()`,
-      [userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida, custoUsd]
-    ).catch(err => log.error('ENGINE INSERT ai_uso_diario', 'Falha ao registrar uso de tokens', { err: err?.message, stack: err?.stack }));
+    await registrarUsoIA(pool, {
+      userId: userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida,
+      custoUsd: estimarCustoUsd(modelo, tokensEntrada, tokensSaida),
+    });
   }
+
+  // 13.1 Registrar execução (aba "Execuções") — turno completou (com ou sem pausa acionada,
+  // ambos contam como execução bem-sucedida do ponto de vista do motor de IA).
+  registrarExecucao('sucesso', { saidaTexto: respostaFinal || null });
 
   // 14. Ações de pausa
   if (pausaAtivada) {
@@ -1129,6 +1215,156 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 //      deixa o lock preso pra sempre.
 // Veredito: sim, o mecanismo evita eficazmente chamadas paralelas à IA pro mesmo chat nesse
 // cenário e em cenários adjacentes (gaps maiores, erros durante o processamento).
+
+// ── Playground de teste (aba "Teste", Sprint Agentes Configurações Avançadas — fase 2,
+// 2026-09-04) ─────────────────────────────────────────────────────────────────────────────────
+// [AUDITORIA] LÓGICA: função NOVA e ISOLADA — deliberadamente não reaproveita `processarMensagem`
+// acima, que está profundamente acoplada ao fluxo real de WhatsApp (resolve/cria `contato` de
+// verdade a partir de `entrada.telefone`, dispara transcrição/visão, humanização, TTS, envio via
+// Evolution, grava `whatsapp_messages`, mexe no lock `atendimentosAtivos` e no circuit-breaker
+// anti-loop entre contas — nada disso faz sentido nem é seguro rodar a partir de uma tela de
+// teste sem contato/telefone real). Reproduz só o essencial pro teste ter valor real (mesmo
+// prompt, mesmo modelo/parâmetros, mesmas ferramentas habilitadas, mesmo loop agêntico) e
+// interrompe exatamente onde o resto seria específico de WhatsApp: nunca chama `enviarResposta`/
+// `enviarRespostaVoz`, nunca grava `whatsapp_messages`, e passa `dryRun: true` pra
+// `executarFerramenta()` — as 4 ferramentas que escrevem dado real ou disparam efeito externo
+// (`criar_ou_atualizar_contato`, `registrar_pausa`, `criar_agendamento`, `criar_corrida`, ver
+// `mcp/tools.ts`) devolvem só uma prévia textual nesse modo. Ainda assim grava uma linha em
+// `agente_execucoes` (`trigger_origem='playground'`) — mesmo histórico/aba "Execuções" da
+// função real, só filtrável por origem.
+export interface ResultadoTeste {
+  resposta: string;
+  tokensEntrada: number;
+  tokensSaida: number;
+  custoUsd: number;
+  latenciaMs: number;
+  modelo: string;
+  trace: any[];
+  erro?: string;
+}
+
+export async function testarAgentePlayground(
+  pool: Pool,
+  userId: string,
+  agenteId: string,
+  historico: { role: 'user' | 'assistant'; content: string }[],
+): Promise<ResultadoTeste> {
+  const inicio = Date.now();
+  const traceLoop: any[] = [];
+  let tokensEntrada = 0;
+  let tokensSaida = 0;
+  let modeloUsado = '';
+
+  const vazio = (erro: string, modelo = ''): ResultadoTeste =>
+    ({ resposta: '', tokensEntrada: 0, tokensSaida: 0, custoUsd: 0, latenciaMs: Date.now() - inicio, modelo, trace: [], erro });
+
+  const agenteRes = await pool.query(`SELECT * FROM agentes WHERE id = $1 AND user_id = $2`, [agenteId, userId]);
+  const agente = agenteRes.rows[0];
+  if (!agente) return vazio('Agente não encontrado.');
+
+  let systemPromptBase: string | null = agente.prompt_sistema || null;
+  if (!systemPromptBase) {
+    const legacy = await pool.query(`SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`, [userId]);
+    systemPromptBase = legacy.rows[0]?.conteudo || null;
+  }
+  if (!systemPromptBase) return vazio('Este agente não tem Prompt do Sistema configurado (aba Perfil) — não há o que testar ainda.');
+
+  const systemPrompt = systemPromptBase +
+    `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
+    `\n\n[MODO TESTE] Você está sendo testado por um operador do CRM através da tela de configuração ` +
+    `do agente — não é uma conversa real com cliente. Responda normalmente, seguindo suas instruções.`;
+
+  const mcpToolsHabilitadas = agente.mcp_tools == null
+    ? MCP_TOOLS
+    : MCP_TOOLS.filter(t => (agente.mcp_tools as string[]).includes(t.name));
+
+  const providerInfo = await criarProvider(pool, userId, agente.provider_id ?? null);
+  const envKey = process.env.OPENAI_API_KEY || '';
+  const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
+  const modelo = providerInfo?.modelo || agente.modelo || 'gpt-4o-mini';
+  const providerSlug = providerInfo?.providerSlug || 'openai';
+  modeloUsado = modelo;
+
+  const mensagens: AIMessage[] = historico.map(h => ({ role: h.role, content: h.content }));
+  const MAX_ITER = Math.min(Math.max(Number(agente.limite_passos) || 5, 1), 20);
+  let respostaFinal = '';
+  let pausaAtivada = false;
+
+  const registrarExecucaoTeste = (status: 'sucesso' | 'erro', extra: { saidaTexto?: string | null; erroMsg?: string } = {}) => {
+    pool.query(
+      `INSERT INTO agente_execucoes
+         (agente_id, user_id, trigger_origem, status, modelo, latencia_ms,
+          tokens_entrada, tokens_saida, custo_usd, entrada_texto, saida_texto, erro_msg, trace)
+       VALUES ($1,$2,'playground',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        agente.id, userId, status, modelo, Date.now() - inicio,
+        tokensEntrada, tokensSaida, estimarCustoUsd(modelo, tokensEntrada, tokensSaida),
+        (historico[historico.length - 1]?.content || '').slice(0, 4000), extra.saidaTexto?.slice(0, 4000) ?? null,
+        extra.erroMsg?.slice(0, 2000) ?? null, JSON.stringify(traceLoop),
+      ]
+    ).catch(err => log.error('ENGINE PLAYGROUND', 'Falha ao gravar agente_execucoes', { err: err?.message }));
+  };
+
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    let resp: Awaited<ReturnType<typeof provider.complete>> | null = null;
+    try {
+      resp = await provider.complete(mensagens, systemPrompt, mcpToolsHabilitadas, {
+        model: modelo,
+        temperature: Number(agente.temperatura) || 0.7,
+        maxTokens: agente.max_tokens || 1024,
+        serviceTier: agente.tier_servico || null,
+        reasoningEffort: agente.esforco_raciocinio || null,
+      });
+    } catch (err: any) {
+      log.error('ENGINE PLAYGROUND', 'Chamada à IA falhou no modo teste', { agenteId, providerSlug, modelo, err: err?.message });
+      registrarExecucaoTeste('erro', { erroMsg: err?.message || 'erro desconhecido na chamada à LLM' });
+      return { resposta: '', tokensEntrada, tokensSaida, custoUsd: estimarCustoUsd(modelo, tokensEntrada, tokensSaida), latenciaMs: Date.now() - inicio, modelo, trace: traceLoop, erro: err?.message || 'Erro na chamada à IA.' };
+    }
+
+    tokensEntrada += resp.inputTokens;
+    tokensSaida += resp.outputTokens;
+    if (resp.text) respostaFinal = resp.text;
+    traceLoop.push({
+      iter, texto: resp.text?.slice(0, 500) ?? null,
+      toolCalls: resp.toolCalls.map(tc => ({ nome: tc.name, input: tc.input })),
+      finishReason: resp.finishReason,
+    });
+
+    if (!resp.toolCalls.length) break;
+
+    const toolResults: AIMessage[] = [];
+    for (const tc of resp.toolCalls) {
+      if (!mcpToolsHabilitadas.some(t => t.name === tc.name)) {
+        toolResults.push({ role: 'user', content: `[Resultado de ${tc.name}]: ferramenta não disponível.` });
+        continue;
+      }
+      const resultado = await executarFerramenta(
+        pool, userId, tc.name, tc.input,
+        { contatoId: null, nomeContato: 'Operador (modo teste)' },
+        { dryRun: true },
+      );
+      if (resultado.startsWith('PAUSA_ATIVADA:')) {
+        pausaAtivada = true;
+        break;
+      }
+      toolResults.push({ role: 'user', content: `[Resultado de ${tc.name}]: ${resultado}` });
+    }
+    if (traceLoop.length) traceLoop[traceLoop.length - 1].toolResultados = toolResults.map(t => (typeof t.content === 'string' ? t.content.slice(0, 300) : null));
+
+    if (pausaAtivada) break;
+
+    mensagens.push({ role: 'assistant', content: respostaFinal || '[usando ferramentas]' });
+    mensagens.push(...toolResults);
+  }
+
+  const custoUsd = estimarCustoUsd(modelo, tokensEntrada, tokensSaida);
+  const latenciaMs = Date.now() - inicio;
+  const respostaExibida = respostaFinal || (pausaAtivada ? '(o agente sinalizou pausa/transferência para atendimento humano — nada mais seria enviado ao cliente)' : '');
+  registrarExecucaoTeste('sucesso', { saidaTexto: respostaExibida || null });
+
+  return { resposta: respostaExibida, tokensEntrada, tokensSaida, custoUsd, latenciaMs, modelo: modeloUsado, trace: traceLoop };
+}
+
 // ── Debounce — agrupa mensagens picotadas do mesmo contato ───────────────────
 export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada): Promise<void> {
   const chave = `${entrada.instancia}:${entrada.telefone}`;

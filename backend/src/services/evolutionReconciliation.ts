@@ -5,6 +5,11 @@ import { log } from '../logger';
 interface EvolutionInstanceInfo {
   name: string;
   connectionStatus: string;
+  // [AUDITORIA] LÓGICA (achado 2026-08-10 — loop de LOGOUT 401 em produção): campo novo, usado
+  // pelo guard-rail de POST /whatsapp/connect (routes/whatsapp.ts) pra detectar quando o número
+  // que o tenant está tentando conectar já tem uma sessão genuinamente aberta sob OUTRO nome de
+  // instância — sem isso não dava pra comparar "mesmo número" entre instâncias diferentes.
+  ownerJid?: string;
 }
 
 export async function fetchInstancesFromServer(url: string, apiKey: string): Promise<EvolutionInstanceInfo[] | null> {
@@ -16,7 +21,7 @@ export async function fetchInstancesFromServer(url: string, apiKey: string): Pro
     if (!resp.ok) return null;
     const data = await resp.json().catch(() => null);
     if (!Array.isArray(data)) return null;
-    return data.map((i: any) => ({ name: i?.name, connectionStatus: i?.connectionStatus }));
+    return data.map((i: any) => ({ name: i?.name, connectionStatus: i?.connectionStatus, ownerJid: i?.ownerJid }));
   } catch (err: any) {
     log.warn('EVOLUTION_SYNC', 'Falha ao consultar fetchInstances', { url, err: err?.message });
     return null;
@@ -68,6 +73,32 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
 
     const encontrada = instancias.find(i => i.name === conector.instancia);
     const aberta = encontrada?.connectionStatus === 'open';
+
+    // [AUDITORIA] LÓGICA (Sprint Grupos Somem com Instância Duplicada, 2026-09-04): grava/atualiza
+    // o ledger `instance_name → número real` (migrations.ts) sempre que a Evolution reportar
+    // `ownerJid` pra esta instância — em QUALQUER status (não só 'open'): mesmo uma instância
+    // travada em 'connecting'/'close' pode ter um `ownerJid` válido de quando esteve aberta, e é
+    // exatamente esse histórico que GET /conversas precisa pra não perder grupos quando o número
+    // migra pra um `instance_name` novo. Nunca deleta linha nenhuma daqui — o ledger é permanente
+    // de propósito, ver comentário completo na migration.
+    const ownerJid = encontrada?.ownerJid;
+    const numeroReal = ownerJid ? String(ownerJid).split('@')[0].replace(/\D/g, '') : '';
+    if (numeroReal) {
+      await pool.query(
+        `INSERT INTO whatsapp_instance_numeros (instance_name, user_id, numero, atualizado_em)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (instance_name) DO UPDATE SET numero = EXCLUDED.numero, atualizado_em = NOW()
+         WHERE whatsapp_instance_numeros.numero IS DISTINCT FROM EXCLUDED.numero`,
+        [conector.instancia, conector.user_id, numeroReal]
+      ).catch((err: any) => {
+        log.warn('EVOLUTION_SYNC', 'Falha ao gravar ledger instance_name→número', { err: err?.message, instancia: conector.instancia });
+      });
+      await pool.query(
+        `UPDATE agentes SET numero_conectado = $1, updated_at = NOW()
+         WHERE user_id = $2 AND evolution_instancia = $3 AND numero_conectado IS DISTINCT FROM $1`,
+        [numeroReal, conector.user_id, conector.instancia]
+      ).catch(() => {});
+    }
     // [AUDITORIA] LÓGICA: 'inativo' é o valor usado pelo resto do arquivo (default do
     // POST /) e o único do CHECK constraint (integracoes_config_status_check) que
     // representa "não conectado" — não existe 'desconectado' no enum permitido.

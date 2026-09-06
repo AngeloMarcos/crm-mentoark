@@ -12,6 +12,7 @@ import TermsPage from "./pages/Terms";
 import PrivacyPage from "./pages/Privacy";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
+import ExportarDadosPage from "./pages/ExportarDados";
 import TagsPage from "./pages/Tags";
 import ContatosPage from "./pages/Contatos";
 import ContatoDetalhePage from "./pages/ContatoDetalhe";
@@ -23,6 +24,7 @@ import RespostasRapidasPage from "./pages/RespostasRapidas";
 import CorridasPendentesPage from "./pages/CorridasPendentes";
 import DisparosPage from "./pages/Disparos";
 import DisparoTemplatesPage from "./pages/DisparoTemplates";
+import DisparoTemplateEditorPage from "./pages/DisparoTemplateEditor";
 import CampanhasPage from "./pages/Campanhas";
 import IntegracoesPage from "./pages/Integracoes";
 import CerebroPage from "./pages/Cerebro";
@@ -77,6 +79,7 @@ const App = () => (
               <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
               <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />
               <Route path="/leads"        element={<ProtectedRoute requireModulo="leads">       <LeadsPage /></ProtectedRoute>} />
+              <Route path="/exportar-dados" element={<ProtectedRoute requireModulo="leads">     <ExportarDadosPage /></ProtectedRoute>} />
               <Route path="/tags-funil"   element={<ProtectedRoute requireModulo="leads">       <TagsPage /></ProtectedRoute>} />
               <Route path="/contatos"     element={<ProtectedRoute requireModulo="contatos">    <ContatosPage /></ProtectedRoute>} />
               <Route path="/contatos/:id" element={<ProtectedRoute requireModulo="contatos">    <ContatoDetalhePage /></ProtectedRoute>} />
@@ -89,6 +92,7 @@ const App = () => (
               <Route path="/corridas-pendentes" element={<ProtectedRoute requireModulo="whatsapp"> <CorridasPendentesPage /></ProtectedRoute>} />
               <Route path="/disparos"     element={<ProtectedRoute requireModulo="disparos">    <DisparosPage /></ProtectedRoute>} />
               <Route path="/disparos/templates" element={<ProtectedRoute requireModulo="disparos"> <DisparoTemplatesPage /></ProtectedRoute>} />
+              <Route path="/disparos/templates/:id" element={<ProtectedRoute requireModulo="disparos"> <DisparoTemplateEditorPage /></ProtectedRoute>} />
               <Route path="/campanhas"    element={<ProtectedRoute requireModulo="campanhas">   <CampanhasPage /></ProtectedRoute>} />
               <Route path="/marketing-digital" element={<ProtectedRoute requireModulo="campanhas"> <MarketingDigitalPage /></ProtectedRoute>} />
               <Route path="/integracoes"  element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />

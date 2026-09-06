@@ -341,7 +341,14 @@ class QueryBuilder {
   single()           { this._single = true; return this; }
   maybeSingle()      { this._maybeSingle = true; return this; }
 
-  then(resolve: (v: any) => any, reject: (r: any) => any) {
+  // [AUDITORIA] BUG (achado 2026-09-04, typecheck escopado): `reject` era obrigatório na
+  // assinatura, mas `QueryBuilder` não estende `Promise` de verdade — TS type-checa chamadas
+  // diretas de `.then(cb)` contra ESTA assinatura (não a de `PromiseLike`, que aceita
+  // `onrejected` opcional). Qualquer `.then(fn)` com 1 argumento só (ex: Disparos.tsx, carregar
+  // campanha aberta) dava erro de tipo "Expected 2 arguments, but got 1" — inofensivo em
+  // runtime (JS não valida aridade), mas real no build com `--noEmit`. [AUDITORIA] FIX APLICADO:
+  // `reject` opcional, do jeito que `PromiseLike.then` já declara.
+  then(resolve: (v: any) => any, reject?: (r: any) => any) {
     return this._exec()
       .catch((err: any) => ({
         data: null,

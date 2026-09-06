@@ -22,6 +22,13 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // whatsapp_messages v1 (schema PT legado) removida — criada pela migration 002 em schema EN canônico
 
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS push_name TEXT`);
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, 2026-08-26): sinal explícito de que
+  // `nome` é um nome de pessoa de verdade (resolvido pela cadeia em whatsapp.ts,
+  // `resolverNomeParticipante`), não o telefone reaproveitado como nome (convenção antiga usada
+  // quando não havia nenhuma fonte de nome disponível). `NULL` em todo dado existente — de
+  // propósito, sem backfill/heurística sobre histórico (fora de escopo desta sprint); só passa a
+  // ser `true`/`false` em contatos novos criados/atualizados pela cadeia de resolução.
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS nome_verificado BOOLEAN`).catch(() => {});
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS profile_pic_url TEXT`);
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ultima_mensagem_em TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS opt_out BOOLEAN DEFAULT false`);
@@ -689,6 +696,24 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // pula (SKIP) qualquer linha já travada pela primeira em vez de esperar ou reprocessar.
   // Nenhuma mudança de código necessária aqui; item já estava corretamente implementado antes
   // desta auditoria.
+  // [AUDITORIA] FIX APLICADO (Sprint Variação de Imagem, 2026-08-25, pedido do usuário —
+  // anti-fingerprint): toggle por campanha, opt-in (default false — não muda o comportamento de
+  // nenhuma campanha existente). Quando ligado, `disparoProcessor.ts` gera uma variação de
+  // hash único POR MENSAGEM (ver `gerarVariacaoImagem()`, whatsappMediaStorage.ts) em vez de
+  // reaproveitar o mesmo arquivo cacheado por campanha inteira.
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS variar_imagem BOOLEAN DEFAULT false`).catch(() => {});
+
+  // [AUDITORIA] BUG CORRIGIDO (achado real em teste de homolog, Sprint Variação de Imagem,
+  // 2026-08-25 — não só teórico): Postgres recusa `CREATE OR REPLACE FUNCTION` quando o
+  // `RETURNS TABLE` muda de colunas (`cannot change return type of existing function`) —
+  // silenciosamente capturado pelo `.catch()` de sempre, então a função ficou com a assinatura
+  // ANTIGA (sem `variar_imagem`) rodando em produção normalmente, sem erro visível pra ninguém
+  // além do log de MIGRATIONS. Resultado real observado: `variar_imagem` vinha `undefined` em
+  // todo `msg` do lote, o toggle inteiro virava um no-op silencioso. [AUDITORIA] FIX APLICADO:
+  // `DROP FUNCTION IF EXISTS` antes do `CREATE` — mesmo problema pode se repetir em qualquer
+  // sprint futura que mude o `RETURNS TABLE` desta função; o DROP resolve de vez.
+  await pool.query(`DROP FUNCTION IF EXISTS get_next_disparo_batch(INTEGER)`).catch(err => log.warn('MIGRATIONS', 'Falha ao dropar get_next_disparo_batch antiga', { err: err?.message }));
+
   // ── Função get_next_disparo_batch para o processador ───────────────────────
   await pool.query(`
     CREATE OR REPLACE FUNCTION get_next_disparo_batch(batch_size INTEGER)
@@ -700,7 +725,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
       mensagem TEXT,
       tipo_midia TEXT,
       url_midia TEXT,
-      legenda_midia TEXT
+      legenda_midia TEXT,
+      variar_imagem BOOLEAN
     ) AS $$
     BEGIN
       -- [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): bloqueia reenvio pro
@@ -728,7 +754,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
       RETURN QUERY
       WITH next_msgs AS (
         SELECT l.id, l.disparo_id, l.user_id, l.telefone, l.mensagem_enviada,
-               d.tipo_midia, d.url_midia, d.legenda_midia
+               d.tipo_midia, d.url_midia, d.legenda_midia, d.variar_imagem
         FROM disparo_logs l
         JOIN disparos d ON d.id = l.disparo_id
         WHERE l.status = 'pending'
@@ -755,9 +781,10 @@ export async function runMigrations(pool: Pool): Promise<void> {
       SET status = 'sending'
       FROM next_msgs
       WHERE disparo_logs.id = next_msgs.id
-      RETURNING 
-        next_msgs.id, next_msgs.disparo_id, next_msgs.user_id, next_msgs.telefone, 
-        next_msgs.mensagem_enviada, next_msgs.tipo_midia, next_msgs.url_midia, next_msgs.legenda_midia;
+      RETURNING
+        next_msgs.id, next_msgs.disparo_id, next_msgs.user_id, next_msgs.telefone,
+        next_msgs.mensagem_enviada, next_msgs.tipo_midia, next_msgs.url_midia, next_msgs.legenda_midia,
+        next_msgs.variar_imagem;
     END;
     $$ LANGUAGE plpgsql;
   `).catch(err => log.error('MIGRATIONS', 'Erro ao criar function get_next_disparo_batch', { err: err.message }));
@@ -1905,6 +1932,235 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_pares_ativo ON maturador_pares(ativo) WHERE ativo = true`).catch(() => {});
 
   log.info('MIGRATIONS', 'Maturador de Números (schema) OK');
+
+  // ── Circuit-breaker de loop de LOGOUT (Sprint 2026-08-10, continuação Serenovlogs067) ────────
+  // [AUDITORIA] BUG GRAVE (2 incidentes reais confirmados — Serenovlogs067 em 10/08 e outro
+  // usuário no mesmo dia, ambos com número derrubado/banido pelo WhatsApp): reconectar
+  // repetidamente (via `nova_conexao` OU `force_reconnect`, "Forçar Reinicialização") gera um
+  // pareamento de "aparelho conectado" novo pro WhatsApp a cada tentativa — sem limite algum, o
+  // sistema deixava o usuário (ou o próprio operador, sob pressão) repetir isso dezenas de vezes
+  // em minutos, até o WhatsApp derrubar a sessão em LOGOUT (`statusReason:401`) repetidas vezes,
+  // padrão que o próprio WhatsApp trata como abuso. Tabela separada de `agentes` DE PROPÓSITO —
+  // a linha em `agentes` é apagada/recriada com frequência real (confirmado nos 2 incidentes,
+  // inclusive por ação do próprio usuário), o que zeraria qualquer contador guardado ali
+  // exatamente durante o padrão que o circuit-breaker existe pra pegar. Chave é `instancia`
+  // (nome da instância Evolution, string), não `agente_id` — sobrevive a qualquer exclusão/
+  // recriação de linha em `agentes` pra aquele mesmo nome.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_logout_events (
+      id            BIGSERIAL   PRIMARY KEY,
+      instancia     TEXT        NOT NULL,
+      status_reason INTEGER,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_logout_events_instancia_created ON whatsapp_logout_events(instancia, created_at DESC)`).catch(() => {});
+
+  log.info('MIGRATIONS', 'Circuit-breaker de loop de LOGOUT (schema) OK');
+
+  // ── Estruturar Disparo + listas já disparadas (Sprint 2026-08-11) ────────────────────────────
+  // [AUDITORIA] LÓGICA: `disparos` já tinha `tags_selecionadas TEXT[]`/`estagios_selecionados
+  // UUID[]` (colunas informativas, nunca lidas por `disparoProcessor.ts` — a personalização já
+  // roda no frontend, na criação) mas NENHUMA delas era de fato gravada no INSERT de
+  // `StepReview.handleStart()` (Disparos.tsx) — confirmado por leitura antes de mexer. `lista_id`
+  // (singular, FK) existe há mais tempo ainda e também nunca foi escrita — e é insuficiente de
+  // qualquer forma pra uma campanha que mira MÚLTIPLAS listas ao mesmo tempo (suportado na UI,
+  // "Por Lista" permite seleção múltipla). `listas_ids` (plural, array) é a coluna nova — mesmo
+  // padrão de `tags_selecionadas`, pra saber DEPOIS quais listas uma campanha usou (pedido real
+  // do usuário: "ver por lista quais campanhas já usaram ela" + avisar reenvio numa lista recente).
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS listas_ids UUID[] NOT NULL DEFAULT '{}'`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_disparos_listas_ids ON disparos USING GIN (listas_ids)`).catch(() => {});
+
+  log.info('MIGRATIONS', 'Disparo — rastro de listas usadas (listas_ids) OK');
+
+  // ── Modalidades de mídia opcionais por agente (Sprint 2026-08-23) ──────────────────────────
+  // [AUDITORIA] BUG (achado real, sprint anterior 2026-08-07 já tinha o toggle desenhado na UI
+  // — `Agentes.tsx`, aba Motor — e o campo no formulário, mas deliberadamente sem coluna aqui
+  // e removido do payload via `stripFields` em `index.ts`, com aviso visível na tela avisando
+  // que "não bloqueiam nada de verdade"; motivo documentado então foi só escopo de sprint, não
+  // limitação técnica). [AUDITORIA] FIX APLICADO (pedido explícito do usuário: "não tire essa
+  // funcionalidade [transcrição/visão], deixe como opcional"): coluna real, default `true` —
+  // preserva o comportamento atual (sempre ligado) pra toda conta que nunca mexeu no toggle;
+  // quem quiser economizar token desliga explicitamente. Lido de verdade agora em
+  // `webhook.ts` (gate principal) e `agentEngine.ts` (fallback local) antes de pagar
+  // Whisper/Vision — nunca se aplica a mídia de grupo, que já tem seu próprio gate
+  // (`grupos_ia_permitidos`, 2026-08-14) sempre avaliado primeiro e independente deste.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS modalidade_audio BOOLEAN NOT NULL DEFAULT true`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS modalidade_imagem BOOLEAN NOT NULL DEFAULT true`).catch(() => {});
+
+  log.info('MIGRATIONS', 'Modalidades de mídia opcionais por agente (modalidade_audio/imagem) OK');
+
+  // ── Cache de nomes resolvidos via fetchProfile (Sprint Nome Real de Leads de Grupo, cont.,
+  // 2026-08-26) ────────────────────────────────────────────────────────────────────────────
+  // [AUDITORIA] LÓGICA (pedido explícito do usuário: "vamos ver a melhor forma de resolver
+  // isso"): testado ao vivo contra produção — `POST /chat/fetchProfile` (1 chamada por
+  // participante, já existia na Evolution mas nunca usado neste projeto) devolve nome real em
+  // ~78-79% dos casos (28 participantes reais testados), muito acima da cadeia gratuita já em
+  // produção (~11-21%). Mas é lento (~2,3s/chamada) e bater nele em rajada pra um grupo inteiro
+  // é o tipo de padrão de automação que arrisca o WhatsApp sinalizar a conta — por isso não
+  // entra na cadeia síncrona de export/import (`resolverNomeParticipante`), vira uma ação
+  // separada e explícita (`POST /grupos/:groupJid/resolver-nomes`), com o mesmo delay anti-ban
+  // já usado no perfil "Rápido" dos Disparos (5-15s aleatório, `disparoProcessor.ts`). Esta
+  // tabela é o cache: evita pagar a chamada de novo pro mesmo telefone (mesmo em grupos
+  // diferentes, ou reimportação do mesmo grupo) e alimenta `resolverNomeParticipante()` como
+  // camada adicional, mais confiável que push_name/group-participants por ser resolução
+  // explícita e recente.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_nomes_resolvidos (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id      UUID NOT NULL,
+      telefone     TEXT NOT NULL,
+      nome         TEXT NOT NULL,
+      resolvido_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (user_id, telefone)
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_nomes_resolvidos_user ON whatsapp_nomes_resolvidos(user_id, telefone)`).catch(() => {});
+
+  log.info('MIGRATIONS', 'whatsapp_nomes_resolvidos (cache fetchProfile) OK');
+
+  // ── Ledger permanente instance_name → número real (Sprint Grupos Somem com Instância
+  // Duplicada, 2026-09-04) ─────────────────────────────────────────────────────────────────
+  // [AUDITORIA] LÓGICA (achado real do usuário — "não consigo ver os grupos do número X",
+  // investigado ao vivo em produção): o `instance_name` da Evolution não é uma identidade
+  // estável do número de telefone — toda vez que um número reconecta sob um nome de instância
+  // novo (o que já aconteceu de verdade: `crm_435ee4720fc3` → `crm_435ee4720fc3_2`, mesmo
+  // `ownerJid` 5511991909106, criada em 2026-09-02 apesar do guard-rail de reaproveitamento em
+  // `POST /whatsapp/connect`), qualquer filtro que compare `instance_name` cru (o filtro de
+  // número da Inbox, `WhatsAppInterface.tsx`) passa a esconder silenciosamente conversas cuja
+  // última mensagem ficou presa no nome antigo — grupos são os mais afetados por terem menos
+  // tráfego que 1:1 e por isso "última mensagem" neles envelhece mais devagar. Esta tabela é um
+  // LEDGER histórico (nunca é limpo/deletado quando uma instância desconecta ou é removida de
+  // `agentes` — ao contrário de `agentes.evolution_instancia`, que é limpo no logout): registra
+  // permanentemente qual número real cada `instance_name` já representou, populado a cada ciclo
+  // do cron de reconciliação (`evolutionReconciliation.ts`, roda a cada 15min e já busca
+  // `ownerJid` de toda instância do servidor). GET /conversas usa este ledger pra resolver um
+  // `numero` estável por conversa, e o filtro de número do frontend passa a casar por esse
+  // `numero` em vez do `instance_name` da última mensagem — sobrevive a qualquer quantidade de
+  // instâncias duplicadas/recriadas pro mesmo número.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_instance_numeros (
+      instance_name TEXT PRIMARY KEY,
+      user_id       UUID NOT NULL,
+      numero        TEXT NOT NULL,
+      criado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_wa_instance_numeros_user_numero ON whatsapp_instance_numeros(user_id, numero)`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS numero_conectado TEXT`).catch(() => {});
+
+  log.info('MIGRATIONS', 'whatsapp_instance_numeros (ledger instância→número) OK');
+
+  // ── Editor de template rico (Header/Corpo/Footer/Botões), Sprint Editor Template WhatsApp,
+  // 2026-09-04 ──────────────────────────────────────────────────────────────────────────────
+  // [AUDITORIA] LÓGICA (pedido explícito do usuário, com mockup de referência anexado): campos
+  // novos são ADITIVOS — `mensagem`/`tipo_midia`/`url_midia`/`legenda_midia` (já usados de
+  // verdade por Disparos.tsx e disparoProcessor.ts pra montar e enviar campanha) continuam
+  // existindo e sendo a fonte usada no envio real; o editor novo escreve neles também (composição
+  // feita no frontend ao salvar, `DisparoTemplateEditor.tsx`), então nenhum consumidor existente
+  // precisou mudar. `header_tipo` cobre nenhum/texto/imagem/documento/áudio — "vídeo" ficou de
+  // fora de propósito (Galeria de Mídias, `galeria.ts`, não aceita nenhum mimetype de vídeo hoje,
+  // e `disparoProcessor.ts` não tem branch de envio de vídeo — declarar a opção sem esse suporte
+  // vazaria como "configurei mas não envia", a mesma classe de bug crônica já documentada em
+  // AUDITORIA_LOG.md). [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, logo após o primeiro
+  // deploy desta sprint): "áudio" tinha ficado de fora do editor por engano junto com "vídeo" —
+  // diferente de vídeo, áudio JÁ tem suporte completo (Galeria aceita mp3/ogg/wav/m4a,
+  // `disparoProcessor.ts` já manda via `sendWhatsAppAudio`) e é um `tipo_midia` legado válido —
+  // abrir um template de áudio existente no editor novo e salvar apagava a mídia dele (virava
+  // texto puro em silêncio). Corrigido antes de qualquer template de áudio real passar por isso.
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS funil_estagio_id UUID REFERENCES funil_estagios(id) ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS header_tipo TEXT NOT NULL DEFAULT 'nenhum'`).catch(() => {});
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS header_texto TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS footer TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS botoes JSONB NOT NULL DEFAULT '[]'`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_disparo_templates_funil ON disparo_templates(funil_estagio_id)`).catch(() => {});
+
+  log.info('MIGRATIONS', 'disparo_templates: header/footer/botões/funil OK');
+
+  // ── Configurações avançadas de agente (Perfil/Configurações mais profissional), Sprint
+  // Agentes Configurações Avançadas, 2026-09-04 ───────────────────────────────────────────────
+  // [AUDITORIA] LÓGICA (pedido explícito do usuário, com mockup de referência anexado — fase 1
+  // de 2, escolhida pelo usuário: "Perfil + Configurações primeiro", deixando Execuções/Teste
+  // pra depois por exigirem instrumentar `agentEngine.ts` do zero, ver AUDITORIA_LOG.md):
+  // `icone`/`cor` são só identidade visual (renderizados na listagem de agentes,
+  // `Agentes.tsx`); os outros 5 campos são configuração REAL, lida por `agentEngine.ts`/
+  // `providers/index.ts`/`webhook.ts` — nenhum é só decorativo. `esforco_raciocinio` só tem
+  // efeito quando o modelo escolhido é da família "raciocínio" (o1/o3/o4/gpt-5-thinking) — o
+  // seletor de modelo hoje só oferece gpt-4o/gpt-4o-mini/claude/gemini, nenhum deles reasoning,
+  // então este campo fica inerte até alguém apontar `modelo_id` pra um modelo desses
+  // diretamente; documentado assim na UI pra não prometer o que não faz ainda.
+  // `limite_passos` substitui o `MAX_ITER = 5` hardcoded do loop agêntico (agentEngine.ts) —
+  // default NULL cai no mesmo 5 de sempre, não muda comportamento de agente nenhum já existente.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS icone TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS cor TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS esforco_raciocinio TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS tier_servico TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS max_tokens_prompt_sistema INTEGER`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS limite_passos INTEGER`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS fallback_transcricao_falha TEXT`).catch(() => {});
+
+  log.info('MIGRATIONS', 'agentes: configurações avançadas (ícone/cor/raciocínio/tier/limite de passos/fallback transcrição) OK');
+
+  // ── Log de execuções de agente (aba "Execuções"), Sprint Agentes Configurações Avançadas —
+  // fase 2, 2026-09-04 ─────────────────────────────────────────────────────────────────────────
+  // [AUDITORIA] LÓGICA (pedido explícito do usuário, continuação da fase 1 — Perfil/
+  // Configurações): tabela NOVA, não reaproveita `ai_mensagens`/`ai_conversas` (que existem no
+  // schema mas têm 0 linhas em produção — confirmado ao vivo: nunca foram escritas por
+  // `agentEngine.ts`, sobra de uma arquitetura anterior, provavelmente pensada pra n8n). Reviver
+  // aquelas duas exigiria também simular a semântica de "conversa" delas (dedupe por
+  // instance_name+remote_jid) sem nenhum consumidor real pra justificar o acoplamento extra —
+  // uma tabela própria, plana, é mais simples e mais segura de instrumentar dentro do loop
+  // agêntico de produção (`agentEngine.ts`) sem arriscar quebrar nada ali.
+  // `trigger_origem`: 'sistema' (mensagem real via WhatsApp) ou 'playground' (aba Teste, fase
+  // seguinte). `trace` guarda um resumo por iteração do loop agêntico (texto parcial + tool
+  // calls) — não o payload bruto da API, pra manter a linha pequena e não duplicar dado já
+  // salvo em `whatsapp_messages`/`chat_messages`.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agente_execucoes (
+      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      agente_id      UUID NOT NULL REFERENCES agentes(id) ON DELETE CASCADE,
+      user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      trigger_origem TEXT NOT NULL DEFAULT 'sistema',
+      status         TEXT NOT NULL,
+      modelo         TEXT,
+      latencia_ms    INTEGER,
+      tokens_entrada INTEGER NOT NULL DEFAULT 0,
+      tokens_saida   INTEGER NOT NULL DEFAULT 0,
+      custo_usd      NUMERIC(12,6) NOT NULL DEFAULT 0,
+      entrada_texto  TEXT,
+      saida_texto    TEXT,
+      erro_msg       TEXT,
+      trace          JSONB NOT NULL DEFAULT '[]',
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_agente_execucoes_agente ON agente_execucoes(agente_id, created_at DESC)`).catch(() => {});
+
+  log.info('MIGRATIONS', 'agente_execucoes (log de execuções) OK');
+
+  // ── Cache de preview de link genérico (Sprint Grupos — melhorias WhatsApp, 2026-09-06,
+  // pedido explícito do usuário: "links de outros grupos também virem preview/card, não só
+  // convite") ──────────────────────────────────────────────────────────────────────────────
+  // [AUDITORIA] LÓGICA: tabela COMPARTILHADA entre todos os tenants (sem user_id) de propósito —
+  // metadado Open Graph de uma URL pública (título/descrição/imagem) é o mesmo pra qualquer
+  // usuário que colar o mesmo link, então cachear por URL (não por usuário/mensagem) evita bater
+  // no site de terceiro de novo a cada vez que a MESMA url aparecer em qualquer conta. `erro`
+  // guardado também (com o mesmo TTL) — evita reprocessar repetidamente uma URL que já falhou
+  // (offline, bloqueou scraping, não é HTML) a cada mensagem nova que a citar.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS link_previews_cache (
+      url          TEXT PRIMARY KEY,
+      titulo       TEXT,
+      descricao    TEXT,
+      imagem_url   TEXT,
+      site_nome    TEXT,
+      erro         TEXT,
+      buscado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+
+  log.info('MIGRATIONS', 'link_previews_cache OK');
 
   log.info('MIGRATIONS', 'OK');
 }

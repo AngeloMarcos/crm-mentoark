@@ -1,8 +1,9 @@
 import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
+import { registrarUsoIA, estimarCustoUsd } from '../utils/aiCusto';
 import { botSentTexts, botMessageIds, BOT_ECHO_TTL_MS } from './agentEngine';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
-import { garantirMidiaEstavel } from '../utils/whatsappMediaStorage';
+import { garantirMidiaEstavel, gerarVariacaoImagem } from '../utils/whatsappMediaStorage';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
 
@@ -185,7 +186,7 @@ export async function processarDisparos(pool: Pool) {
 
     for (let i = 0; i < batch.rows.length; i++) {
       const msg = batch.rows[i];
-      const { log_id, disparo_id, user_id, telefone, mensagem, tipo_midia, url_midia, legenda_midia } = msg;
+      const { log_id, disparo_id, user_id, telefone, mensagem, tipo_midia, url_midia, legenda_midia, variar_imagem } = msg;
 
       if (campanhasPausadasNesteLote.has(disparo_id)) {
         await requeuePendentes(pool, [{ log_id }]);
@@ -391,6 +392,46 @@ export async function processarDisparos(pool: Pool) {
         // 3. Normalizar telefone
         const digits = telefone.replace(/\D/g, '');
 
+        // [AUDITORIA] BUG (achado real, Sprint Continuidade — Vistoria de Problemas, 2026-08-25,
+        // investigando `SPRINT_GRUPOS_DIAGNOSTICO_COMPLETO.md`): nada em `contatos` distingue a
+        // linha sintética de um GRUPO (criada por `webhook.ts` pro backfill de nome/foto — mesmo
+        // `origem = 'WhatsApp'` de um contato pessoa real, sem coluna `is_group`) de um contato de
+        // verdade — confirmado em produção: a conta `mentoark@gmail.com` já tem 4 grupos reais
+        // como linha em `contatos` hoje. Nada em `StepContacts`/`disparoProcessor` os excluía —
+        // um grupo podia ser selecionado numa campanha de Disparo e `number: digits` (sem `@g.us`)
+        // ia direto pro `/message/sendText` da Evolution, com risco real da Evolution/Baileys
+        // resolver por tamanho e mandar a mensagem de campanha (com dado de outro contato via
+        // `{{nome}}`) pra DENTRO do grupo, visível pra todo mundo lá. [AUDITORIA] FIX APLICADO:
+        // JID de grupo do WhatsApp é sempre um ID longo (`120363...`, 18+ dígitos) ou o formato
+        // antigo com hífen (`5511952927886-1398018374`, 24+ dígitos após stripar não-dígito) —
+        // nenhum telefone real (nem com DDI de outro país, E.164 tem no máximo 15 dígitos) chega
+        // nem perto disso. `> 15` é uma barreira segura: bloqueia os 2 formatos de grupo
+        // conhecidos sem risco de rejeitar número de cliente real.
+        if (digits.length > 15) {
+          await pool.query(
+            `UPDATE disparo_logs SET status = 'failed', erro = 'destino_parece_grupo_nao_contato' WHERE id = $1`,
+            [log_id]
+          ).catch(err => log.error('DISPARO', 'Falha ao marcar log como destino_parece_grupo_nao_contato', { err: err?.message }));
+          // [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, revisão pós-Sprint Grupos/Template):
+          // este `continue` pula por cima do bloco de contabilidade que todo outro caminho de
+          // falha passa (`catch` mais abaixo, `falhas = falhas + 1`) — campanha com N contatos
+          // que na verdade são grupo tinha N linhas marcadas 'failed' em `disparo_logs` mas
+          // `disparos.falhas` (o contador agregado que `MonitoringDashboard.tsx` mostra e usa
+          // pra calcular taxa de falha) nunca via esse número. Resultado real: barra de progresso
+          // (`enviados`/`total_leads`) nunca fecha 100%, sem nenhuma "falha" visível que explique
+          // a diferença. [AUDITORIA] FIX APLICADO: incrementa `falhas` aqui também — mas
+          // deliberadamente NÃO mexe em `errosConsecutivos` (o freio de pausa automática por erro
+          // consecutivo, ver comentário logo acima): isso aqui é validação de dado de entrada, não
+          // falha operacional de envio/API, incluir no circuit-breaker pausaria campanhas
+          // legítimas só por terem alguns contatos de grupo misturados.
+          await pool.query(
+            `UPDATE disparos SET falhas = falhas + 1 WHERE id = $1`,
+            [disparo_id]
+          ).catch(err => log.error('DISPARO', 'Falha ao incrementar contador de falhas (destino_parece_grupo_nao_contato)', { err: err?.message }));
+          log.warn('DISPARO_GRUPO_BLOQUEADO', 'Disparo bloqueado — destino parece ser grupo do WhatsApp, não contato individual', { disparo_id, telefone, digitos: digits.length });
+          continue;
+        }
+
         // 3.1. Humanizar mensagem via IA — withAiFallback garante que erros 401/429
         //      não travam o disparo; a mensagem original é usada como contingência.
         let textoFinal: string = mensagem;
@@ -407,31 +448,63 @@ export async function processarDisparos(pool: Pool) {
         // `legenda_midia` de verdade). `legenda_midia` void o fallback só quando `mensagem` vier
         // vazio (ex: campanha antiga, criada antes deste fix, sem log personalizado equivalente).
         let legendaFinal: string = mensagem || legenda_midia;
+        // [AUDITORIA] BUG (achado 2026-09-02, revisão de gastos de IA pedida pelo usuário: "preciso
+        // que não ocorra mais os gastos absurdos"): `humanizarMensagem` paga OpenAI de verdade a
+        // cada variação nova (cache reaproveita ~70% depois das 5 primeiras, mas o resto é chamada
+        // real) e isso nunca era registrado em `ai_uso_diario` — invisível no dashboard de custo,
+        // mesmo padrão que deixou o gasto de mídia de grupo passar batido até o saldo zerar em
+        // 14/08. [AUDITORIA] FIX APLICADO: `humanizarMensagem` agora devolve os tokens usados;
+        // registrado aqui com `registrarUsoIA` sempre que a chamada realmente aconteceu (tokens > 0
+        // — cache hit ou fallback por erro não contam, porque não pagaram nada de verdade).
+        const registrarCustoHumanizacao = (r: { tokensEntrada: number; tokensSaida: number; modelo: string }) => {
+          if (!r.tokensEntrada && !r.tokensSaida) return;
+          registrarUsoIA(pool, {
+            userId: user_id, providerSlug: 'openai', modelo: r.modelo,
+            tokensEntrada: r.tokensEntrada, tokensSaida: r.tokensSaida,
+            custoUsd: estimarCustoUsd(r.modelo, r.tokensEntrada, r.tokensSaida),
+          }).catch(() => {});
+        };
         if (await deveHumanizar(pool, disparo_id)) {
           if (tipo_midia === 'texto' || !tipo_midia) {
-            textoFinal = await withAiFallback(
-              () => humanizarMensagem(mensagem),
-              mensagem,
+            const r = await withAiFallback(
+              () => humanizarMensagem(mensagem, pool, user_id),
+              { texto: mensagem, tokensEntrada: 0, tokensSaida: 0, modelo: '' },
               'humanizarMensagem(texto)',
             );
+            textoFinal = r.texto;
+            registrarCustoHumanizacao(r);
           } else if (legendaFinal) {
             // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): humaniza
             // `legendaFinal` (já resolvido acima, prioritariamente a versão PERSONALIZADA por
             // contato) em vez do `legenda_midia` cru — humanizar o texto cru reescreveria a
             // mensagem inteira sem nunca substituir `{{placeholders}}` (a humanização roda antes
             // de qualquer substituição, e não existe um segundo passo de substituição depois dela).
-            legendaFinal = await withAiFallback(
-              () => humanizarMensagem(legendaFinal),
-              legendaFinal,
+            const r = await withAiFallback(
+              () => humanizarMensagem(legendaFinal, pool, user_id),
+              { texto: legendaFinal, tokensEntrada: 0, tokensSaida: 0, modelo: '' },
               'humanizarMensagem(legenda)',
             );
+            legendaFinal = r.texto;
+            registrarCustoHumanizacao(r);
           }
         }
 
         // 4. Enviar mensagem
         // Usa a URL estável já cacheada pra esta campanha (ver bloco de transição de campanha
         // acima), com fallback pra `url_midia` crua se a estabilização falhou/não rodou.
-        const urlMidiaFinal = urlMidiaEstavelPorCampanha.get(disparo_id) || url_midia;
+        let urlMidiaFinal = urlMidiaEstavelPorCampanha.get(disparo_id) || url_midia;
+        // [AUDITORIA] FIX APLICADO (Sprint Variação de Imagem, 2026-08-25, pedido do usuário —
+        // anti-fingerprint): campanha com `variar_imagem=true` gera uma variação de hash único
+        // POR MENSAGEM aqui (nunca cacheada — diferente da URL estável acima, que É cacheada de
+        // propósito por campanha) — cada destinatário recebe um arquivo com hash diferente,
+        // visualmente idêntico. Opt-in, default false — nenhuma campanha existente muda de
+        // comportamento sem o operador ligar o toggle explicitamente. Só faz sentido pra imagem
+        // (documento/áudio corromperiam com reencode de imagem); qualquer falha do sharp
+        // (formato não suportado, arquivo não encontrado) devolve a URL original inalterada —
+        // nunca bloqueia o envio por conta desta variação.
+        if (variar_imagem && tipo_midia === 'imagem' && urlMidiaFinal) {
+          urlMidiaFinal = await gerarVariacaoImagem(urlMidiaFinal);
+        }
         let endpoint = `${baseUrl}/message/sendText/${instancia}`;
         let body: any = { number: digits, text: textoFinal };
 
@@ -497,7 +570,12 @@ export async function processarDisparos(pool: Pool) {
           throw httpErr;
         }
 
-        const respData = await resp.json().catch(() => ({}));
+        // [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, typecheck escopado): sem anotação, TS
+        // infere `respData` como `{}` (não `any`) — `resp.json()` resolve pra `Promise<unknown>`
+        // nos tipos reais instalados (`undici-types`), e o `.catch(() => ({}))` acaba virando o
+        // tipo do resultado. Mesmo padrão já usado em outros pontos do projeto pra JSON de
+        // resposta de formato variável (ex: `whatsappMediaStorage.ts`, `buscarInfoGrupo`).
+        const respData: any = await resp.json().catch(() => ({}));
         const realMsgId = respData?.key?.id || `disparo_${log_id}`;
 
         if (respData?.key?.id) {

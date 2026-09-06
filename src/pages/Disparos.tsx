@@ -53,6 +53,35 @@ import {
   DialogFooter,
   DialogDescription,
 } from "@/components/ui/dialog";
+// [AUDITORIA] LÓGICA (Sprint Monitor Persistente de Campanhas, 2026-08-11): `MonitoringDashboard`
+// (e `EditarConfiguracaoPausada`, usado só internamente por ele) foram extraídos pra
+// `components/disparos/MonitoringDashboard.tsx` — reaproveitado agora também por
+// `MonitorWhatsApp.tsx` (lista persistente "Campanhas de Disparo"), fechando a pendência de
+// `diagnosticos/SPRINT_MONITOR_CAMPANHAS_DISPARO.md`. Comportamento aqui em `Disparos.tsx`
+// inalterado — mesmo componente, só importado em vez de definido localmente.
+import { MonitoringDashboard } from "@/components/disparos/MonitoringDashboard";
+// [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): mesmo espírito da importação
+// acima — lista de campanhas extraída pra componente compartilhado, agora a tela PADRÃO desta
+// página (pedido explícito do usuário: "reorganizar a tela/fluxo de Disparos"). Antes, a única
+// forma de ver uma campanha depois de criada era o estado em memória `activeCampaign` — sumia ao
+// sair da tela. Agora a campanha aberta vive em `?campanha=<id>` (useSearchParams), sobrevive a
+// F5/link direto, mesmo padrão já usado e comprovado em `MonitorWhatsApp.tsx`.
+import { CampanhasList } from "@/components/disparos/CampanhasList";
+import { useSearchParams } from "react-router-dom";
+
+// [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): "há X min/h/dias" em pt-BR sem
+// depender de `date-fns` (não importado neste arquivo até agora) — usado no badge "usada em N
+// campanhas" (StepContacts) e no aviso de reenvio recente.
+function formatRelativoPtBr(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return "agora mesmo";
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h}h`;
+  const dias = Math.floor(h / 24);
+  return `há ${dias} dia${dias > 1 ? "s" : ""}`;
+}
 
 // [AUDITORIA] BUG (Sprint Disparos/Importação, revisão 2026-07-25): usuário reportou nomes
 // corrompidos na importação real (ex: "GraÃ§a" em vez de "Graça", "JosÃ©" em vez de "José") —
@@ -407,9 +436,31 @@ const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar 
 export default function DisparosPage() {
   const { user } = useAuth();
   const [step, setStep] = useState(0);
-  const [activeCampaign, setActiveCampaign] = useState<any>(null);
   const [targetContacts, setTargetContacts] = useState<any[]>([]);
   const [loadingCount, setLoadingCount] = useState(false);
+  // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): `modo` substitui a lógica antiga
+  // de "sempre abre no wizard" — tela padrão agora é a lista de campanhas (`CampanhasList`),
+  // wizard só aparece sob ação explícita ("+ Nova Campanha"). Campanha aberta pra
+  // acompanhamento/controle não usa mais `activeCampaign` (estado em memória, perdido ao sair da
+  // tela) — vive em `?campanha=<id>`, resolvido contra a lista real do banco a cada render.
+  const [modo, setModo] = useState<'lista' | 'nova'>('lista');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const campanhaAbertaId = searchParams.get('campanha');
+  const [campanhaAberta, setCampanhaAberta] = useState<any>(null);
+  const [carregandoCampanhaAberta, setCarregandoCampanhaAberta] = useState(false);
+
+  const abrirCampanha = (id: string) => setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('campanha', id); return p; });
+  const fecharCampanha = () => setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('campanha'); return p; });
+
+  useEffect(() => {
+    if (!campanhaAbertaId) { setCampanhaAberta(null); return; }
+    let cancelado = false;
+    setCarregandoCampanhaAberta(true);
+    api.from("disparos").select("*").eq("id", campanhaAbertaId).single().then(({ data }: any) => {
+      if (!cancelado) { setCampanhaAberta(data || null); setCarregandoCampanhaAberta(false); }
+    });
+    return () => { cancelado = true; };
+  }, [campanhaAbertaId]);
 
   const [form, setForm] = useState({
     nome: "",
@@ -462,6 +513,13 @@ export default function DisparosPage() {
     // já criadas/agendadas não são afetadas (cada uma já tem `humanizar_ia` gravado no próprio
     // registro em `disparos`, só o valor inicial do formulário de campanha NOVA muda).
     humanizar_ia: false,
+    // [AUDITORIA] LÓGICA (Sprint Variação de Imagem, 2026-08-25, pedido do usuário —
+    // anti-fingerprint): campanha de imagem mandava o mesmo arquivo (mesmo hash) pra todo
+    // destinatário — sinal de spam real. Opt-in, default false pelo mesmo motivo de
+    // `humanizar_ia` acima: mudar o valor padrão de todo formulário novo é uma decisão de
+    // produto, não algo pra ligar sozinho sem o operador decidir. Só usado quando
+    // `tipo_midia === 'imagem'` (ver toggle condicional em StepMessage).
+    variar_imagem: false,
     // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): variação por mensagens-base
     // COMPLETAS (item 2), mais forte que só spintax por palavra — array vazio = comportamento
     // atual inalterado (só `form.mensagem`/`legenda_midia`, resolvido por
@@ -592,7 +650,25 @@ export default function DisparosPage() {
           { description: "Contatos sem telefone não podem receber campanha de WhatsApp." }
         );
       }
-      const unique = Array.from(new Map(comTelefone.map(c => [c.telefone, c])).values());
+      // [AUDITORIA] BUG (achado real, Sprint Continuidade — Vistoria de Problemas, 2026-08-25,
+      // investigando `SPRINT_GRUPOS_DIAGNOSTICO_COMPLETO.md`): a linha sintética que `webhook.ts`
+      // cria em `contatos` pro GRUPO EM SI (backfill de nome/foto, `origem = 'WhatsApp'` — igual
+      // a qualquer contato pessoa real, sem coluna `is_group`) não tinha filtro nenhum aqui —
+      // diferente do participante importado (`origem = 'Grupo WhatsApp'`, já filtrado acima só no
+      // modo "Todos os Leads"), o grupo em si passava por QUALQUER um dos 3 modos (tag/estágio/
+      // lista) se o operador o tivesse marcado sem perceber que era um grupo. Mesma defesa
+      // aplicada no backend (`disparoProcessor.ts`) — JID de grupo é sempre um ID longo (18+
+      // dígitos) ou o formato antigo com hífen (24+ dígitos após stripar não-dígito); nenhum
+      // telefone real chega perto disso (E.164 tem no máximo 15 dígitos).
+      const semGrupoSintetico = comTelefone.filter((c: any) => String(c.telefone).replace(/\D/g, "").length <= 15);
+      const grupoCount = comTelefone.length - semGrupoSintetico.length;
+      if (grupoCount > 0) {
+        toast.warning(
+          `${grupoCount} grupo(s) do WhatsApp foram excluídos da seleção`,
+          { description: "Grupos não podem receber campanha individual de Disparo." }
+        );
+      }
+      const unique = Array.from(new Map(semGrupoSintetico.map(c => [c.telefone, c])).values());
       setTargetContacts(unique);
       setLoadingCount(false);
     };
@@ -633,21 +709,43 @@ export default function DisparosPage() {
     return null;
   }, [stepValid, step, form]);
 
-  // [AUDITORIA] BUG (achado real do usuário, Sprint Monitor de Disparo — Layout/Controle,
-  // 2026-08-08): este `return` ficava ANTES de qualquer `<CRMLayout>` — o resto da página (o
-  // wizard normal, abaixo) é que fica dentro dele. Resultado: com uma campanha ativa,
-  // `MonitoringDashboard` renderizava sozinho, fora do layout do CRM — sem sidebar/navegação,
-  // "tomando a tela inteira" e impedindo o operador de navegar pra outro módulo sem perder o
-  // monitor (só dava pra sair fechando a aba/dando refresh, o que também derruba `activeCampaign`,
-  // estado só em memória — ver `SPRINT_MONITOR_CAMPANHAS_DISPARO.md`, ainda pendente, para o
-  // problema relacionado de não existir nenhum jeito de voltar a essa campanha depois disso).
-  // [AUDITORIA] FIX APLICADO: envolvido em `<CRMLayout>`, mesmo padrão já usado pelo wizard
-  // logo abaixo — sidebar/navegação voltam a aparecer com o monitor aberto, confirmado
-  // visualmente em homolog.
-  if (activeCampaign) {
+  // [AUDITORIA] FIX APLICADO (Sprint Estruturar Disparo, 2026-08-11 — substitui o `if
+  // (activeCampaign)` antigo): campanha aberta agora vem de `?campanha=<id>` + fetch real, não de
+  // estado em memória — sobrevive a F5/link direto/voltar depois de navegar pra outro módulo.
+  // `<CRMLayout>` preservado (mesmo fix de 08/08, sidebar/navegação continuam visíveis).
+  if (campanhaAbertaId) {
     return (
       <CRMLayout>
-        <MonitoringDashboard campaign={activeCampaign} onCancel={() => setActiveCampaign(null)} />
+        {carregandoCampanhaAberta ? (
+          <div className="p-12 text-center text-muted-foreground text-sm">Carregando campanha…</div>
+        ) : campanhaAberta ? (
+          <>
+            <div className="max-w-6xl mx-auto mb-2">
+              <Button variant="ghost" size="sm" className="gap-1 -ml-2" onClick={fecharCampanha}>
+                ← Voltar pras Campanhas
+              </Button>
+            </div>
+            <MonitoringDashboard campaign={campanhaAberta} onCancel={fecharCampanha} />
+          </>
+        ) : (
+          <div className="p-12 text-center text-muted-foreground text-sm">
+            Campanha não encontrada.
+            <Button variant="link" onClick={fecharCampanha}>Voltar pras Campanhas</Button>
+          </div>
+        )}
+      </CRMLayout>
+    );
+  }
+
+  // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11 — pedido explícito do usuário:
+  // "reorganizar a tela/fluxo de Disparos"): tela padrão passa a ser a LISTA de campanhas, não o
+  // wizard — era exatamente a falta disso que deixou 3 campanhas reais (conta mentoark@gmail.com,
+  // mesma sessão) `em_andamento` sem ninguém saber, uma delas disparando mensagem de verdade.
+  // Wizard de criação só aparece sob ação explícita.
+  if (modo === 'lista') {
+    return (
+      <CRMLayout>
+        <CampanhasList onOpen={abrirCampanha} onNova={() => setModo('nova')} />
       </CRMLayout>
     );
   }
@@ -657,6 +755,9 @@ export default function DisparosPage() {
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
+            <Button variant="ghost" size="sm" className="gap-1 -ml-2 mb-1" onClick={() => setModo('lista')}>
+              ← Campanhas
+            </Button>
             <h1 className="text-2xl font-bold">Novo Disparo em Massa</h1>
             <p className="text-sm text-muted-foreground">Configure em 4 passos rápidos</p>
           </div>
@@ -702,7 +803,11 @@ export default function DisparosPage() {
           {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} targetContacts={targetContacts} setTargetContacts={setTargetContacts} />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
-          {step === 3 && <StepReview form={form} targetContacts={targetContacts} loadingContacts={loadingCount} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
+          {/* [AUDITORIA] FIX APLICADO (Sprint Estruturar Disparo, 2026-08-11): `onStart` não seta
+              mais estado em memória (`activeCampaign`, perdido ao sair da tela) — abre a campanha
+              recém-criada via `?campanha=<id>`, mesma rota persistente usada pra reabrir qualquer
+              campanha existente a partir da lista. */}
+          {step === 3 && <StepReview form={form} targetContacts={targetContacts} loadingContacts={loadingCount} onStart={(campaignData: any) => abrirCampanha(campaignData.id)} />}
         </div>
 
         {/* Footer: na revisão escondemos para evitar duplicidade com os CTAs internos */}
@@ -730,7 +835,16 @@ export default function DisparosPage() {
 function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [], setTargetContacts }: any) {
   const { user } = useAuth();
   const [previewSearch, setPreviewSearch] = useState("");
+  // [AUDITORIA] LÓGICA (achado real, `SPRINT_NOME_REAL_CONTATOS_GRUPO.md`): participante de grupo
+  // importado nasce com `nome = telefone` quando a Evolution não devolve nome de perfil (padrão
+  // documentado — endpoint hoje usado só devolve JID/admin, sem pushName). Contagem/filtro/edição
+  // aqui dão visibilidade e uma correção rápida pro operador, mesmo sem uma fonte automática de
+  // nome real disponível hoje (testado: `whatsapp_messages` não guarda o telefone do remetente
+  // individual em mensagem de grupo, só o JID do grupo — não dá pra cruzar por lá).
+  const [soSemNome, setSoSemNome] = useState(false);
+  const semNomeCount = targetContacts.filter((c: any) => c.nome && c.telefone && c.nome === c.telefone).length;
   const filteredPreview = targetContacts.filter((c: any) => {
+    if (soSemNome && !(c.nome && c.telefone && c.nome === c.telefone)) return false;
     if (!previewSearch.trim()) return true;
     const q = previewSearch.toLowerCase();
     return (c.nome || "").toLowerCase().includes(q) || (c.telefone || "").toLowerCase().includes(q);
@@ -749,6 +863,15 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
   const [totalContatos, setTotalContatos] = useState<number>(0);
   const [csvPreview, setCsvPreview] = useState<string[][]>([]);
   const [tagSearch, setTagSearch] = useState("");
+  // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): histórico de campanhas que já
+  // usaram cada lista — achado real do usuário ("ver por lista quais campanhas já usaram ela" +
+  // "avisar reenvio pra lista já usada"). Busca TODAS as campanhas do tenant (volume real é
+  // baixo, dezenas por conta — mesmo padrão já usado por `fetchTargets` pra tags/estágios/
+  // listas) e agrupa client-side por `listas_ids`, em vez de filtrar no banco por array-contains
+  // — o QueryBuilder deste projeto (`integrations/database/client.ts`) só suporta
+  // eq/in/gte/lte/gt/lt/ilike, sem operador de array, confirmado por leitura antes de tentar usar
+  // um que não existe.
+  const [campanhasPorLista, setCampanhasPorLista] = useState<Record<string, { total: number; ultima: { nome: string; created_at: string; status: string } }>>({});
 
   // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): mapa funil_estagio_id ->
   // {nome, cor} pra coluna "Situação no CRM" na prévia — mesma fonte (`estagios`, já buscada em
@@ -758,6 +881,28 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
     for (const e of estagios) mapa[e.id] = e;
     return mapa;
   }, [estagios]);
+
+  // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11 — pedido explícito do usuário:
+  // "avisar reenvio pra lista já usada"): olha as listas JÁ SELECIONADAS agora contra
+  // `campanhasPorLista` — status rascunho/cancelado não conta (nunca chegou a mandar mensagem de
+  // verdade). Aviso não-bloqueante de propósito (mesmo espírito do aviso de cooldown por contato
+  // já existente em StepReview) — reenviar pra uma lista recente às vezes é intencional; o
+  // cooldown por contato (backend, `get_next_disparo_batch`) já protege o envio duplicado de
+  // verdade, isso aqui é só visibilidade adiantada, antes do usuário chegar no Passo 4.
+  const listasRecentesReenviadas = useMemo(() => {
+    const cooldownMs = (Number(form.cooldown_horas) || 0) * 60 * 60 * 1000;
+    if (cooldownMs <= 0) return [];
+    return form.listas_selecionadas
+      .filter((id: string) => id !== "__all__")
+      .map((id: string) => {
+        const info = campanhasPorLista[id];
+        if (!info || info.ultima.status === 'rascunho' || info.ultima.status === 'cancelado') return null;
+        if (Date.now() - new Date(info.ultima.created_at).getTime() >= cooldownMs) return null;
+        const lista = listas.find(l => l.id === id);
+        return { nome: lista?.nome || id, ultima: info.ultima };
+      })
+      .filter(Boolean);
+  }, [form.listas_selecionadas, form.cooldown_horas, campanhasPorLista, listas]);
 
   // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): busca "última campanha"
   // só pros contatos REALMENTE VISÍVEIS na prévia (até 500, já limitado abaixo) — não pra
@@ -793,6 +938,31 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         })
       );
       setListasCounts(counts);
+    }
+
+    // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): agrega, por lista, quantas
+    // campanhas já a usaram e qual foi a mais recente — rascunho/cancelada não contam pro aviso
+    // de reenvio (nunca chegaram a mandar mensagem de verdade), mas contam pro contador
+    // informativo "usada em N campanhas" (o usuário pode querer ver até tentativa cancelada).
+    if (listasData && listasData.length) {
+      const { data: disparosData } = await api
+        .from("disparos")
+        .select("id, nome, status, created_at, listas_ids");
+      const agregado: Record<string, { total: number; ultima: { nome: string; created_at: string; status: string } }> = {};
+      for (const d of disparosData || []) {
+        for (const listaId of (d.listas_ids || [])) {
+          const atual = agregado[listaId];
+          if (!atual || new Date(d.created_at).getTime() > new Date(atual.ultima.created_at).getTime()) {
+            agregado[listaId] = {
+              total: (atual?.total || 0) + 1,
+              ultima: { nome: d.nome, created_at: d.created_at, status: d.status },
+            };
+          } else {
+            atual.total += 1;
+          }
+        }
+      }
+      setCampanhasPorLista(agregado);
     }
   };
 
@@ -909,6 +1079,31 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
       toast.success("Contato removido");
     } finally {
       setRemovendoContatoId(null);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (item 4, `SPRINT_NOME_REAL_CONTATOS_GRUPO.md`): edição inline do nome
+  // direto na prévia de seleção — corrige na hora quem ficou com telefone no lugar do nome (ex:
+  // participante de grupo importado sem pushName disponível), sem sair do fluxo de criação da
+  // campanha. `PATCH /api/contatos/:id` já existe (rota genérica `makeCrud`), só faltava a UI.
+  const [editandoNomeId, setEditandoNomeId] = useState<string | null>(null);
+  const [nomeEditado, setNomeEditado] = useState("");
+  const [salvandoNomeId, setSalvandoNomeId] = useState<string | null>(null);
+  const salvarNomeEditado = async (id: string) => {
+    const novoNome = nomeEditado.trim();
+    if (!novoNome) { toast.error("Nome não pode ficar vazio"); return; }
+    setSalvandoNomeId(id);
+    try {
+      const { error } = await api.from("contatos").update({ nome: novoNome }).eq("id", id);
+      if (error) {
+        toast.error("Erro ao salvar nome", { description: error.message });
+        return;
+      }
+      setTargetContacts((prev: any[]) => prev.map(c => c.id === id ? { ...c, nome: novoNome } : c));
+      setEditandoNomeId(null);
+      toast.success("Nome atualizado");
+    } finally {
+      setSalvandoNomeId(null);
     }
   };
 
@@ -1123,6 +1318,20 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         </TabsList>
 
         <TabsContent value="lista" className="p-4 border rounded-lg bg-card space-y-4">
+          {listasRecentesReenviadas.length > 0 && (
+            <div className="p-3 text-xs rounded-lg bg-amber-50 border border-amber-200 text-amber-700 dark:bg-amber-950/30 dark:border-amber-900 dark:text-amber-400">
+              <p className="font-semibold flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5" /> Lista já usada recentemente
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {listasRecentesReenviadas.map((r: any) => (
+                  <li key={r.nome}>
+                    "{r.nome}" foi alvo da campanha "{r.ultima.nome}" {formatRelativoPtBr(r.ultima.created_at)} — contatos que já receberam serão pulados automaticamente pelo cooldown de {form.cooldown_horas}h, os demais recebem normalmente.
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="flex items-center justify-between flex-wrap gap-2">
             <p className="text-sm font-medium">Selecione uma ou mais listas de leads:</p>
             <div className="flex items-center gap-2">
@@ -1214,7 +1423,17 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                       }}
                     />
                     <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: l.cor || "hsl(217 91% 45%)" }} />
-                    <span className="text-sm truncate">{l.nome}</span>
+                    <div className="min-w-0 flex flex-col">
+                      <span className="text-sm truncate">{l.nome}</span>
+                      {/* [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): visibilidade
+                          cedo (Passo 1, não só no resumo final do Passo 4) de que essa lista já
+                          foi alvo de campanha antes — pedido explícito do usuário. */}
+                      {campanhasPorLista[l.id] && (
+                        <span className="text-[10px] text-muted-foreground truncate">
+                          Usada em {campanhasPorLista[l.id].total} campanha{campanhasPorLista[l.id].total > 1 ? "s" : ""} — última: {formatRelativoPtBr(campanhasPorLista[l.id].ultima.created_at)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     <Badge variant="outline" className="text-[10px]">
@@ -1481,14 +1700,28 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
               <p className="text-sm font-medium">Contatos selecionados</p>
               <p className="text-xs text-muted-foreground">
                 {filteredPreview.length} de {targetContacts.length} {previewSearch ? "(filtrados)" : "totais"}
+                {semNomeCount > 0 && <span className="text-amber-600 dark:text-amber-500"> · {semNomeCount} sem nome identificado</span>}
               </p>
             </div>
-            <Input
-              placeholder="Buscar por nome ou telefone..."
-              value={previewSearch}
-              onChange={e => setPreviewSearch(e.target.value)}
-              className="h-8 max-w-xs"
-            />
+            <div className="flex items-center gap-2">
+              {semNomeCount > 0 && (
+                <Button
+                  type="button"
+                  variant={soSemNome ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setSoSemNome(v => !v)}
+                >
+                  {soSemNome ? "Mostrando só sem nome" : "Mostrar só sem nome"}
+                </Button>
+              )}
+              <Input
+                placeholder="Buscar por nome ou telefone..."
+                value={previewSearch}
+                onChange={e => setPreviewSearch(e.target.value)}
+                className="h-8 max-w-xs"
+              />
+            </div>
           </div>
           {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28): faltava overflow-x-auto — só a tabela
               de importação de CSV/XLSX do sistema sem essa proteção (achado na auditoria de
@@ -1518,7 +1751,43 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                   const statusEnvio = statusEnvioPorTelefone[chaveTelefone(c.telefone)];
                   return (
                     <tr key={c.id || c.telefone || i} className="border-t hover:bg-muted/30">
-                      <td className="px-3 py-1.5 truncate max-w-[200px]">{c.nome || "—"}</td>
+                      <td className="px-3 py-1.5 truncate max-w-[200px]">
+                        {editandoNomeId === c.id ? (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              autoFocus
+                              value={nomeEditado}
+                              onChange={e => setNomeEditado(e.target.value)}
+                              onKeyDown={e => { if (e.key === "Enter") salvarNomeEditado(c.id); if (e.key === "Escape") setEditandoNomeId(null); }}
+                              className="h-6 text-xs px-1.5"
+                            />
+                            <button
+                              type="button"
+                              title="Salvar"
+                              disabled={salvandoNomeId === c.id}
+                              onClick={() => salvarNomeEditado(c.id)}
+                              className="p-0.5 rounded hover:bg-primary/20 text-primary disabled:opacity-50 shrink-0"
+                            >
+                              {salvandoNomeId === c.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 group/nome">
+                            <span>{c.nome || "—"}</span>
+                            {c.nome && c.telefone && c.nome === c.telefone && (
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 text-amber-600 dark:text-amber-500 border-amber-600/40 shrink-0">sem nome</Badge>
+                            )}
+                            <button
+                              type="button"
+                              title="Editar nome"
+                              onClick={() => { setEditandoNomeId(c.id); setNomeEditado(c.nome === c.telefone ? "" : (c.nome || "")); }}
+                              className="p-0.5 rounded hover:bg-muted opacity-0 group-hover/nome:opacity-100 text-muted-foreground shrink-0"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-1.5 font-mono text-xs">{c.telefone || "—"}</td>
                       <td className="px-3 py-1.5">
                         {estagio ? (
@@ -2206,6 +2475,17 @@ function StepAntiBan({ form, setForm }: any) {
   const [apenasSaudaveis, setApenasSaudaveis] = useState(false);
   const LIMIAR_SAUDAVEL = 70;
   const LIMIAR_PADRAO = 40;
+  // [AUDITORIA] BUG CORRIGIDO (achado 2026-08-10 — usuário reportou disparo bloqueado por
+  // "score baixo" num número com score real 70/100): `(i.whatsapp_score || 0)` tratava
+  // `whatsapp_score === null` ("nunca calculado ainda" — cron de 15min ou primeira conexão,
+  // ver `instanceScore.ts`) exatamente como "score 0" (pior caso possível), bloqueando pra
+  // disparo qualquer instância recém-conectada só por falta de dado, não por sinal real de
+  // problema. `InstanceManagementPanel.tsx` já tinha esse mesmo cuidado (`naoCalculado`) —
+  // esta tela ficou pra trás na sprint anterior. [AUDITORIA] FIX APLICADO: `scoreCalculado`
+  // usa `score_updated_at` (preenchido só quando existe cálculo real) pra distinguir "nunca
+  // avaliado" de "avaliado e crítico"; só o segundo caso bloqueia.
+  const scoreCalculado = (i: any) => !!i.score_updated_at;
+  const scoreDe = (i: any) => i.whatsapp_score ?? 0;
 
   useEffect(() => {
     const fetchInstancias = async () => {
@@ -2234,7 +2514,7 @@ function StepAntiBan({ form, setForm }: any) {
   }, []);
 
   const instanciasVisiveis = apenasSaudaveis
-    ? instancias.filter(i => (i.whatsapp_score || 0) > LIMIAR_SAUDAVEL)
+    ? instancias.filter(i => scoreCalculado(i) && scoreDe(i) > LIMIAR_SAUDAVEL)
     : instancias;
 
   // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): cada perfil agora carrega
@@ -2270,7 +2550,9 @@ function StepAntiBan({ form, setForm }: any) {
               className="h-7 text-xs"
               onClick={() => {
                 const available = instancias
-                  .filter(i => apenasSaudaveis ? (i.whatsapp_score || 0) > LIMIAR_SAUDAVEL : (i.whatsapp_score || 0) >= LIMIAR_PADRAO)
+                  .filter(i => apenasSaudaveis
+                    ? (scoreCalculado(i) && scoreDe(i) > LIMIAR_SAUDAVEL)
+                    : (!scoreCalculado(i) || scoreDe(i) >= LIMIAR_PADRAO))
                   .map(i => i.id);
                 const allSelected = available.length > 0 && available.every(id => form.instancias_ids.includes(id));
                 setForm({ ...form, instancias_ids: allSelected ? [] : available });
@@ -2286,7 +2568,7 @@ function StepAntiBan({ form, setForm }: any) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           {instanciasVisiveis.map(inst => {
-            const isBlocked = (inst.whatsapp_score || 0) < LIMIAR_PADRAO;
+            const isBlocked = scoreCalculado(inst) && scoreDe(inst) < LIMIAR_PADRAO;
             return (
               <div key={inst.id} className={`flex items-center justify-between p-3 border rounded-lg ${isBlocked ? 'bg-red-50/50 dark:bg-red-950/10 border-red-200' : ''}`}>
                 <div className="flex items-center gap-3">
@@ -2309,7 +2591,7 @@ function StepAntiBan({ form, setForm }: any) {
                 </div>
                 <div className="text-right">
                   <Badge variant={isBlocked ? "destructive" : "outline"} className="text-[10px]">
-                    Score: {inst.whatsapp_score || 0}
+                    {scoreCalculado(inst) ? `Score: ${inst.whatsapp_score}` : "Ainda não avaliado"}
                   </Badge>
                   {isBlocked && <p className="text-[9px] text-red-500 font-bold mt-1 uppercase">Bloqueada</p>}
                 </div>
@@ -2473,6 +2755,29 @@ function StepAntiBan({ form, setForm }: any) {
             />
           </div>
         </Card>
+
+        {/* [AUDITORIA] LÓGICA (Sprint Variação de Imagem, 2026-08-25, pedido do usuário —
+            anti-fingerprint): só aparece pra campanha de imagem — documento/áudio não fazem
+            sentido pra essa técnica (reencode arriscaria corromper o arquivo). Opt-in, default
+            desligado (mesmo espírito de "Humanizar com IA" acima — não muda o comportamento de
+            ninguém sem decisão explícita). Perturbação é imperceptível (brilho <3% + reencode);
+            o objetivo é só mudar o hash do arquivo, não a aparência. */}
+        {form.tipo_midia === "imagem" && (
+          <Card className="p-4 space-y-3 border-primary/30 bg-primary/5">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="font-bold">Variar imagem a cada envio <span className="font-normal text-[10px] text-muted-foreground">(anti-fingerprint)</span></Label>
+                <p className="text-[11px] text-muted-foreground">
+                  Mandar o mesmo arquivo de imagem (mesmo hash) pra centenas/milhares de contatos é um sinal de spam usado pra bloquear números. Com isto ligado, cada envio recebe uma variação imperceptível (hash diferente, aparência idêntica) — sem custo de IA, quase instantâneo.
+                </p>
+              </div>
+              <Switch
+                checked={form.variar_imagem}
+                onCheckedChange={v => setForm({...form, variar_imagem: v})}
+              />
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   );
@@ -2574,6 +2879,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         limite_diario_mensagens: form.limite_diario_mensagens,
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
         humanizar_ia: form.humanizar_ia,
+        variar_imagem: form.tipo_midia === "imagem" ? form.variar_imagem : false,
         // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): gravado por
         // auditoria/reuso (mesmo espírito informativo de `mensagem_template`, não lido por
         // `disparoProcessor.ts` — a personalização já roda aqui embaixo, no `.map()` de
@@ -2595,6 +2901,19 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         // nunca faria de qualquer forma).
         delay_min_segundos: Math.round((Number(form.delay_min_minutos) || 0) * 60),
         delay_max_segundos: Math.round((Number(form.delay_max_minutos) || 0) * 60),
+        // [AUDITORIA] BUG CORRIGIDO (Sprint Estruturar Disparo, 2026-08-11): estas 3 colunas
+        // (mesmo espírito informativo de `mensagem_template`/`mensagens_variantes` acima, não
+        // lidas por `disparoProcessor.ts`) já existiam no schema pra `tags_selecionadas`/
+        // `estagios_selecionados`, mas NUNCA eram gravadas aqui — toda campanha nascia sem
+        // registro nenhum de qual tag/estágio/lista a originou, mesmo já existindo coluna pronta
+        // pra isso. `listas_ids` é nova (`migrations.ts`) — `"__all__"` (sentinela de "Todos os
+        // Leads", não é um UUID real de lista) filtrado antes de gravar, senão o INSERT falharia
+        // contra o tipo `UUID[]`. Habilita o badge "usada em N campanhas" por lista
+        // (`StepContacts`, aba "Por Lista") e o aviso de reenvio recente, os dois pedidos
+        // explicitamente pelo usuário nesta sprint.
+        tags_selecionadas: form.tags_selecionadas,
+        estagios_selecionados: form.estagios_selecionados,
+        listas_ids: form.listas_selecionadas.filter((id: string) => id !== "__all__"),
       };
 
 
@@ -2667,7 +2986,22 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         // nenhum `disparo_logs` correspondente, status preso em 'em_andamento'/'rascunho'.
         // Desfaz a criação da campanha nesse caso, pra falhar de forma limpa (usuário só vê
         // o erro e tenta de novo, sem lixo acumulando no banco a cada tentativa).
-        await api.from("disparos").delete().eq("id", campaignData.id).catch(() => {});
+        // [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, typecheck escopado): `.catch()` chamado
+        // direto no QueryBuilder — ele não é uma Promise de verdade (só thenable, ver
+        // `client.ts`), não tem método `.catch`. Isso lançava `TypeError: ...catch is not a
+        // function` TODA VEZ que este rollback rodava (ou seja, toda vez que o INSERT em
+        // `disparo_logs` falhava depois do de `disparos` já ter sido criado) — o DELETE de
+        // limpeza nunca chegava a executar (o erro estoura antes do `await` valer alguma coisa),
+        // e o erro real (`logsError`) virava um "api.from(...).catch is not a function" confuso
+        // no catch externo. Ou seja: a campanha órfã que este bloco existe pra evitar (achado
+        // 2026-08-06) continuava acontecendo, só que mascarada. [AUDITORIA] FIX APLICADO: try/catch
+        // de verdade em volta do rollback — best-effort, nunca deixa uma falha aqui esconder o
+        // `logsError` original lançado logo abaixo.
+        try {
+          await api.from("disparos").delete().eq("id", campaignData.id);
+        } catch {
+          // rollback é best-effort — se falhar, segue pro throw do erro original mesmo assim.
+        }
         throw logsError;
       }
 
@@ -2800,391 +3134,4 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
     </div>
   );
 }
-
-// [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08, item 3): editor de
-// configuração da campanha, só renderizado quando `status === 'pausado'` (ver `MonitoringDashboard`
-// abaixo). `disparoProcessor.ts` lê `perfil_velocidade`/`delay_min_segundos`/`delay_max_segundos`
-// (a cada mensagem, dentro do loop de envio) e `horario_inicio`/`horario_fim`/`pausa_fins_semana`/
-// `limite_diario_mensagens` (a cada troca de campanha dentro de um lote) DIRETO da tabela
-// `disparos`, sem cache de vida longa — confirmado por leitura do arquivo antes de implementar
-// (`instanciasDisponiveisHojeCache`, o único cache module-level relevante ali, guarda só a lista de
-// instâncias elegíveis pro teto diário, não estes campos). Um `PATCH disparos` aqui já tem efeito
-// real no próximo ciclo do motor, sem precisar de nada novo no backend — mesmo endpoint genérico
-// (`makeCrud`) já usado por `handleStatusChange`.
-// Estado inicializado com um lazy initializer (`useState(() => ...)`) — só roda no PRIMEIRO mount
-// deste componente. Como ele só é montado/desmontado quando `status` alterna de/pra 'pausado' (ver
-// render condicional abaixo), os polls de 3s de `MonitoringDashboard` (que trocam a prop `campaign`
-// a cada request) NUNCA sobrescrevem uma edição não salva do operador no meio do caminho.
-// Mensagem da campanha (`mensagem`/`mensagens_variantes`) DELIBERADAMENTE fora deste formulário —
-// decisão explícita do pedido: editar o texto exigiria re-resolver `disparo_logs.mensagem_enviada`
-// pendente por pendente (regenerar a personalização/variação já aplicada na criação), risco e
-// escopo maior — ver "O que NÃO fazer" do prompt desta sprint. Se o usuário quiser isso no futuro,
-// é sprint separada.
-function EditarConfiguracaoPausada({ campaign, onSaved }: { campaign: any; onSaved: (fields: any) => void }) {
-  const [editForm, setEditForm] = useState(() => ({
-    perfil_velocidade: campaign.perfil_velocidade || "safe",
-    delay_min_minutos: campaign.delay_min_segundos != null ? Number(campaign.delay_min_segundos) / 60 : 0.5,
-    delay_max_minutos: campaign.delay_max_segundos != null ? Number(campaign.delay_max_segundos) / 60 : 1,
-    horario_inicio: campaign.horario_inicio || "08:00",
-    horario_fim: campaign.horario_fim || "21:00",
-    limite_diario_mensagens: campaign.limite_diario_mensagens ?? 200,
-    pausa_fins_semana: campaign.pausa_fins_semana ?? true,
-  }));
-  const [salvando, setSalvando] = useState(false);
-
-  // Mesmo piso de segurança já usado no wizard (StepAntiBan) — reaproveitado aqui de propósito
-  // pra não deixar o operador configurar, editando uma campanha já em produção, um intervalo mais
-  // arriscado do que a tela de criação jamais permitiria.
-  const intervaloInvalido = editForm.delay_min_minutos < DELAY_MIN_ABSOLUTO_MINUTOS
-    || editForm.delay_max_minutos < DELAY_MIN_ABSOLUTO_MINUTOS
-    || editForm.delay_min_minutos > editForm.delay_max_minutos;
-
-  const salvar = async () => {
-    if (intervaloInvalido) {
-      toast.error("Corrija o intervalo de delay antes de salvar (mínimo não pode ser maior que o máximo, nem menor que o piso de segurança).");
-      return;
-    }
-    setSalvando(true);
-    const payload = {
-      perfil_velocidade: editForm.perfil_velocidade,
-      delay_min_segundos: Math.round(Number(editForm.delay_min_minutos) * 60),
-      delay_max_segundos: Math.round(Number(editForm.delay_max_minutos) * 60),
-      horario_inicio: editForm.horario_inicio,
-      horario_fim: editForm.horario_fim,
-      limite_diario_mensagens: Number(editForm.limite_diario_mensagens) || 200,
-      pausa_fins_semana: editForm.pausa_fins_semana,
-    };
-    const { error } = await api.from("disparos").update(payload).eq("id", campaign.id);
-    setSalvando(false);
-    if (error) {
-      toast.error("Erro ao salvar configuração: " + error.message);
-      return;
-    }
-    toast.success("Configuração atualizada — vale a partir do próximo envio.");
-    onSaved(payload);
-  };
-
-  return (
-    <Card className="p-4 space-y-4 border-primary/30">
-      <div className="flex items-center justify-between">
-        <Label className="font-bold flex items-center gap-2"><Settings2 className="h-4 w-4" /> Editar configuração (campanha pausada)</Label>
-        <Badge variant="outline" className="text-[10px]">Aplica no próximo envio, sem reiniciar a fila</Badge>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Perfil de velocidade</span>
-          <Select value={editForm.perfil_velocidade} onValueChange={v => setEditForm({ ...editForm, perfil_velocidade: v })}>
-            <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="safe">Seguro (30-60s)</SelectItem>
-              <SelectItem value="moderate">Moderado (15-30s)</SelectItem>
-              <SelectItem value="fast">Rápido (5-15s)</SelectItem>
-              <SelectItem value="ultra_safe">Ultra Seguro (8-12min)</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Intervalo mínimo (min)</span>
-          <Input type="number" step="0.1" min={DELAY_MIN_ABSOLUTO_MINUTOS} className="h-8"
-            value={editForm.delay_min_minutos}
-            onChange={e => setEditForm({ ...editForm, delay_min_minutos: parseFloat(e.target.value) })} />
-        </div>
-        <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Intervalo máximo (min)</span>
-          <Input type="number" step="0.1" min={DELAY_MIN_ABSOLUTO_MINUTOS} className="h-8"
-            value={editForm.delay_max_minutos}
-            onChange={e => setEditForm({ ...editForm, delay_max_minutos: parseFloat(e.target.value) })} />
-        </div>
-      </div>
-      {intervaloInvalido && (
-        <p className="text-[10px] text-destructive font-medium">
-          O mínimo não pode ser maior que o máximo, e nenhum dos dois pode ser menor que {DELAY_MIN_ABSOLUTO_MINUTOS.toFixed(2)} min (5s).
-        </p>
-      )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Início da janela</span>
-          <Input type="time" className="h-8" value={editForm.horario_inicio} onChange={e => setEditForm({ ...editForm, horario_inicio: e.target.value })} />
-        </div>
-        <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Fim da janela</span>
-          <Input type="time" className="h-8" value={editForm.horario_fim} onChange={e => setEditForm({ ...editForm, horario_fim: e.target.value })} />
-        </div>
-        <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Limite diário (mensagens)</span>
-          <Input type="number" min={1} className="h-8" value={editForm.limite_diario_mensagens} onChange={e => setEditForm({ ...editForm, limite_diario_mensagens: e.target.value })} />
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <span className="text-xs">Pausar nos fins de semana</span>
-        <Switch checked={editForm.pausa_fins_semana} onCheckedChange={v => setEditForm({ ...editForm, pausa_fins_semana: v })} />
-      </div>
-
-      <div className="flex justify-end">
-        <Button size="sm" onClick={salvar} disabled={salvando || intervaloInvalido}>
-          {salvando && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-          Salvar configuração
-        </Button>
-      </div>
-    </Card>
-  );
-}
-
-function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: () => void }) {
-  const [currentCampaign, setCurrentCampaign] = useState(campaign);
-  const [logs, setLogs] = useState<any[]>([]);
-
-  useEffect(() => {
-    const fetchProgress = async () => {
-      // 1. Atualizar dados da campanha
-      const { data: campaignData } = await api
-        .from("disparos")
-        .select("*")
-        .eq("id", campaign.id)
-        .single();
-      
-      if (campaignData) {
-        setCurrentCampaign(campaignData);
-      }
-
-      // 2. Buscar logs recentes
-      const { data: logsData } = await api
-        .from("disparo_logs")
-        .select("*")
-        .eq("disparo_id", campaign.id)
-        .order("created_at", { ascending: false })
-        .limit(20);
-      
-      if (logsData) {
-        setLogs(logsData);
-      }
-    };
-
-    fetchProgress();
-    const timer = setInterval(fetchProgress, 3000);
-    return () => clearInterval(timer);
-  }, [campaign.id]);
-
-  const stats = [
-    { label: "Enviados", val: currentCampaign.enviados || 0, total: currentCampaign.total_leads || 0, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10" },
-    { label: "Entregues", val: currentCampaign.entregues || 0, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10" },
-    { label: "Respondidos", val: currentCampaign.respondidos || 0, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10" },
-    { label: "Falhas", val: currentCampaign.falhas || 0, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
-  ];
-
-  const failureRate = currentCampaign.enviados > 0 ? (currentCampaign.falhas / (currentCampaign.enviados + currentCampaign.falhas)) * 100 : 0;
-
-  const handleStatusChange = async (newStatus: string) => {
-    const { error } = await api
-      .from("disparos")
-      .update({ status: newStatus })
-      .eq("id", campaign.id);
-
-    if (error) {
-      toast.error("Erro ao alterar status: " + error.message);
-    } else {
-      toast.success(`Campanha ${newStatus === 'pausado' ? 'pausada' : newStatus === 'em_andamento' ? 'retomada' : 'cancelada'}!`);
-      // [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08): atualiza o
-      // estado local na hora, em vez de esperar o próximo poll de 3s — o badge de status (e o
-      // formulário de edição condicionado a `status === 'pausado'`, logo abaixo) reagem
-      // imediatamente ao clique, sem lag visual.
-      setCurrentCampaign((prev: any) => ({ ...prev, status: newStatus }));
-      if (newStatus === 'cancelado') onCancel();
-    }
-  };
-
-  // [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08, item 4): remove
-  // um contato ainda `pending` da fila enquanto a campanha está em andamento/pausada. Usa
-  // PATCH status='cancelado' (não DELETE) — mesmo espírito do resto do sistema (cooldown/opt-out
-  // já usam status em vez de apagar linha, mantendo histórico auditável). `get_next_disparo_batch()`
-  // (migrations.ts) só enfileira `status = 'pending'`, então um log 'cancelado' nunca mais é
-  // processado — efeito imediato e seguro, confirmado por leitura do SQL antes de implementar.
-  // `disparos.total_leads` decrementado junto (2º PATCH, mesmo clique) pra o card "Enviados X/Y"
-  // continuar batendo com o que realisticamente ainda vai ser enviado — sem isso, a campanha
-  // nunca "fecharia" visualmente em 100% depois de uma remoção manual.
-  const [removendoId, setRemovendoId] = useState<string | null>(null);
-  const removerContatoPendente = async (log: any) => {
-    if (!confirm(`Remover ${log.nome || log.telefone} desta campanha? Esse contato não vai receber a mensagem.`)) return;
-    setRemovendoId(log.id);
-    try {
-      const novoTotal = Math.max(0, (Number(currentCampaign.total_leads) || 0) - 1);
-      const [{ error: errLog }, { error: errTotal }] = await Promise.all([
-        api.from("disparo_logs").update({ status: 'cancelado', erro: 'Removido manualmente pelo operador' }).eq("id", log.id),
-        api.from("disparos").update({ total_leads: novoTotal }).eq("id", campaign.id),
-      ]);
-      if (errLog || errTotal) throw new Error(errLog?.message || errTotal?.message);
-      setLogs(prev => prev.filter(l => l.id !== log.id));
-      setCurrentCampaign((prev: any) => ({ ...prev, total_leads: novoTotal }));
-      toast.success(`${log.nome || log.telefone} removido da campanha.`);
-    } catch (err: any) {
-      toast.error("Erro ao remover contato: " + err.message);
-    } finally {
-      setRemovendoId(null);
-    }
-  };
-
-  return (
-    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in zoom-in duration-300">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <Activity className="h-6 w-6 text-primary animate-pulse" />
-            Monitoramento: {currentCampaign.nome}
-          </h2>
-          <Badge className={`mt-1 ${currentCampaign.status === 'em_andamento' ? 'bg-emerald-500/20 text-emerald-600' : 'bg-yellow-500/20 text-yellow-600'}`}>
-            {currentCampaign.status.toUpperCase()}
-          </Badge>
-        </div>
-        <div className="flex gap-2">
-          {currentCampaign.status === 'em_andamento' ? (
-            <Button variant="outline" onClick={() => handleStatusChange('pausado')}><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
-          ) : (
-            <Button variant="outline" onClick={() => handleStatusChange('em_andamento')}><Play className="w-4 h-4 mr-2" /> Retomar</Button>
-          )}
-          <Button variant="destructive" onClick={() => handleStatusChange('cancelado')}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
-        </div>
-      </div>
-
-      {/* [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08, item 3): só
-          renderizado com a campanha pausada — editar velocidade/janela/limite/etc enquanto ela
-          está `em_andamento` seria editar algo que o motor pode estar lendo no exato meio de um
-          ciclo; pausar primeiro garante uma janela segura e previsível pra aplicar a mudança. */}
-      {currentCampaign.status === 'pausado' && (
-        <EditarConfiguracaoPausada
-          campaign={currentCampaign}
-          onSaved={(fields) => setCurrentCampaign((prev: any) => ({ ...prev, ...fields }))}
-        />
-      )}
-
-      {failureRate > 10 && (
-        <Alert variant={failureRate > 25 ? "destructive" : "default"} className={`animate-bounce ${failureRate <= 25 ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950/20' : ''}`}>
-          <AlertCircle className={`h-4 w-4 ${failureRate <= 25 ? 'text-yellow-500' : ''}`} />
-          <AlertTitle className={failureRate <= 25 ? 'text-yellow-600' : ''}>{failureRate > 25 ? "Pausa Automática Ativada" : "Taxa de Falha Elevada"}</AlertTitle>
-          <AlertDescription className={failureRate <= 25 ? 'text-yellow-600/80' : ''}>
-            {failureRate > 25 
-              ? "A campanha foi pausada automaticamente devido a uma taxa de erro superior a 25%." 
-              : "Detectamos que mais de 10% dos disparos estão falhando. Recomendamos revisar suas instâncias."}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade): 4 colunas
-          fixas espremiam os cards de estatística abaixo de ~768px; grid agora recolhe pra 2
-          colunas em telas pequenas/médias antes de abrir pra 4 em desktop. */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map(s => (
-          <Card key={s.label} className="p-5 border-none shadow-sm overflow-hidden relative group">
-            <div className={`absolute top-0 right-0 p-4 transition-transform group-hover:scale-110`}>
-              <s.icon className={`h-12 w-12 opacity-10 ${s.color}`} />
-            </div>
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">{s.label}</p>
-            <div className="flex items-baseline gap-1">
-              <span className={`text-3xl font-black ${s.color}`}>{s.val}</span>
-              {s.total !== null && <span className="text-sm text-muted-foreground font-bold">/ {s.total}</span>}
-            </div>
-            {s.total !== null && <Progress value={(s.val/s.total)*100} className={`h-1.5 mt-3 ${s.bg}`} />}
-            {s.label === "Respondidos" && s.val > 0 && (
-              <p className="text-[10px] text-purple-600 font-bold mt-2">
-                Conversão: {((s.val / currentCampaign.enviados) * 100).toFixed(1)}%
-              </p>
-            )}
-          </Card>
-        ))}
-      </div>
-
-      <Card className="border-none shadow-sm overflow-hidden">
-        <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
-          <h3 className="font-bold text-sm flex items-center gap-2"><TableIcon className="h-4 w-4" /> Log de Envios (Tempo Real)</h3>
-          <Badge variant="outline" className="text-[10px]">Atualizando a cada 3s</Badge>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/10">
-                <th className="p-3 text-left font-bold">Nome</th>
-                <th className="p-3 text-left font-bold">Número</th>
-                <th className="p-3 text-left font-bold">Status</th>
-                <th className="p-3 text-left font-bold">Erro</th>
-                <th className="p-3 text-left font-bold">Horário</th>
-                {/* [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08,
-                    item 4): coluna nova, só usada pra ação de remover contato ainda pending. */}
-                <th className="p-3 text-left font-bold w-10"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {logs.map((log, i) => (
-                <tr key={log.id} className="hover:bg-muted/5 transition-colors">
-                  <td className="p-3 font-medium">{log.nome || "Contato"}</td>
-                  <td className="p-3 text-xs font-mono">{log.telefone}</td>
-                  <td className="p-3">
-                    {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): sem um
-                        case explícito, 'cooldown' caía no fallback 'outline'/"Pendente" — enganoso,
-                        já que um log em cooldown nunca vai ser processado (não é "pendente" de
-                        verdade, foi bloqueado por design).
-                        [AUDITORIA] FIX APLICADO (Sprint Monitor de Disparo — Layout/Controle,
-                        2026-08-08): mesmo raciocínio pro status 'cancelado' (novo, item 4) — sem
-                        um case explícito cairia no fallback 'outline'/"Pendente", o que seria
-                        ativamente enganoso aqui (o operador acabou de remover o contato de
-                        propósito, ele nunca mais vai ser processado; rotular como "Pendente"
-                        sugeriria o oposto). */}
-                    <Badge variant={
-                      log.status === 'sent' ? 'secondary' :
-                      log.status === 'failed' ? 'destructive' :
-                      log.status === 'cooldown' ? 'outline' :
-                      log.status === 'cancelado' ? 'outline' :
-                      log.status === 'sending' ? 'default' : 'outline'
-                    } className={`text-[10px] px-2 py-0 ${log.status === 'cooldown' ? 'border-amber-500 text-amber-600' : ''} ${log.status === 'cancelado' ? 'border-muted-foreground/40 text-muted-foreground' : ''}`}>
-                      {log.status === 'sent' ? 'Enviado' :
-                       log.status === 'failed' ? 'Falha' :
-                       log.status === 'cooldown' ? 'Bloqueado (cooldown)' :
-                       log.status === 'cancelado' ? 'Removido' :
-                       log.status === 'sending' ? 'Enviando...' : 'Pendente'}
-                    </Badge>
-                  </td>
-                  <td className="p-3 text-xs text-red-500 max-w-[200px] truncate" title={log.erro}>
-                    {log.erro || "-"}
-                  </td>
-                  <td className="p-3 text-xs text-muted-foreground">
-                    {new Date(log.enviado_at || log.created_at).toLocaleTimeString()}
-                  </td>
-                  <td className="p-3">
-                    {/* [AUDITORIA] LÓGICA (Sprint Monitor de Disparo — Layout/Controle, 2026-08-08,
-                        item 4): remover só disponível pra 'pending' — nunca pra sending/sent/
-                        failed/cooldown/cancelado, que já são histórico real (pedido explícito do
-                        usuário, `get_next_disparo_batch()` só reprocessa 'pending' de qualquer
-                        forma, então remover um log que já saiu do estado pending não teria efeito
-                        nenhum no envio real, só confundiria o operador). */}
-                    {log.status === 'pending' && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                        disabled={removendoId === log.id}
-                        onClick={() => removerContatoPendente(log)}
-                        title="Remover contato desta campanha"
-                      >
-                        {removendoId === log.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {logs.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="p-8 text-center text-muted-foreground italic">
-                    Nenhum envio registrado ainda.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
 
