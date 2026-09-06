@@ -96,7 +96,13 @@ const STATUS_CONFIG: Record<Status, { label: string; className: string; icon: an
 };
 
 const AI_PROVIDERS = [
-  { slug: "openai",  label: "OpenAI",          icon: Bot,      modelos: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-3.5-turbo"] },
+  // [AUDITORIA] LÓGICA (pedido explícito do usuário, 2026-09-02: "veja as mais baratas... precisamos
+  // economizar ao máximo token"): gpt-5-nano ($0,05/$0,40 por 1M tokens) e gpt-5-mini ($0,25/$2,00)
+  // adicionados na frente — confirmados em 2+ fontes independentes de pricing (ver STATUS.md), mais
+  // baratos E mais novos que gpt-3.5-turbo (mantido no fim só por compatibilidade com quem já
+  // selecionou antes, sem motivo real pra escolher hoje). Preço de referência espelhado em
+  // `PRECO_POR_1M_TOKENS`, backend/src/utils/aiCusto.ts — mantenha os dois em sincronia se mexer aqui.
+  { slug: "openai",  label: "OpenAI",          icon: Bot,      modelos: ["gpt-5-nano", "gpt-4o-mini", "gpt-5-mini", "gpt-4o", "gpt-4.1", "gpt-3.5-turbo"] },
   { slug: "claude",  label: "Claude (Anthropic)", icon: Sparkles, modelos: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
   { slug: "gemini",  label: "Google Gemini",   icon: Zap,      modelos: ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"] },
 ] as const;

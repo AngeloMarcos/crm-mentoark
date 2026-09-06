@@ -68,6 +68,7 @@ import {
   fetchConnectionStatus,
   disconnectInstance,
   pollQr,
+  LogoutLoopError,
   type CreateInstanceResult,
 } from "@/services/evolutionService";
 
@@ -183,6 +184,41 @@ export function InstanceManagementPanel() {
   const [waitingQr, setWaitingQr] = useState(false); // Baileys ainda gerando QR
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [showForceBtn, setShowForceBtn] = useState(false);
+  // [AUDITORIA] LÓGICA (Sprint Circuit-Breaker LOGOUT, 2026-08-10): estado do cooldown quando o
+  // backend recusa reconectar (`LogoutLoopError`) — `until` é o epoch ms em que o backend
+  // considera a janela liberada; `cooldownSecondsLeft` só existe pra render (contagem regressiva
+  // visível), recalculado a cada segundo a partir de `until`, nunca decidido localmente. Se a
+  // aba ficar aberta além do cooldown, o próximo clique bate o backend de novo — que é quem
+  // continua sendo a fonte real da regra (o timer local é só UX, não segurança).
+  const [forceReconnectCooldown, setForceReconnectCooldown] = useState<{ until: number; total: number } | null>(null);
+  const [cooldownSecondsLeft, setCooldownSecondsLeft] = useState(0);
+  const [showForceConfirm, setShowForceConfirm] = useState(false);
+
+  useEffect(() => {
+    if (!forceReconnectCooldown) { setCooldownSecondsLeft(0); return; }
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((forceReconnectCooldown.until - Date.now()) / 1000));
+      setCooldownSecondsLeft(left);
+      if (left <= 0) setForceReconnectCooldown(null);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [forceReconnectCooldown]);
+
+  // [AUDITORIA] LÓGICA: handler comum pros 3 pontos que chamam createInstance() (Conectar nova
+  // instância, Reconectar existente, Forçar Reinicialização) — trata especificamente o bloqueio
+  // do circuit-breaker (mensagem + cooldown visível), devolve `true` quando tratou, pra quem
+  // chamou decidir se ainda precisa do fallback de erro genérico.
+  const tratarErroDeConexao = (err: any): boolean => {
+    if (err instanceof LogoutLoopError) {
+      setForceReconnectCooldown({ until: Date.now() + err.minutosRestantes * 60_000, total: err.totalRecente });
+      setErrorDetail(err.message);
+      toast.error(err.message, { duration: 8000 });
+      return true;
+    }
+    return false;
+  };
   // [AUDITORIA] BUG: pollQrLoop() e pollUntilConnected() (abaixo) usavam a variável de estado
   // (waitingQr / pollingConnect / showQrModal) diretamente na condição do `while`. Como essas
   // funções chamam `setWaitingQr(true)`/`setPollingConnect(true)` na própria primeira linha, a
@@ -235,6 +271,7 @@ export function InstanceManagementPanel() {
         toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
     } catch (err: any) {
+      if (tratarErroDeConexao(err)) return;
       const msg = err.message || "";
       if (msg.includes("401") || msg.includes("unauthorized")) {
         toast.error("Erro na Evolution API: API Key inválida ou expirada.");
@@ -313,9 +350,17 @@ export function InstanceManagementPanel() {
     toast.error("Tempo esgotado para gerar QR. Clique em 'Forçar Reinicialização' para tentar novamente.");
   };
 
+  // [AUDITORIA] FIX APLICADO (Sprint Circuit-Breaker LOGOUT, 2026-08-10): o botão não chama mais
+  // a reinicialização direto — abre um diálogo de confirmação explicando o risco real primeiro
+  // (achado do incidente: o botão aparecia sozinho depois de um erro/timeout, convidando a
+  // clicar de novo sem fricção nenhuma, e cada clique é literalmente um pareamento de aparelho
+  // novo pro WhatsApp). A ação de fato fica em `executeForceReconnect`, só chamada após confirmar.
+  const handleForceReconnect = () => setShowForceConfirm(true);
+
   // Deleta fisicamente a instância na Evolution e recria do zero — destrava casos em que o
   // Baileys mantém a instância presa em memória com o socket quebrado (loop de QR sem fim).
-  const handleForceReconnect = async () => {
+  const executeForceReconnect = async () => {
+    setShowForceConfirm(false);
     setConnecting(true);
     setErrorDetail(null);
     setShowForceBtn(false);
@@ -343,6 +388,7 @@ export function InstanceManagementPanel() {
         pollQrLoop(res.instancia || res.instanceName);
       }
     } catch (err: any) {
+      if (tratarErroDeConexao(err)) { setShowForceBtn(true); return; }
       setErrorDetail(`Falha na reinicialização forçada: ${err.message}`);
       setShowForceBtn(true);
       toast.error(`Falha na reinicialização forçada: ${err.message}`);
@@ -433,6 +479,7 @@ export function InstanceManagementPanel() {
         toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
     } catch (err: any) {
+      if (tratarErroDeConexao(err)) return;
       const msg = err.message || "";
       toast.error(`Falha ao reconectar: ${msg}`);
       setErrorDetail(msg || "Falha ao reconectar.");
@@ -1219,14 +1266,23 @@ export function InstanceManagementPanel() {
               )}
 
               {showForceBtn && (
-                <Button
-                  onClick={handleForceReconnect}
-                  disabled={connecting}
-                  className="w-full bg-amber-600 hover:bg-amber-700 text-white gap-2"
-                >
-                  {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  Forçar Reinicialização do QR Code
-                </Button>
+                <div className="space-y-1.5">
+                  <Button
+                    onClick={handleForceReconnect}
+                    disabled={connecting || cooldownSecondsLeft > 0}
+                    className="w-full bg-amber-600 hover:bg-amber-700 text-white gap-2"
+                  >
+                    {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    {cooldownSecondsLeft > 0
+                      ? `Aguarde ${Math.floor(cooldownSecondsLeft / 60)}:${String(cooldownSecondsLeft % 60).padStart(2, "0")}`
+                      : "Forçar Reinicialização do QR Code"}
+                  </Button>
+                  {cooldownSecondsLeft > 0 && (
+                    <p className="text-[11px] text-amber-600 text-center">
+                      {forceReconnectCooldown?.total} desconexões seguidas detectadas — bloqueado temporariamente pra não arriscar banir o número.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -1248,6 +1304,35 @@ export function InstanceManagementPanel() {
           os dois abriam juntos). Era um subconjunto funcional do que ficou (mesmos dois campos,
           mesmo startConnect), confirmado sem uso próprio antes da remoção.
         */}
+
+        {/* [AUDITORIA] LÓGICA (Sprint Circuit-Breaker LOGOUT, 2026-08-10): fricção real antes de
+            "Forçar Reinicialização" — achado do incidente Serenovlogs067 (e um segundo usuário
+            banido no mesmo dia) é que o botão convidava a clicar de novo sem nenhum aviso do
+            risco real. Diálogo explícito, sem atalho — confirmar tem que ser uma ação de
+            propósito, não um segundo clique reflexo. */}
+        <Dialog open={showForceConfirm} onOpenChange={setShowForceConfirm}>
+          <DialogContent className="sm:max-w-[440px]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-amber-600">
+                <AlertOctagon className="h-5 w-5" />
+                Forçar reinicialização?
+              </DialogTitle>
+              <DialogDescription className="pt-2 text-sm text-foreground/90 leading-relaxed">
+                Cada reinicialização forçada apaga a sessão atual e cria um <strong>pareamento de aparelho novo</strong> pro WhatsApp — como se você tivesse escaneado o QR Code do zero num celular diferente.
+                <br /><br />
+                Repetir isso várias vezes seguidas é exatamente o padrão que já derrubou e chegou a banir números reais desta conta. Só use se o QR realmente estiver travado — não como primeira tentativa.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowForceConfirm(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={executeForceReconnect} className="bg-amber-600 hover:bg-amber-700 text-white">
+                Sim, forçar reinicialização
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </TooltipProvider>
   );

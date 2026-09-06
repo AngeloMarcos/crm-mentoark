@@ -33,7 +33,10 @@ const STEPS = [
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
 const IDIOMAS = ["Português BR", "Português PT", "Espanhol", "Inglês"];
-const MODELOS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
+// [AUDITORIA] LÓGICA (pedido explícito do usuário, 2026-09-02: "veja as mais baratas...
+// economizar ao máximo token") — gpt-5-nano/gpt-5-mini adicionados, mesmas 2 opções novas de
+// Integracoes.tsx (ver comentário completo lá, com os preços de referência).
+const MODELOS = ["gpt-5-nano", "gpt-4o-mini", "gpt-5-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
 
 export function SetupAgente({ open, onClose, onConcluir, initialStep }: Props) {
   const { user } = useAuth();

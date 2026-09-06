@@ -7,10 +7,14 @@
  * lista de auditoria do WhatsApp porque opera sobre mensagens enviadas via Evolution API, mas é
  * um recurso do módulo de Disparos, não do chat em si.
  */
+import { Pool } from 'pg';
+import { criarProvider } from './providers/index';
 import { log } from '../logger';
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
-const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+// Exportado (não só local) pra `disparoProcessor.ts` registrar o custo com o modelo real usado,
+// em vez de arriscar hardcodar um valor que diverge de `OPENAI_MODEL` se essa env var mudar.
+export const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 // [AUDITORIA] LÓGICA: chave de cache é o texto-base da campanha (mesma mensagem, muitos
 // destinatários) — o cache reaproveita até 5 variações por campanha (70% de chance) para não
 // pagar uma chamada de IA por destinatário. O Map em si nunca remove chaves antigas (só limita o
@@ -31,34 +35,52 @@ REGRAS:
 - NÃO use formatação markdown (sem **, ##, etc).
 - Responda APENAS com o texto reescrito, sem aspas, sem explicações.`;
 
-// [AUDITORIA] LÓGICA: usa sempre process.env.OPENAI_API_KEY (chave global do servidor), nunca a
-// chave/provider configurado pelo usuário em ai_providers — diferente de agentEngine.ts, que
-// resolve provider por usuário (criarProvider) e permite OpenAI/Claude/Gemini. Não marquei como
-// bug porque pode ser intencional (custo de humanização de campanha centralizado na plataforma),
-// mas vale confirmar com o usuário se cada conta deveria usar sua própria chave/provider aqui também.
-// [AUDITORIA] FIX PENDENTE (motivo: decisão de produto): se a intenção for usar o provider do
-// usuário, precisa receber userId/pool como parâmetro e reusar criarProvider() de providers/index
-// — mudança de assinatura que afeta o único chamador (disparoProcessor.ts), fora do escopo desta
-// auditoria pontual.
-export async function humanizarMensagem(mensagemBase: string): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
+// [AUDITORIA] BUG (achado 2026-09-02, revisão de gastos de IA pedida pelo usuário antes de
+// reconectar a chave da OpenAI: "preciso que não ocorra mais os gastos absurdos de IA"): esta
+// função paga OpenAI de verdade (uma chamada por variação nova, ~30% das mensagens de campanha
+// depois do cache aquecer — nada desprezível numa campanha de milhares de contatos) mas nunca
+// devolvia os tokens usados pro chamador registrar em `ai_uso_diario` — só um `log.info` solto,
+// que não aparece em NENHUM dashboard. Mesmo padrão exato que deixou o gasto de mídia de grupo
+// invisível até o saldo zerar em 14/08 (ver AUDITORIA_LOG.md). [AUDITORIA] FIX APLICADO: retorno
+// muda de `string` pra `{ texto, tokensEntrada, tokensSaida }` — o chamador (`disparoProcessor.ts`)
+// agora registra o custo real via `registrarUsoIA()`, mesmo padrão já usado por Vision/Whisper.
+// [AUDITORIA] FIX APLICADO (achado 2026-09-02, mesma sessão, resposta explícita do usuário: "a
+// chave vai ficar só na conta da mentoark, cada usuário novo deverá ter sua chave"): antes,
+// SEMPRE usava `process.env.OPENAI_API_KEY` (chave global do servidor), pra qualquer conta,
+// mesmo quem já tivesse configurado a própria em `ai_providers` — cada campanha de disparo de
+// QUALQUER cliente consumia o saldo da Mentoark, nunca o próprio, mesmo já tendo chave cadastrada.
+// Agora resolve o provider do tenant primeiro (mesma função/tabela que `agentEngine.ts` já usa,
+// `criarProvider`/`ai_providers`) — só cai pro fallback global se o tenant não tiver provider
+// próprio configurado (aí sim, por decisão do usuário, é esperado consumir o saldo compartilhado).
+// Restrito a `providerSlug === 'openai'` de propósito: esta função é uma chamada crua ao endpoint
+// REST da OpenAI (`OPENAI_API_URL` abaixo), não a abstração `AIProvider` — um provider Claude
+// configurado aqui falharia (401, endpoint errado), então cai pro fallback global nesse caso
+// específico em vez de tentar e falhar sempre.
+export async function humanizarMensagem(
+  mensagemBase: string, pool: Pool, userId: string,
+): Promise<{ texto: string; tokensEntrada: number; tokensSaida: number; modelo: string }> {
+  const providerInfo = await criarProvider(pool, userId, null).catch(() => null);
+  const apiKey = (providerInfo?.providerSlug === 'openai' ? providerInfo.apiKey : null) || process.env.OPENAI_API_KEY;
+  const modelo = (providerInfo?.providerSlug === 'openai' ? providerInfo.modelo : null) || MODEL;
+  const semCusto = (texto: string) => ({ texto, tokensEntrada: 0, tokensSaida: 0, modelo });
 
   if (!apiKey) {
-    log.error('RASTREIO IA - ERRO', 'humanizarMensagem: OPENAI_API_KEY ausente no ambiente — retornando original');
-    return mensagemBase;
+    log.error('RASTREIO IA - ERRO', 'humanizarMensagem: nenhuma chave OpenAI disponível (nem provider do tenant, nem OPENAI_API_KEY do ambiente) — retornando original');
+    return semCusto(mensagemBase);
   }
-  if (!mensagemBase?.trim()) return mensagemBase;
+  if (!mensagemBase?.trim()) return semCusto(mensagemBase);
 
   const cacheKey = mensagemBase.trim().substring(0, 100);
   const variacoes = cache.get(cacheKey) || [];
 
   if (variacoes.length >= 5 && Math.random() < 0.7) {
-    return variacoes[Math.floor(Math.random() * variacoes.length)];
+    return semCusto(variacoes[Math.floor(Math.random() * variacoes.length)]);
   }
 
   // ── [RASTREIO IA] Log pré-chamada ──────────────────────────────────────────
   log.info('RASTREIO IA', 'Enviando para OpenAI (humanização)', {
-    modelo: MODEL,
+    modelo,
+    chaveDoTenant: providerInfo?.providerSlug === 'openai',
     apiKeyPreview: `OK (${apiKey.slice(0, 8)}...)`,
     systemPrompt: SYSTEM_PROMPT.slice(0, 100).replace(/\n/g, ' '),
     mensagemUsuario: mensagemBase.slice(0, 150),
@@ -78,7 +100,7 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
         authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: modelo,
         temperature: 0.9,
         max_tokens: 512,
         messages: [
@@ -98,7 +120,7 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
           : 'Erro no servidor OpenAI',
         detalhe: errText.slice(0, 200),
       });
-      return mensagemBase;
+      return semCusto(mensagemBase);
     }
 
     const data: any = await resp.json();
@@ -106,8 +128,11 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
 
     if (!texto) {
       log.warn('RASTREIO IA - ERRO', 'humanizarMensagem: resposta vazia da OpenAI — usando original');
-      return mensagemBase;
+      return semCusto(mensagemBase);
     }
+
+    const tokensEntrada = data?.usage?.prompt_tokens || 0;
+    const tokensSaida = data?.usage?.completion_tokens || 0;
 
     // ── [RASTREIO IA] Log pós-resposta ─────────────────────────────────────
     log.info('RASTREIO IA', 'Resposta OpenAI recebida (humanização)', {
@@ -119,13 +144,13 @@ export async function humanizarMensagem(mensagemBase: string): Promise<string> {
     if (variacoes.length > CACHE_MAX) variacoes.shift();
     cache.set(cacheKey, variacoes);
 
-    return texto;
+    return { texto, tokensEntrada, tokensSaida, modelo };
   } catch (err: any) {
     log.error('RASTREIO IA - ERRO', 'humanizarMensagem: exceção na chamada OpenAI', {
       tipo: err?.name ?? 'Error',
       err: err?.message,
       stack: err?.stack,
     });
-    return mensagemBase;
+    return semCusto(mensagemBase);
   }
 }

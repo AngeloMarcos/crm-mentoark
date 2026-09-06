@@ -12,6 +12,7 @@ import { Pool, PoolClient } from 'pg';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import type { MCPTool } from './mcp/tools';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
+import { registrarUsoIA, estimarCustoUsd, orcamentoDiarioExcedido } from '../utils/aiCusto';
 import { log } from '../logger';
 
 const COOLDOWN_MS = 2 * 60 * 1000;
@@ -65,16 +66,43 @@ export async function processarMensagemGrupoAutorizado(pool: Pool, p: ParamsGrup
     if (!permissaoRes.rows.length) return;
     const permissaoId = permissaoRes.rows[0].id;
 
+    // [AUDITORIA] LÓGICA: mesmo freio geral de `webhook.ts` (ver comentário completo em
+    // `orcamentoDiarioExcedido()`, aiCusto.ts) — este fluxo é isolado do motor de conversa
+    // (ver cabeçalho do arquivo), então precisa do próprio guard, não herda o de lá.
+    const orcamento = await orcamentoDiarioExcedido(pool);
+    if (orcamento.excedido) {
+      log.warn('GRUPO_TAREFA', 'Classificação pulada — orçamento diário de IA excedido', {
+        userId: p.userId, remoteJid: p.remoteJid, gastoHojeUsd: orcamento.gastoHojeUsd, limiteUsd: orcamento.limiteUsd,
+      });
+      return;
+    }
+
     const providerInfo = await criarProvider(pool, p.userId, null);
     const envKey = process.env.OPENAI_API_KEY || '';
     const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
     const modelo = providerInfo?.modelo || 'gpt-4o-mini';
+    const providerSlug = providerInfo?.providerSlug || 'openai';
 
     const mensagens: AIMessage[] = [{ role: 'user', content: texto }];
     const resp = await provider.complete(mensagens, SYSTEM_PROMPT, [CRIAR_TAREFA_GRUPO_TOOL], {
       model: modelo,
       temperature: 0.2,
       maxTokens: 300,
+    });
+
+    // [AUDITORIA] BUG (achado 2026-09-02, revisão de gastos de IA pedida pelo usuário antes de
+    // reconectar a chave da OpenAI: "preciso que não ocorra mais os gastos absurdos de IA"): esta
+    // chamada de LLM paga de verdade (classifica TODA mensagem de grupo autorizado, não só as que
+    // viram tarefa) mas nunca gravava em `ai_uso_diario` — exatamente o mesmo padrão que deixou o
+    // gasto de mídia de grupo invisível até o saldo zerar em 14/08 (ver AUDITORIA_LOG.md). Gate
+    // (`grupos_ia_permitidos=0` linhas ativas, confirmado em produção nesta auditoria) mantém isso
+    // inofensivo enquanto nenhum grupo for autorizado — mas o dashboard de custo (`GET
+    // /api/ai/uso/resumo`) precisa enxergar este gasto no momento em que alguém autorizar o
+    // primeiro grupo, não descobrir por acaso meses depois.
+    await registrarUsoIA(pool, {
+      userId: p.userId, providerSlug, modelo,
+      tokensEntrada: resp.inputTokens || 0, tokensSaida: resp.outputTokens || 0,
+      custoUsd: estimarCustoUsd(modelo, resp.inputTokens || 0, resp.outputTokens || 0),
     });
 
     // [AUDITORIA] LÓGICA: log da decisão em todo caso (não só quando cria tarefa) — sem isso,

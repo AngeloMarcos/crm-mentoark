@@ -1,12 +1,17 @@
 import { log } from '../logger';
 
+export interface ResultadoEmbedding {
+  embedding: number[];
+  tokensEntrada: number;
+}
+
 // [AUDITORIA] LÓGICA: Gera um vetor via text-embedding-3-large da OpenAI, truncado para 1536
 // dimensões pelo parâmetro `dimensions` (suporte nativo da OpenAI a embeddings Matryoshka) —
 // a coluna real (documents.embedding) é vector(1536), não vector(3072) (confirmado contra
 // crm_hml). Mantém o modelo mais moderno pedido, só ajusta a dimensão de saída pro schema
 // existente em vez de migrar a coluna.
 // Implementa AbortController para evitar requisições penduradas infinitamente caso a OpenAI fique lenta.
-export async function gerarEmbedding(text: string, apiKey: string): Promise<number[] | null> {
+export async function gerarEmbedding(text: string, apiKey: string): Promise<ResultadoEmbedding | null> {
   const url = 'https://api.openai.com/v1/embeddings';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000); // Timeout de 8 segundos
@@ -33,7 +38,12 @@ export async function gerarEmbedding(text: string, apiKey: string): Promise<numb
     }
 
     const json: any = await res.json().catch(() => ({}));
-    return json?.data?.[0]?.embedding || null;
+    const embedding = json?.data?.[0]?.embedding;
+    if (!embedding) return null;
+    // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): `usage.total_tokens`
+    // sempre veio na resposta e sempre foi descartado — sem isso não dava pra calcular custo_usd
+    // nenhum pra essas chamadas (embeddings nunca apareciam no dashboard de custo).
+    return { embedding, tokensEntrada: Number(json?.usage?.total_tokens) || 0 };
   } catch (err: any) {
     log.error('EMBEDDINGS', 'Erro de rede/timeout ao gerar embedding', { err: err.message });
     return null;

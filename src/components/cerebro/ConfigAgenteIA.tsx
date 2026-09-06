@@ -268,8 +268,13 @@ export function ConfigAgenteIA() {
                     <Select value={config.modelo_llm} onValueChange={(v) => update("modelo_llm", v)}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="gpt-4o">gpt-4o</SelectItem>
+                        {/* [AUDITORIA] LÓGICA (pedido explícito do usuário, 2026-09-02: "veja as
+                            mais baratas... economizar ao máximo token") — mesmas 2 opções novas
+                            adicionadas em Integracoes.tsx, ver comentário completo lá. */}
+                        <SelectItem value="gpt-5-nano">gpt-5-nano (mais barato)</SelectItem>
                         <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
+                        <SelectItem value="gpt-5-mini">gpt-5-mini</SelectItem>
+                        <SelectItem value="gpt-4o">gpt-4o</SelectItem>
                         <SelectItem value="gpt-4-turbo">gpt-4-turbo</SelectItem>
                         <SelectItem value="gpt-3.5-turbo">gpt-3.5-turbo</SelectItem>
                       </SelectContent>
