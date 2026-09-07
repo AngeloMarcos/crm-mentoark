@@ -1,5 +1,21 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-09-07 — 🆕 Estrutura base da API Oficial do WhatsApp (Meta Cloud API) — em HOMOLOG
+
+Pedido explícito do usuário: "vamos preparar para começar a estruturar a api oficial". Pesquisado antes de codar: WhatsApp Business Platform (Cloud API) da Meta — WABA, Phone Number ID, System User Access Token permanente, App Secret pra assinatura HMAC-SHA256 do webhook (`X-Hub-Signature-256`), handshake de verificação (`hub.mode`/`hub.verify_token`/`hub.challenge`), endpoints versionados da Graph API. Confirmado com o usuário antes de definir escopo: já tem Business Manager/WABA configurado; a API oficial fica **restrita a conversas 1:1 com clientes** — grupos continuam 100% na Evolution/Baileys, porque a API de Grupos da Meta é incompatível com os grupos de comunidade já existentes (máx. 8 participantes, exige Official Business Account, só grupos criados pela própria empresa).
+
+**Implementado** (commit `68a39c2`):
+- `whatsapp_oficial_config` (tabela nova, `migrations.ts`) — segredos criptografados (`access_token_enc`/`app_secret_enc`, mesmo padrão AES-256-CBC de `ai_providers.api_key_enc`), `verify_token` próprio por config.
+- `services/metaCloudApi.ts` — encriptar/decriptar segredo, `testarConexaoMetaOficial` (GET leve na Graph API), `enviarTextoMetaOficial`, `verificarAssinaturaWebhook`.
+- `routes/metaOficial.ts` — `GET`/`PUT /api/meta-oficial/config` (autenticado; GET nunca reexibe segredo salvo, só booleano `temAccessToken`/`temAppSecret`) + `POST /testar`.
+- `routes/metaWebhook.ts` — `GET`/`POST /webhook/meta/:configId` (rota pública, mesmo padrão de `webhook.ts` da Evolution) — handshake de verificação + recepção de mensagem assinada, grava em `whatsapp_messages` com `instance_name = 'meta_oficial:<phone_number_id>'` (nunca colide com nome de instância Evolution).
+- `index.ts` — captura `req.rawBody` (`express.json({verify})`, necessário pra validar assinatura do webhook) e monta as duas rotas novas.
+- `Integracoes.tsx` — card "WhatsApp API Oficial (Meta)" com badge Beta.
+
+**Fase atual — só recebe, ainda não responde**: `metaWebhook.ts` grava a mensagem recebida mas NÃO chama `agentEngine.ts`. Conectar este canal ao motor de IA exige abstrair o envio por trás de uma interface comum (hoje `enviarResposta`/`enviarRespostaVoz` só sabem falar com a Evolution) — decisão de deixar pra próxima fase, só depois de validar com credenciais reais do usuário que o recebimento básico funciona.
+
+Build (`swc` + `vite build`) limpo. Deployado e validado em homolog (health 200, sem erro nos logs; tabela `whatsapp_oficial_config` confirmada em `crm_hml`). **Pendente:** credenciais reais da Meta (Phone Number ID, WABA ID, Access Token, App Secret) pra testar conexão de verdade — tela existe mas está inerte sem elas. Deploy em produção não feito (aguardando validação real primeiro, mesmo padrão de toda sprint anterior).
+
 ## Sessão 2026-09-02 — 🆕 Revisão de gastos de IA antes de reconectar a chave da OpenAI: 3 vazamentos invisíveis fechados + freio geral novo — em PRODUÇÃO
 
 Pedido explícito do usuário: "vou conectar a api do chat gpt novamente e preciso que não ocorra mais os gastos absurdos de ia". Levantamento antes de mexer: gasto real dos últimos 30 dias em produção é **$0,11** (praticamente zero — número principal desconectado desde 24/08, sem tráfego real), `grupos_ia_permitidos` com 0 linhas ativas (gate de 14/08 intacto), `documents` (RAG) ainda vazia (gate do `buscar_documentos` intacto), **0 contas com provider OpenAI próprio** (todo mundo ainda consome da mesma chave/saldo compartilhado — `OPENAI_API_KEY` do servidor).
