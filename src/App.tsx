@@ -10,6 +10,7 @@ import LoginPage from "./pages/Login";
 import RegisterPage from "./pages/Register";
 import TermsPage from "./pages/Terms";
 import PrivacyPage from "./pages/Privacy";
+import ExclusaoDadosPage from "./pages/ExclusaoDados";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
 import ExportarDadosPage from "./pages/ExportarDados";
@@ -74,6 +75,7 @@ const App = () => (
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/termos" element={<TermsPage />} />
               <Route path="/privacidade" element={<PrivacyPage />} />
+              <Route path="/exclusao-de-dados" element={<ExclusaoDadosPage />} />
               <Route path="/convite/:token" element={<AceitarConvitePage />} />
 
               <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
