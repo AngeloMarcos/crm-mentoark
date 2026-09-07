@@ -68,6 +68,8 @@ import kanbanRouter, { kanbanWebhookN8n } from './routes/kanban';
 import funisRouter from './routes/funis';
 import conversasRouter from './routes/conversas';
 import { testarAgentePlayground } from './services/agentEngine';
+import metaOficialRouter from './routes/metaOficial';
+import metaWebhookRouter from './routes/metaWebhook';
 import aiProvidersRouter from './routes/ai-providers';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
@@ -135,7 +137,13 @@ app.use(cors({
 // Evolution tentou reenviar 10x, todas falharam com PayloadTooLargeError, e o evento foi
 // perdido de vez (sem retry futuro) — sintoma reportado: "instância conectada mas não
 // atualiza mensagens". Ver diagnosticos/AUDITORIA_LOG.md. Elevado para 50mb.
-app.use(express.json({ limit: '50mb' }));
+// [AUDITORIA] LÓGICA (Sprint Estruturar API Oficial, 2026-09-06): `verify` guarda o corpo CRU
+// (Buffer, antes do parse) em `req.rawBody` — necessário só pro webhook da Meta Cloud API
+// (routes/metaWebhook.ts), que assina o corpo com HMAC-SHA256 (`X-Hub-Signature-256`); validar
+// a assinatura contra o JSON re-serializado por `JSON.stringify(req.body)` falharia às vezes
+// (ordem de chave/espaço em branco podem diferir do que a Meta mandou de verdade). Não muda nada
+// pra nenhuma outra rota — só guarda uma referência a mais ao buffer já lido, sem custo real.
+app.use(express.json({ limit: '50mb', verify: (req: any, _res, buf) => { req.rawBody = buf; } }));
 
 // ── Servir imagens de upload com log de auditoria ──────────────────────────
 app.use('/uploads', (req, res, next) => {
@@ -154,6 +162,11 @@ const marketing = marketingRouter(pool);
 app.use('/auth', authRouter);
 app.use('/auth', teamInvitePublicRouter(pool)); // /auth/invite/:token + /auth/accept-invite
 app.use('/webhook', webhookRouter(pool));
+// [AUDITORIA] LÓGICA (Sprint Estruturar API Oficial, 2026-09-06): montado ANTES do
+// `app.use('/api', authMiddleware)` abaixo, mesmo padrão do webhookRouter da Evolution logo
+// acima — a Meta chama esta URL diretamente, sem JWT nosso; segurança real é o handshake de
+// verificação (GET) + assinatura HMAC (POST), ver routes/metaWebhook.ts.
+app.use('/webhook/meta', metaWebhookRouter(pool));
 // ── MCP com CORS específico para n8n Cloud ─────────────────────────────────
 app.use('/mcp', (req, res, next) => {
   const mcpOrigins = (process.env.MCP_ALLOWED_ORIGINS || 'https://fierceparrot-n8n.cloudfy.live')
@@ -444,6 +457,7 @@ app.use('/api/kanban', kanbanRouter(pool));
 app.use('/api/funis', funisRouter(pool));
 app.use('/api/conversas', conversasRouter(pool));
 app.use('/api/ai-providers', aiProvidersRouter(pool));
+app.use('/api/meta-oficial', metaOficialRouter(pool));
 app.use('/api/ai', aiUsoRouter(pool));
 app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));

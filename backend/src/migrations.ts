@@ -2162,5 +2162,40 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'link_previews_cache OK');
 
+  // ── WhatsApp API Oficial (Meta Cloud API) — Sprint Estruturar API Oficial, 2026-09-06,
+  // pedido explícito do usuário: "vamos preparar para começar a estruturar a api oficial" ─────
+  // [AUDITORIA] LÓGICA: canal NOVO, paralelo à Evolution — não substitui ela. Pesquisa feita
+  // antes de implementar (ver conversa/commit): a Groups API oficial da Meta só serve pra grupo
+  // CRIADO pela própria empresa via API (máximo 8 participantes, exige "Official Business
+  // Account") — não tem equivalente pra entrar/gerenciar grupo comunitário grande já existente
+  // (o que este CRM já faz via Evolution, ver Sprint Grupos Entrar/Sair). Por decisão do usuário,
+  // este canal fica escopado só pra conversa 1:1 com cliente; grupo continua 100% Evolution.
+  // `access_token_enc`/`app_secret_enc` seguem o MESMO esquema de criptografia já usado em
+  // `ai_providers.api_key_enc` (AES-256-CBC, `ENCRYPTION_KEY` do .env) — nenhum segredo novo
+  // inventado. `verify_token` NÃO é segredo da Meta, é um valor que ESTE sistema gera e o
+  // operador cola no dashboard da Meta pra provar a ele mesmo (handshake do GET /webhook) — por
+  // isso fica em texto plano, sem necessidade de criptografia.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_oficial_config (
+      id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id            UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      numero_exibicao    TEXT,
+      phone_number_id    TEXT,
+      waba_id            TEXT,
+      access_token_enc   TEXT,
+      app_secret_enc     TEXT,
+      verify_token       TEXT NOT NULL DEFAULT encode(gen_random_bytes(16), 'hex'),
+      graph_api_version  TEXT NOT NULL DEFAULT 'v21.0',
+      ativo              BOOLEAN NOT NULL DEFAULT false,
+      ultima_conexao_em  TIMESTAMPTZ,
+      ultimo_erro        TEXT,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(user_id)
+    )
+  `).catch(() => {});
+
+  log.info('MIGRATIONS', 'whatsapp_oficial_config (Meta Cloud API) OK');
+
   log.info('MIGRATIONS', 'OK');
 }
