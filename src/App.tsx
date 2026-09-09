@@ -56,6 +56,7 @@ import CargosPage from "./pages/Cargos";
 import FirewallPage from "./pages/admin/Firewall";
 import CopilotoPage from "./pages/admin/Copiloto";
 import DiagnosticoWhatsApp from "./pages/admin/DiagnosticoWhatsApp";
+import StyleLabPage from "./pages/StyleLab";
 
 
 
@@ -77,6 +78,7 @@ const App = () => (
               <Route path="/privacidade" element={<PrivacyPage />} />
               <Route path="/exclusao-de-dados" element={<ExclusaoDadosPage />} />
               <Route path="/convite/:token" element={<AceitarConvitePage />} />
+              <Route path="/style-lab" element={<StyleLabPage />} />
 
               <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
               <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />

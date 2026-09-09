@@ -38,6 +38,7 @@ export default function WhatsAppPage() {
 
   return (
     <CRMLayout>
+      <div className="surface-whatsapp">
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
         <TabsList className="mb-4">
           <TabsTrigger value="conversas" className="gap-2">
@@ -66,6 +67,7 @@ export default function WhatsAppPage() {
           <TesteInstancias />
         </TabsContent>
       </Tabs>
+      </div>
     </CRMLayout>
   );
 }

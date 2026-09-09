@@ -1465,6 +1465,16 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE agentes       ADD COLUMN IF NOT EXISTS linked_agent_id   UUID`).catch(() => {});
   await pool.query(`ALTER TABLE agent_prompts ADD COLUMN IF NOT EXISTS updated_at        TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
 
+  // ── Config da instância (painel "Configurações" em InstanceManagementPanel) ──
+  // A UI já enviava estas colunas no payload de `agentes.update`, mas a migração nunca
+  // foi escrita — `update` quebrava com `column "fallback_owner" ... does not exist`.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS fallback_owner  TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS filial          TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS reject_calls    BOOLEAN`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ignore_groups   BOOLEAN`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS auto_read       BOOLEAN`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS show_signature  BOOLEAN`).catch(() => {});
+
   // ── Score de Saúde do número WhatsApp ────────────────────────────────────────
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS score_updated_at  TIMESTAMPTZ`).catch(() => {});
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS health_score       INT DEFAULT 100`).catch(() => {});

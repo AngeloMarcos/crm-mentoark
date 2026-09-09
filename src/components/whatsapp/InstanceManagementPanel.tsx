@@ -24,6 +24,14 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from "@/components/ui/sheet";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -962,17 +970,22 @@ export function InstanceManagementPanel() {
         </div>
 
 
-        {/* Modal de configuração */}
-        <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-          <DialogContent className="sm:max-w-[560px]">
-            <DialogHeader>
-              <DialogTitle>Configurar Instância</DialogTitle>
-              <DialogDescription>
+        {/* Painel lateral de configuração */}
+        <Sheet open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+          <SheetContent
+            side="right"
+            onInteractOutside={(e) => e.preventDefault()}
+            className="w-full sm:max-w-xl flex flex-col gap-0 p-0"
+          >
+            <SheetHeader className="border-b p-6 pb-4 text-left">
+              <SheetTitle>Configurar Instância</SheetTitle>
+              <SheetDescription>
                 Ajuste comportamento e automação do número conectado.
-              </DialogDescription>
-            </DialogHeader>
+              </SheetDescription>
+            </SheetHeader>
 
             {editing && (
+              <div className="flex-1 overflow-y-auto p-6">
               <Tabs defaultValue="geral" className="w-full">
                 <TabsList className="grid grid-cols-3 w-full">
                   <TabsTrigger value="geral">Geral</TabsTrigger>
@@ -1101,9 +1114,10 @@ export function InstanceManagementPanel() {
                   </div>
                 </TabsContent>
               </Tabs>
+              </div>
             )}
 
-            <DialogFooter>
+            <SheetFooter className="border-t bg-muted/30 p-6 pt-4 !flex-row !justify-end !space-x-2">
               <Button variant="outline" onClick={() => setEditing(null)} disabled={saving}>
                 Cancelar
               </Button>
@@ -1111,9 +1125,9 @@ export function InstanceManagementPanel() {
                 {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Salvar
               </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
 
         {/* ─── Modal: Conectar nova instância ─── */}
         <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>

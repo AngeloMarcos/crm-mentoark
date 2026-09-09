@@ -2552,7 +2552,7 @@ export function WhatsAppInterface() {
   // Nenhuma das opções é "trocar uma classe" — todas mudam comportamento de navegação percebido
   // pelo usuário, por isso não implementadas sem confirmação.
   return (
-    <div className="flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border shadow-xl bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
+    <div className="wa-panel flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
 
       {/* ── LEFT: Conversation List ── */}
       {/* [AUDITORIA] FIX APLICADO (Achado 3 — responsividade, achado 2026-07-27, implementado

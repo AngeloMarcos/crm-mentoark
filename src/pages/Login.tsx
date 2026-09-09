@@ -183,14 +183,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#1e1e2d] p-0 overflow-hidden">
+    <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0a0705] via-[#160f0a] to-[#0a0705] p-0 overflow-hidden">
       {/* Particles Background */}
       <ParticlesBackground showContrastToggle />
       
       {/* Ambient glow effects */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-32 -left-32 w-[40rem] h-[40rem] rounded-full bg-purple-600/20 blur-[96px] animate-pulse" />
-        <div className="absolute -bottom-40 -right-32 w-[40rem] h-[40rem] rounded-full bg-blue-600/20 blur-[96px] animate-pulse" style={{ animationDelay: '2s' }} />
+        <div className="absolute -top-32 -left-32 w-[40rem] h-[40rem] rounded-full bg-primary/20 blur-[96px] animate-pulse" />
+        <div className="absolute -bottom-40 -right-32 w-[40rem] h-[40rem] rounded-full bg-accent/20 blur-[96px] animate-pulse" style={{ animationDelay: '2s' }} />
       </div>
 
       <div className="relative z-10 flex w-full h-full min-h-screen">
@@ -199,7 +199,7 @@ export default function LoginPage() {
           <div className="w-full max-w-md space-y-6 animate-fade-in">
             <div className="text-center space-y-3 mb-8 lg:hidden">
               <div className="relative mx-auto w-fit">
-                <div className="relative p-1 bg-gradient-to-tr from-purple-500 to-blue-500 rounded-2xl animate-breathe shadow-2xl">
+                <div className="relative p-1 bg-gradient-to-tr from-primary to-accent rounded-2xl animate-breathe shadow-2xl">
                   <img src={logo} alt="MentoArk" className="w-16 h-16 rounded-xl object-cover bg-[#1e1e2d]" />
                 </div>
               </div>
@@ -214,7 +214,7 @@ export default function LoginPage() {
                 <CardTitle className="text-2xl font-bold text-white">
                   {isLogin ? "Bem-vindo" : "Criar Conta"}
                 </CardTitle>
-                <CardDescription className="text-blue-100/60">
+                <CardDescription className="text-white/60">
                   {isLogin ? "Acesse sua conta para continuar" : "Preencha os dados para se cadastrar"}
                 </CardDescription>
               </CardHeader>
@@ -228,7 +228,7 @@ export default function LoginPage() {
                         value={displayName} 
                         onChange={(e) => setDisplayName(e.target.value)} 
                         placeholder="Seu nome"
-                        className="bg-white/5 border-white/10 text-white placeholder:text-white/20 focus:ring-purple-500"
+                        className="bg-white/5 border-white/10 text-white placeholder:text-white/20 focus:ring-primary"
                       />
                     </div>
                   )}
@@ -241,7 +241,7 @@ export default function LoginPage() {
                       value={email} 
                       onChange={(e) => setEmail(e.target.value)} 
                       required 
-                      className="bg-white/5 border-white/10 text-white placeholder:text-white/20 focus:ring-purple-500"
+                      className="bg-white/5 border-white/10 text-white placeholder:text-white/20 focus:ring-primary"
                     />
                   </div>
                   <div className="space-y-2">
@@ -251,7 +251,7 @@ export default function LoginPage() {
                         <button 
                           type="button" 
                           onClick={handleForgotPassword}
-                          className="text-xs text-purple-300 hover:text-white hover:underline transition-colors"
+                          className="text-xs text-primary hover:text-white hover:underline transition-colors"
                         >
                           Esqueci minha senha
                         </button>
@@ -266,7 +266,7 @@ export default function LoginPage() {
                         onChange={(e) => setPassword(e.target.value)} 
                         required 
                         minLength={6}
-                        className="bg-white/5 border-white/10 text-white placeholder:text-white/20 focus:ring-purple-500"
+                        className="bg-white/5 border-white/10 text-white placeholder:text-white/20 focus:ring-primary"
                       />
                       <Button 
                         type="button" 
@@ -284,16 +284,16 @@ export default function LoginPage() {
                       id="terms" 
                       checked={acceptedTerms} 
                       onCheckedChange={(checked) => setAcceptedTerms(checked as boolean)}
-                      className="border-white/20 data-[state=checked]:bg-purple-600 data-[state=checked]:border-purple-600 mt-1"
+                      className="border-white/20 data-[state=checked]:bg-primary data-[state=checked]:border-primary mt-1"
                     />
                     <Label 
                       htmlFor="terms" 
                       className="text-xs text-white/60 leading-tight cursor-pointer select-none"
                     >
                       Eu li e concordo com os{" "}
-                      <Link to="/termos" className="text-purple-400 hover:underline">Termos de Uso</Link>
+                      <Link to="/termos" className="text-primary hover:underline">Termos de Uso</Link>
                       {" "}e a{" "}
-                      <Link to="/privacidade" className="text-purple-400 hover:underline">Política de Privacidade</Link>.
+                      <Link to="/privacidade" className="text-primary hover:underline">Política de Privacidade</Link>.
                     </Label>
                   </div>
 
@@ -316,7 +316,7 @@ export default function LoginPage() {
 
                   <Button 
                     type="submit" 
-                    className="w-full gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white border-none shadow-lg shadow-purple-500/20 transition-all duration-300 transform hover:scale-[1.02]" 
+                    className="w-full gap-2 bg-gradient-to-r from-primary to-accent hover:brightness-110 text-white border-none shadow-lg shadow-primary/20 transition-all duration-300 transform hover:scale-[1.02]" 
                     disabled={loading || !turnstileToken}
                   >
                     {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : isLogin ? <LogIn className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
@@ -365,7 +365,7 @@ export default function LoginPage() {
                       setTurnstileToken(hasTurnstile ? null : 'bypass');
                       setTurnstileKey(k => k + 1);
                     }}
-                    className="text-sm text-purple-300 hover:text-white hover:underline transition-colors"
+                    className="text-sm text-primary hover:text-white hover:underline transition-colors"
                   >
                     {isLogin ? "Não tem uma conta? Cadastre-se gratuitamente" : "Já tem uma conta? Entre agora"}
                   </button>
@@ -383,21 +383,21 @@ export default function LoginPage() {
         </div>
 
         {/* Right Side: Logo & Branding */}
-        <div className="hidden lg:flex flex-1 flex-col items-center justify-between bg-gradient-to-br from-purple-900/30 via-[#1e1e2d]/60 to-blue-900/30 backdrop-blur-[10px] relative overflow-hidden border-l border-white/10 py-16 px-12">
+        <div className="hidden lg:flex flex-1 flex-col items-center justify-between bg-gradient-to-br from-primary/15 via-[#160f0a]/60 to-accent/15 backdrop-blur-[10px] relative overflow-hidden border-l border-white/10 py-16 px-12">
           {/* Decorative lines */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="absolute top-12 left-0 w-32 h-px bg-gradient-to-r from-purple-400/60 to-transparent" />
-            <div className="absolute top-16 left-0 w-20 h-px bg-gradient-to-r from-blue-400/40 to-transparent" />
-            <div className="absolute bottom-24 right-0 w-40 h-px bg-gradient-to-l from-purple-400/60 to-transparent" />
-            <div className="absolute bottom-28 right-0 w-24 h-px bg-gradient-to-l from-blue-400/40 to-transparent" />
-            <div className="absolute top-8 left-8 w-2 h-2 rounded-full bg-purple-400/60" />
-            <div className="absolute bottom-32 right-12 w-1.5 h-1.5 rounded-full bg-blue-400/60" />
+            <div className="absolute top-12 left-0 w-32 h-px bg-gradient-to-r from-primary/60 to-transparent" />
+            <div className="absolute top-16 left-0 w-20 h-px bg-gradient-to-r from-accent/40 to-transparent" />
+            <div className="absolute bottom-24 right-0 w-40 h-px bg-gradient-to-l from-primary/60 to-transparent" />
+            <div className="absolute bottom-28 right-0 w-24 h-px bg-gradient-to-l from-accent/40 to-transparent" />
+            <div className="absolute top-8 left-8 w-2 h-2 rounded-full bg-primary/60" />
+            <div className="absolute bottom-32 right-12 w-1.5 h-1.5 rounded-full bg-accent/60" />
           </div>
 
           <div className="flex-1 flex flex-col items-center justify-center w-full">
             {/* Circular Logo */}
             <div className="relative mb-8">
-              <div className="absolute inset-0 bg-purple-500/20 blur-[51px] rounded-full scale-150" />
+              <div className="absolute inset-0 bg-primary/20 blur-[51px] rounded-full scale-150" />
               <div className="relative w-36 h-36 rounded-full bg-white shadow-2xl flex items-center justify-center ring-4 ring-white/10">
                 <img src={logo} alt="MentoArk" className="w-24 h-24 object-contain" />
               </div>
@@ -410,14 +410,14 @@ export default function LoginPage() {
             </h2>
 
             {/* Tagline */}
-            <p className="text-lg text-blue-100/70 font-light text-center max-w-xs mb-12">
+            <p className="text-lg text-white/70 font-light text-center max-w-xs mb-12">
               CRM inteligente para automação comercial via WhatsApp
             </p>
 
             {/* Social media circles */}
             <div className="flex items-center gap-4">
               <a href="https://instagram.com/mentoark" target="_blank" rel="noreferrer" aria-label="Instagram"
-                className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center hover:scale-110 hover:shadow-purple-500/40 transition-all duration-300">
+                className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center hover:scale-110 hover:shadow-primary/40 transition-all duration-300">
                 <svg className="h-5 w-5" viewBox="0 0 24 24" fill="url(#ig-grad)">
                   <defs>
                     <linearGradient id="ig-grad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -430,7 +430,7 @@ export default function LoginPage() {
                 </svg>
               </a>
               <a href="https://linkedin.com/company/mentoark" target="_blank" rel="noreferrer" aria-label="LinkedIn"
-                className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center hover:scale-110 hover:shadow-blue-500/40 transition-all duration-300">
+                className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center hover:scale-110 hover:shadow-primary/40 transition-all duration-300">
                 <svg className="h-5 w-5" viewBox="0 0 24 24" fill="#0A66C2">
                   <path d="M4.98 3.5c0 1.381-1.11 2.5-2.48 2.5S0 4.881 0 3.5C0 2.12 1.11 1 2.5 1s2.48 1.12 2.48 2.5zM.02 8h4.96v16H.02V8zm7.98 0h4.756v2.19h.067c.662-1.25 2.28-2.566 4.692-2.566 5.018 0 5.945 3.302 5.945 7.596V24h-4.96v-7.61c0-1.815-.033-4.15-2.53-4.15-2.53 0-2.92 1.977-2.92 4.02V24H8V8z"/>
                 </svg>
@@ -442,7 +442,7 @@ export default function LoginPage() {
                 </svg>
               </a>
               <a href="https://facebook.com/mentoark" target="_blank" rel="noreferrer" aria-label="Facebook"
-                className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center hover:scale-110 hover:shadow-blue-600/40 transition-all duration-300">
+                className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center hover:scale-110 hover:shadow-primary/40 transition-all duration-300">
                 <svg className="h-5 w-5" viewBox="0 0 24 24" fill="#1877F2">
                   <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
                 </svg>
