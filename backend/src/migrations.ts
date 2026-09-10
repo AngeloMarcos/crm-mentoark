@@ -2207,5 +2207,54 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'whatsapp_oficial_config (Meta Cloud API) OK');
 
+  // ── assinaturas: período gratuito de 3 dias por tenant (owner_id) ─────────────
+  // [AUDITORIA] LÓGICA (2026-09-10 — pedido do usuário: versão gratuita com trial de 3 dias +
+  // modo somente-leitura ao expirar): 1 linha por tenant (o usuário-dono, `COALESCE(owner_id,
+  // id)`). `status`: trial | ativa | expirada. A trava de escrita (Fase 2) fica atrás do flag
+  // de env `TRIAL_ENFORCEMENT` — esta migração e a Fase 1 só criam a tabela + o status, nada
+  // bloqueia ainda. Contas que JÁ existiam antes do cutoff são grandfathered como 'ativa' (não
+  // caem no trial). Cadastros novos ganham a linha 'trial' no /auth/register.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assinaturas (
+      owner_id      UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      status        TEXT NOT NULL DEFAULT 'trial',
+      plano         TEXT NOT NULL DEFAULT 'free',
+      trial_inicio  TIMESTAMPTZ,
+      trial_fim     TIMESTAMPTZ,
+      ativada_em    TIMESTAMPTZ,
+      ativada_por   UUID REFERENCES users(id) ON DELETE SET NULL,
+      observacao    TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(err => log.error('MIGRATIONS', 'Erro ao criar assinaturas', { err: err.message }));
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assinatura_solicitacoes (
+      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      solicitado_por UUID REFERENCES users(id) ON DELETE SET NULL,
+      mensagem       TEXT,
+      atendida       BOOLEAN NOT NULL DEFAULT false,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_assinatura_solic_owner ON assinatura_solicitacoes (owner_id, created_at DESC)`).catch(() => {});
+
+  // Grandfather em massa: todo tenant-raiz (dono de si mesmo) criado ANTES do cutoff vira
+  // 'ativa'. Idempotente (ON CONFLICT DO NOTHING) — contas novas depois do cutoff NÃO são
+  // pegas aqui (têm created_at maior), então recebem 'trial' pelo /auth/register ou pela
+  // criação on-the-fly em subscription.ts.
+  await pool.query(`
+    INSERT INTO assinaturas (owner_id, status, plano, ativada_em, observacao)
+    SELECT id, 'ativa', 'free', now(), 'grandfathered — conta anterior ao trial (migração 2026-09-10)'
+    FROM users
+    WHERE (owner_id IS NULL OR owner_id = id)
+      AND created_at < TIMESTAMPTZ '2026-09-11 00:00:00+00'
+    ON CONFLICT (owner_id) DO NOTHING
+  `).catch(err => log.warn('MIGRATIONS', 'Falha ao grandfathered assinaturas', { err: err?.message }));
+
+  log.info('MIGRATIONS', 'assinaturas (trial 3 dias) OK');
+
   log.info('MIGRATIONS', 'OK');
 }

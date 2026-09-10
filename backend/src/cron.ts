@@ -230,5 +230,21 @@ export function initCronJobs() {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // [AUDITORIA] LÓGICA (2026-09-10 — trial de 3 dias): marca assinaturas de trial vencido como
+  // 'expirada'. `subscription.ts` já resolve isso em tempo real a cada request (não depende deste
+  // cron), mas o job mantém a coluna coerente pro painel super-admin e pra relatórios. Cadência
+  // de 30min é folgada de sobra pra uma janela de 3 dias.
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      const r = await pool.query(
+        `UPDATE assinaturas SET status = 'expirada', updated_at = now()
+         WHERE status = 'trial' AND trial_fim IS NOT NULL AND trial_fim < now()`
+      );
+      if (r.rowCount) log.info('CRON', 'Assinaturas de trial expiradas', { count: r.rowCount });
+    } catch (err: any) {
+      log.error('CRON', 'Erro ao expirar assinaturas de trial', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   log.info('CRON', 'Jobs de limpeza e retenção LGPD registrados');
 }
