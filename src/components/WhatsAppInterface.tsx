@@ -363,6 +363,181 @@ function AudioPlayer({ src }: { src: string }) {
   );
 }
 
+// ── Preview de envio de mídia em tela cheia (padrão WhatsApp) ──────────────────
+// [AUDITORIA] LÓGICA (2026-09-10 — pedido do usuário: "faça uma parecida com a do WhatsApp
+// original"): substitui o chip inline minúsculo que existia antes. Tela cheia escura, mídia
+// grande centralizada, campo de legenda POR ARQUIVO, tira de miniaturas com o ativo destacado,
+// botão "+" pra anexar mais e botão de enviar próprio (círculo verde). Envio serializado no
+// pai (`enviarAnexosDoPreview`), um `enviarMidia` por arquivo com a sua legenda.
+function MediaSendPreview({
+  files, recipientName, sending, onClose, onAddMore, onRemove, onSend,
+}: {
+  files: File[];
+  recipientName: string;
+  sending: boolean;
+  onClose: () => void;
+  onAddMore: () => void;
+  onRemove: (index: number) => void;
+  onSend: (itens: { file: File; caption: string }[]) => void;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [captions, setCaptions] = useState<string[]>([]);
+
+  const urls = useMemo(() => files.map(f => URL.createObjectURL(f)), [files]);
+  useEffect(() => () => { urls.forEach(u => URL.revokeObjectURL(u)); }, [urls]);
+
+  useEffect(() => {
+    setCaptions(prev => files.map((_, i) => prev[i] ?? ''));
+    setActiveIndex(i => Math.min(i, Math.max(0, files.length - 1)));
+  }, [files]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !sending) onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, sending]);
+
+  if (!files.length) return null;
+  const active = files[activeIndex];
+  if (!active) return null;
+  const activeUrl = urls[activeIndex];
+  const kind = mimeToMediaType(active.type);
+
+  const setActiveCaption = (v: string) =>
+    setCaptions(prev => prev.map((c, i) => (i === activeIndex ? v : c)));
+
+  const handleSend = () => {
+    if (sending) return;
+    onSend(files.map((f, i) => ({ file: f, caption: (captions[i] || '').trim() })));
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] flex flex-col bg-[#0b141a] text-[#e9edef] animate-in fade-in duration-150">
+      {/* Cabeçalho */}
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-3 sm:px-5">
+        <button
+          onClick={() => !sending && onClose()}
+          className="rounded-full p-2 transition-colors hover:bg-white/10 disabled:opacity-30"
+          disabled={sending}
+          title="Cancelar (Esc)"
+        >
+          <X className="h-5 w-5" />
+        </button>
+        <span className="truncate px-2 text-sm text-[#8696a0]">
+          {files.length > 1
+            ? `${activeIndex + 1} de ${files.length}`
+            : kind === 'image' ? 'Foto' : kind === 'video' ? 'Vídeo' : 'Arquivo'}
+        </span>
+        <button
+          onClick={() => !sending && onRemove(activeIndex)}
+          className="rounded-full p-2 transition-colors hover:bg-white/10 disabled:opacity-30"
+          disabled={sending}
+          title="Remover este arquivo"
+        >
+          <Trash2 className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* Mídia */}
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 sm:p-8">
+        {kind === 'image' ? (
+          <img src={activeUrl} alt={active.name} className="max-h-full max-w-full rounded-lg object-contain" />
+        ) : kind === 'video' ? (
+          <video src={activeUrl} controls className="max-h-full max-w-full rounded-lg" />
+        ) : (
+          <div className="flex flex-col items-center gap-4 text-center">
+            <div className="flex h-28 w-24 items-center justify-center rounded-xl bg-[#202c33]">
+              <FileText className="h-12 w-12 text-[#8696a0]" />
+            </div>
+            <div>
+              <p className="max-w-xs break-all text-sm font-medium">{active.name}</p>
+              <p className="mt-0.5 text-xs text-[#8696a0]">
+                {(active.size / 1024).toFixed(0)} KB{active.type ? ` · ${active.type}` : ''}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Legenda do arquivo ativo */}
+      <div className="shrink-0 px-3 sm:px-6">
+        <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-lg bg-[#2a3942] px-4 py-2.5">
+          <input
+            value={captions[activeIndex] ?? ''}
+            onChange={e => setActiveCaption(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleSend(); } }}
+            placeholder="Adicione uma legenda..."
+            maxLength={1024}
+            autoFocus
+            className="flex-1 border-none bg-transparent text-sm text-[#e9edef] outline-none placeholder:text-[#8696a0]"
+          />
+        </div>
+      </div>
+
+      {/* Miniaturas + adicionar + enviar */}
+      <div className="flex shrink-0 items-center gap-3 px-3 py-4 sm:px-6">
+        <div className="flex flex-1 items-center gap-2 overflow-x-auto pb-1">
+          {files.map((f, i) => {
+            const u = urls[i];
+            const isImg = f.type.startsWith('image/');
+            const isVid = f.type.startsWith('video/');
+            return (
+              <button
+                key={i}
+                onClick={() => setActiveIndex(i)}
+                className={`relative h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 transition-all ${
+                  i === activeIndex
+                    ? 'border-[#00a884]'
+                    : 'border-transparent opacity-60 hover:opacity-100'
+                }`}
+                title={f.name}
+              >
+                {isImg ? (
+                  <img src={u} alt="" className="h-full w-full object-cover" />
+                ) : isVid ? (
+                  <video src={u} className="h-full w-full object-cover" muted />
+                ) : (
+                  <span className="flex h-full w-full items-center justify-center bg-[#202c33]">
+                    <FileText className="h-5 w-5 text-[#8696a0]" />
+                  </span>
+                )}
+                {files.length > 1 && !sending && (
+                  <span
+                    role="button"
+                    onClick={e => { e.stopPropagation(); onRemove(i); }}
+                    className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/75"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <button
+            onClick={() => !sending && onAddMore()}
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-[#8696a0]/40 text-[#8696a0] transition-colors hover:border-[#00a884] hover:text-[#00a884]"
+            title="Adicionar mais"
+          >
+            <Plus className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden max-w-[140px] truncate text-xs text-[#8696a0] sm:inline">{recipientName}</span>
+          <button
+            onClick={handleSend}
+            disabled={sending}
+            className="flex h-12 w-12 items-center justify-center rounded-full bg-[#00a884] text-[#0b141a] shadow-lg transition-colors hover:bg-[#06cf9c] disabled:opacity-60"
+            title={`Enviar para ${recipientName}`}
+          >
+            {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5 translate-x-0.5" />}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // [AUDITORIA] FIX APLICADO (Achado B — imagem/figurinha recebida não carrega): componentes
 // dedicados em vez de chamar useAuthedMediaUrl() direto dentro do .map() de mensagens — hooks
 // não podem ser chamados condicionalmente/dentro de callback de array (o nº de mensagens muda
@@ -494,8 +669,11 @@ export function WhatsAppInterface() {
   const [noteInput, setNoteInput] = useState("");
   // [AUDITORIA] LÓGICA (Achado A — envio de mídia): estado do anexo selecionado (preview antes
   // de enviar/cancelar) e da gravação de áudio via MediaRecorder.
-  const [attachedFile, setAttachedFile] = useState<File | null>(null);
-  const [attachedPreviewUrl, setAttachedPreviewUrl] = useState<string | null>(null);
+  // [AUDITORIA] LÓGICA (2026-09-10 — pedido do usuário: preview igual ao do WhatsApp original):
+  // virou uma LISTA de arquivos (o preview em tela cheia `MediaSendPreview` suporta múltiplos
+  // anexos + legenda por arquivo). O antigo `attachedPreviewUrl` (blob URL único) saiu — o modal
+  // gerencia os próprios object URLs, um por arquivo.
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [sendingMedia, setSendingMedia] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -1615,9 +1793,7 @@ export function WhatsAppInterface() {
     setReplyTo(null);
     setIsSelectMode(false);
     setSelectedMessageIds(new Set());
-    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
-    setAttachedFile(null);
-    setAttachedPreviewUrl(null);
+    setAttachedFiles([]);
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
@@ -1799,7 +1975,7 @@ export function WhatsAppInterface() {
   // `POST /api/whatsapp/upload-media` (novo, mesmo padrão de catalogo.ts/galeria.ts) antes de
   // chamar `/send` — `dataUrl` continua sendo usado só para o preview otimista local (não muda,
   // `<img>`/`<video>` renderizam `data:` direto sem precisar do proxy autenticado).
-  const enviarMidia = async (file: Blob, mediaType: 'image' | 'video' | 'audio' | 'document', filename?: string) => {
+  const enviarMidia = async (file: Blob, mediaType: 'image' | 'video' | 'audio' | 'document', filename?: string, caption?: string) => {
     if (!activeChatId) return;
     if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
       toast.error(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)}MB excede o limite de ${(MAX_OUTBOUND_MEDIA_BYTES / 1024 / 1024).toFixed(0)}MB para envio via WhatsApp.`);
@@ -1812,7 +1988,8 @@ export function WhatsAppInterface() {
     try {
       const dataUrl = await fileToDataUrl(file);
       const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      const legenda = mediaType === 'image' ? '📷 Foto' : mediaType === 'video' ? '🎥 Vídeo' : mediaType === 'audio' ? '🎤 Áudio' : `📎 ${filename || 'Documento'}`;
+      const legendaFinal = (caption ?? '').trim();
+      const legenda = legendaFinal || (mediaType === 'image' ? '📷 Foto' : mediaType === 'video' ? '🎥 Vídeo' : mediaType === 'audio' ? '🎤 Áudio' : `📎 ${filename || 'Documento'}`);
 
       // Atualização otimista — mesmo padrão de handleSendMessage. data: URI funciona direto no
       // <img>/<video>/<audio> sem precisar do proxy autenticado (não é local://, não precisa).
@@ -1823,7 +2000,7 @@ export function WhatsAppInterface() {
               messages: [...c.messages, {
                 id: tempId,
                 role: "assistant" as const,
-                content: '',
+                content: legendaFinal,
                 timestamp: ts,
                 senderName: currentUserName,
                 status: "sent",
@@ -1863,6 +2040,7 @@ export function WhatsAppInterface() {
           mediaUrl: mediaUrlEstavel,
           mediaType,
           mediaFilename: filename,
+          mediaCaption: legendaFinal || undefined,
           instancia: chat?.source,
         }),
       });
@@ -1891,23 +2069,25 @@ export function WhatsAppInterface() {
   // [AUDITORIA] LÓGICA: extraído de handleFileSelected (achado 2026-07-28) pra ser reaproveitado
   // por handlePasteImage abaixo — mesma validação de tamanho e troca de preview blob URL,
   // independente de vir do input de arquivo ou de um Ctrl+V.
+  const MAX_ANEXOS = 30;
   const attachFile = (file: File) => {
     if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
       toast.error(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)}MB excede o limite de ${(MAX_OUTBOUND_MEDIA_BYTES / 1024 / 1024).toFixed(0)}MB para envio via WhatsApp.`);
       return;
     }
-    // [AUDITORIA] LÓGICA: revoga o blob URL do anexo anterior antes de criar um novo — sem isso,
-    // trocar de arquivo (selecionar A, depois B sem cancelar A) vazava o blob URL de A.
-    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
-    setAttachedFile(file);
-    setAttachedPreviewUrl(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
+    setAttachedFiles(prev => {
+      if (prev.length >= MAX_ANEXOS) {
+        toast.error(`Máximo de ${MAX_ANEXOS} arquivos por vez.`);
+        return prev;
+      }
+      return [...prev, file];
+    });
   };
 
   const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = ''; // permite selecionar o mesmo arquivo de novo depois
-    if (!file) return;
-    attachFile(file);
+    files.forEach(attachFile);
   };
 
   // [AUDITORIA] BUG (achado 2026-07-28 — "tentei colar um print e não consegui"): não existia
@@ -1933,16 +2113,21 @@ export function WhatsAppInterface() {
   };
 
   const cancelAttachment = () => {
-    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
-    setAttachedFile(null);
-    setAttachedPreviewUrl(null);
+    setAttachedFiles([]);
   };
 
-  const confirmSendAttachment = async () => {
-    if (!attachedFile) return;
-    const file = attachedFile;
+  const removerAnexo = (index: number) => {
+    setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // [AUDITORIA] LÓGICA (2026-09-10): envia todos os anexos do preview em sequência, cada um com
+  // a sua própria legenda (igual ao WhatsApp original). `enviarMidia` já faz a atualização
+  // otimista + upload + /send por arquivo; aqui só serializa e limpa o preview no fim.
+  const enviarAnexosDoPreview = async (itens: { file: File; caption: string }[]) => {
     cancelAttachment();
-    await enviarMidia(file, mimeToMediaType(file.type), file.name);
+    for (const { file, caption } of itens) {
+      await enviarMidia(file, mimeToMediaType(file.type), file.name, caption);
+    }
   };
 
   // [AUDITORIA] LÓGICA: gravação via MediaRecorder — tenta opus (melhor compressão/qualidade,
@@ -3950,32 +4135,10 @@ export function WhatsAppInterface() {
                       </div>
                     ) : (
                       <div className="relative">
-                        {/* [AUDITORIA] FIX APLICADO (Achado A): preview do anexo selecionado, com
-                            opção de cancelar antes de enviar, conforme pedido. */}
-                        {attachedFile && (
-                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 animate-in slide-in-from-bottom-2 duration-200 overflow-hidden">
-                            <div className="p-3 flex items-center gap-3">
-                              {attachedPreviewUrl ? (
-                                <img src={attachedPreviewUrl} alt="preview do anexo" className="w-12 h-12 rounded-lg object-cover shrink-0" />
-                              ) : (
-                                <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center shrink-0">
-                                  <Paperclip className="h-5 w-5 text-muted-foreground" />
-                                </div>
-                              )}
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs font-bold truncate">{attachedFile.name}</p>
-                                <p className="text-[10px] text-muted-foreground">{(attachedFile.size / 1024).toFixed(0)} KB</p>
-                              </div>
-                              <button
-                                onClick={cancelAttachment}
-                                disabled={sendingMedia}
-                                className="p-1 rounded-full hover:bg-muted text-muted-foreground transition-colors disabled:opacity-40"
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-                        )}
+                        {/* [AUDITORIA] LÓGICA (2026-09-10): o preview de anexo agora é a tela cheia
+                            `MediaSendPreview` (renderizada no fim do componente, fora do composer),
+                            igual ao WhatsApp original — legenda por arquivo, múltiplos anexos,
+                            miniaturas e botão de enviar próprio. O chip inline antigo saiu. */}
 
                         {/* Preview de Resposta */}
                         {replyTo && (
@@ -4053,15 +4216,27 @@ export function WhatsAppInterface() {
                     ref={fileInputRef}
                     onChange={handleFileSelected}
                     accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                    multiple
                     className="hidden"
                   />
+                  {attachedFiles.length > 0 && (
+                    <MediaSendPreview
+                      files={attachedFiles}
+                      recipientName={chats.find(c => c.id === activeChatId)?.name || 'contato'}
+                      sending={sendingMedia}
+                      onClose={cancelAttachment}
+                      onAddMore={() => fileInputRef.current?.click()}
+                      onRemove={removerAnexo}
+                      onSend={enviarAnexosDoPreview}
+                    />
+                  )}
                   <div className="grid grid-cols-2 gap-1 p-0.5">
                     <Button
                       variant="ghost" size="icon"
                       className="h-9 w-9 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-colors"
                       title="Respostas Rápidas (/)"
                       onClick={() => { setMessageInput('/'); setShowQR(true); setQrSearch(''); textareaRef.current?.focus(); }}
-                      disabled={inputMode === "nota" || isRecording || !!attachedFile}
+                      disabled={inputMode === "nota" || isRecording || attachedFiles.length > 0}
                     >
                       <Zap className="h-4.5 w-4.5" />
                     </Button>
@@ -4070,7 +4245,7 @@ export function WhatsAppInterface() {
                       className="h-9 w-9 rounded-xl hover:bg-blue-50 hover:text-blue-600 transition-colors"
                       title="Anexar arquivo"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={inputMode === "nota" || isRecording || !!attachedFile || sendingMedia}
+                      disabled={inputMode === "nota" || isRecording || attachedFiles.length > 0 || sendingMedia}
                     >
                       <Paperclip className="h-4.5 w-4.5" />
                     </Button>
@@ -4089,7 +4264,7 @@ export function WhatsAppInterface() {
                         className="h-9 w-9 rounded-xl hover:bg-red-50 hover:text-red-600 transition-colors"
                         title="Gravar áudio"
                         onClick={startRecording}
-                        disabled={inputMode === "nota" || !!attachedFile || sendingMedia}
+                        disabled={inputMode === "nota" || attachedFiles.length > 0 || sendingMedia}
                       >
                         <Mic className="h-4.5 w-4.5" />
                       </Button>
@@ -4098,7 +4273,7 @@ export function WhatsAppInterface() {
                       className={`h-9 w-9 rounded-xl shadow-lg transition-all active:scale-90 ${
                         isRecording
                           ? "bg-red-500 hover:bg-red-600 shadow-red-500/20"
-                          : (attachedFile || (inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
+                          : (inputMode === "nota" ? noteInput.trim() : messageInput.trim())
                             ? (inputMode === "nota" ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-primary hover:bg-primary/90 shadow-primary/20")
                             : "bg-muted text-muted-foreground opacity-50"
                       }`}
@@ -4107,12 +4282,10 @@ export function WhatsAppInterface() {
                           ? false
                           : sendingMedia
                             ? true
-                            : attachedFile
-                              ? false
-                              : (isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
+                            : (isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
                       }
-                      onClick={isRecording ? sendRecording : attachedFile ? confirmSendAttachment : handleSendMessage}
-                      title={isRecording ? 'Parar e enviar áudio' : attachedFile ? 'Enviar anexo' : 'Enviar'}
+                      onClick={isRecording ? sendRecording : handleSendMessage}
+                      title={isRecording ? 'Parar e enviar áudio' : 'Enviar'}
                     >
                       {sendingMedia ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Send className="h-4.5 w-4.5" />}
                     </Button>
