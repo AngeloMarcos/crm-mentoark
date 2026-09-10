@@ -106,6 +106,14 @@ function isMediaHostAllowed(mediaUrl: string, evoBaseUrl: string): boolean {
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
     const host = u.hostname.toLowerCase();
     if (host === 'whatsapp.net' || host.endsWith('.whatsapp.net')) return true;
+    // [AUDITORIA] FIX APLICADO (2026-09-10): o próprio host de `/uploads` (mídia de SAÍDA salva
+    // por `POST /upload-media`) também é permitido — sem isso, todo áudio/mídia enviado pelo chat
+    // (URL `${API_BASE_URL}/uploads/...`) era bloqueado pelo proxy com 400, e o player mostrava
+    // "Áudio indisponível". Continua sendo uma allowlist estrita (não abre pra host arbitrário).
+    try {
+      const apiHost = new URL(API_BASE_URL).hostname.toLowerCase();
+      if (host === apiHost) return true;
+    } catch { /* API_BASE_URL malformada — ignora */ }
     const evoHost = new URL(evoBaseUrl).hostname.toLowerCase();
     return host === evoHost;
   } catch {
@@ -2138,8 +2146,12 @@ export default function whatsappRouter(pool: Pool): Router {
       // pausado agora só acontece por ação explícita (atendente reativando manualmente, ou
       // reconexão bem-sucedida da MESMA instância que ele estava conversando, já tratado em
       // outro ponto do código).
+      // [AUDITORIA] FIX APLICADO (pedido explícito do usuário, 2026-09-09): removida a linha
+      // `UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id=$1 AND instance_name=$2`.
+      // Desconectar/remover uma instância NÃO pode mais apagar o histórico de conversa — é dado
+      // de negócio (conversas com clientes). Mensagens só são apagadas por ação explícita do
+      // usuário, via DELETE /whatsapp/instances/:name/mensagens (botão em Configurações).
       const queries = [
-        (await req.getDb!()).query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, instancia]),
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [instancia]),
         pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia = $2`, [userId, instancia]),
         pool.query(
@@ -2348,20 +2360,21 @@ export default function whatsappRouter(pool: Pool): Router {
 
       if (mediaUrlFinal && mediaType) {
         msgType = mediaType;
-        const mediaEndpoints: Record<string, string> = {
-          image: 'sendMedia',
-          video: 'sendMedia',
-          document: 'sendMedia',
-          audio: 'sendMedia',
-        };
-        const endpoint = mediaEndpoints[mediaType] || 'sendMedia';
-        const mediaPayload: any = {
-          number: phoneClean,
-          mediatype: mediaType,
-          media: mediaUrlFinal,
-        };
-        if (mediaCaption) mediaPayload.caption = mediaCaption;
-        if (mediaFilename) mediaPayload.fileName = mediaFilename;
+        // [AUDITORIA] BUG (achado 2026-09-10 — "meus áudios não dá pra ouvir"): áudio saía por
+        // `sendMedia` com `mediatype:'audio'`, que manda o arquivo como anexo cru, sem a
+        // conversão pra OGG/Opus (nota de voz) que a Evolution só faz no endpoint dedicado. O
+        // composer grava `webm/opus` no navegador — sem transcode, o WhatsApp do destinatário
+        // não reconhece como áudio tocável. `disparoProcessor.ts` e `agentEngine.ts` já usam
+        // `sendWhatsAppAudio` (payload `{ number, audio }`, sem `mediatype`/`media`) — este
+        // fluxo era o único fora do padrão. [AUDITORIA] FIX APLICADO: áudio agora usa o mesmo
+        // endpoint/payload dos outros fluxos.
+        const isAudio = mediaType === 'audio';
+        const endpoint = isAudio ? 'sendWhatsAppAudio' : 'sendMedia';
+        const mediaPayload: any = isAudio
+          ? { number: phoneClean, audio: mediaUrlFinal }
+          : { number: phoneClean, mediatype: mediaType, media: mediaUrlFinal };
+        if (!isAudio && mediaCaption) mediaPayload.caption = mediaCaption;
+        if (!isAudio && mediaFilename) mediaPayload.fileName = mediaFilename;
 
         const targetUrl = `${base}/message/${endpoint}/${cfg.instancia}`;
         log.info('DEBUG SEND', 'Disparando para Evolution', { targetUrl, tokenPresente: !!cfg.api_key });
@@ -2454,6 +2467,29 @@ export default function whatsappRouter(pool: Pool): Router {
       const content = text || mediaCaption || null;
       const tenantId = await resolveOwnerId(userId);
 
+      // [AUDITORIA] BUG (achado 2026-09-10): o INSERT abaixo nunca gravava `media_mimetype` (a
+      // coluna nem estava na lista) — toda mídia enviada pelo chat ficava com mimetype NULL, e o
+      // proxy `/api/whatsapp/media` (branch `local://`) então servia `application/octet-stream`,
+      // que o `<audio>`/`<video>` do navegador se recusa a decodificar. `disparoProcessor.ts` já
+      // gravava o mimetype. [AUDITORIA] FIX APLICADO: deriva o mimetype da extensão da URL, com
+      // fallback por tipo de mídia.
+      const mediaMimetype = (() => {
+        if (!mediaUrlFinal || !mediaType) return null;
+        const ext = (mediaUrlFinal.split('?')[0].split('.').pop() || '').toLowerCase();
+        const byExt: Record<string, string> = {
+          ogg: 'audio/ogg', opus: 'audio/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4',
+          webm: mediaType === 'audio' ? 'audio/webm' : 'video/webm',
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+          mp4: 'video/mp4', mov: 'video/quicktime',
+          pdf: 'application/pdf',
+        };
+        if (byExt[ext]) return byExt[ext];
+        return mediaType === 'audio' ? 'audio/ogg'
+          : mediaType === 'image' ? 'image/jpeg'
+          : mediaType === 'video' ? 'video/mp4'
+          : 'application/octet-stream';
+      })();
+
       // [AUDITORIA] LÓGICA: Salva a mensagem associando ao tenantId (dono da instância), mas
       // registrando quem de fato disparou o envio (sent_by_user_id = userId do agente humano logado).
       // [AUDITORIA] FIX APLICADO (2026-07-21): setDbUserId(tenantId) -- o INSERT grava
@@ -2463,11 +2499,11 @@ export default function whatsappRouter(pool: Pool): Router {
       await (await req.getDb!()).query(
         `INSERT INTO whatsapp_messages
            (user_id, sent_by_user_id, instance_name, remote_jid, message_id, from_me, message_type,
-            content, media_url, status, timestamp_wa)
-         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, 'sent', NOW())
+            content, media_url, media_mimetype, status, timestamp_wa)
+         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, 'sent', NOW())
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
         [tenantId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
-         messageId, msgType, content, mediaUrlFinal || null]
+         messageId, msgType, content, mediaUrlFinal || null, mediaMimetype]
       ).catch(err => log.warn('SEND', 'Falha ao salvar', { err: err.message }));
 
       return res.json({ ok: true, messageId });
@@ -2564,7 +2600,10 @@ export default function whatsappRouter(pool: Pool): Router {
         // /disconnect, ver comentário completo lá): as duas UPDATEs de `contatos`/`dados_cliente`
         // sem filtro de instância reativavam a IA pra TODOS os contatos do tenant, inclusive os
         // pausados de propósito (atendente humano) ou por falha real de LLM. Removido.
-        (await req.getDb!()).query(`UPDATE whatsapp_messages SET deleted_at = NOW() WHERE user_id = $1 AND instance_name = $2`, [userId, name]),
+        // [AUDITORIA] FIX APLICADO (pedido explícito do usuário, 2026-09-09): removida a linha
+        // `UPDATE whatsapp_messages SET deleted_at = NOW()`. Deletar a instância NÃO apaga mais
+        // o histórico de conversa — só some por ação explícita do usuário em
+        // DELETE /whatsapp/instances/:name/mensagens (botão "Apagar mensagens" em Configurações).
         pool.query(`DELETE FROM webhook_mensagens_processadas WHERE instancia = $1`, [name]),
         pool.query(`DELETE FROM integracoes_config WHERE user_id = $1 AND tipo = 'evolution' AND instancia = $2`, [userId, name]),
         pool.query(
@@ -2581,6 +2620,42 @@ export default function whatsappRouter(pool: Pool): Router {
       return res.json({ ok: true, message: 'Instância removida e estado limpo.' });
     } catch (err: any) {
       log.error('WHATSAPP', 'Erro ao deletar instância via DELETE', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // [AUDITORIA] LÓGICA (pedido explícito do usuário, 2026-09-09): ÚNICA forma de apagar
+  // mensagens é esta — ação deliberada do usuário. Deletar/desconectar instância nunca mais
+  // toca em whatsapp_messages. Soft-delete (deleted_at) + purga física pelo cron de 90 dias
+  // (mesmo padrão LGPD já usado). Checagem de ownership igual à do DELETE /instances/:name.
+  router.delete('/instances/:name/mensagens', async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const name = req.params.name;
+
+      const ownRes = await pool.query(
+        `SELECT 1 FROM integracoes_config WHERE user_id = $1 AND instancia = $2 AND tipo = 'evolution'
+         UNION
+         SELECT 1 FROM agentes WHERE user_id = $1 AND evolution_instancia = $2
+         UNION
+         SELECT 1 FROM whatsapp_messages WHERE user_id = $1 AND instance_name = $2 LIMIT 1`,
+        [userId, name]
+      ).catch(() => ({ rows: [] as any[] }));
+      if (!ownRes.rows.length) {
+        return res.status(403).json({ message: 'Instância não pertence a este usuário' });
+      }
+
+      const db = await req.getDb!();
+      const r = await db.query(
+        `UPDATE whatsapp_messages SET deleted_at = NOW()
+         WHERE user_id = $1 AND instance_name = $2 AND deleted_at IS NULL`,
+        [userId, name]
+      );
+
+      log.info('WHATSAPP', 'Mensagens apagadas por ação explícita do usuário', { userId, instancia: name, count: r.rowCount });
+      return res.json({ ok: true, apagadas: r.rowCount ?? 0 });
+    } catch (err: any) {
+      log.error('WHATSAPP', 'Erro ao apagar mensagens da instância', { err: err?.message });
       return res.status(500).json({ message: err.message });
     }
   });

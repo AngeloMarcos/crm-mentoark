@@ -306,13 +306,24 @@ function ChatAvatar({
   );
 }
 
-// ── Player de áudio com proxy autenticado ──────────────────────────────────────
+// ── Player de áudio ───────────────────────────────────────────────────────────
+// [AUDITORIA] BUG (achado 2026-09-10 — "meus áudios não dá pra ouvir"): este player SEMPRE
+// buscava via o proxy `/api/whatsapp/media`, mesmo quando `src` já era uma URL pública normal.
+// Áudio enviado pelo chat fica salvo como `${API_BASE}/uploads/...` — o proxy roda uma allowlist
+// de host (`isMediaHostAllowed`, whatsapp.ts) que só permitia `*.whatsapp.net`/host da Evolution,
+// então respondia 400 e o player mostrava "Áudio indisponível". Imagens/vídeos nunca tiveram
+// isso porque `useAuthedMediaUrl` carrega http(s) direto. [AUDITORIA] FIX APLICADO: mesma regra —
+// URL http(s)/data: carrega direto no <audio>; só `local://` (mídia recebida, salva em disco,
+// exige header de Authorization que a tag <audio> não manda) passa pelo proxy autenticado.
 function AudioPlayer({ src }: { src: string }) {
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const precisaProxy = src.startsWith('local://') || src.startsWith('local-pic://');
+  const [blobUrl, setBlobUrl] = useState<string | null>(precisaProxy ? null : src);
+  const [loading, setLoading] = useState(precisaProxy);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    if (!precisaProxy) { setBlobUrl(src); setLoading(false); setError(false); return; }
+
     let revoke: string | null = null;
     setLoading(true);
     setError(false);
@@ -335,20 +346,20 @@ function AudioPlayer({ src }: { src: string }) {
       .finally(() => setLoading(false));
 
     return () => { if (revoke) URL.revokeObjectURL(revoke); };
-  }, [src]);
+  }, [src, precisaProxy]);
 
   if (loading) return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
       <Loader2 className="h-4 w-4 animate-spin" /> carregando áudio...
     </div>
   );
-  if (error) return (
+  if (error || !blobUrl) return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
       <Mic className="h-4 w-4" /> Áudio indisponível
     </div>
   );
   return (
-    <audio controls src={blobUrl!} className="max-w-[260px] h-10 rounded-lg" preload="metadata" />
+    <audio controls src={blobUrl} className="max-w-[260px] h-10 rounded-lg" preload="metadata" />
   );
 }
 
@@ -2839,7 +2850,7 @@ export function WhatsAppInterface() {
             </div>
           )}
 
-          <div className="divide-y divide-border/50">
+          <div className="space-y-1 p-2">
             {filteredChats.map(chat => {
               const isActive = activeChatId === chat.id;
               return (
@@ -2850,12 +2861,12 @@ export function WhatsAppInterface() {
                         setActiveChatId(chat.id);
                         lastOpenedRef.current.set(chat.phone, new Date().toISOString());
                       }}
-                      className={`flex items-start gap-3 px-3.5 sm:px-4 py-2.5 sm:py-3 cursor-pointer transition-all relative group ${
+                      className={`flex items-start gap-3 rounded-xl px-3 py-2.5 cursor-pointer transition-all relative group border ${
                         isActive
-                          ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary z-10"
+                          ? "bg-primary/10 border-primary/30 shadow-sm z-10 after:absolute after:left-0 after:top-2 after:bottom-2 after:w-1 after:rounded-full after:bg-primary"
                           : chat.unread
-                          ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
-                          : "hover:bg-muted/30"
+                          ? "bg-primary/[0.06] border-primary/15"
+                          : "border-transparent hover:bg-muted/40 hover:border-border/60 hover:-translate-y-px"
                       }`}
                     >
                       <div className="relative shrink-0">
@@ -2872,7 +2883,7 @@ export function WhatsAppInterface() {
                       <div className="flex-1 min-w-0 py-0.5">
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>
+                            <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-primary" : "text-foreground"}`}>
                               {chat.name}
                             </span>
                             {chat.is_pinned && <Pin className="h-3 w-3 text-muted-foreground rotate-45 shrink-0" />}
@@ -2882,7 +2893,7 @@ export function WhatsAppInterface() {
                         </div>
                         <div className="flex items-center gap-1.5 mb-1.5">
                           {chat.is_group && (
-                            <span className="text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase">Grupo</span>
+                            <span className="text-[9px] px-1.5 py-0.5 bg-primary/12 text-primary border border-primary/20 font-bold rounded tracking-tight uppercase">Grupo</span>
                           )}
                           {chat.source && (
                             <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
@@ -2896,7 +2907,7 @@ export function WhatsAppInterface() {
                             {chat.lastMessage.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}
                           </p>
                           {chat.unread ? (
-                            <span className="min-w-[18px] h-[18px] px-1 bg-green-500 text-white text-[10px] font-black rounded-full flex items-center justify-center shadow-sm shrink-0">
+                            <span className="min-w-[18px] h-[18px] px-1 bg-primary text-primary-foreground text-[10px] font-black rounded-full flex items-center justify-center shadow-sm shrink-0">
                               {chat.unread}
                             </span>
                           ) : null}
@@ -3356,10 +3367,10 @@ export function WhatsAppInterface() {
                   onClick={toggleIA}
                   disabled={togglingIA}
                   title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-bold border transition-all active:scale-95 ${
                     iaPausada
-                      ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
-                      : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                      ? "bg-warning/15 border-warning/40 text-warning hover:bg-warning/25"
+                      : "bg-success/15 border-success/40 text-success hover:bg-success/25"
                   }`}
                 >
                   {togglingIA ? (
@@ -3691,12 +3702,12 @@ export function WhatsAppInterface() {
                             if (!isNote) toggleMessageSelection(m.id);
                           }}
                         >
-                          <div className={`max-w-[88%] sm:max-w-[85%] rounded-2xl px-3 sm:px-4 py-2 sm:py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
+                          <div className={`max-w-[88%] sm:max-w-[85%] rounded-2xl px-3.5 sm:px-4 py-2.5 relative animate-in slide-in-from-bottom-2 duration-300 group ${
                             isOut
-                              ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
+                              ? "bg-primary text-primary-foreground rounded-tr-md shadow-[0_6px_18px_-8px_hsl(var(--primary)/0.55)]"
                               : isNote
-                                ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
-                                : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
+                                ? "bg-warning/15 border border-warning/30 text-warning-foreground dark:text-warning w-full text-center rounded-xl shadow-none"
+                                : "bg-card rounded-tl-md border border-border/60 shadow-[0_4px_14px_-8px_rgb(0_0_0/0.35)]"
                           } ${selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10 brightness-95 scale-[0.98] origin-center transition-all" : ""}`}>
                             
                             {/* Ícone de Favorito (Star) */}
@@ -3757,7 +3768,7 @@ export function WhatsAppInterface() {
                           ) : m.tipo === 'audio' ? (
                             m.midia_url
                               ? <AudioPlayer src={m.midia_url} />
-                              : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Mic className="h-4 w-4" /> Áudio</div>
+                              : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1" title="A mídia deste áudio ainda não foi baixada — o servidor tenta recuperar automaticamente."><Mic className="h-4 w-4" /> Áudio (mídia indisponível)</div>
                           ) : m.tipo === 'video' && m.midia_url ? (
                             <AuthedVideo src={m.midia_url} mime={m.midia_mime} className="rounded max-w-[260px] mb-1" />
                           ) : m.tipo === 'document' && m.midia_url ? (

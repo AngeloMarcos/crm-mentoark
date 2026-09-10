@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "include": [
-    "src/migrations.ts",
-    "src/routes/whatsapp.ts",
-    "src/utils/linkPreview.ts"
-  ]
-}

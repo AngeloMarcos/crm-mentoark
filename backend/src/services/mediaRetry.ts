@@ -25,12 +25,19 @@ export async function retentarMidiaPendente(pool: Pool): Promise<{ tentadas: num
   // temporária. Retentar isso todo dia até sair da janela de 7 dias era trabalho certo de dar
   // errado; excluído via NOT EXISTS contra as 3 tabelas que sabem quais instâncias existem
   // hoje (mesma checagem que webhook.ts usa pra resolver dono de instância).
+  // [AUDITORIA] BUG (achado 2026-09-10 — "alguns áudios não aparecem a opção de ouvir"):
+  // o filtro `media_url IS NOT NULL` excluía as linhas em que a mídia NUNCA chegou a ser
+  // baixada (webhook gravou `message_type='audio'` sem `media_url` porque a Evolution estava
+  // fora do ar / decrypt falhou na hora). Essas linhas ficavam pra sempre sem player no chat —
+  // este retry, que era a única chance de recuperação, nunca as pegava. `salvarMidiaWhatsapp()`
+  // re-baixa pela dupla (messageId, instancia), não precisa da URL crua, então recuperar
+  // `media_url IS NULL` é seguro. [AUDITORIA] FIX APLICADO: passa a cobrir `media_url IS NULL`
+  // também (continua excluindo o que já migrou pra `local://`).
   const pendentes = await pool.query(
     `SELECT message_id, instance_name, remote_jid, from_me, message_type, user_id, media_mimetype
      FROM whatsapp_messages m
      WHERE message_type IN ('image','audio','video','document','sticker')
-       AND media_url IS NOT NULL
-       AND media_url NOT LIKE 'local://%'
+       AND (media_url IS NULL OR media_url NOT LIKE 'local://%')
        AND created_at > NOW() - INTERVAL '${JANELA_DIAS} days'
        AND deleted_at IS NULL
        AND (

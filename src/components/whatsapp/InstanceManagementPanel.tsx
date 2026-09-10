@@ -578,10 +578,38 @@ export function InstanceManagementPanel() {
         const j = await res.json().catch(() => ({}));
         throw new Error(j?.message || "Falha ao excluir");
       }
-      toast.success("Instância removida");
+      toast.success("Instância removida (histórico de mensagens preservado)");
       carregar();
     } catch (e: any) {
       toast.error(`Erro ao excluir: ${e.message}`);
+    }
+  };
+
+  // Apagar mensagens é a ÚNICA forma de remover histórico — ação deliberada do usuário.
+  // Deletar/desconectar instância nunca mais apaga mensagens (fix backend 2026-09-09).
+  const [apagandoMsgs, setApagandoMsgs] = useState(false);
+  const handleDeleteMessages = async (inst: string) => {
+    const txt = window.prompt(
+      `Isso vai apagar TODO o histórico de mensagens da instância "${inst}".\n` +
+      `Ação irreversível (as mensagens somem da tela e são expurgadas em 90 dias).\n\n` +
+      `Digite APAGAR para confirmar:`,
+    );
+    if (txt?.trim().toUpperCase() !== "APAGAR") return;
+    setApagandoMsgs(true);
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/instances/${encodeURIComponent(inst)}/mensagens`, {
+        method: "DELETE",
+        headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.message || "Falha ao apagar mensagens");
+      toast.success(`${j.apagadas ?? 0} mensagem(ns) apagada(s)`);
+    } catch (e: any) {
+      toast.error(`Erro ao apagar mensagens: ${e.message}`);
+    } finally {
+      setApagandoMsgs(false);
     }
   };
 
@@ -1111,6 +1139,25 @@ export function InstanceManagementPanel() {
                       checked={!!editing.auto_distribute}
                       onCheckedChange={(v) => setEditing({ ...editing, auto_distribute: v })}
                     />
+                  </div>
+
+                  {/* Zona de perigo — apagar mensagens é ação deliberada e separada */}
+                  <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/[0.04] p-3">
+                    <p className="text-sm font-medium text-destructive">Apagar histórico de mensagens</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      Remove todas as mensagens desta instância da tela (expurgo definitivo em 90 dias).
+                      Excluir ou desconectar a instância <strong>não</strong> apaga o histórico — só este botão.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      disabled={apagandoMsgs || !editing.evolution_instancia}
+                      onClick={() => editing.evolution_instancia && handleDeleteMessages(editing.evolution_instancia)}
+                    >
+                      {apagandoMsgs && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+                      Apagar mensagens desta instância
+                    </Button>
                   </div>
                 </TabsContent>
               </Tabs>
