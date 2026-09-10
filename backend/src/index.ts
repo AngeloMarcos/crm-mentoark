@@ -35,7 +35,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 import { pool, migrationsPool } from './db';
-import { authMiddleware, adminMiddleware, tenantContextMiddleware, AuthRequest } from './middleware';
+import { authMiddleware, adminMiddleware, tenantContextMiddleware, assinaturaGuard, AuthRequest } from './middleware';
 import { makeCrud } from './crud';
 
 import authRouter from './auth';
@@ -278,6 +278,8 @@ app.get('/api/catalogo/n8n/:userId', async (req, res) => {
 // ── Protected routes (JWT required) ─────────────────────────
 app.use('/api', authMiddleware);
 app.use('/api', tenantContextMiddleware);
+// [AUDITORIA] Fase 2 do trial: no-op enquanto TRIAL_ENFORCEMENT !== 'on' (ver middleware.ts).
+app.use('/api', assinaturaGuard);
 
 // Standard CRUD tables (generic factory)
 const SIMPLE_TABLES = [

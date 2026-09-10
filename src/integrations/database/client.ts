@@ -4,6 +4,7 @@
 // NÃO usa Database real — zero dependência externa
 import { getAuthToken } from "@/lib/api-token";
 import { withCooldown, CooldownError, hasExceededRetries, friendlyError } from "@/lib/requestGuard";
+import { isReadOnly, avisarBloqueado } from "@/lib/readonly";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'https://api.mentoark.com.br';
 
@@ -378,6 +379,12 @@ class QueryBuilder {
   private _idFilter(): Filter | undefined { return this._filters.find(f => f.col === 'id' && f.op === 'eq'); }
 
   private async _exec(): Promise<{ data: any; count?: number | null; error: any }> {
+    // [AUDITORIA] Fase 2 do trial: se a assinatura do tenant expirou, corta escrita antes de
+    // sair pela rede (o backend também recusa com 403 SUBSCRIPTION_INACTIVE — isto é só a UX).
+    if ((this._op === 'insert' || this._op === 'update' || this._op === 'delete') && isReadOnly()) {
+      avisarBloqueado();
+      return { data: null, error: { message: 'Assinatura inativa — modo somente leitura', code: 'SUBSCRIPTION_INACTIVE' } };
+    }
     const token = _getToken();
     if (token && _isExpired(token)) {
       const ok = await auth._refreshSilent();

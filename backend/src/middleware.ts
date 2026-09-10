@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { PoolClient } from 'pg';
 import { pool } from './db';
 import { log, setRequestUserId } from './logger';
+import { getAssinatura, resolverOwnerId } from './services/subscription';
 
 export interface AuthRequest extends Request {
   userId?: string;
@@ -110,6 +111,51 @@ export function tenantContextMiddleware(req: AuthRequest, res: Response, next: N
   });
 
   next();
+}
+
+// [AUDITORIA] LÓGICA (2026-09-10 — Fase 2 do trial de 3 dias): trava de escrita quando a
+// assinatura do tenant está `expirada`. LIGA SÓ com `TRIAL_ENFORCEMENT=on` no .env — sem a env
+// (padrão) este middleware é um no-op, o deploy fica "no escuro" até validar. Regras:
+//  - GET/HEAD/OPTIONS sempre passam (modo somente-leitura = pode consultar tudo).
+//  - `/api/assinatura/*` e `/api/suporte/*` sempre passam (ver status, pedir reativação, falar
+//    com o suporte — senão o usuário fica preso sem como sair).
+//  - MASTER_EMAILS nunca são bloqueados.
+//  - Qualquer outra escrita de um tenant `expirada` → 403 SUBSCRIPTION_INACTIVE.
+// Webhooks/n8n/mcp entram ANTES do `/api` (não passam por aqui), então automação de entrada
+// (mensagem recebida, resposta da IA) continua funcionando mesmo com o trial vencido.
+const MASTER_EMAILS_SET = new Set(
+  (process.env.MASTER_EMAILS || 'angelobispofilho@gmail.com,mentoark@gmail.com')
+    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
+);
+const ASSINATURA_WRITE_ALLOWLIST = ['/api/assinatura', '/api/suporte'];
+
+export async function assinaturaGuard(req: AuthRequest, res: Response, next: NextFunction) {
+  if (process.env.TRIAL_ENFORCEMENT !== 'on') return next();
+
+  const metodo = req.method.toUpperCase();
+  if (metodo === 'GET' || metodo === 'HEAD' || metodo === 'OPTIONS') return next();
+
+  const path = (req.originalUrl || req.url || '').split('?')[0];
+  if (ASSINATURA_WRITE_ALLOWLIST.some(p => path.startsWith(p))) return next();
+
+  if (req.userEmail && MASTER_EMAILS_SET.has(req.userEmail.toLowerCase())) return next();
+  if (!req.userId) return next();
+
+  try {
+    const ownerId = await resolverOwnerId(pool, req.userId);
+    const a = await getAssinatura(pool, ownerId);
+    if (a.read_only) {
+      return res.status(403).json({
+        code: 'SUBSCRIPTION_INACTIVE',
+        message: 'Assinatura inativa — o sistema está em modo somente leitura. Reative para voltar a editar.',
+      });
+    }
+  } catch (err: any) {
+    // Falha ao resolver assinatura nunca bloqueia (fail-open) — o pior caso é deixar passar uma
+    // escrita de conta expirada, aceitável frente a travar todo mundo por um erro de infra.
+    log.warn('ASSINATURA_GUARD', 'Falha ao checar assinatura — liberando por precaução', { err: err?.message });
+  }
+  return next();
 }
 
 /**

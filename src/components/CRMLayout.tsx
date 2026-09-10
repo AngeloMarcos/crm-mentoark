@@ -4,9 +4,11 @@ import { AppHeader } from "@/components/AppHeader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HealthCheck } from "./HealthCheck";
 import { AssinaturaBanner } from "@/components/AssinaturaBanner";
+import { AssinaturaProvider } from "@/hooks/useAssinatura";
 
 export function CRMLayout({ children }: { children: React.ReactNode }) {
   return (
+    <AssinaturaProvider>
     <SidebarProvider>
       <div className="min-h-screen flex w-full relative overflow-hidden bg-background">
         {/* Luz ambiente — bem discreta, só um respiro de laranja nos cantos */}
@@ -31,5 +33,6 @@ export function CRMLayout({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     </SidebarProvider>
+    </AssinaturaProvider>
   );
 }
