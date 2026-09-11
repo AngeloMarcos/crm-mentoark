@@ -17,7 +17,7 @@ import {
   Clock, Calendar, MessageSquare, Image as ImageIcon,
   FileText, Headphones, AlertTriangle, CheckCircle2,
   Table as TableIcon, Send, XCircle, Activity, AlertCircle,
-  LayoutTemplate, Loader2, Save, Trash2, Pencil, Plus
+  LayoutTemplate, Loader2, Save, Trash2, Pencil, Plus, Download
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, getFreshToken } from "@/integrations/database/client";
@@ -45,6 +45,7 @@ import {
   temTermoVariavel,
   TAMANHO_DICIONARIO_VARIACAO,
 } from "@/lib/motorTexto";
+import { baixarModeloContatosCSV } from "@/lib/modeloImportacao";
 import {
   Dialog,
   DialogContent,
@@ -1619,6 +1620,15 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
             <Button variant="outline" size="sm" className="mt-4" onClick={() => document.getElementById('csv-upload')?.click()}>
               Selecionar Arquivo
             </Button>
+            {/* [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas, 2026-09-11): mesmo modelo baixável
+                de Leads.tsx (nome/telefone/email/empresa/cargo/origem/status/tags/notas) — os dois
+                importam pra `contatos`, então um modelo só serve pros dois pontos de import. */}
+            <p className="text-xs text-muted-foreground mt-3">
+              Não tem uma planilha pronta?{" "}
+              <button type="button" onClick={baixarModeloContatosCSV} className="text-primary font-medium underline-offset-2 hover:underline inline-flex items-center gap-1">
+                <Download className="h-3 w-3" /> Baixar modelo
+              </button>
+            </p>
           </div>
           {csvPreview.length > 0 && (
             <div className="space-y-3 text-left">

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Upload, FileSpreadsheet, AlertCircle, Loader2, CheckCircle } from "lucide-react";
+import { Upload, FileSpreadsheet, AlertCircle, Loader2, CheckCircle, Download } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
+import { baixarModeloProdutosCSV } from "@/lib/modeloImportacao";
 
 interface ImportExcelModalProps {
   open: boolean;
@@ -53,9 +54,14 @@ export function ImportExcelModal({ open, onOpenChange, onImported }: ImportExcel
         
         <div className="space-y-4 py-4">
           <div className="bg-muted p-4 rounded-lg text-xs space-y-2">
-            <p className="font-semibold flex items-center gap-1">
-              <AlertCircle className="h-3 w-3" /> Formato esperado:
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold flex items-center gap-1">
+                <AlertCircle className="h-3 w-3" /> Formato esperado:
+              </p>
+              <Button type="button" variant="outline" size="sm" className="h-6 text-[11px] gap-1" onClick={baixarModeloProdutosCSV}>
+                <Download className="h-3 w-3" /> Baixar modelo
+              </Button>
+            </div>
             <ul className="list-disc list-inside opacity-70">
               <li>Colunas: nome, descricao, preco, codigo, estoque</li>
               <li>O campo 'nome' é obrigatório</li>

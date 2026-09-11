@@ -24,6 +24,7 @@ import {
   Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, MessageCircle, Download, ListTodo, ShieldCheck, SearchCheck,
 } from "lucide-react";
 import { normalizarTelefoneBR } from "@/lib/phone";
+import { baixarModeloContatosCSV } from "@/lib/modeloImportacao";
 import { BuscarLeadsModal } from "@/components/campanhas/BuscarLeadsModal";
 
 function formatWhatsappNumber(raw: string | null | undefined): string | null {
@@ -838,10 +839,15 @@ export default function LeadsPage() {
               </div>
 
               <div className="space-y-1">
-                <p className="font-medium text-primary">2. Exportação do próprio CRM (MentoArk)</p>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className="font-medium text-primary">2. Exportação do próprio CRM (MentoArk)</p>
+                  <Button type="button" variant="outline" size="sm" className="h-6 text-[11px] gap-1" onClick={baixarModeloContatosCSV}>
+                    <Download className="h-3 w-3" /> Baixar modelo
+                  </Button>
+                </div>
                 <p className="text-muted-foreground">
                   CSV com colunas: nome, telefone, email, empresa, cargo, origem, status, tags, notas.
-                  Tags separadas por ponto e vírgula (;).
+                  Tags separadas por ponto e vírgula (;). Mesmo modelo aceito em Disparos → Importar contatos.
                 </p>
               </div>
 
