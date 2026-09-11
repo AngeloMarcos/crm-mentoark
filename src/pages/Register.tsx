@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import ParticlesBackground from "@/components/ParticlesBackground";
-import logo from "@/assets/mentoark-icon-2026.png";
+import logo from "@/assets/mentoark-app-icon-2026.png";
 
 export default function RegisterPage() {
   const { toast } = useToast();
@@ -127,9 +127,7 @@ export default function RegisterPage() {
           <div className="w-full max-w-md space-y-6 animate-fade-in">
             <div className="text-center space-y-3 mb-8 lg:hidden">
               <div className="relative mx-auto w-fit">
-                <div className="relative p-1 bg-gradient-to-tr from-purple-500 to-blue-500 rounded-2xl animate-breathe shadow-2xl">
-                  <img src={logo} alt="MentoArk" className="w-16 h-16 rounded-xl object-contain p-2 bg-[#1e1e2d]" />
-                </div>
+                <img src={logo} alt="MentoArk" className="w-16 h-16 object-contain animate-breathe drop-shadow-2xl" />
               </div>
               <h1 className="text-3xl font-extrabold tracking-tight">
                 <span className="text-white drop-shadow-md">Mento</span>
@@ -272,9 +270,7 @@ export default function RegisterPage() {
           <div className="flex-1 flex flex-col items-center justify-center w-full text-center">
             <div className="relative mb-8">
               <div className="absolute inset-0 bg-purple-500/20 blur-3xl rounded-full scale-150" />
-              <div className="relative w-36 h-36 rounded-full bg-white shadow-2xl flex items-center justify-center ring-4 ring-white/10">
-                <img src={logo} alt="MentoArk" className="w-24 h-24 object-contain" />
-              </div>
+              <img src={logo} alt="MentoArk" className="relative w-32 h-32 object-contain drop-shadow-2xl" />
             </div>
 
             <h2 className="text-5xl font-black tracking-tight mb-4">
