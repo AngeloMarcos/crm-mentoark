@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { getAuthToken } from "@/lib/api-token";
+import { BIBLIOTECA_VARIACOES, textoTemSpintax } from "@/lib/motorTexto";
 
 // [AUDITORIA] LÓGICA (Sprint Editor Template WhatsApp, 2026-09-04 — mockup de referência trazido
 // pelo usuário): esta tela substitui o antigo modal simples de `DisparoTemplates.tsx` por um
@@ -105,6 +106,15 @@ const LIMITE_BOTOES_TELEFONE = 1;
 const LIMITE_FOOTER = 60;
 const LIMITE_HEADER_TEXTO = 60;
 const LIMITE_BOTAO_TEXTO = 25;
+
+// [AUDITORIA] LÓGICA (melhoria Variáveis do Template, 2026-09-11 — pedido do usuário: "as
+// variáveis não tão muito intuitivas"): antes, as variáveis apareciam só como texto estático de
+// ajuda abaixo do Corpo ("Use {{nome}}, ..."), sem nenhum jeito de inserir com clique — o operador
+// tinha que digitar a sintaxe à mão. `Disparos.tsx` (passo "Mensagem" de campanha) já resolve isso
+// com chips clicáveis que inserem o placeholder direto; mesma lista de 5 variáveis usada lá (a
+// única diferença real antes desta mudança era a página de Template omitir {{data}} do texto de
+// ajuda, apesar de dizer "mesmas variáveis do passo Mensagem em Disparos" — corrigido junto).
+const PLACEHOLDERS = ["{{nome}}", "{{primeiro_nome}}", "{{telefone}}", "{{data}}", "{{empresa}}"];
 
 // [AUDITORIA] LÓGICA: agrupa botões por tipo (resposta_rapida primeiro, depois url, depois
 // telefone) — exigência real da Meta pra templates oficiais ("respostas rápidas ficam juntas"),
@@ -310,6 +320,24 @@ export default function DisparoTemplateEditorPage() {
     requestAnimationFrame(() => {
       el.focus();
       el.setSelectionRange(novoCursorIni, novoCursorFim);
+    });
+  };
+
+  // [AUDITORIA] LÓGICA (melhoria Variáveis do Template, 2026-09-11): insere `texto` na posição do
+  // cursor do Corpo (substitui a seleção, se houver) — usado pelos chips de variável/spintax
+  // abaixo. Mais intuitivo que só concatenar no final (padrão do `Disparos.tsx`): clicar
+  // "{{nome}}" com o cursor no meio da frase insere ali, não joga pro fim do texto.
+  const inserirNoCursor = (texto: string) => {
+    const el = corpoRef.current;
+    if (!el) { setCorpo(corpo + texto); return; }
+    const inicio = el.selectionStart;
+    const fim = el.selectionEnd;
+    const novoTexto = `${corpo.slice(0, inicio)}${texto}${corpo.slice(fim)}`;
+    const novoCursor = inicio + texto.length;
+    setCorpo(novoTexto);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(novoCursor, novoCursor);
     });
   };
 
@@ -525,12 +553,49 @@ export default function DisparoTemplateEditorPage() {
                 placeholder="Olá {{primeiro_nome}}, tudo bem?"
                 className="min-h-[140px] resize-y font-mono text-sm rounded-t-none"
               />
-              <p className="text-xs text-muted-foreground">
-                Use <code className="bg-muted px-1 rounded">{"{{nome}}"}</code>, <code className="bg-muted px-1 rounded">{"{{primeiro_nome}}"}</code>, <code className="bg-muted px-1 rounded">{"{{telefone}}"}</code>, <code className="bg-muted px-1 rounded">{"{{empresa}}"}</code> — mesmas variáveis do passo Mensagem em Disparos.
-              </p>
-              <p className="text-xs text-muted-foreground">
-                💡 Use <code className="bg-muted px-1 rounded">{"{opção 1|opção 2|opção 3}"}</code> pra variar o texto por contato sem custo de IA.
-              </p>
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-muted-foreground">Inserir variável:</span>
+                  {PLACEHOLDERS.map(v => (
+                    <Button
+                      key={v}
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="text-[10px] h-7"
+                      onClick={() => inserirNoCursor(v)}
+                    >
+                      +{v}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Preenchidas com o dado real do contato ao enviar — mesmas variáveis do passo Mensagem em Disparos.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-muted-foreground">Variar texto:</span>
+                  {BIBLIOTECA_VARIACOES.map(v => (
+                    <Button
+                      key={v.label}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="text-[10px] h-7"
+                      onClick={() => inserirNoCursor(v.spintax)}
+                    >
+                      🎲 {v.label}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  {textoTemSpintax(corpo)
+                    ? "Cada contato recebe uma opção sorteada dos blocos acima, sem custo de IA."
+                    : <>💡 Use <code className="bg-muted px-1 rounded">{"{opção 1|opção 2|opção 3}"}</code> pra variar o texto por contato sem custo de IA — os botões acima já inserem blocos prontos.</>}
+                </p>
+              </div>
             </div>
 
             <div className="space-y-1">
