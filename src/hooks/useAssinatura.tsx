@@ -15,6 +15,7 @@ export interface AssinaturaInfo {
   dias_restantes: number;
   read_only: boolean;
   sou_dono: boolean;
+  sou_master: boolean;
 }
 
 interface AssinaturaCtx {

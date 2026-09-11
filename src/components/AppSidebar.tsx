@@ -5,10 +5,11 @@ import {
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut, ShieldOff,
   ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
-  Activity, Webhook, Database, Sparkles, LayoutTemplate, Car, Download,
+  Activity, Webhook, Database, Sparkles, LayoutTemplate, Car, Download, CreditCard,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useAssinatura } from "@/hooks/useAssinatura";
 import logo from "@/assets/mentoark-logo.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -26,6 +27,8 @@ interface NavItem {
   modulo: string;
   color: string;
   adminOnly?: boolean;
+  /** Só o master do sistema (MASTER_EMAILS) vê — ver `assinatura.sou_master`. */
+  masterOnly?: boolean;
 }
 
 interface NavSubgroup {
@@ -174,6 +177,7 @@ const navGroups: NavGroup[] = [
         color: "text-teal-600",
         items: [
           { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
+          { title: "Assinaturas", url: "/admin/assinaturas", icon: CreditCard, modulo: "usuarios", color: "text-emerald-500", adminOnly: true, masterOnly: true },
           { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400", adminOnly: true },
           { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
         ],
@@ -204,6 +208,8 @@ function NavSubgroupSection({
   location: { pathname: string };
 }) {
   const { isAdmin, equipeRole } = useAuth();
+  const { assinatura } = useAssinatura();
+  const souMaster = !!assinatura?.sou_master;
   const visibleItems = useMemo(() => {
     return subgroup.items.filter((i) => {
       // 1. Permissão por módulo
@@ -211,6 +217,9 @@ function NavSubgroupSection({
 
       // 2. Admin logic
       if (i.adminOnly && !isAdmin) return false;
+
+      // 2b. Só o master do sistema
+      if (i.masterOnly && !souMaster) return false;
 
       // 3. Equipe logic para 'membro' (admin bypassa essa restrição)
       if (equipeRole === 'membro' && !isAdmin) {
@@ -221,7 +230,7 @@ function NavSubgroupSection({
 
       return true;
     });
-  }, [subgroup.items, hasModulo, isAdmin, equipeRole]);
+  }, [subgroup.items, hasModulo, isAdmin, equipeRole, souMaster]);
 
   const hasActive = visibleItems.some((i) => isRouteActive(location.pathname, i.url));
   // Subgrupos admin começam expandidos; demais, abrem só se a rota ativa estiver dentro
@@ -331,15 +340,18 @@ function NavGroupSection({
   location: { pathname: string };
 }) {
   const { isAdmin, equipeRole } = useAuth();
+  const { assinatura } = useAssinatura();
+  const souMaster = !!assinatura?.sou_master;
   if (group.adminOnly && !isAdmin && equipeRole !== 'gerente') return null;
 
   // Filtra subgrupos visíveis (com pelo menos 1 item permitido)
   const visibleSubgroups = group.subgroups.filter((sg) => {
     if (sg.adminOnly && !isAdmin && equipeRole !== 'gerente') return false;
-    
+
     return sg.items.some((i) => {
       if (!hasModulo(i.modulo)) return false;
       if (i.adminOnly && !isAdmin) return false;
+      if (i.masterOnly && !souMaster) return false;
       
       if (equipeRole === 'membro' && !isAdmin) {
         const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];

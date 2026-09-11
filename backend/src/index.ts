@@ -35,7 +35,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 import { pool, migrationsPool } from './db';
-import { authMiddleware, adminMiddleware, tenantContextMiddleware, assinaturaGuard, AuthRequest } from './middleware';
+import { authMiddleware, adminMiddleware, tenantContextMiddleware, assinaturaGuard, masterOnly, AuthRequest } from './middleware';
 import { makeCrud } from './crud';
 
 import authRouter from './auth';
@@ -77,6 +77,7 @@ import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
 import adminFirewallRouter, { createFirewallMiddleware } from './routes/admin_firewall';
 import suporteCopilotoRouter from './routes/suporte_copiloto';
 import assinaturaRouter from './routes/assinatura';
+import adminAssinaturasRouter from './routes/admin_assinaturas';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -467,6 +468,7 @@ app.use('/api/cargos', cargosRouter(pool));
 app.use('/api/corridas', corridasRouter(pool));
 app.use('/api/suporte',        suporteCopilotoRouter(pool));
 app.use('/api/assinatura', assinaturaRouter(pool));
+app.use('/api/admin/assinaturas', masterOnly, adminAssinaturasRouter(pool));
 app.use('/api/admin/firewall', adminFirewallRouter(pool));
 
 // Virtual tables for Database compatibility

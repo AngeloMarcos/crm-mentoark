@@ -8,7 +8,7 @@
  */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
-import { AuthRequest } from '../middleware';
+import { AuthRequest, isMasterEmail } from '../middleware';
 import { log } from '../logger';
 import { getAssinatura, resolverOwnerId, invalidarAssinaturaCache } from '../services/subscription';
 
@@ -27,11 +27,12 @@ export default function assinaturaRouter(pool: Pool): Router {
         dias_restantes: a.dias_restantes,
         read_only: a.read_only,
         sou_dono: ownerId === req.userId,
+        sou_master: isMasterEmail(req.userEmail),
       });
     } catch (err: any) {
       log.error('ASSINATURA', 'Erro ao ler status', { err: err?.message });
       // fail-open: banner some, nada trava
-      return res.json({ status: 'ativa', plano: 'free', trial_fim: null, dias_restantes: 0, read_only: false, sou_dono: false });
+      return res.json({ status: 'ativa', plano: 'free', trial_fim: null, dias_restantes: 0, read_only: false, sou_dono: false, sou_master: isMasterEmail(req.userEmail) });
     }
   });
 

@@ -32,6 +32,7 @@ import CerebroPage from "./pages/Cerebro";
 import AgentesPage from "./pages/Agentes";
 import UsoIAPage from "./pages/UsoIA";
 import UsuariosPage from "./pages/Usuarios";
+import AdminAssinaturasPage from "./pages/AdminAssinaturas";
 import CatalogoPage from "./pages/Catalogo";
 import CatalogoDetalhePage from "./pages/CatalogoDetalhe";
 import CatalogoEnviosPage from "./pages/CatalogoEnvios";
@@ -113,6 +114,7 @@ const App = () => (
               <Route path="/usuarios"     element={<ProtectedRoute requireAdmin>               <UsuariosPage /></ProtectedRoute>} />
               <Route path="/usuarios/cargos" element={<ProtectedRoute requireAdmin>            <CargosPage /></ProtectedRoute>} />
               <Route path="/seguranca"    element={<ProtectedRoute requireAdmin>               <SegurancaPage /></ProtectedRoute>} />
+              <Route path="/admin/assinaturas" element={<ProtectedRoute requireAdmin>          <AdminAssinaturasPage /></ProtectedRoute>} />
               <Route path="/admin/firewall" element={<ProtectedRoute requireAdmin>             <FirewallPage /></ProtectedRoute>} />
               <Route path="/admin/copiloto" element={<ProtectedRoute requireAdmin>             <CopilotoPage /></ProtectedRoute>} />
               <Route path="/admin/diagnostico-whatsapp" element={<ProtectedRoute requireAdmin> <DiagnosticoWhatsApp /></ProtectedRoute>} />

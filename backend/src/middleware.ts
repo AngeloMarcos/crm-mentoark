@@ -129,6 +129,17 @@ const MASTER_EMAILS_SET = new Set(
 );
 const ASSINATURA_WRITE_ALLOWLIST = ['/api/assinatura', '/api/suporte'];
 
+/** Master do sistema (MASTER_EMAILS) — dono da operação, acima de qualquer admin de tenant. */
+export function isMasterEmail(email?: string | null): boolean {
+  return !!email && MASTER_EMAILS_SET.has(email.toLowerCase());
+}
+
+/** Middleware: só master do sistema passa (usado no painel de assinaturas). */
+export function masterOnly(req: AuthRequest, res: Response, next: NextFunction) {
+  if (isMasterEmail(req.userEmail)) return next();
+  return res.status(403).json({ message: 'Acesso restrito ao administrador do sistema.' });
+}
+
 export async function assinaturaGuard(req: AuthRequest, res: Response, next: NextFunction) {
   if (process.env.TRIAL_ENFORCEMENT !== 'on') return next();
 
