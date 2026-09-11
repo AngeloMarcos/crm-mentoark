@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import ParticlesBackground from "@/components/ParticlesBackground";
-import logo from "@/assets/mentoark-logo.png";
+import logo from "@/assets/mentoark-logo-2026.png";
 
 export default function RegisterPage() {
   const { toast } = useToast();
