@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -162,7 +161,6 @@ export default function DisparoTemplateEditorPage() {
 
   const [carregando, setCarregando] = useState(editando);
   const [salvando, setSalvando] = useState(false);
-  const [previewTab, setPreviewTab] = useState<"oficial" | "extensao">("oficial");
 
   const [nome, setNome] = useState("");
   const [funilId, setFunilId] = useState<string>("");
@@ -419,7 +417,7 @@ export default function DisparoTemplateEditorPage() {
         </div>
 
         <div className="rounded-lg border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
-          As alterações não são enviadas automaticamente a nenhum provedor — o envio real de campanhas (Disparos) sempre usa o texto composto abaixo pela Evolution (aba <strong>Extensão</strong> no preview). Não há integração com a API oficial da Meta neste CRM; a aba <strong>API Oficial</strong> é só uma simulação visual.
+          As alterações não são enviadas automaticamente a nenhum provedor — o envio real de campanhas (Disparos) sempre usa o texto composto abaixo, enviado pela Evolution. Não há integração com a API oficial da Meta neste CRM.
         </div>
 
         <div className="grid lg:grid-cols-[1fr_360px] gap-6 items-start">
@@ -658,30 +656,22 @@ export default function DisparoTemplateEditorPage() {
           </div>
 
           {/* ── Preview ── */}
+          {/* [AUDITORIA] FIX APLICADO (2026-09-11 — pedido do usuário: "não temos api oficial,
+              tire essas opções e coloque só a mensagem"): removidas as abas "API Oficial"/
+              "Extensão" — não existe integração real com a Meta Cloud API neste CRM (só a
+              simulação visual que a aba "API Oficial" mostrava), e ter as duas abas passava a
+              impressão de uma escolha que não existe de verdade. Preview agora mostra direto o
+              único modo real de envio (o que já era a aba "Extensão": botões como linha de texto
+              clicável, via Evolution). */}
           <div className="lg:sticky lg:top-6 space-y-3">
-            <Tabs value={previewTab} onValueChange={v => setPreviewTab(v as "oficial" | "extensao")}>
-              <TabsList className="w-full">
-                <TabsTrigger value="oficial" className="flex-1">API Oficial</TabsTrigger>
-                <TabsTrigger value="extensao" className="flex-1">Extensão</TabsTrigger>
-              </TabsList>
-              <TabsContent value="oficial">
-                <PreviewBubble
-                  headerTipo={headerTipo} headerTexto={headerTexto} headerMidiaUrl={headerMidiaUrl}
-                  corpo={corpo} footer={footer} botoes={botoes} nativo
-                />
-              </TabsContent>
-              <TabsContent value="extensao">
-                <PreviewBubble
-                  headerTipo={headerTipo} headerTexto={headerTexto} headerMidiaUrl={headerMidiaUrl}
-                  corpo={corpo} footer={footer} botoes={botoes} nativo={false}
-                />
-              </TabsContent>
-            </Tabs>
-            {previewTab === "extensao" && (
-              <p className="text-[11px] text-muted-foreground px-1">
-                Texto que realmente sai numa campanha via Disparos: <span className="italic">"{textoPreview.slice(0, 80)}{textoPreview.length > 80 ? "…" : ""}"</span>
-              </p>
-            )}
+            <p className="text-xs font-medium text-muted-foreground px-1">Como a mensagem chega no WhatsApp</p>
+            <PreviewBubble
+              headerTipo={headerTipo} headerTexto={headerTexto} headerMidiaUrl={headerMidiaUrl}
+              corpo={corpo} footer={footer} botoes={botoes} nativo={false}
+            />
+            <p className="text-[11px] text-muted-foreground px-1">
+              Texto que realmente sai numa campanha via Disparos: <span className="italic">"{textoPreview.slice(0, 80)}{textoPreview.length > 80 ? "…" : ""}"</span>
+            </p>
           </div>
         </div>
 
@@ -697,12 +687,12 @@ export default function DisparoTemplateEditorPage() {
   );
 }
 
-// Bolha de mensagem no estilo WhatsApp — `nativo` alterna entre botões desenhados como chip (aba
-// "API Oficial", só visual) e botões como linha de texto clicável (aba "Extensão", o que sai de
-// verdade no envio real por Disparos/Evolution).
-function PreviewBubble({ headerTipo, headerTexto, headerMidiaUrl, corpo, footer, botoes, nativo }: {
+// Bolha de mensagem no estilo WhatsApp — botões sempre como linha de texto clicável, o único modo
+// real de envio por Disparos/Evolution (removido o modo "nativo"/chip que só existia pra simular
+// a API oficial da Meta, que este CRM não integra — ver nota grande no topo do arquivo).
+function PreviewBubble({ headerTipo, headerTexto, headerMidiaUrl, corpo, footer, botoes }: {
   headerTipo: HeaderTipo; headerTexto: string; headerMidiaUrl: string; corpo: string; footer: string;
-  botoes: TemplateBotao[]; nativo: boolean;
+  botoes: TemplateBotao[];
 }) {
   return (
     <Card className="bg-[#efeae2] dark:bg-neutral-900 border-none">
@@ -734,32 +724,15 @@ function PreviewBubble({ headerTipo, headerTexto, headerMidiaUrl, corpo, footer,
         </div>
 
         {botoes.length > 0 && (
-          nativo ? (
-            <div className="mt-2 space-y-1">
-              {botoes.slice(0, 3).map(b => (
-                <div key={b.id} className="bg-white dark:bg-neutral-800 rounded-md shadow-sm py-2 text-center text-sm font-medium text-primary flex items-center justify-center gap-1.5">
-                  {b.tipo === "url" && <LinkIcon className="h-3.5 w-3.5" />}
-                  {b.tipo === "telefone" && <Phone className="h-3.5 w-3.5" />}
-                  {b.texto || "(sem texto)"}
-                </div>
-              ))}
-              {botoes.length > 3 && (
-                <div className="bg-white dark:bg-neutral-800 rounded-md shadow-sm py-2 text-center text-xs text-muted-foreground">
-                  Ver todas as opções
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="mt-1.5 space-y-1 pl-1">
-              {botoes.map(b => (
-                <p key={b.id} className="text-sm text-primary font-medium">
-                  {b.tipo === "url" && `🔗 ${b.texto || "Acessar"}`}
-                  {b.tipo === "telefone" && `📞 ${b.texto || "Ligar"}`}
-                  {b.tipo === "resposta_rapida" && `👉 ${b.texto || "(sem texto)"}`}
-                </p>
-              ))}
-            </div>
-          )
+          <div className="mt-1.5 space-y-1 pl-1">
+            {botoes.map(b => (
+              <p key={b.id} className="text-sm text-primary font-medium">
+                {b.tipo === "url" && `🔗 ${b.texto || "Acessar"}`}
+                {b.tipo === "telefone" && `📞 ${b.texto || "Ligar"}`}
+                {b.tipo === "resposta_rapida" && `👉 ${b.texto || "(sem texto)"}`}
+              </p>
+            ))}
+          </div>
         )}
       </CardContent>
     </Card>
