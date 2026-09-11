@@ -3,7 +3,7 @@ import {
   PhoneCall, Filter, MessageCircle, Timer, Zap,
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut, ShieldOff,
-  Lock, MessagesSquare, Phone, Inbox, Smartphone,
+  Lock, MessagesSquare, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
   Activity, Webhook, Database, Sparkles, LayoutTemplate,
 } from "lucide-react";
@@ -28,154 +28,102 @@ interface NavItem {
   adminOnly?: boolean;
 }
 
-interface NavSubgroup {
+interface NavGroup {
   label: string;
-  icon?: React.ElementType;
-  color?: string;
+  icon: React.ElementType;
+  color: string;
   adminOnly?: boolean;
   items: NavItem[];
 }
 
-interface NavGroup {
-  label: string;
-  adminOnly?: boolean;
-  subgroups: NavSubgroup[];
-}
-
 // ── Estrutura ─────────────────────────────────────────────────────────────────
+// Categorias sempre abertas (sem accordion) — cada uma já mostra seus itens
+// direto, sem precisar clicar pra expandir.
 
 const navGroups: NavGroup[] = [
   {
-    label: "📊 VISÃO GERAL",
-    subgroups: [
-      {
-        label: "Painéis",
-        icon: LayoutDashboard,
-        color: "text-blue-500",
-        items: [
-          { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, modulo: "dashboard", color: "text-blue-500" },
-          { title: "Central de BI", url: "/bi", icon: BarChart3, modulo: "dashboard", color: "text-cyan-500" },
-        ],
-      },
+    label: "Visão Geral",
+    icon: LayoutDashboard,
+    color: "text-blue-500",
+    items: [
+      { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, modulo: "dashboard", color: "text-blue-500" },
+      { title: "Central de BI", url: "/bi", icon: BarChart3, modulo: "dashboard", color: "text-cyan-500" },
     ],
   },
   {
-    label: "👥 EQUIPE",
-    subgroups: [
-      {
-        label: "Equipe",
-        icon: Users2,
-        color: "text-indigo-500",
-        items: [
-          { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
-          { title: "Chat da Equipe", url: "/chat-equipe", icon: UsersIcon, modulo: "whatsapp", color: "text-purple-400" },
-          { title: "Smart Links & QR Code", url: "/smart-links", icon: Link2, modulo: "whatsapp", color: "text-fuchsia-400" },
-        ],
-      },
+    label: "Equipe",
+    icon: Users2,
+    color: "text-indigo-500",
+    items: [
+      { title: "Minha Equipe", url: "/equipe", icon: Users2, modulo: "leads", color: "text-indigo-500" },
+      { title: "Chat da Equipe", url: "/chat-equipe", icon: UsersIcon, modulo: "whatsapp", color: "text-purple-400" },
+      { title: "Smart Links & QR Code", url: "/smart-links", icon: Link2, modulo: "whatsapp", color: "text-fuchsia-400" },
     ],
   },
   {
-    label: "🎯 VENDAS",
-    subgroups: [
-      {
-        label: "Pipeline Comercial",
-        icon: Filter,
-        color: "text-orange-500",
-        items: [
-          { title: "Leads", url: "/leads", icon: UserPlus, modulo: "leads", color: "text-indigo-500" },
-          { title: "Contatos", url: "/contatos", icon: BookUser, modulo: "contatos", color: "text-purple-500" },
-          { title: "Tags e Funil", url: "/tags-funil", icon: Tags, modulo: "leads", color: "text-violet-500" },
-          { title: "Funil de Vendas", url: "/funil", icon: Filter, modulo: "funil", color: "text-orange-500" },
-          { title: "Kanban / Tarefas", url: "/kanban", icon: LayoutGrid, modulo: "leads", color: "text-blue-500" },
-        ],
-      },
+    label: "Vendas",
+    icon: Filter,
+    color: "text-orange-500",
+    items: [
+      { title: "Leads", url: "/leads", icon: UserPlus, modulo: "leads", color: "text-indigo-500" },
+      { title: "Contatos", url: "/contatos", icon: BookUser, modulo: "contatos", color: "text-purple-500" },
+      { title: "Tags e Funil", url: "/tags-funil", icon: Tags, modulo: "leads", color: "text-violet-500" },
+      { title: "Funil de Vendas", url: "/funil", icon: Filter, modulo: "funil", color: "text-orange-500" },
+      { title: "Kanban / Tarefas", url: "/kanban", icon: LayoutGrid, modulo: "leads", color: "text-blue-500" },
     ],
   },
   {
-    label: "💬 ATENDIMENTO",
-    subgroups: [
-      {
-        label: "WhatsApp Chat",
-        icon: MessagesSquare,
-        color: "text-green-500",
-        items: [
-          { title: "WhatsApp", url: "/whatsapp", icon: MessageCircle, modulo: "whatsapp", color: "text-green-500" },
-          
-          { title: "Monitor", url: "/monitor-whatsapp", icon: Monitor, modulo: "whatsapp", color: "text-blue-400" },
-          { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap, modulo: "whatsapp", color: "text-amber-500" },
-          { title: "SLA / Gestão", url: "/sla", icon: Timer, modulo: "whatsapp", color: "text-yellow-500" },
-        ],
-      },
-      {
-        label: "Telefonia",
-        icon: Phone,
-        color: "text-emerald-500",
-        items: [
-          { title: "Discagem", url: "/discagem", icon: PhoneCall, modulo: "discagem", color: "text-emerald-500" },
-        ],
-      },
+    label: "Atendimento",
+    icon: MessagesSquare,
+    color: "text-green-500",
+    items: [
+      { title: "WhatsApp", url: "/whatsapp", icon: MessageCircle, modulo: "whatsapp", color: "text-green-500" },
+      { title: "Monitor", url: "/monitor-whatsapp", icon: Monitor, modulo: "whatsapp", color: "text-blue-400" },
+      { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap, modulo: "whatsapp", color: "text-amber-500" },
+      { title: "SLA / Gestão", url: "/sla", icon: Timer, modulo: "whatsapp", color: "text-yellow-500" },
+      { title: "Discagem", url: "/discagem", icon: PhoneCall, modulo: "discagem", color: "text-emerald-500" },
     ],
   },
   {
-    label: "📣 COMUNICAÇÃO",
-    subgroups: [
-      {
-        label: "Campanhas & Disparos",
-        icon: Megaphone,
-        color: "text-rose-500",
-        items: [
-          { title: "Disparos", url: "/disparos", icon: Send, modulo: "disparos", color: "text-sky-500" },
-          { title: "Templates", url: "/disparos/templates", icon: LayoutTemplate, modulo: "disparos", color: "text-indigo-500" },
-          { title: "Campanhas", url: "/campanhas", icon: Megaphone, modulo: "campanhas", color: "text-rose-500" },
-          { title: "Marketing Digital", url: "/marketing-digital", icon: Rocket, modulo: "campanhas", color: "text-blue-600" },
-        ],
-      },
+    label: "Comunicação",
+    icon: Megaphone,
+    color: "text-rose-500",
+    items: [
+      { title: "Disparos", url: "/disparos", icon: Send, modulo: "disparos", color: "text-sky-500" },
+      { title: "Templates", url: "/disparos/templates", icon: LayoutTemplate, modulo: "disparos", color: "text-indigo-500" },
+      { title: "Campanhas", url: "/campanhas", icon: Megaphone, modulo: "campanhas", color: "text-rose-500" },
+      { title: "Marketing Digital", url: "/marketing-digital", icon: Rocket, modulo: "campanhas", color: "text-blue-600" },
     ],
   },
   {
-    label: "📁 CONTEÚDO",
-    subgroups: [
-      {
-        label: "Biblioteca",
-        icon: Library,
-        color: "text-fuchsia-500",
-        items: [
-          { title: "Catálogo", url: "/catalogo", icon: Package, modulo: "catalogo", color: "text-fuchsia-500" },
-          { title: "Galeria", url: "/galeria", icon: Images, modulo: "galeria", color: "text-pink-500" },
-          { title: "Documentação", url: "/docs", icon: BookOpen, modulo: "docs", color: "text-slate-400" },
-        ],
-      },
+    label: "Conteúdo",
+    icon: Library,
+    color: "text-fuchsia-500",
+    items: [
+      { title: "Catálogo", url: "/catalogo", icon: Package, modulo: "catalogo", color: "text-fuchsia-500" },
+      { title: "Galeria", url: "/galeria", icon: Images, modulo: "galeria", color: "text-pink-500" },
+      { title: "Documentação", url: "/docs", icon: BookOpen, modulo: "docs", color: "text-slate-400" },
     ],
   },
   {
-    label: "🤖 IA & AUTOMAÇÃO",
-    subgroups: [
-      {
-        label: "Agentes & Prompts",
-        icon: Bot,
-        color: "text-teal-500",
-        items: [
-          { title: "Agentes de IA", url: "/agentes", icon: Bot, modulo: "agentes", color: "text-teal-500" },
-          { title: "Configuração da IA", url: "/cerebro", icon: Brain, modulo: "cerebro", color: "text-purple-400" },
-          { title: "Workflows", url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500" },
-          { title: "Uso de IA", url: "/uso-ia", icon: Activity, modulo: "agentes", color: "text-pink-500" },
-        ],
-      },
+    label: "IA & Automação",
+    icon: Bot,
+    color: "text-teal-500",
+    items: [
+      { title: "Agentes de IA", url: "/agentes", icon: Bot, modulo: "agentes", color: "text-teal-500" },
+      { title: "Configuração da IA", url: "/cerebro", icon: Brain, modulo: "cerebro", color: "text-purple-400" },
+      { title: "Workflows", url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500" },
+      { title: "Uso de IA", url: "/uso-ia", icon: Activity, modulo: "agentes", color: "text-pink-500" },
     ],
   },
   {
-    label: "⚙️ ADMINISTRAÇÃO",
-    subgroups: [
-      {
-        label: "Acessos & Conexões",
-        icon: SettingsIcon,
-        color: "text-teal-600",
-        items: [
-          { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
-          { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400", adminOnly: true },
-          { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
-        ],
-      },
+    label: "Administração",
+    icon: SettingsIcon,
+    color: "text-teal-600",
+    items: [
+      { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
+      { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400", adminOnly: true },
+      { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
     ],
   },
 ];
@@ -188,22 +136,24 @@ function isRouteActive(pathname: string, url: string) {
   return pathname === base || pathname.startsWith(base + "/");
 }
 
-// ── Subgrupo colapsável ───────────────────────────────────────────────────────
+// ── Categoria (sempre expandida — sem accordion) ────────────────────────────────
 
-function NavSubgroupSection({
-  subgroup,
+function NavGroupSection({
+  group,
   collapsed,
   hasModulo,
   location,
 }: {
-  subgroup: NavSubgroup;
+  group: NavGroup;
   collapsed: boolean;
   hasModulo: (m: string) => boolean;
   location: { pathname: string };
 }) {
   const { isAdmin, equipeRole } = useAuth();
+  if (group.adminOnly && !isAdmin && equipeRole !== 'gerente') return null;
+
   const visibleItems = useMemo(() => {
-    return subgroup.items.filter((i) => {
+    return group.items.filter((i) => {
       // 1. Permissão por módulo
       if (!hasModulo(i.modulo)) return false;
 
@@ -219,15 +169,14 @@ function NavSubgroupSection({
 
       return true;
     });
-  }, [subgroup.items, hasModulo, isAdmin, equipeRole]);
+  }, [group.items, hasModulo, isAdmin, equipeRole]);
 
+  if (visibleItems.length === 0) return null;
+
+  const Icon = group.icon;
   const hasActive = visibleItems.some((i) => isRouteActive(location.pathname, i.url));
 
-  if (visibleItems.length === 0 || (subgroup.adminOnly && !isAdmin)) return null;
-
-  const Icon = subgroup.icon || LayoutDashboard;
-
-  // Modo colapsado (sidebar mini): mostra só os ícones dos itens, sem cabeçalho expansível
+  // Modo colapsado (sidebar mini): mostra só os ícones dos itens, sem cabeçalho de categoria
   if (collapsed) {
     return (
       <SidebarMenu className="px-1">
@@ -257,21 +206,15 @@ function NavSubgroupSection({
   }
 
   return (
-    <div className="px-2">
-      <div
-        className={`flex items-center w-full gap-2.5 px-2.5 py-2 rounded-lg ${
-          hasActive
-            ? "gradient-brand-subtle shadow-[inset_0_1px_0_hsl(217_91%_45%/0.08),0_0_12px_hsl(217_91%_45%/0.10),inset_0_0_0_1px_hsl(217_91%_45%/0.14)]"
-            : ""
-        }`}
-      >
-        <Icon className={`h-[18px] w-[18px] shrink-0 transition-all duration-300 ${hasActive ? (subgroup.color || "text-primary") + " drop-shadow-[0_0_4px_hsl(217_91%_45%/0.25)] scale-105" : "text-muted-foreground"}`} />
-        <span className={`flex-1 text-left text-sm font-medium ${hasActive ? "gradient-brand-text" : "text-sidebar-foreground"}`}>
-          {subgroup.label}
+    <SidebarGroup className="py-0">
+      <div className="flex items-center gap-2 px-4 pt-4 pb-1.5">
+        <Icon className={`h-3.5 w-3.5 shrink-0 ${hasActive ? group.color : "text-muted-foreground/60"}`} />
+        <span className={`text-[11px] font-semibold tracking-wide uppercase ${hasActive ? group.color : "text-muted-foreground/60"}`}>
+          {group.label}
         </span>
       </div>
 
-      <div className="relative mt-1 ml-[18px] pl-3 border-l border-sidebar-border/60">
+      <SidebarGroupContent className="px-2">
         <SidebarMenu className="gap-0.5">
           {visibleItems.map((item) => {
             const active = isRouteActive(location.pathname, item.url);
@@ -288,7 +231,7 @@ function NavSubgroupSection({
                     }`}
                   >
                     {active && (
-                      <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(217_91%_45%/0.7)]" />
+                      <span className="absolute -left-1 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(217_91%_45%/0.7)]" />
                     )}
                     <item.icon
                       className={`h-4 w-4 shrink-0 transition-all duration-300 ${
@@ -302,68 +245,6 @@ function NavSubgroupSection({
             );
           })}
         </SidebarMenu>
-      </div>
-    </div>
-  );
-}
-
-// ── Categoria ─────────────────────────────────────────────────────────────────
-
-function NavGroupSection({
-  group,
-  collapsed,
-  hasModulo,
-  location,
-}: {
-  group: NavGroup;
-  collapsed: boolean;
-  hasModulo: (m: string) => boolean;
-  location: { pathname: string };
-}) {
-  const { isAdmin, equipeRole } = useAuth();
-  if (group.adminOnly && !isAdmin && equipeRole !== 'gerente') return null;
-
-  // Filtra subgrupos visíveis (com pelo menos 1 item permitido)
-  const visibleSubgroups = group.subgroups.filter((sg) => {
-    if (sg.adminOnly && !isAdmin && equipeRole !== 'gerente') return false;
-    
-    return sg.items.some((i) => {
-      if (!hasModulo(i.modulo)) return false;
-      if (i.adminOnly && !isAdmin) return false;
-      
-      if (equipeRole === 'membro' && !isAdmin) {
-        const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];
-        return allowedPaths.some(path => i.url.startsWith(path));
-      }
-      
-      return true;
-    });
-  });
-  if (visibleSubgroups.length === 0) return null;
-
-  return (
-    <SidebarGroup className="py-0">
-      {!collapsed && (
-        <div className="px-4 pt-4 pb-1.5">
-          <span className="text-[10px] font-semibold tracking-widest uppercase text-muted-foreground/60">
-            {group.label}
-          </span>
-        </div>
-      )}
-      {collapsed && <div className="mx-3 my-2 h-px bg-sidebar-border/40" />}
-
-      <SidebarGroupContent>
-        <div className="flex flex-col gap-0.5">
-          {visibleSubgroups.map((sg) => (
-            <NavSubgroupSection
-              key={sg.label}
-              subgroup={sg}
-              collapsed={collapsed}
-              hasModulo={hasModulo}
-              location={location}
-            />
-          ))}
-        </div>
       </SidebarGroupContent>
     </SidebarGroup>
   );
