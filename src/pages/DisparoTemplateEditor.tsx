@@ -20,6 +20,7 @@ import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { getAuthToken } from "@/lib/api-token";
 import { BIBLIOTECA_VARIACOES, textoTemSpintax } from "@/lib/motorTexto";
+import { VARIAVEIS_MENSAGEM_CONTATO } from "@/lib/modeloImportacao";
 
 // [AUDITORIA] LÓGICA (Sprint Editor Template WhatsApp, 2026-09-04 — mockup de referência trazido
 // pelo usuário): esta tela substitui o antigo modal simples de `DisparoTemplates.tsx` por um
@@ -110,10 +111,15 @@ const LIMITE_BOTAO_TEXTO = 25;
 // variáveis não tão muito intuitivas"): antes, as variáveis apareciam só como texto estático de
 // ajuda abaixo do Corpo ("Use {{nome}}, ..."), sem nenhum jeito de inserir com clique — o operador
 // tinha que digitar a sintaxe à mão. `Disparos.tsx` (passo "Mensagem" de campanha) já resolve isso
-// com chips clicáveis que inserem o placeholder direto; mesma lista de 5 variáveis usada lá (a
-// única diferença real antes desta mudança era a página de Template omitir {{data}} do texto de
-// ajuda, apesar de dizer "mesmas variáveis do passo Mensagem em Disparos" — corrigido junto).
-const PLACEHOLDERS = ["{{nome}}", "{{primeiro_nome}}", "{{telefone}}", "{{data}}", "{{empresa}}"];
+// com chips clicáveis que inserem o placeholder direto.
+// [AUDITORIA] FIX APLICADO (revisão 2026-09-11, mesma sessão — pedido do usuário: "todas as
+// colunas da planilha tem que ser uma variável do sistema... quando formos adicionar a variavel
+// no template tem que ser a mesma variavel dessa coluna"): lista local trocada por
+// `VARIAVEIS_MENSAGEM_CONTATO` (src/lib/modeloImportacao.ts) — a MESMA lista usada pelos botões
+// de Disparos.tsx e gerada a partir de `CAMPOS_CONTATO`, a fonte única também usada pelo modelo de
+// planilha baixável. Import de uma constante em vez de copiar a lista aqui de novo é o que garante
+// as 3 pontas (planilha, variável, botão) nunca mais divergirem sozinhas.
+const PLACEHOLDERS = VARIAVEIS_MENSAGEM_CONTATO;
 
 // [AUDITORIA] LÓGICA: agrupa botões por tipo (resposta_rapida primeiro, depois url, depois
 // telefone) — exigência real da Meta pra templates oficiais ("respostas rápidas ficam juntas"),

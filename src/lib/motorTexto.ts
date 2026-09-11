@@ -53,7 +53,10 @@ function removerPlaceholderVazio(texto: string, placeholder: string): string {
  * o placeholder é removido com limpeza de pontuação (`removerPlaceholderVazio`) em vez de virar
  * texto vazio no meio da frase.
  */
-export function substituirPlaceholders(mensagem: string, contato: { nome?: string; telefone?: string; empresa?: string }): string {
+export function substituirPlaceholders(mensagem: string, contato: {
+  nome?: string; telefone?: string; empresa?: string; email?: string; cargo?: string;
+  cidade?: string; estado?: string; interesse?: string; data_nascimento?: string;
+}): string {
   const semNomeReal = !!contato.telefone && contato.nome === contato.telefone;
   const nome = semNomeReal ? "" : (contato.nome || "cliente");
   const primeiroNome = semNomeReal ? "" : nome.split(" ")[0];
@@ -66,10 +69,29 @@ export function substituirPlaceholders(mensagem: string, contato: { nome?: strin
   } else {
     resultado = resultado.replaceAll("{{nome}}", nome).replaceAll("{{primeiro_nome}}", primeiroNome);
   }
+  // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11 — pedido do usuário:
+  // "todas as colunas da planilha tem que ser uma variável do sistema"): uma entrada aqui por
+  // COLUNA de `CAMPOS_CONTATO` (src/lib/modeloImportacao.ts) que não seja nome/telefone (tratados
+  // à parte acima/abaixo, com regra própria de "sem nome real") — mesmo nome de coluna/variável de
+  // propósito. `empresa` estava fora deste loop antes desta revisão (replace direto, sem limpeza)
+  // — trazida pra cá também, mesmo tratamento que os campos novos: campo vazio some com limpeza de
+  // pontuação ao redor (`removerPlaceholderVazio`) em vez de deixar `{{empresa}}` literal ou um
+  // buraco no meio da frase — a maioria dos contatos importados não vai ter todo campo opcional
+  // preenchido, e a mensagem não pode ficar visivelmente quebrada por isso.
+  for (const [placeholder, valor] of [
+    ["{{email}}", contato.email],
+    ["{{cidade}}", contato.cidade],
+    ["{{estado}}", contato.estado],
+    ["{{interesse}}", contato.interesse],
+    ["{{data_nascimento}}", contato.data_nascimento],
+    ["{{empresa}}", contato.empresa],
+    ["{{cargo}}", contato.cargo],
+  ] as const) {
+    resultado = valor ? resultado.replaceAll(placeholder, valor) : removerPlaceholderVazio(resultado, placeholder);
+  }
   return resultado
     .replaceAll("{{telefone}}", contato.telefone || "")
-    .replaceAll("{{data}}", dataHoje)
-    .replaceAll("{{empresa}}", contato.empresa || "");
+    .replaceAll("{{data}}", dataHoje);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

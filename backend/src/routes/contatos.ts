@@ -188,7 +188,12 @@ export default function contatos(pool: Pool): Router {
     const itens = Array.isArray(req.body?.contatos) ? req.body.contatos : [];
     if (!itens.length) return res.status(400).json({ message: 'Nenhum contato enviado' });
 
-    const COLS = ['user_id', 'nome', 'telefone', 'email', 'empresa', 'cargo', 'notas', 'origem', 'status', 'tags', 'lista_id'];
+    // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): cidade/estado/
+    // interesse/data_nascimento adicionados — mesmas 4 colunas novas de `contatos`
+    // (migrations.ts) e mesmas 4 variáveis novas em `motorTexto.ts`. Sem essa entrada aqui, o
+    // frontend já mandaria esses campos no payload (Disparos.tsx, `confirmarImportacao`) mas o
+    // INSERT ignoraria silenciosamente — `COLS` é a lista fixa que decide o que de fato grava.
+    const COLS = ['user_id', 'nome', 'telefone', 'email', 'empresa', 'cargo', 'cidade', 'estado', 'interesse', 'data_nascimento', 'notas', 'origem', 'status', 'tags', 'lista_id'];
     const BATCH = 500;
     const inseridos: { id: string; telefone: string }[] = [];
     // Set (não array) — dedupe telefone repetido dentro do próprio arquivo antes de calcular
@@ -219,6 +224,15 @@ export default function contatos(pool: Pool): Router {
             raw?.email || null,
             raw?.empresa || null,
             raw?.cargo || null,
+            raw?.cidade || null,
+            raw?.estado || null,
+            raw?.interesse || null,
+            // [AUDITORIA] LÓGICA: `data_nascimento` gravada como TEXT (não DATE) de propósito —
+            // planilha de cliente real vem em formatos variados (DD/MM/AAAA, "12 de maio", etc.)
+            // e um tipo DATE rejeitaria a linha inteira em qualquer formato ambíguo ou fora do
+            // padrão ISO. Mesma filosofia já usada pro resto do import (nunca descarta a linha por
+            // causa de um campo extra malformado, só grava como veio).
+            raw?.data_nascimento || null,
             raw?.notas || null,
             raw?.origem || 'Importado (Disparos)',
             raw?.status || 'novo',

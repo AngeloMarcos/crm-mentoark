@@ -45,7 +45,7 @@ import {
   temTermoVariavel,
   TAMANHO_DICIONARIO_VARIACAO,
 } from "@/lib/motorTexto";
-import { baixarModeloContatosCSV } from "@/lib/modeloImportacao";
+import { baixarModeloContatosCSV, VARIAVEIS_MENSAGEM_CONTATO } from "@/lib/modeloImportacao";
 import {
   Dialog,
   DialogContent,
@@ -201,7 +201,8 @@ function sanitizarTelefoneImportacao(raw: string): TelefoneImportado {
 }
 
 interface ContatoImportado {
-  nome: string; telefone: string; email: string; empresa: string; cargo: string; notas: string;
+  nome: string; telefone: string; email: string; empresa: string; cargo: string;
+  cidade: string; estado: string; interesse: string; data_nascimento: string; notas: string;
 }
 
 interface LinhaSuspeita { linha: number; motivo: string }
@@ -343,12 +344,22 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
     const atividade = getPorSubstring(cols, "atividades_principal", "atividade principal", "atividade", "cnae", "segmento", "ramo");
     const naturezaJuridica = getPorSubstring(cols, "natureza_juridica", "natureza jurídica");
     const porte = getPorSubstring(cols, "porte_empresa", "porte");
+    // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): cidade/estado
+    // extraídos numa variável própria (antes só entravam no `endereco` composto abaixo, dentro de
+    // `notas`) — pedido do usuário: "todas as colunas da planilha tem que ser uma variável do
+    // sistema", então viram campos de primeira classe (`contatos.cidade`/`contatos.estado`,
+    // {{cidade}}/{{estado}} em `motorTexto.ts`), sem tirar do `endereco` — continua registrado ali
+    // por completude (junto com logradouro/número/bairro, que não têm variável própria).
+    const cidade = getPorSubstring(cols, "municipio", "município", "cidade");
+    const estadoContato = getPorSubstring(cols, "estado", "uf");
+    const interesse = getPorSubstring(cols, "interesse", "produto de interesse", "produto_interesse", "produto");
+    const dataNascimento = getPorSubstring(cols, "data de nascimento", "data_nascimento", "nascimento", "aniversario", "aniversário");
     const endereco = [
       getPorSubstring(cols, "logradouro"),
       getPorSubstring(cols, "numero", "número"),
       getPorSubstring(cols, "bairro"),
-      getPorSubstring(cols, "municipio", "município"),
-      getPorSubstring(cols, "estado", "uf"),
+      cidade,
+      estadoContato,
     ].filter(Boolean).join(", ");
 
     const notasExtra: string[] = [];
@@ -378,6 +389,10 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
       email: getPorSubstring(cols, "e-mail", "email", "mail"),
       empresa,
       cargo: getPorSubstring(cols, "cargo", "função", "role", "profissão", "profissao") || atividade,
+      cidade,
+      estado: estadoContato,
+      interesse,
+      data_nascimento: dataNascimento,
       notas: notasExtra.join(" | "),
     });
 
@@ -576,8 +591,14 @@ export default function DisparosPage() {
       // [AUDITORIA] FIX APLICADO (Sprint Colunas de Status de Envio, 2026-07-31): `funil_estagio_id`
       // adicionado ao select das 3 fontes — usado pela coluna nova "Situação no CRM" na prévia de
       // contatos (StepContacts), mesma fonte já usada na aba "Por Estágio" desta mesma tela.
+      // [AUDITORIA] FIX APLICADO (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): email/
+      // cargo/cidade/estado/interesse/data_nascimento adicionados ao select das 3 fontes — mesmo
+      // motivo do `empresa` acima: sem o campo no select, a variável correspondente
+      // (substituirPlaceholders, motorTexto.ts) sempre sai vazia no envio real, mesmo com o dado
+      // preenchido no contato. `email`/`cargo` já eram variável desde sempre mas nunca tinham sido
+      // selecionados aqui — lacuna antiga, fechada junto com os 4 campos novos.
       if (form.tags_selecionadas.length > 0) {
-        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, tags, opt_out, ultimo_disparo_em, funil_estagio_id"));
+        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, opt_out, ultimo_disparo_em, funil_estagio_id"));
         const filtered = data.filter((c: any) =>
           Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
         );
@@ -591,7 +612,7 @@ export default function DisparosPage() {
             // adicionado ao select — necessário pra regra de variante por tag (ver item 3,
             // StepReview.handleStart) funcionar independente de qual dos 3 modos (tag/estágio/
             // lista) selecionou o contato, não só quando a busca em si foi por tag.
-            .select("id, nome, telefone, empresa, tags, opt_out, ultimo_disparo_em, funil_estagio_id")
+            .select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, opt_out, ultimo_disparo_em, funil_estagio_id")
             .in("funil_estagio_id", form.estagios_selecionados)
         );
         list = [...list, ...data];
@@ -610,7 +631,7 @@ export default function DisparosPage() {
           // instâncias do anti-ban nesta mesma tela). Operador ainda pode incluir esses contatos
           // de propósito atribuindo tag/lista/estágio manualmente — os outros 2 modos continuam
           // trazendo qualquer contato, sem essa exclusão.
-          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem"));
+          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem"));
           const semGrupo = data.filter((c: any) => c.origem !== "Grupo WhatsApp");
           list = [...list, ...semGrupo];
         } else {
@@ -618,7 +639,7 @@ export default function DisparosPage() {
             api
               .from("contatos")
               // tags adicionado — ver comentário no bloco de estágio acima (mesmo motivo)
-              .select("id, nome, telefone, empresa, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id")
+              .select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id")
               .in("lista_id", form.listas_selecionadas)
           );
           list = [...list, ...data];
@@ -2288,7 +2309,7 @@ function StepMessage({ form, setForm }: any) {
             placeholder={form.tipo_midia === 'texto' ? "Olá {{primeiro_nome}}, tudo bem?" : "Legenda do arquivo..."}
           />
           <div className="flex gap-2 flex-wrap">
-            {["{{nome}}", "{{primeiro_nome}}", "{{telefone}}", "{{data}}", "{{empresa}}"].map(v => (
+            {VARIAVEIS_MENSAGEM_CONTATO.map(v => (
               <Button key={v} size="sm" variant="secondary" className="text-[10px] h-7" onClick={() => {
                 setTextoAtivo(textoAtivo + v);
               }}>+{v}</Button>
@@ -2383,7 +2404,10 @@ function StepMessage({ form, setForm }: any) {
                 ordem usada no envio real (StepReview.handleStart), incluindo a camada nova (item 2)
                 respeitando `form.variacao_automatica`. */}
             <p className="text-sm whitespace-pre-wrap">
-              {personalizarMensagem(textoAtivo, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" }, form.variacao_automatica)}
+              {personalizarMensagem(textoAtivo, {
+                nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo",
+                cidade: "São Paulo", estado: "SP", interesse: "Consórcio de imóvel", data_nascimento: "12/05/1990",
+              }, form.variacao_automatica)}
             </p>
             {textoTemSpintax(textoAtivo) ? (
               <p className="text-[10px] text-muted-foreground italic mt-1">

@@ -2279,5 +2279,20 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'estrutura organizacional (departamentos/filiais/squads) OK');
 
+  // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11 — pedido do usuário:
+  // "todas as colunas da planilha tem que ser uma variável do sistema"): 4 colunas novas em
+  // `contatos`, cada uma com uma variável correspondente em `motorTexto.ts`
+  // (`substituirPlaceholders`) — {{cidade}}, {{estado}}, {{interesse}}, {{data_nascimento}} — e
+  // no modelo de planilha baixável (`src/lib/modeloImportacao.ts`). Mesmo nome de coluna/variável
+  // de propósito (regra explícita do usuário), pra quem prepara a planilha reconhecer de cara
+  // qual variável cada coluna vira no template. `data_nascimento` é TEXT, não DATE — ver nota em
+  // `backend/src/routes/contatos.ts` (`importar-lote`) sobre formato variado de planilha real.
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS cidade TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS estado TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS interesse TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS data_nascimento TEXT`).catch(() => {});
+
+  log.info('MIGRATIONS', 'contatos: cidade/estado/interesse/data_nascimento OK');
+
   log.info('MIGRATIONS', 'OK');
 }
