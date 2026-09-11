@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -2097,6 +2097,29 @@ function StepMessage({ form, setForm }: any) {
   const textoAtivo: string = form[campoAtivo] || "";
   const setTextoAtivo = (valor: string) => setForm({ ...form, [campoAtivo]: valor });
 
+  // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, print em produção, 2026-09-11: "quando
+  // clico nos botoes de variaveis nao funciona"): os botões de variável/spintax sempre jogavam o
+  // texto no FINAL da mensagem (`setTextoAtivo(textoAtivo + v)`) — numa mensagem de várias linhas
+  // com o cursor no topo (ex: editando o começo, "{{primeiro_nome}}, tudo certo?"), o clique
+  // "funcionava" de verdade (o state mudava), mas o resultado aparecia lá embaixo, fora da vista,
+  // parecendo que não tinha feito nada. Mesmo fix já aplicado em `DisparoTemplateEditor.tsx`
+  // (`inserirNoCursor`) nesta mesma sessão — trazido aqui pro StepMessage, a tela ORIGINAL de onde
+  // aquele padrão foi copiado, fechando a inconsistência entre as duas.
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const inserirNoCursor = (texto: string) => {
+    const el = textareaRef.current;
+    if (!el) { setTextoAtivo(textoAtivo + texto); return; }
+    const inicio = el.selectionStart ?? textoAtivo.length;
+    const fim = el.selectionEnd ?? textoAtivo.length;
+    const novoTexto = `${textoAtivo.slice(0, inicio)}${texto}${textoAtivo.slice(fim)}`;
+    const novoCursor = inicio + texto.length;
+    setTextoAtivo(novoTexto);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(novoCursor, novoCursor);
+    });
+  };
+
   // [AUDITORIA] LÓGICA (Sprint Templates de Disparo, 2026-07-30): carregar/salvar template
   // reaproveita a mesma tabela genérica (`disparo_templates`, CRUD via makeCrud) usada pela tela
   // dedicada `DisparoTemplates.tsx`. `loadedTemplateId` rastreia se a mensagem atual veio de um
@@ -2306,6 +2329,7 @@ function StepMessage({ form, setForm }: any) {
             <span className={`text-[10px] ${textoAtivo.length > 4096 ? "text-destructive font-bold" : "text-muted-foreground"}`}>{textoAtivo.length}/4096</span>
           </div>
           <Textarea
+            ref={textareaRef}
             className="min-h-[150px] font-mono text-sm"
             value={textoAtivo}
             onChange={e => setTextoAtivo(e.target.value)}
@@ -2313,20 +2337,20 @@ function StepMessage({ form, setForm }: any) {
           />
           <div className="flex gap-2 flex-wrap">
             {VARIAVEIS_MENSAGEM_CONTATO.map(v => (
-              <Button key={v} size="sm" variant="secondary" className="text-[10px] h-7" onClick={() => {
-                setTextoAtivo(textoAtivo + v);
-              }}>+{v}</Button>
+              <Button key={v} type="button" size="sm" variant="secondary" className="text-[10px] h-7" onClick={() => inserirNoCursor(v)}>
+                +{v}
+              </Button>
             ))}
           </div>
           {/* [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): biblioteca curada de
-              variações prontas (item 1) — mesmo padrão de append dos botões de placeholder acima,
-              pra quem não vai lembrar/saber escrever a sintaxe `{a|b|c}` na mão. */}
+              variações prontas (item 1), pra quem não vai lembrar/saber escrever a sintaxe
+              `{a|b|c}` na mão. */}
           <div className="flex gap-2 flex-wrap items-center">
             <span className="text-[10px] text-muted-foreground">Variar:</span>
             {BIBLIOTECA_VARIACOES.map(v => (
-              <Button key={v.label} size="sm" variant="outline" className="text-[10px] h-7" onClick={() => {
-                setTextoAtivo(textoAtivo ? `${textoAtivo} ${v.spintax}` : v.spintax);
-              }}>🎲 {v.label}</Button>
+              <Button key={v.label} type="button" size="sm" variant="outline" className="text-[10px] h-7" onClick={() => inserirNoCursor(v.spintax)}>
+                🎲 {v.label}
+              </Button>
             ))}
           </div>
           {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): dica de sintaxe do
