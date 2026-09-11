@@ -207,17 +207,23 @@ export async function processarDisparos(pool: Pool) {
         // (ver `disparo_logs.instancia`, preenchida no UPDATE de envio abaixo). Instâncias que já
         // bateram o teto saem da lista de disponíveis; a campanha só pausa de vez quando TODAS
         // as candidatas estiverem no teto. Teto configurável por campanha
-        // (`disparos.limite_diario_mensagens`, default 500 no banco / 200 sugerido na UI) —
-        // mesmo padrão já usado por `limite_erros_consecutivos`.
+        // (`disparos.limite_diario_mensagens`), com teto ABSOLUTO de 50/dia por instância.
+        // [AUDITORIA] FIX APLICADO (Sprint Limite Diário Seguro, 2026-09-11 — pedido explícito do
+        // usuário: "limite os usuarios a disparar menos de 50 por dia para não travar ou banir a
+        // conta deles"): default caiu de 500 pra 50 (COALESCE e fallback `|| 500` abaixo), e um
+        // `Math.min(50, ...)` reforça isso mesmo se a coluna, por algum caminho fora de
+        // `routes/disparos.ts` (que já clampa no POST/PUT), guardar um valor maior — este é o
+        // ponto que decide de verdade quantas mensagens saem, então é o lugar certo pro teto valer
+        // sempre, não só confiar que todo caminho de escrita passou pelo clamp.
         try {
           const capMetaRes = await pool.query(
-            `SELECT user_id, COALESCE(limite_diario_mensagens, 500) AS limite_diario_mensagens
+            `SELECT user_id, COALESCE(limite_diario_mensagens, 50) AS limite_diario_mensagens
              FROM disparos WHERE id = $1 LIMIT 1`,
             [disparo_id]
           );
           if (capMetaRes.rows.length) {
             const donoCampanha = capMetaRes.rows[0].user_id;
-            const limiteDiario = Number(capMetaRes.rows[0].limite_diario_mensagens) || 500;
+            const limiteDiario = Math.min(50, Number(capMetaRes.rows[0].limite_diario_mensagens) || 50);
 
             const instanciasSelecionadas = await resolverInstanciasCampanha(pool, disparo_id, donoCampanha);
             let candidatos: InstanciaElegivel[] = instanciasSelecionadas;

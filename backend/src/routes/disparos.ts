@@ -40,6 +40,26 @@ function normalizarTelefone(raw: string): string | null {
   return digits;
 }
 
+// [AUDITORIA] LÓGICA (Sprint Limite Diário Seguro, 2026-09-11 — pedido explícito do usuário:
+// "limite os usuarios a disparar menos de 50 por dia para não travar ou banir a conta deles"):
+// teto ABSOLUTO de 50 mensagens/dia por instância, reforçado aqui no servidor — `Disparos.tsx`
+// já limita o campo a max=50 na UI, mas confiar só no frontend deixaria a porta aberta pra
+// qualquer POST/PUT direto na API (Postman, script, integração externa) herdar o default antigo
+// de 500 do banco ou qualquer valor digitado manualmente. Clamp, não rejeita a requisição
+// inteira — campanha continua sendo criada/atualizada normalmente, só com o valor travado no
+// teto seguro (silencioso de propósito: o operador não perde a ação por causa de um número que a
+// própria UI já devia ter impedido de chegar aqui).
+const TETO_SEGURO_DISPARO_DIARIO = 50;
+function clamparLimiteDiario(req: AuthRequest, _res: Response, next: NextFunction) {
+  if (req.body && req.body.limite_diario_mensagens != null) {
+    const v = Number(req.body.limite_diario_mensagens);
+    if (Number.isFinite(v)) {
+      req.body.limite_diario_mensagens = Math.max(1, Math.min(TETO_SEGURO_DISPARO_DIARIO, Math.trunc(v)));
+    }
+  }
+  next();
+}
+
 function dentroDaJanela(): boolean {
   // Horário de Brasília (America/Sao_Paulo). Permite 08:00–21:00.
   const sp = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
@@ -366,7 +386,11 @@ REGRAS ESTRITAS:
   // pausada e depois retomada as reprocessa do zero — mesmo comportamento já usado e testado
   // pra `requeuePendentes()` (`disparoProcessor.ts`) no caso irmão (motor aborta o lote antes
   // de processar todas as linhas já dequeueadas).
-  router.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  // Cria campanha (POST '/') cai direto no CRUD genérico (`base`, abaixo) — intercepta só pra
+  // aplicar o teto de 50/dia antes do INSERT.
+  router.post('/', clamparLimiteDiario);
+
+  router.put('/:id', clamparLimiteDiario, async (req: AuthRequest, res: Response, next: NextFunction) => {
     const novoStatus = req.body?.status;
     if (novoStatus === 'pausado' || novoStatus === 'cancelado') {
       // [AUDITORIA] BUG DE SEGURANÇA CORRIGIDO (achado 2026-09-04, revisão pós-Sprint Grupos/

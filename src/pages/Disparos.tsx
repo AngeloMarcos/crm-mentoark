@@ -491,10 +491,13 @@ export default function DisparosPage() {
     // [AUDITORIA] FIX APLICADO (2026-07-29): campo existia na tabela `disparos`
     // (`limite_diario_mensagens`, default 500 no banco) mas não tinha nenhum controle na UI —
     // toda campanha nascia fixa em 500/dia sem o operador conseguir configurar algo mais
-    // conservador pra chip novo/em aquecimento. Default aqui é mais baixo que o do banco de
-    // propósito (200 vs. 500) — evita que quem nunca mexer neste campo herde o teto mais
-    // permissivo sem perceber.
-    limite_diario_mensagens: 200,
+    // conservador pra chip novo/em aquecimento.
+    // [AUDITORIA] FIX APLICADO (Sprint Limite Diário Seguro, 2026-09-11 — pedido explícito do
+    // usuário: "limite os usuarios a disparar menos de 50 por dia para não travar ou banir a
+    // conta deles"): default derrubado de 200 pra 30, e o campo abaixo ganhou `max={50}` — teto
+    // de verdade é reforçado no backend (`routes/disparos.ts`), então nem um POST/PUT direto na
+    // API consegue herdar um valor maior que 50, mesmo sem passar pela UI.
+    limite_diario_mensagens: 30,
     // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): janela (em horas) que
     // um contato precisa esperar antes de poder receber outra campanha — bloqueia reenvio pro
     // mesmo número em campanhas DIFERENTES (não confundir com a dedupe já existente, que só evita
@@ -2740,12 +2743,23 @@ function StepAntiBan({ form, setForm }: any) {
               <span className="text-[10px] uppercase text-muted-foreground">Limite Diário de Mensagens por Instância</span>
               <Input
                 type="number"
+                min={1}
+                max={50}
                 value={form.limite_diario_mensagens}
-                onChange={e => setForm({ ...form, limite_diario_mensagens: parseInt(e.target.value) })}
+                // [AUDITORIA] FIX APLICADO (Sprint Limite Diário Seguro, 2026-09-11 — pedido do
+                // usuário): clamp no próprio onChange, não só o atributo HTML `max` — `max` no
+                // input type=number bloqueia as setinhas/scroll, mas ainda deixa o operador digitar
+                // "500" manualmente sem travar nada visualmente até o submit. Backend
+                // (routes/disparos.ts) reforça o mesmo teto de 50 de qualquer forma, mas a UI não
+                // devia deixar o campo mostrar um número que o servidor vai reduzir depois.
+                onChange={e => {
+                  const v = parseInt(e.target.value);
+                  setForm({ ...form, limite_diario_mensagens: Number.isFinite(v) ? Math.min(50, Math.max(1, v)) : 1 });
+                }}
                 className="h-8"
               />
               <p className="text-[10px] text-muted-foreground">
-                Recomendado: 150 a 200 para chips novos/em aquecimento; até 500 para chips antigos.
+                Máximo permitido: 50/dia por instância — teto de segurança pra não travar/banir o número. Recomendado começar mais baixo (20 a 30) em chips novos/em aquecimento.
               </p>
             </div>
             {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): campo novo —

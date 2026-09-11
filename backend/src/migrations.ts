@@ -2294,5 +2294,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'contatos: cidade/estado/interesse/data_nascimento OK');
 
+  // [AUDITORIA] LÓGICA (Sprint Limite Diário Seguro, 2026-09-11 — pedido explícito do usuário:
+  // "limite os usuarios a disparar menos de 50 por dia para não travar ou banir a conta deles"):
+  // teto de 50/dia por instância passa a ser reforçado em `routes/disparos.ts` (POST/PUT), mas
+  // isso só vale pra campanha nova ou editada dali pra frente — campanha já criada com o default
+  // antigo (500) ou qualquer valor acima de 50 continuaria rodando no limite alto de antes até
+  // alguém abrir e salvar ela de novo. `UPDATE` aqui baixa TODA campanha existente (qualquer
+  // status) que hoje está acima do novo teto — idempotente (roda de novo sem efeito depois da
+  // 1ª vez, já que nada fica acima de 50 pra atualizar), mesmo padrão do resto deste arquivo.
+  await pool.query(`ALTER TABLE disparos ALTER COLUMN limite_diario_mensagens SET DEFAULT 50`).catch(() => {});
+  await pool.query(`UPDATE disparos SET limite_diario_mensagens = 50 WHERE limite_diario_mensagens > 50`).catch(() => {});
+  log.info('MIGRATIONS', 'disparos: limite_diario_mensagens travado em 50 (default da coluna + campanhas existentes acima disso, reduzidas)');
+
   log.info('MIGRATIONS', 'OK');
 }
