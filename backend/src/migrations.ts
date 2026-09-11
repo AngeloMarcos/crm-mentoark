@@ -715,6 +715,32 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`DROP FUNCTION IF EXISTS get_next_disparo_batch(INTEGER)`).catch(err => log.warn('MIGRATIONS', 'Falha ao dropar get_next_disparo_batch antiga', { err: err?.message }));
 
   // ── Função get_next_disparo_batch para o processador ───────────────────────
+  // [AUDITORIA] BUG GRAVE CORRIGIDO (Sprint Fila Por Campanha — revisão 2, 2026-09-11, achado ao
+  // revisar o próprio fix do motor concorrente por-campanha, disparoProcessor.ts): a versão
+  // anterior desta função buscava as `batch_size` linhas 'pending' MAIS ANTIGAS GLOBALMENTE
+  // (`ORDER BY l.created_at ASC LIMIT batch_size`, sem nenhum agrupamento por campanha). Isso
+  // continuava sendo uma "fila única" na prática: campanha com mais de `batch_size` mensagens
+  // pendentes (comum — 2660 num caso real do dia) preenchia o lote INTEIRO sozinha em TODO tick;
+  // nenhuma OUTRA campanha (de nenhuma conta) jamais aparecia na amostra, mesmo com o dedup por
+  // campanha já aplicado em `disparoProcessor.ts` — dedup só ajuda quando o lote já contém mais de
+  // uma campanha, e aqui nunca continha, porque a mais antiga sempre vencia a corrida pelas
+  // `batch_size` posições. [AUDITORIA] FIX APLICADO: `DISTINCT ON (l.disparo_id)` seleciona a
+  // mensagem mais antiga DE CADA campanha elegível, entre TODAS as campanhas com trabalho
+  // pendente — garante que toda campanha ativa apareça no lote a cada tick, não só a de backlog
+  // mais antigo. `batch_size` agora limita quantas CAMPANHAS DISTINTAS um tick considera (não
+  // quantas mensagens de uma só), protegendo o banco/o motor de um pico de trabalho concorrente
+  // caso existam, ao mesmo tempo, mais campanhas 'em_andamento' que `batch_size` no sistema
+  // inteiro. Com 40 (valor atual em disparoProcessor.ts) isso cobre qualquer volume realista de
+  // campanhas simultâneas; se um dia existirem mais de 40 campanhas 'em_andamento' ao mesmo
+  // tempo, as que ficarem de fora do corte (ordenadas por `disparo_id`, não por prioridade) não
+  // são escolhidas de forma rotativa — caso raro o suficiente pra não valer a complexidade extra
+  // agora, mas documentado aqui caso vire relevante no futuro.
+  //
+  // Postgres não permite `FOR UPDATE` direto numa query com `DISTINCT` (SELECT DISTINCT/DISTINCT
+  // ON cannot be used with FOR UPDATE/SHARE) — por isso o `DISTINCT ON` roda numa CTE separada,
+  // sem `FOR UPDATE`, só pra decidir QUAIS ids entram; o lock (`FOR UPDATE SKIP LOCKED`, mesma
+  // proteção de sempre contra duas réplicas pegando a mesma linha) acontece numa 2ª CTE, filtrando
+  // só por esses ids já escolhidos.
   await pool.query(`
     CREATE OR REPLACE FUNCTION get_next_disparo_batch(batch_size INTEGER)
     RETURNS TABLE (
@@ -752,9 +778,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
         AND c.ultimo_disparo_em > NOW() - (COALESCE(d.cooldown_horas, 24) || ' hours')::interval;
 
       RETURN QUERY
-      WITH next_msgs AS (
-        SELECT l.id, l.disparo_id, l.user_id, l.telefone, l.mensagem_enviada,
-               d.tipo_midia, d.url_midia, d.legenda_midia, d.variar_imagem
+      WITH candidatos AS (
+        SELECT DISTINCT ON (l.disparo_id) l.id
         FROM disparo_logs l
         JOIN disparos d ON d.id = l.disparo_id
         WHERE l.status = 'pending'
@@ -773,9 +798,16 @@ export async function runMigrations(pool: Pool): Promise<void> {
               AND RIGHT(c.telefone, 11) = RIGHT(l.telefone, 11)
               AND c.opt_out IS TRUE
           )
-        ORDER BY l.created_at ASC
+        ORDER BY l.disparo_id, l.created_at ASC
         LIMIT batch_size
-        FOR UPDATE SKIP LOCKED
+      ),
+      next_msgs AS (
+        SELECT l.id, l.disparo_id, l.user_id, l.telefone, l.mensagem_enviada,
+               d.tipo_midia, d.url_midia, d.legenda_midia, d.variar_imagem
+        FROM disparo_logs l
+        JOIN disparos d ON d.id = l.disparo_id
+        WHERE l.id IN (SELECT id FROM candidatos)
+        FOR UPDATE OF l SKIP LOCKED
       )
       UPDATE disparo_logs
       SET status = 'sending'
