@@ -246,7 +246,7 @@ export default function LoginPage() {
                   </div>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <Label htmlFor="password" senior-only className="text-white/80">Senha</Label>
+                      <Label htmlFor="password" className="text-white/80">Senha</Label>
                       {isLogin && (
                         <button 
                           type="button" 
