@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadTimeline } from "@/components/leads/LeadTimeline";
 import { LeadTarefas } from "@/components/leads/LeadTarefas";
 import {
-  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, MessageCircle, Download, ListTodo, ShieldCheck, SearchCheck,
+  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, FileDown, MessageCircle, Download, ListTodo, ShieldCheck, SearchCheck,
 } from "lucide-react";
 import { normalizarTelefoneBR } from "@/lib/phone";
 import { baixarModeloContatosCSV } from "@/lib/modeloImportacao";
@@ -623,6 +623,15 @@ export default function LeadsPage() {
           <div className="flex items-center gap-2 flex-wrap">
             <Button variant="outline" size="sm" onClick={() => setModalLista(true)}>
               <FolderPlus className="h-4 w-4 mr-1" /> Nova Lista
+            </Button>
+            {/* [AUDITORIA] FIX APLICADO (2026-09-11 — usuário não achou o botão "Baixar modelo":
+                ele só existia dentro do modal "Importar CSV", precisava abrir o modal primeiro pra
+                ver. Botão direto na barra, sem precisar abrir nada — mesma função
+                (baixarModeloContatosCSV), só um segundo ponto de acesso mais visível.
+                Posicionado ANTES de "Importar CSV" de propósito: é o passo que vem antes, quem
+                ainda não tem planilha pronta baixa o modelo primeiro. */}
+            <Button variant="outline" size="sm" onClick={baixarModeloContatosCSV}>
+              <FileDown className="h-4 w-4 mr-1" /> Baixar modelo
             </Button>
             <Button variant="outline" size="sm" onClick={() => { setImportLista(""); setModalImport(true); }}>
               <Upload className="h-4 w-4 mr-1" /> Importar CSV
