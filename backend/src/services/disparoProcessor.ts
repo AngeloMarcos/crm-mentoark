@@ -255,8 +255,17 @@ export async function processarDisparos(pool: Pool) {
     // pra ter uma amostra grande o suficiente de conter mensagens de VÁRIAS campanhas/contas
     // diferentes num único tick, mesmo quando uma campanha grande (milhares de linhas 'pending'
     // criadas juntas) domina a ordenação por `created_at` da fila.
+    // [AUDITORIA] BUG CORRIGIDO (achado no próprio deploy deste fix, 2026-09-11): `$1` parametrizado
+    // chega ao Postgres como tipo `unknown` — com mais de uma versão de `get_next_disparo_batch`
+    // no banco (histórico de `CREATE OR REPLACE`/`DROP FUNCTION` de sprints anteriores), a função
+    // deixou de ser resolvível de forma única ("function ... is not unique"), e o motor inteiro
+    // passou a lançar erro em TODO tick, sem processar nenhuma campanha. `TAMANHO_LOTE` é uma
+    // constante fixa do código (nunca input de usuário) — interpolar direto no texto do SQL é
+    // seguro aqui (mesmo padrão da chamada original, `get_next_disparo_batch(5)`, que nunca teve
+    // esse problema por passar um literal inteiro, não um parâmetro `$1`) e resolve a ambiguidade
+    // de overload sem precisar de `::integer` (Postgres já vê um literal inteiro no texto do SQL).
     const TAMANHO_LOTE = 40;
-    const batch = await pool.query('SELECT * FROM public.get_next_disparo_batch($1)', [TAMANHO_LOTE]);
+    const batch = await pool.query(`SELECT * FROM public.get_next_disparo_batch(${TAMANHO_LOTE})`);
 
     if (!batch.rows.length) return;
 
