@@ -3,11 +3,11 @@ import {
   PhoneCall, Filter, MessageCircle, Timer, Zap,
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut, ShieldOff,
-  ChevronDown, Lock, MessagesSquare, Phone, Inbox, Smartphone,
+  Lock, MessagesSquare, Phone, Inbox, Smartphone,
   Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
   Activity, Webhook, Database, Sparkles, LayoutTemplate,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/mentoark-app-icon-2026.png";
 import { NavLink } from "@/components/NavLink";
@@ -222,8 +222,6 @@ function NavSubgroupSection({
   }, [subgroup.items, hasModulo, isAdmin, equipeRole]);
 
   const hasActive = visibleItems.some((i) => isRouteActive(location.pathname, i.url));
-  // Subgrupos admin começam expandidos; demais, abrem só se a rota ativa estiver dentro
-  const [open, setOpen] = useState<boolean>(hasActive);
 
   if (visibleItems.length === 0 || (subgroup.adminOnly && !isAdmin)) return null;
 
@@ -260,57 +258,51 @@ function NavSubgroupSection({
 
   return (
     <div className="px-2">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className={`flex items-center w-full gap-2.5 px-2.5 py-2 rounded-lg transition-all duration-200 ${
+      <div
+        className={`flex items-center w-full gap-2.5 px-2.5 py-2 rounded-lg ${
           hasActive
             ? "gradient-brand-subtle shadow-[inset_0_1px_0_hsl(217_91%_45%/0.08),0_0_12px_hsl(217_91%_45%/0.10),inset_0_0_0_1px_hsl(217_91%_45%/0.14)]"
-            : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_1px_hsl(217_91%_45%/0.03)]"
+            : ""
         }`}
       >
         <Icon className={`h-[18px] w-[18px] shrink-0 transition-all duration-300 ${hasActive ? (subgroup.color || "text-primary") + " drop-shadow-[0_0_4px_hsl(217_91%_45%/0.25)] scale-105" : "text-muted-foreground"}`} />
         <span className={`flex-1 text-left text-sm font-medium ${hasActive ? "gradient-brand-text" : "text-sidebar-foreground"}`}>
           {subgroup.label}
         </span>
-        <ChevronDown
-          className={`h-4 w-4 text-muted-foreground/60 transition-transform duration-200 ${open ? "rotate-0" : "-rotate-90"}`}
-        />
-      </button>
+      </div>
 
-      {open && (
-        <div className="relative mt-1 ml-[18px] pl-3 border-l border-sidebar-border/60">
-          <SidebarMenu className="gap-0.5">
-            {visibleItems.map((item) => {
-              const active = isRouteActive(location.pathname, item.url);
-              return (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
-                    <NavLink
-                      to={item.url}
-                      end={item.url === "/dashboard"}
-                      className={`group relative flex items-center gap-2.5 px-2.5 py-2 rounded-md transition-all duration-200 ${
-                        active
-                          ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.14),0_0_14px_hsl(217_91%_45%/0.10)]"
-                          : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.04)]"
+      <div className="relative mt-1 ml-[18px] pl-3 border-l border-sidebar-border/60">
+        <SidebarMenu className="gap-0.5">
+          {visibleItems.map((item) => {
+            const active = isRouteActive(location.pathname, item.url);
+            return (
+              <SidebarMenuItem key={item.title}>
+                <SidebarMenuButton asChild>
+                  <NavLink
+                    to={item.url}
+                    end={item.url === "/dashboard"}
+                    className={`group relative flex items-center gap-2.5 px-2.5 py-2 rounded-md transition-all duration-200 ${
+                      active
+                        ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.14),0_0_14px_hsl(217_91%_45%/0.10)]"
+                        : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.04)]"
+                    }`}
+                  >
+                    {active && (
+                      <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(217_91%_45%/0.7)]" />
+                    )}
+                    <item.icon
+                      className={`h-4 w-4 shrink-0 transition-all duration-300 ${
+                        active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(217_91%_45%/0.3)]" : "text-muted-foreground group-hover:" + item.color
                       }`}
-                    >
-                      {active && (
-                        <span className="absolute -left-3 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(217_91%_45%/0.7)]" />
-                      )}
-                      <item.icon
-                        className={`h-4 w-4 shrink-0 transition-all duration-300 ${
-                          active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(217_91%_45%/0.3)]" : "text-muted-foreground group-hover:" + item.color
-                        }`}
-                      />
-                      <span className={`text-[13px] ${active ? "gradient-brand-text" : ""}`}>{item.title}</span>
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              );
-            })}
-          </SidebarMenu>
-        </div>
-      )}
+                    />
+                    <span className={`text-[13px] ${active ? "gradient-brand-text" : ""}`}>{item.title}</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          })}
+        </SidebarMenu>
+      </div>
     </div>
   );
 }
