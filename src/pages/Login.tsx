@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import ParticlesBackground from "@/components/ParticlesBackground";
-import logo from "@/assets/mentoark-logo-2026.png";
+import logo from "@/assets/mentoark-icon-2026.png";
 import { Turnstile } from "@marsidev/react-turnstile";
 
 export default function LoginPage() {
@@ -200,7 +200,7 @@ export default function LoginPage() {
             <div className="text-center space-y-3 mb-8 lg:hidden">
               <div className="relative mx-auto w-fit">
                 <div className="relative p-1 bg-gradient-to-tr from-purple-500 to-blue-500 rounded-2xl animate-breathe shadow-2xl">
-                  <img src={logo} alt="MentoArk" className="w-16 h-16 rounded-xl object-cover bg-[#1e1e2d]" />
+                  <img src={logo} alt="MentoArk" className="w-16 h-16 rounded-xl object-contain p-2 bg-[#1e1e2d]" />
                 </div>
               </div>
               <h1 className="text-3xl font-extrabold tracking-tight">

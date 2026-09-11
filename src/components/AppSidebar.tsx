@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
-import logo from "@/assets/mentoark-logo-2026.png";
+import logo from "@/assets/mentoark-icon-2026.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -404,7 +404,7 @@ export function AppSidebar() {
       {/* Logo */}
       <div className="relative flex items-center gap-2 px-4 py-4 border-b border-sidebar-border/60">
         <div className="w-9 h-9 rounded-lg gradient-brand flex items-center justify-center shrink-0 animate-breathe overflow-hidden">
-          <img src={logo} alt="MentoArk" className="w-full h-full object-cover" />
+          <img src={logo} alt="MentoArk" className="w-full h-full object-contain p-1" />
         </div>
         {!collapsed && (
           <span className="font-bold text-lg tracking-tight">
