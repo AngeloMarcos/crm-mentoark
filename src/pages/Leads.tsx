@@ -24,7 +24,7 @@ import {
   Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, FileDown, MessageCircle, Download, ListTodo, ShieldCheck, SearchCheck,
 } from "lucide-react";
 import { normalizarTelefoneBR } from "@/lib/phone";
-import { baixarModeloContatosCSV } from "@/lib/modeloImportacao";
+import { baixarModeloContatosXLSX } from "@/lib/modeloImportacao";
 import { BuscarLeadsModal } from "@/components/campanhas/BuscarLeadsModal";
 
 function formatWhatsappNumber(raw: string | null | undefined): string | null {
@@ -627,10 +627,10 @@ export default function LeadsPage() {
             {/* [AUDITORIA] FIX APLICADO (2026-09-11 — usuário não achou o botão "Baixar modelo":
                 ele só existia dentro do modal "Importar CSV", precisava abrir o modal primeiro pra
                 ver. Botão direto na barra, sem precisar abrir nada — mesma função
-                (baixarModeloContatosCSV), só um segundo ponto de acesso mais visível.
+                (baixarModeloContatosXLSX), só um segundo ponto de acesso mais visível.
                 Posicionado ANTES de "Importar CSV" de propósito: é o passo que vem antes, quem
                 ainda não tem planilha pronta baixa o modelo primeiro. */}
-            <Button variant="outline" size="sm" onClick={baixarModeloContatosCSV}>
+            <Button variant="outline" size="sm" onClick={baixarModeloContatosXLSX}>
               <FileDown className="h-4 w-4 mr-1" /> Baixar modelo
             </Button>
             <Button variant="outline" size="sm" onClick={() => { setImportLista(""); setModalImport(true); }}>
@@ -882,7 +882,7 @@ export default function LeadsPage() {
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <p className="font-medium text-primary">2. Modelo padrão do CRM (MentoArk)</p>
-                  <Button type="button" variant="outline" size="sm" className="h-6 text-[11px] gap-1" onClick={baixarModeloContatosCSV}>
+                  <Button type="button" variant="outline" size="sm" className="h-6 text-[11px] gap-1" onClick={baixarModeloContatosXLSX}>
                     <Download className="h-3 w-3" /> Baixar modelo
                   </Button>
                 </div>

@@ -45,7 +45,7 @@ import {
   temTermoVariavel,
   TAMANHO_DICIONARIO_VARIACAO,
 } from "@/lib/motorTexto";
-import { baixarModeloContatosCSV, VARIAVEIS_MENSAGEM_CONTATO } from "@/lib/modeloImportacao";
+import { baixarModeloContatosXLSX, VARIAVEIS_MENSAGEM_CONTATO } from "@/lib/modeloImportacao";
 import {
   Dialog,
   DialogContent,
@@ -1649,7 +1649,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                 importam pra `contatos`, então um modelo só serve pros dois pontos de import. */}
             <p className="text-xs text-muted-foreground mt-3">
               Não tem uma planilha pronta?{" "}
-              <button type="button" onClick={baixarModeloContatosCSV} className="text-primary font-medium underline-offset-2 hover:underline inline-flex items-center gap-1">
+              <button type="button" onClick={baixarModeloContatosXLSX} className="text-primary font-medium underline-offset-2 hover:underline inline-flex items-center gap-1">
                 <Download className="h-3 w-3" /> Baixar modelo
               </button>
             </p>

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Upload, FileSpreadsheet, AlertCircle, Loader2, CheckCircle, Download } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
-import { baixarModeloProdutosCSV } from "@/lib/modeloImportacao";
+import { baixarModeloProdutosXLSX } from "@/lib/modeloImportacao";
 
 interface ImportExcelModalProps {
   open: boolean;
@@ -58,7 +58,7 @@ export function ImportExcelModal({ open, onOpenChange, onImported }: ImportExcel
               <p className="font-semibold flex items-center gap-1">
                 <AlertCircle className="h-3 w-3" /> Formato esperado:
               </p>
-              <Button type="button" variant="outline" size="sm" className="h-6 text-[11px] gap-1" onClick={baixarModeloProdutosCSV}>
+              <Button type="button" variant="outline" size="sm" className="h-6 text-[11px] gap-1" onClick={baixarModeloProdutosXLSX}>
                 <Download className="h-3 w-3" /> Baixar modelo
               </Button>
             </div>

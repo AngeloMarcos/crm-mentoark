@@ -14,11 +14,21 @@
 // abaixo é a ÚNICA fonte de verdade — cada entrada é ao mesmo tempo (1) uma coluna do modelo
 // baixável, (2) a variável `{{...}}` correspondente em `motorTexto.ts` (mesmo nome, sempre) e (3)
 // um dos botões "Inserir variável" em Disparos.tsx/DisparoTemplateEditor.tsx, que importam esta
-// lista em vez de manter a própria cópia — sem isso, as 3 pontas divergem de novo com o tempo,
-// exatamente o problema que motivou esta sprint. `status`/`tags`/`notas`/`origem` (usados em
-// Leads.tsx pro CRM em si) ficaram DE FORA de propósito: não fazem sentido como variável dentro de
-// uma mensagem pro cliente, e a regra do usuário é estrita — só entra no modelo o que vira
-// variável de verdade.
+// lista em vez de manter a própria cópia. `status`/`tags`/`notas`/`origem` (usados em Leads.tsx
+// pro CRM em si) ficaram DE FORA de propósito: não fazem sentido como variável dentro de uma
+// mensagem pro cliente, e a regra do usuário é estrita — só entra no modelo o que vira variável
+// de verdade.
+//
+// [AUDITORIA] FIX APLICADO (revisão 2026-09-11, mesma sessão — achado real do usuário, print de
+// Excel em PT-BR: "modelo esta vindo em csv bem mal estruturado e sem colunas... quero que faça
+// em excel"): CSV puro quebra em qualquer Excel configurado em locale PT-BR — nesse locale a
+// vírgula é o separador DECIMAL, então o Excel abre um CSV separado por vírgula como uma coluna
+// só, sem nenhum split (exatamente o print do usuário: cabeçalho inteiro numa célula A1 só).
+// Trocado por `.xlsx` de verdade via ExcelJS — chega já com colunas reais (não depende de
+// nenhuma configuração regional pra separar), cabeçalho colorido (laranja para obrigatório,
+// cinza para opcional — pedido explícito: "tabelas coloridas e padronizado"), largura de coluna
+// ajustada, bordas, congelamento da 1ª linha e filtro automático.
+import ExcelJS from "exceljs";
 
 /** Uma coluna do modelo de planilha de contatos — sempre com uma variável `{{...}}` de mesmo nome. */
 export interface CampoContato {
@@ -31,18 +41,20 @@ export interface CampoContato {
   label: string;
   /** Valor de exemplo na linha "tudo preenchido" do modelo. */
   exemplo: string;
+  /** Largura da coluna no Excel gerado (unidade ExcelJS ~ nº de caracteres). */
+  largura: number;
 }
 
 export const CAMPOS_CONTATO: CampoContato[] = [
-  { coluna: "nome", obrigatorio: true, label: "Nome", exemplo: "João Silva" },
-  { coluna: "telefone", obrigatorio: true, label: "Telefone", exemplo: "11999999999" },
-  { coluna: "email", obrigatorio: false, label: "E-mail", exemplo: "joao@email.com" },
-  { coluna: "cidade", obrigatorio: false, label: "Cidade", exemplo: "São Paulo" },
-  { coluna: "estado", obrigatorio: false, label: "Estado (UF)", exemplo: "SP" },
-  { coluna: "interesse", obrigatorio: false, label: "Interesse", exemplo: "Consórcio de imóvel" },
-  { coluna: "data_nascimento", obrigatorio: false, label: "Data de nascimento", exemplo: "12/05/1990" },
-  { coluna: "empresa", obrigatorio: false, label: "Empresa", exemplo: "Empresa XYZ Ltda" },
-  { coluna: "cargo", obrigatorio: false, label: "Cargo", exemplo: "Gerente Financeiro" },
+  { coluna: "nome", obrigatorio: true, label: "Nome", exemplo: "João Silva", largura: 24 },
+  { coluna: "telefone", obrigatorio: true, label: "Telefone", exemplo: "11999999999", largura: 16 },
+  { coluna: "email", obrigatorio: false, label: "E-mail", exemplo: "joao@email.com", largura: 26 },
+  { coluna: "cidade", obrigatorio: false, label: "Cidade", exemplo: "São Paulo", largura: 16 },
+  { coluna: "estado", obrigatorio: false, label: "Estado (UF)", exemplo: "SP", largura: 12 },
+  { coluna: "interesse", obrigatorio: false, label: "Interesse", exemplo: "Consórcio de imóvel", largura: 24 },
+  { coluna: "data_nascimento", obrigatorio: false, label: "Data de nascimento", exemplo: "12/05/1990", largura: 18 },
+  { coluna: "empresa", obrigatorio: false, label: "Empresa", exemplo: "Empresa XYZ Ltda", largura: 24 },
+  { coluna: "cargo", obrigatorio: false, label: "Cargo", exemplo: "Gerente Financeiro", largura: 20 },
 ];
 
 /** `{{variavel}}` pronta pra inserir num template — mesmo texto usado pelos botões "Inserir variável". */
@@ -61,13 +73,25 @@ export const VARIAVEIS_MENSAGEM_CONTATO: string[] = [
   ...CAMPOS_CONTATO.filter(c => c.coluna !== "nome" && c.coluna !== "telefone").map(variavelDoCampo),
 ];
 
-/** Gera e dispara o download de um arquivo CSV (mesmo padrão de `exportarCsv`, Leads.tsx). */
-function baixarCsv(nomeArquivo: string, linhas: string[][]): void {
-  const csv = linhas
-    .map(linha => linha.map(v => `"${String(v).replace(/"/g, '""')}"`).join(","))
-    .join("\n");
-  // BOM (﻿) — sem ele, Excel no Windows abre acento/ç como caractere quebrado.
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+// ─────────────────────────────────────────────────────────────────────────────
+// Paleta — mesmo laranja de marca usado nos botões primários do CRM (ver index.css / gradient-brand)
+// ─────────────────────────────────────────────────────────────────────────────
+const COR_OBRIGATORIO = "F97316"; // laranja — coluna que precisa vir preenchida
+const COR_OPCIONAL = "475569"; // slate escuro — coluna opcional
+const COR_TEXTO_HEADER = "FFFFFF";
+const COR_EXEMPLO_FUNDO = "F8FAFC"; // cinza quase branco — linha de exemplo, não é dado real
+const COR_EXEMPLO_TEXTO = "64748B";
+const COR_BORDA = "CBD5E1";
+
+const bordaFina = {
+  top: { style: "thin" as const, color: { argb: `FF${COR_BORDA}` } },
+  left: { style: "thin" as const, color: { argb: `FF${COR_BORDA}` } },
+  bottom: { style: "thin" as const, color: { argb: `FF${COR_BORDA}` } },
+  right: { style: "thin" as const, color: { argb: `FF${COR_BORDA}` } },
+};
+
+/** Dispara o download de um Blob gerado (mesmo padrão de anchor+click já usado no resto do sistema). */
+function baixarBlob(nomeArquivo: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -76,36 +100,103 @@ function baixarCsv(nomeArquivo: string, linhas: string[][]): void {
   URL.revokeObjectURL(url);
 }
 
-/** Cabeçalho canônico de importação/exportação de contatos — usado por Leads e Disparos. */
-export const COLUNAS_MODELO_CONTATOS = CAMPOS_CONTATO.map(c => c.coluna);
+const MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /**
- * Baixa o modelo de planilha de contatos — mesmas colunas aceitas por Leads.tsx e Disparos.tsx
- * (ambos leem pra tabela `contatos`), cada uma com a variável `{{...}}` de mesmo nome disponível
- * no editor de template. Duas linhas de exemplo: uma com todos os campos preenchidos, outra só
- * com os 2 obrigatórios (nome + telefone) — deixa claro que o resto é opcional sem precisar de
- * outro texto de ajuda.
+ * Baixa o modelo de planilha de contatos em .xlsx — mesmas colunas aceitas por Leads.tsx e
+ * Disparos.tsx (ambos leem pra tabela `contatos`), cada uma com a variável `{{...}}` de mesmo
+ * nome disponível no editor de template. Cabeçalho colorido (laranja = obrigatório, cinza =
+ * opcional, com nota explicando o porquê em cada uma dessas 2 células), 2 linhas de exemplo
+ * (uma com tudo preenchido, outra só com o mínimo obrigatório) marcadas visualmente como
+ * exemplo, filtro automático e 1ª linha congelada.
  */
-export function baixarModeloContatosCSV(): void {
-  // [AUDITORIA] BUG EVITADO: header PRECISA ser o nome exato da coluna, sem marcador nenhum de
-  // "obrigatório" (ex: "nome*") — Leads.tsx (`importarCSV`, `get()`) casa o cabeçalho por
-  // igualdade exata, então um asterisco colado quebraria a reimportação do próprio modelo que
-  // este arquivo gera. "Obrigatório" é comunicado só no texto de ajuda ao lado do botão, nunca no
-  // cabeçalho em si.
-  const header = CAMPOS_CONTATO.map(c => c.coluna);
-  const linhaCompleta = CAMPOS_CONTATO.map(c => c.exemplo);
-  const linhaMinima = CAMPOS_CONTATO.map(c => c.obrigatorio ? (c.coluna === "nome" ? "Maria Souza" : "21988887777") : "");
-  baixarCsv("modelo_importacao_contatos.csv", [header, linhaCompleta, linhaMinima]);
+export async function baixarModeloContatosXLSX(): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "MentoArk CRM";
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet("Contatos", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+
+  ws.columns = CAMPOS_CONTATO.map(c => ({ header: c.coluna, width: c.largura }));
+
+  const headerRow = ws.getRow(1);
+  headerRow.height = 22;
+  CAMPOS_CONTATO.forEach((campo, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = campo.coluna;
+    cell.font = { bold: true, color: { argb: `FF${COR_TEXTO_HEADER}` }, size: 11 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${campo.obrigatorio ? COR_OBRIGATORIO : COR_OPCIONAL}` } };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+    cell.border = bordaFina;
+    if (campo.obrigatorio) {
+      cell.note = {
+        texts: [{ text: `Obrigatório — sem "${campo.coluna}" preenchido essa linha não entra na importação.` }],
+      } as ExcelJS.Comment;
+    } else {
+      cell.note = { texts: [{ text: `Opcional — vira a variável {{${campo.coluna}}} disponível nos templates de Disparos.` }] } as ExcelJS.Comment;
+    }
+  });
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: CAMPOS_CONTATO.length } };
+
+  // Linha 2 — exemplo com todos os campos preenchidos. Linha 3 — só o mínimo obrigatório (deixa
+  // claro que o resto é opcional sem precisar de outro texto de ajuda fora da planilha).
+  const linhaCompleta = ws.addRow(CAMPOS_CONTATO.map(c => c.exemplo));
+  const linhaMinima = ws.addRow(CAMPOS_CONTATO.map(c => c.obrigatorio ? (c.coluna === "nome" ? "Maria Souza" : "21988887777") : ""));
+  for (const row of [linhaCompleta, linhaMinima]) {
+    row.eachCell({ includeEmpty: true }, cell => {
+      cell.font = { italic: true, color: { argb: `FF${COR_EXEMPLO_TEXTO}` } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${COR_EXEMPLO_FUNDO}` } };
+      cell.border = bordaFina;
+    });
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  baixarBlob("modelo_importacao_contatos.xlsx", new Blob([buffer], { type: MIME_XLSX }));
 }
 
 /** Cabeçalho canônico de importação de produtos do Catálogo — mesmas colunas já documentadas em `ImportExcelModal.tsx`. */
-export const COLUNAS_MODELO_PRODUTOS = ["nome", "descricao", "preco", "codigo", "estoque"] as const;
-
-const EXEMPLOS_MODELO_PRODUTOS: string[][] = [
-  ["Consórcio de Imóvel 200 parcelas", "Carta de crédito para compra de imóvel", "1500.00", "COD-001", "50"],
+interface CampoProduto { coluna: string; obrigatorio: boolean; exemplo: string; largura: number }
+const CAMPOS_PRODUTO: CampoProduto[] = [
+  { coluna: "nome", obrigatorio: true, exemplo: "Consórcio de Imóvel 200 parcelas", largura: 32 },
+  { coluna: "descricao", obrigatorio: false, exemplo: "Carta de crédito para compra de imóvel", largura: 40 },
+  { coluna: "preco", obrigatorio: false, exemplo: "1500.00", largura: 12 },
+  { coluna: "codigo", obrigatorio: false, exemplo: "COD-001", largura: 14 },
+  { coluna: "estoque", obrigatorio: false, exemplo: "50", largura: 10 },
 ];
 
-/** Baixa o modelo de planilha de produtos do Catálogo. */
-export function baixarModeloProdutosCSV(): void {
-  baixarCsv("modelo_importacao_produtos.csv", [[...COLUNAS_MODELO_PRODUTOS], ...EXEMPLOS_MODELO_PRODUTOS]);
+/** Baixa o modelo de planilha de produtos do Catálogo, em .xlsx — mesmo padrão visual do modelo de contatos. */
+export async function baixarModeloProdutosXLSX(): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "MentoArk CRM";
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet("Produtos", { views: [{ state: "frozen", ySplit: 1 }] });
+  ws.columns = CAMPOS_PRODUTO.map(c => ({ header: c.coluna, width: c.largura }));
+
+  const headerRow = ws.getRow(1);
+  headerRow.height = 22;
+  CAMPOS_PRODUTO.forEach((campo, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = campo.coluna;
+    cell.font = { bold: true, color: { argb: `FF${COR_TEXTO_HEADER}` }, size: 11 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${campo.obrigatorio ? COR_OBRIGATORIO : COR_OPCIONAL}` } };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+    cell.border = bordaFina;
+    if (campo.obrigatorio) {
+      cell.note = { texts: [{ text: `Obrigatório — sem "${campo.coluna}" preenchido o produto não é importado.` }] } as ExcelJS.Comment;
+    }
+  });
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: CAMPOS_PRODUTO.length } };
+
+  const linhaExemplo = ws.addRow(CAMPOS_PRODUTO.map(c => c.exemplo));
+  linhaExemplo.eachCell({ includeEmpty: true }, cell => {
+    cell.font = { italic: true, color: { argb: `FF${COR_EXEMPLO_TEXTO}` } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: `FF${COR_EXEMPLO_FUNDO}` } };
+    cell.border = bordaFina;
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  baixarBlob("modelo_importacao_produtos.xlsx", new Blob([buffer], { type: MIME_XLSX }));
 }
