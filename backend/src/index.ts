@@ -78,6 +78,7 @@ import adminFirewallRouter, { createFirewallMiddleware } from './routes/admin_fi
 import suporteCopilotoRouter from './routes/suporte_copiloto';
 import assinaturaRouter from './routes/assinatura';
 import adminAssinaturasRouter from './routes/admin_assinaturas';
+import organizacaoRouter from './routes/organizacao';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -469,6 +470,9 @@ app.use('/api/corridas', corridasRouter(pool));
 app.use('/api/suporte',        suporteCopilotoRouter(pool));
 app.use('/api/assinatura', assinaturaRouter(pool));
 app.use('/api/admin/assinaturas', masterOnly, adminAssinaturasRouter(pool));
+app.use('/api/departamentos', organizacaoRouter(pool, 'departamentos'));
+app.use('/api/filiais', organizacaoRouter(pool, 'filiais'));
+app.use('/api/squads', organizacaoRouter(pool, 'squads'));
 app.use('/api/admin/firewall', adminFirewallRouter(pool));
 
 // Virtual tables for Database compatibility

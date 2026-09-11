@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, UserPlus, Pencil, Trash2, Search, Eye, EyeOff, LayoutGrid, IdCard, ShieldCheck, KeyRound } from "lucide-react";
+import { Loader2, UserPlus, Pencil, Trash2, Search, Eye, EyeOff, LayoutGrid, IdCard, ShieldCheck, KeyRound, Building2, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -28,6 +28,9 @@ interface UserRow {
   display_name: string | null;
   cargo_id: string | null;
   cargo_nome: string | null;
+  departamento_id: string | null;
+  filial_id: string | null;
+  squad_id: string | null;
   role: string;
   active: boolean;
   created_at: string;
@@ -36,12 +39,65 @@ interface UserRow {
 
 interface Cargo { id: string; nome: string; permissoes: string[]; }
 interface ModuloCatalogo { key: string; label: string; padrao: boolean; adminOnly: boolean; }
+interface OrgItem { id: string; nome: string; ativo: boolean; }
+
+/** Select de um cadastro (departamento/filial/squad) com criação inline. */
+function CadastroSelect({
+  label, endpoint, value, onChange, items, onCreated,
+}: {
+  label: string;
+  endpoint: string;
+  value: string;
+  onChange: (v: string) => void;
+  items: OrgItem[];
+  onCreated: () => void;
+}) {
+  const [criando, setCriando] = useState(false);
+  const criar = async () => {
+    const nome = window.prompt(`Novo ${label.toLowerCase()}:`)?.trim();
+    if (!nome) return;
+    setCriando(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/${endpoint}`, {
+        method: "POST", headers: authHeaders(), body: JSON.stringify({ nome }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.message || "Falha ao criar");
+      onChange(data.id);
+      onCreated();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setCriando(false);
+    }
+  };
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <div className="flex gap-2">
+        <Select value={value || "__none__"} onValueChange={(v) => onChange(v === "__none__" ? "" : v)}>
+          <SelectTrigger className="flex-1"><SelectValue placeholder={`Selecione…`} /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">— nenhum —</SelectItem>
+            {items.map(i => <SelectItem key={i.id} value={i.id}>{i.nome}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Button type="button" variant="outline" size="icon" onClick={criar} disabled={criando} title={`Novo ${label.toLowerCase()}`}>
+          {criando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export default function UsuariosPage() {
   const navigate = useNavigate();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [cargos, setCargos] = useState<Cargo[]>([]);
   const [catalogo, setCatalogo] = useState<ModuloCatalogo[]>([]);
+  const [deptos, setDeptos] = useState<OrgItem[]>([]);
+  const [filiais, setFiliais] = useState<OrgItem[]>([]);
+  const [squads, setSquads] = useState<OrgItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -54,6 +110,9 @@ export default function UsuariosPage() {
   const [senha, setSenha] = useState("");
   const [confirmSenha, setConfirmSenha] = useState("");
   const [cargoId, setCargoId] = useState("");
+  const [deptoId, setDeptoId] = useState("");
+  const [filialId, setFilialId] = useState("");
+  const [squadId, setSquadId] = useState("");
   const [modSel, setModSel] = useState<Set<string>>(new Set());
   const [ativo, setAtivo] = useState(true);
   const [showSenha, setShowSenha] = useState(false);
@@ -69,13 +128,26 @@ export default function UsuariosPage() {
     setLoading(false);
   };
 
+  const H = { headers: { Authorization: `Bearer ${token()}` } };
   const loadAux = async () => {
-    const [rc, rm] = await Promise.all([
-      fetch(`${API_BASE}/api/cargos`, { headers: { Authorization: `Bearer ${token()}` } }),
-      fetch(`${API_BASE}/api/modulos/lista`, { headers: { Authorization: `Bearer ${token()}` } }),
+    const [rc, rm, rd, rf, rs] = await Promise.all([
+      fetch(`${API_BASE}/api/cargos`, H),
+      fetch(`${API_BASE}/api/modulos/lista`, H),
+      fetch(`${API_BASE}/api/departamentos`, H),
+      fetch(`${API_BASE}/api/filiais`, H),
+      fetch(`${API_BASE}/api/squads`, H),
     ]);
     if (rc.ok) setCargos(await rc.json());
     if (rm.ok) setCatalogo(await rm.json());
+    if (rd.ok) setDeptos(await rd.json());
+    if (rf.ok) setFiliais(await rf.json());
+    if (rs.ok) setSquads(await rs.json());
+  };
+  const reloadOrg = (which: "dep" | "fil" | "sq") => async () => {
+    const map = { dep: ["departamentos", setDeptos], fil: ["filiais", setFiliais], sq: ["squads", setSquads] } as const;
+    const [ep, setter] = map[which];
+    const r = await fetch(`${API_BASE}/api/${ep}`, H);
+    if (r.ok) (setter as (v: OrgItem[]) => void)(await r.json());
   };
 
   useEffect(() => { load(); }, [search, page]);
@@ -84,7 +156,8 @@ export default function UsuariosPage() {
   const resetForm = () => {
     setUserEdit(null);
     setNome(""); setEmail(""); setSenha(""); setConfirmSenha("");
-    setCargoId(""); setModSel(new Set()); setAtivo(true); setShowSenha(false);
+    setCargoId(""); setDeptoId(""); setFilialId(""); setSquadId("");
+    setModSel(new Set()); setAtivo(true); setShowSenha(false);
   };
 
   const handleEdit = (u: UserRow) => {
@@ -93,6 +166,9 @@ export default function UsuariosPage() {
     setEmail(u.email);
     setSenha(""); setConfirmSenha("");
     setCargoId(u.cargo_id || "");
+    setDeptoId(u.departamento_id || "");
+    setFilialId(u.filial_id || "");
+    setSquadId(u.squad_id || "");
     setModSel(new Set(u.modulos || []));
     setAtivo(u.active);
     setShowSenha(false);
@@ -138,7 +214,10 @@ export default function UsuariosPage() {
         const rp = await fetch(`${API_BASE}/api/profiles/${userEdit.user_id}`, {
           method: "PATCH",
           headers: authHeaders(),
-          body: JSON.stringify({ display_name: nome.trim(), cargo_id: cargoId || null, active: ativo }),
+          body: JSON.stringify({
+            display_name: nome.trim(), cargo_id: cargoId || null, active: ativo,
+            departamento_id: deptoId || null, filial_id: filialId || null, squad_id: squadId || null,
+          }),
         });
         if (!rp.ok) { const e = await rp.json().catch(() => ({})); throw new Error(e.message || "Erro ao atualizar usuário"); }
 
@@ -157,7 +236,10 @@ export default function UsuariosPage() {
         const rc = await fetch(`${API_BASE}/api/profiles`, {
           method: "POST",
           headers: authHeaders(),
-          body: JSON.stringify({ email: email.trim(), password: senha, display_name: nome.trim(), cargo_id: cargoId || null }),
+          body: JSON.stringify({
+            email: email.trim(), password: senha, display_name: nome.trim(), cargo_id: cargoId || null,
+            departamento_id: deptoId || null, filial_id: filialId || null, squad_id: squadId || null,
+          }),
         });
         if (!rc.ok) { const e = await rc.json().catch(() => ({})); throw new Error(e.message || "Erro ao criar usuário"); }
         const novo = await rc.json();
@@ -307,6 +389,18 @@ export default function UsuariosPage() {
                   <Label htmlFor="email">E-mail (login) *</Label>
                   <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={!!userEdit} placeholder="exemplo@email.com" />
                 </div>
+              </div>
+            </section>
+
+            {/* Alocação corporativa */}
+            <section className="space-y-3">
+              <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary">
+                <Building2 className="h-4 w-4" /> Alocação corporativa
+              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <CadastroSelect label="Departamento" endpoint="departamentos" value={deptoId} onChange={setDeptoId} items={deptos} onCreated={reloadOrg("dep")} />
+                <CadastroSelect label="Filial / Loja" endpoint="filiais" value={filialId} onChange={setFilialId} items={filiais} onCreated={reloadOrg("fil")} />
+                <CadastroSelect label="Equipe / Squad" endpoint="squads" value={squadId} onChange={setSquadId} items={squads} onCreated={reloadOrg("sq")} />
               </div>
             </section>
 

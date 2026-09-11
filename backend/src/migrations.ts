@@ -2256,5 +2256,28 @@ export async function runMigrations(pool: Pool): Promise<void> {
 
   log.info('MIGRATIONS', 'assinaturas (trial 3 dias) OK');
 
+  // ── Estrutura organizacional: departamentos / filiais / squads ───────────────
+  // [AUDITORIA] LÓGICA (2026-09-10 — Fase 4b: "cargos/departamentos/filiais como cadastro
+  // real"): 3 cadastros por TENANT (owner_id, não por usuário — o time inteiro compartilha).
+  // `users` ganha as FKs (ON DELETE SET NULL — apagar um departamento não apaga o usuário).
+  for (const t of ['departamentos', 'filiais', 'squads']) {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ${t} (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        owner_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        nome       TEXT NOT NULL,
+        ativo      BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `).catch(err => log.error('MIGRATIONS', `Erro ao criar ${t}`, { err: err.message }));
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_${t}_owner_nome ON ${t} (owner_id, lower(nome))`).catch(() => {});
+  }
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS departamento_id UUID REFERENCES departamentos(id) ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS filial_id       UUID REFERENCES filiais(id)       ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS squad_id        UUID REFERENCES squads(id)        ON DELETE SET NULL`).catch(() => {});
+
+  log.info('MIGRATIONS', 'estrutura organizacional (departamentos/filiais/squads) OK');
+
   log.info('MIGRATIONS', 'OK');
 }

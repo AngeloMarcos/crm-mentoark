@@ -14,7 +14,7 @@ export default function usuarios(pool: Pool): Router {
   router.post('/profiles', adminMiddleware, async (req: AuthRequest, res: Response) => {
     const client = await pool.connect();
     try {
-      const { email, password, display_name, cargo_id } = req.body || {};
+      const { email, password, display_name, cargo_id, departamento_id, filial_id, squad_id } = req.body || {};
       const adminId = req.userId!;
 
       if (!email || !password) {
@@ -40,10 +40,10 @@ export default function usuarios(pool: Pool): Router {
       
       // 1. Criar usuário com owner_id
       const ins = await client.query(
-        `INSERT INTO users (email, password_hash, display_name, role, active, email_verified, owner_id, cargo_id)
-         VALUES ($1, $2, $3, 'user', true, false, $4, $5)
+        `INSERT INTO users (email, password_hash, display_name, role, active, email_verified, owner_id, cargo_id, departamento_id, filial_id, squad_id)
+         VALUES ($1, $2, $3, 'user', true, false, $4, $5, $6, $7, $8)
          RETURNING id, email, display_name, role, created_at, cargo_id`,
-        [emailNorm, password_hash, nome, adminId, cargo_id || null]
+        [emailNorm, password_hash, nome, adminId, cargo_id || null, departamento_id || null, filial_id || null, squad_id || null]
       );
       const novo = ins.rows[0];
 
@@ -120,9 +120,15 @@ export default function usuarios(pool: Pool): Router {
       const r = await pool.query(
         `SELECT u.id AS user_id, u.email, u.display_name, u.role, u.active, u.created_at, u.cargo_id,
                 c.nome as cargo_nome,
+                u.departamento_id, d.nome AS departamento_nome,
+                u.filial_id, f.nome AS filial_nome,
+                u.squad_id, s.nome AS squad_nome,
                 (SELECT array_agg(modulo) FROM user_modulos WHERE user_id = u.id AND ativo = true) as modulos
          FROM users u
          LEFT JOIN cargos c ON c.id = u.cargo_id
+         LEFT JOIN departamentos d ON d.id = u.departamento_id
+         LEFT JOIN filiais f ON f.id = u.filial_id
+         LEFT JOIN squads s ON s.id = u.squad_id
          WHERE ($1::text IS NULL OR u.email ILIKE $1 OR u.display_name ILIKE $1)
            AND u.deleted_at IS NULL
          ORDER BY u.created_at DESC
@@ -264,7 +270,7 @@ export default function usuarios(pool: Pool): Router {
   router.patch('/profiles/:user_id', adminMiddleware, async (req: AuthRequest, res: Response) => {
     try {
       const { user_id } = req.params;
-      const { active, display_name, cargo_id } = req.body;
+      const { active, display_name, cargo_id, departamento_id, filial_id, squad_id } = req.body;
       const adminId = req.userId!;
 
       const fields: string[] = [];
@@ -283,6 +289,10 @@ export default function usuarios(pool: Pool): Router {
         fields.push(`cargo_id = $${idx++}`);
         values.push(cargo_id);
       }
+      // [AUDITORIA] Fase 4b: alocação organizacional (departamentos/filiais/squads)
+      if (departamento_id !== undefined) { fields.push(`departamento_id = $${idx++}`); values.push(departamento_id || null); }
+      if (filial_id       !== undefined) { fields.push(`filial_id = $${idx++}`);       values.push(filial_id || null); }
+      if (squad_id        !== undefined) { fields.push(`squad_id = $${idx++}`);        values.push(squad_id || null); }
 
       if (fields.length === 0) return res.status(400).json({ message: 'Nada para atualizar' });
 
