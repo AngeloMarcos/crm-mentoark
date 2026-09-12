@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getAuthToken } from "@/lib/api-token";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
+import { formatPhoneDisplay } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,14 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -55,6 +64,10 @@ import {
   Power,
   Download,
   Trash2,
+  Pencil,
+  Check,
+  X,
+  Phone,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
@@ -63,6 +76,7 @@ import {
   fetchConnectionStatus,
   disconnectInstance,
   pollQr,
+  LogoutLoopError,
   type CreateInstanceResult,
 } from "@/services/evolutionService";
 
@@ -80,6 +94,12 @@ interface Agente {
   evolution_instancia: string | null;
   whatsapp_score: number | null;
   score_fatores: ScoreFatores | null;
+  // [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): `null` = nunca calculado de
+  // verdade (cron de 15min ainda não passou por esta instância) — usado pra distinguir "sem dado
+  // real ainda" de "score baixo calculado de verdade", em vez do fallback antigo (`?? 100`) que
+  // mascarava os dois casos como "Saudável".
+  score_updated_at: string | null;
+  created_at: string;
   fallback_owner: string | null;
   filial: string | null;
   reject_calls: boolean | null;
@@ -119,10 +139,46 @@ export function InstanceManagementPanel() {
   const [agentes, setAgentes] = useState<Agente[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [statuses, setStatuses] = useState<Record<string, ConnState>>({});
+  const [phoneNumbers, setPhoneNumbers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Agente | null>(null);
   const [saving, setSaving] = useState(false);
   const [calculating, setCalculating] = useState<string | null>(null);
+
+  // ─── Renomear instância (inline, sem abrir a modal de configuração inteira) ───
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
+
+  const startRename = (a: Agente) => {
+    setRenamingId(a.id);
+    setRenameValue(a.nome);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+    setRenameValue("");
+  };
+
+  const confirmRename = async (a: Agente) => {
+    const novoNome = renameValue.trim();
+    if (!novoNome || novoNome === a.nome) {
+      cancelRename();
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      const { error } = await api.from("agentes").update({ nome: novoNome }).eq("id", a.id);
+      if (error) throw error;
+      toast.success("Instância renomeada");
+      cancelRename();
+      carregar();
+    } catch (e: any) {
+      toast.error(`Erro ao renomear: ${e.message}`);
+    } finally {
+      setRenameSaving(false);
+    }
+  };
 
   // ─── Conectar nova instância ───
   const [showConnectModal, setShowConnectModal] = useState(false);
@@ -136,6 +192,41 @@ export function InstanceManagementPanel() {
   const [waitingQr, setWaitingQr] = useState(false); // Baileys ainda gerando QR
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [showForceBtn, setShowForceBtn] = useState(false);
+  // [AUDITORIA] LÓGICA (Sprint Circuit-Breaker LOGOUT, 2026-08-10): estado do cooldown quando o
+  // backend recusa reconectar (`LogoutLoopError`) — `until` é o epoch ms em que o backend
+  // considera a janela liberada; `cooldownSecondsLeft` só existe pra render (contagem regressiva
+  // visível), recalculado a cada segundo a partir de `until`, nunca decidido localmente. Se a
+  // aba ficar aberta além do cooldown, o próximo clique bate o backend de novo — que é quem
+  // continua sendo a fonte real da regra (o timer local é só UX, não segurança).
+  const [forceReconnectCooldown, setForceReconnectCooldown] = useState<{ until: number; total: number } | null>(null);
+  const [cooldownSecondsLeft, setCooldownSecondsLeft] = useState(0);
+  const [showForceConfirm, setShowForceConfirm] = useState(false);
+
+  useEffect(() => {
+    if (!forceReconnectCooldown) { setCooldownSecondsLeft(0); return; }
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((forceReconnectCooldown.until - Date.now()) / 1000));
+      setCooldownSecondsLeft(left);
+      if (left <= 0) setForceReconnectCooldown(null);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [forceReconnectCooldown]);
+
+  // [AUDITORIA] LÓGICA: handler comum pros 3 pontos que chamam createInstance() (Conectar nova
+  // instância, Reconectar existente, Forçar Reinicialização) — trata especificamente o bloqueio
+  // do circuit-breaker (mensagem + cooldown visível), devolve `true` quando tratou, pra quem
+  // chamou decidir se ainda precisa do fallback de erro genérico.
+  const tratarErroDeConexao = (err: any): boolean => {
+    if (err instanceof LogoutLoopError) {
+      setForceReconnectCooldown({ until: Date.now() + err.minutosRestantes * 60_000, total: err.totalRecente });
+      setErrorDetail(err.message);
+      toast.error(err.message, { duration: 8000 });
+      return true;
+    }
+    return false;
+  };
   // [AUDITORIA] BUG: pollQrLoop() e pollUntilConnected() (abaixo) usavam a variável de estado
   // (waitingQr / pollingConnect / showQrModal) diretamente na condição do `while`. Como essas
   // funções chamam `setWaitingQr(true)`/`setPollingConnect(true)` na própria primeira linha, a
@@ -188,6 +279,7 @@ export function InstanceManagementPanel() {
         toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
     } catch (err: any) {
+      if (tratarErroDeConexao(err)) return;
       const msg = err.message || "";
       if (msg.includes("401") || msg.includes("unauthorized")) {
         toast.error("Erro na Evolution API: API Key inválida ou expirada.");
@@ -266,9 +358,17 @@ export function InstanceManagementPanel() {
     toast.error("Tempo esgotado para gerar QR. Clique em 'Forçar Reinicialização' para tentar novamente.");
   };
 
+  // [AUDITORIA] FIX APLICADO (Sprint Circuit-Breaker LOGOUT, 2026-08-10): o botão não chama mais
+  // a reinicialização direto — abre um diálogo de confirmação explicando o risco real primeiro
+  // (achado do incidente: o botão aparecia sozinho depois de um erro/timeout, convidando a
+  // clicar de novo sem fricção nenhuma, e cada clique é literalmente um pareamento de aparelho
+  // novo pro WhatsApp). A ação de fato fica em `executeForceReconnect`, só chamada após confirmar.
+  const handleForceReconnect = () => setShowForceConfirm(true);
+
   // Deleta fisicamente a instância na Evolution e recria do zero — destrava casos em que o
   // Baileys mantém a instância presa em memória com o socket quebrado (loop de QR sem fim).
-  const handleForceReconnect = async () => {
+  const executeForceReconnect = async () => {
+    setShowForceConfirm(false);
     setConnecting(true);
     setErrorDetail(null);
     setShowForceBtn(false);
@@ -296,6 +396,7 @@ export function InstanceManagementPanel() {
         pollQrLoop(res.instancia || res.instanceName);
       }
     } catch (err: any) {
+      if (tratarErroDeConexao(err)) { setShowForceBtn(true); return; }
       setErrorDetail(`Falha na reinicialização forçada: ${err.message}`);
       setShowForceBtn(true);
       toast.error(`Falha na reinicialização forçada: ${err.message}`);
@@ -386,6 +487,7 @@ export function InstanceManagementPanel() {
         toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
     } catch (err: any) {
+      if (tratarErroDeConexao(err)) return;
       const msg = err.message || "";
       toast.error(`Falha ao reconectar: ${msg}`);
       setErrorDetail(msg || "Falha ao reconectar.");
@@ -476,10 +578,38 @@ export function InstanceManagementPanel() {
         const j = await res.json().catch(() => ({}));
         throw new Error(j?.message || "Falha ao excluir");
       }
-      toast.success("Instância removida");
+      toast.success("Instância removida (histórico de mensagens preservado)");
       carregar();
     } catch (e: any) {
       toast.error(`Erro ao excluir: ${e.message}`);
+    }
+  };
+
+  // Apagar mensagens é a ÚNICA forma de remover histórico — ação deliberada do usuário.
+  // Deletar/desconectar instância nunca mais apaga mensagens (fix backend 2026-09-09).
+  const [apagandoMsgs, setApagandoMsgs] = useState(false);
+  const handleDeleteMessages = async (inst: string) => {
+    const txt = window.prompt(
+      `Isso vai apagar TODO o histórico de mensagens da instância "${inst}".\n` +
+      `Ação irreversível (as mensagens somem da tela e são expurgadas em 90 dias).\n\n` +
+      `Digite APAGAR para confirmar:`,
+    );
+    if (txt?.trim().toUpperCase() !== "APAGAR") return;
+    setApagandoMsgs(true);
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/instances/${encodeURIComponent(inst)}/mensagens`, {
+        method: "DELETE",
+        headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.message || "Falha ao apagar mensagens");
+      toast.success(`${j.apagadas ?? 0} mensagem(ns) apagada(s)`);
+    } catch (e: any) {
+      toast.error(`Erro ao apagar mensagens: ${e.message}`);
+    } finally {
+      setApagandoMsgs(false);
     }
   };
 
@@ -522,16 +652,19 @@ export function InstanceManagementPanel() {
   // diagnosticos/AUDITORIA_LOG.md, Sprint 1/2), cada card busca o próprio status, em paralelo.
   const carregarStatus = async (lista: Agente[]) => {
     const map: Record<string, ConnState> = {};
+    const phones: Record<string, string> = {};
     await Promise.all(lista.map(async (a) => {
       if (!a.evolution_instancia) return;
       try {
         const st = await fetchConnectionStatus(a.evolution_instancia);
         map[a.id] = (st.state ?? "close") as ConnState;
+        if (st.phoneNumber) phones[a.id] = st.phoneNumber;
       } catch (error) {
         console.error(`[WhatsApp] Erro ao buscar status de ${a.evolution_instancia}:`, error);
       }
     }));
     setStatuses(map);
+    setPhoneNumbers(phones);
   };
 
   useEffect(() => {
@@ -555,41 +688,27 @@ export function InstanceManagementPanel() {
     [agentes]
   );
 
-  const updateScore = async (id: string, mockData?: any) => {
+  // [AUDITORIA] BUG GRAVE CORRIGIDO (Sprint Score Real + Maturador, 2026-08-09): achado real do
+  // usuário — 2 números banidos na mesma semana, "Score de Saúde" mostrando 100/100 "Saudável"
+  // nos dois. Causa raiz confirmada por leitura do código: esta função nunca calculou nada real —
+  // `Math.random()` pra volume/taxa/reclamações/tempo, só rodava com clique manual, e o fallback
+  // de exibição sem cálculo nenhum era `whatsapp_score ?? 100`. [AUDITORIA] FIX APLICADO: chama o
+  // backend de verdade (`POST /api/instancias/:id/score`, `backend/src/services/instanceScore.ts`)
+  // que consulta `whatsapp_messages`/`disparo_logs`/`disparo_optouts` reais — mesma função usada
+  // pelo cron de 15min que agora recalcula automaticamente todas as instâncias conectadas (este
+  // botão só força um recálculo imediato, pra quem acabou de mudar algo e não quer esperar).
+  const updateScore = async (id: string) => {
     setCalculating(id);
     try {
-      // Em um cenário real, isso seria uma chamada para /api/agentes/:id/score
-      // que consultaria o histórico real de disparos, taxas e logs de ban.
-      // Aqui simulamos o cálculo baseado nas regras fornecidas.
-      
-      const data = mockData || {
-        volume_diario: Math.floor(Math.random() * 200),
-        taxa_resposta: Math.floor(Math.random() * 50),
-        reclamacoes: Math.floor(Math.random() * 5),
-        tempo_dias: Math.floor(Math.random() * 120),
-      };
-
-      let v_score = data.volume_diario < 50 ? 25 : data.volume_diario <= 150 ? 15 : 5;
-      let r_score = data.taxa_resposta > 30 ? 25 : data.taxa_resposta >= 10 ? 15 : 5;
-      let b_score = data.reclamacoes === 0 ? 25 : data.reclamacoes <= 3 ? 10 : 0;
-      let m_score = data.tempo_dias > 90 ? 25 : data.tempo_dias >= 30 ? 15 : 5;
-
-      const total = v_score + r_score + b_score + m_score;
-      const fatores: ScoreFatores = {
-        volume_diario: v_score,
-        taxa_resposta: r_score,
-        reclamacoes: b_score,
-        tempo_conta: m_score
-      };
-
-      const { error } = await api.from("agentes").update({
-        whatsapp_score: total,
-        score_fatores: fatores,
-        score_updated_at: new Date().toISOString()
-      }).eq("id", id);
-
-      if (error) throw error;
-      toast.success("Score atualizado com sucesso");
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/instancias/${id}/score`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.message || "Falha ao calcular score");
+      toast.success(`Score recalculado: ${json.total}/100`);
       carregar();
     } catch (err: any) {
       toast.error(`Falha ao calcular score: ${err.message}`);
@@ -667,10 +786,22 @@ export function InstanceManagementPanel() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {instancias.map(a => {
-            const score = a.whatsapp_score ?? 100;
-            const fatores = a.score_fatores || { volume_diario: 25, taxa_resposta: 25, reclamacoes: 25, tempo_conta: 25 };
+            // [AUDITORIA] FIX APLICADO (Sprint Score Real + Maturador, 2026-08-09): `?? 100` era a
+            // causa raiz do achado do usuário — sem NENHUM cálculo real, o fallback mostrava
+            // "Saudável" pra qualquer instância nunca avaliada (inclusive uma já banida). Agora
+            // `naoCalculado` é tratado como estado PRÓPRIO (nem "saudável" nem "crítico" — ver
+            // `ScoreInstancia.tsx`), e `score`/`fatores` só são realmente exibidos quando existe
+            // dado de verdade (`score_updated_at` preenchido pelo cálculo real, cron ou botão).
+            const naoCalculado = !a.score_updated_at;
+            const score = a.whatsapp_score ?? 0;
+            const fatores = a.score_fatores || { volume_diario: 0, taxa_resposta: 0, reclamacoes: 0, tempo_conta: 0 };
             const state: ConnState = statuses[a.id] ?? "close";
-            const isCritical = score < 40;
+            // Override crítico do achado original: desconectada/banida nunca é "saudável",
+            // independente do score calculado (pode estar desatualizado em até 15min) — mesmo
+            // raciocínio se aplica ao badge "Score crítico"/botão "Novo Disparo" abaixo, não só
+            // ao componente ScoreInstancia.
+            const desconectada = state !== "open";
+            const isCritical = desconectada || (!naoCalculado && score < 40);
 
             return (
               <Card key={a.id} className={`p-5 space-y-4 hover:shadow-lg transition-all border-2 ${isCritical ? 'border-red-500/50 bg-red-50/30' : 'border-transparent'}`}>
@@ -680,11 +811,63 @@ export function InstanceManagementPanel() {
                       <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
                         <Smartphone className="h-4 w-4 text-primary" />
                       </div>
-                      <div className="min-w-0">
-                        <h3 className="font-bold truncate">{a.nome}</h3>
+                      <div className="min-w-0 flex-1">
+                        {renamingId === a.id ? (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") confirmRename(a);
+                                if (e.key === "Escape") cancelRename();
+                              }}
+                              disabled={renameSaving}
+                              autoFocus
+                              className="h-7 text-sm"
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0 text-emerald-600"
+                              onClick={() => confirmRename(a)}
+                              disabled={renameSaving}
+                              title="Salvar nome"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0"
+                              onClick={cancelRename}
+                              disabled={renameSaving}
+                              title="Cancelar"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1 group/name">
+                            <h3 className="font-bold truncate">{a.nome}</h3>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-5 w-5 shrink-0 opacity-0 group-hover/name:opacity-100"
+                              onClick={() => startRename(a)}
+                              title="Renomear instância"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        )}
                         <p className="text-[10px] font-mono text-muted-foreground truncate">
                           {a.evolution_instancia}
                         </p>
+                        {phoneNumbers[a.id] && (
+                          <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                            <Phone className="h-3 w-3" /> {formatPhoneDisplay(phoneNumbers[a.id]) || phoneNumbers[a.id]}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -766,16 +949,24 @@ export function InstanceManagementPanel() {
                   )}
                 </div>
 
+                {/* [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): texto
+                    diferenciado — "desconectada" e "score crítico" são achados diferentes, não
+                    faz sentido usar a mesma frase pros dois. Nenhum dos dois casos realmente
+                    PAUSA disparos automaticamente no backend hoje (achado lateral, fora do escopo
+                    desta sprint — só o botão "Novo Disparo" fica desabilitado NESTA tela; ver
+                    diagnosticos/AUDITORIA_LOG.md pro registro completo). */}
                 {isCritical && (
                   <div className="flex items-center gap-2 p-2 bg-red-500 text-white rounded-md text-[11px] font-bold animate-pulse">
                     <AlertOctagon className="h-3 w-3" />
-                    Score crítico — disparos pausados automaticamente
+                    {desconectada ? "Desconectada — não deve receber disparos" : "Score crítico — evite disparar por este número"}
                   </div>
                 )}
 
-                <ScoreInstancia 
-                  score={score} 
-                  fatores={fatores} 
+                <ScoreInstancia
+                  score={score}
+                  fatores={fatores}
+                  desconectado={desconectada}
+                  naoCalculado={naoCalculado}
                 />
 
                 <div className="flex flex-wrap gap-1.5 pt-1">
@@ -807,17 +998,22 @@ export function InstanceManagementPanel() {
         </div>
 
 
-        {/* Modal de configuração */}
-        <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-          <DialogContent className="sm:max-w-[560px]">
-            <DialogHeader>
-              <DialogTitle>Configurar Instância</DialogTitle>
-              <DialogDescription>
+        {/* Painel lateral de configuração */}
+        <Sheet open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+          <SheetContent
+            side="right"
+            onInteractOutside={(e) => e.preventDefault()}
+            className="w-full sm:max-w-xl flex flex-col gap-0 p-0"
+          >
+            <SheetHeader className="border-b p-6 pb-4 text-left">
+              <SheetTitle>Configurar Instância</SheetTitle>
+              <SheetDescription>
                 Ajuste comportamento e automação do número conectado.
-              </DialogDescription>
-            </DialogHeader>
+              </SheetDescription>
+            </SheetHeader>
 
             {editing && (
+              <div className="flex-1 overflow-y-auto p-6">
               <Tabs defaultValue="geral" className="w-full">
                 <TabsList className="grid grid-cols-3 w-full">
                   <TabsTrigger value="geral">Geral</TabsTrigger>
@@ -944,11 +1140,31 @@ export function InstanceManagementPanel() {
                       onCheckedChange={(v) => setEditing({ ...editing, auto_distribute: v })}
                     />
                   </div>
+
+                  {/* Zona de perigo — apagar mensagens é ação deliberada e separada */}
+                  <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/[0.04] p-3">
+                    <p className="text-sm font-medium text-destructive">Apagar histórico de mensagens</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      Remove todas as mensagens desta instância da tela (expurgo definitivo em 90 dias).
+                      Excluir ou desconectar a instância <strong>não</strong> apaga o histórico — só este botão.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      disabled={apagandoMsgs || !editing.evolution_instancia}
+                      onClick={() => editing.evolution_instancia && handleDeleteMessages(editing.evolution_instancia)}
+                    >
+                      {apagandoMsgs && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+                      Apagar mensagens desta instância
+                    </Button>
+                  </div>
                 </TabsContent>
               </Tabs>
+              </div>
             )}
 
-            <DialogFooter>
+            <SheetFooter className="border-t bg-muted/30 p-6 pt-4 !flex-row !justify-end !space-x-2">
               <Button variant="outline" onClick={() => setEditing(null)} disabled={saving}>
                 Cancelar
               </Button>
@@ -956,9 +1172,9 @@ export function InstanceManagementPanel() {
                 {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Salvar
               </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
 
         {/* ─── Modal: Conectar nova instância ─── */}
         <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
@@ -1111,14 +1327,23 @@ export function InstanceManagementPanel() {
               )}
 
               {showForceBtn && (
-                <Button
-                  onClick={handleForceReconnect}
-                  disabled={connecting}
-                  className="w-full bg-amber-600 hover:bg-amber-700 text-white gap-2"
-                >
-                  {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  Forçar Reinicialização do QR Code
-                </Button>
+                <div className="space-y-1.5">
+                  <Button
+                    onClick={handleForceReconnect}
+                    disabled={connecting || cooldownSecondsLeft > 0}
+                    className="w-full bg-amber-600 hover:bg-amber-700 text-white gap-2"
+                  >
+                    {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    {cooldownSecondsLeft > 0
+                      ? `Aguarde ${Math.floor(cooldownSecondsLeft / 60)}:${String(cooldownSecondsLeft % 60).padStart(2, "0")}`
+                      : "Forçar Reinicialização do QR Code"}
+                  </Button>
+                  {cooldownSecondsLeft > 0 && (
+                    <p className="text-[11px] text-amber-600 text-center">
+                      {forceReconnectCooldown?.total} desconexões seguidas detectadas — bloqueado temporariamente pra não arriscar banir o número.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -1140,6 +1365,35 @@ export function InstanceManagementPanel() {
           os dois abriam juntos). Era um subconjunto funcional do que ficou (mesmos dois campos,
           mesmo startConnect), confirmado sem uso próprio antes da remoção.
         */}
+
+        {/* [AUDITORIA] LÓGICA (Sprint Circuit-Breaker LOGOUT, 2026-08-10): fricção real antes de
+            "Forçar Reinicialização" — achado do incidente Serenovlogs067 (e um segundo usuário
+            banido no mesmo dia) é que o botão convidava a clicar de novo sem nenhum aviso do
+            risco real. Diálogo explícito, sem atalho — confirmar tem que ser uma ação de
+            propósito, não um segundo clique reflexo. */}
+        <Dialog open={showForceConfirm} onOpenChange={setShowForceConfirm}>
+          <DialogContent className="sm:max-w-[440px]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-amber-600">
+                <AlertOctagon className="h-5 w-5" />
+                Forçar reinicialização?
+              </DialogTitle>
+              <DialogDescription className="pt-2 text-sm text-foreground/90 leading-relaxed">
+                Cada reinicialização forçada apaga a sessão atual e cria um <strong>pareamento de aparelho novo</strong> pro WhatsApp — como se você tivesse escaneado o QR Code do zero num celular diferente.
+                <br /><br />
+                Repetir isso várias vezes seguidas é exatamente o padrão que já derrubou e chegou a banir números reais desta conta. Só use se o QR realmente estiver travado — não como primeira tentativa.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowForceConfirm(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={executeForceReconnect} className="bg-amber-600 hover:bg-amber-700 text-white">
+                Sim, forçar reinicialização
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </TooltipProvider>
   );

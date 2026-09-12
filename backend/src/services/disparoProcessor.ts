@@ -1,12 +1,38 @@
 import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
+import { registrarUsoIA, estimarCustoUsd } from '../utils/aiCusto';
 import { botSentTexts, botMessageIds, BOT_ECHO_TTL_MS } from './agentEngine';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
-import { garantirMidiaEstavel } from '../utils/whatsappMediaStorage';
+import { garantirMidiaEstavel, gerarVariacaoImagem } from '../utils/whatsappMediaStorage';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// [AUDITORIA] BUG GRAVÍSSIMO CORRIGIDO (achado real do usuário, 2026-09-11 — conta
+// cotinedeborah@gmail.com com 2 campanhas em 0/2661 enviados, 0% por mais de 1h; usuário: "cada
+// usuario deve ter sua propria fila problema gravissimo"): a versão antiga deste arquivo buscava
+// UM lote global de 5 mensagens (`get_next_disparo_batch(5)`, sem filtro por conta/campanha) e
+// processava CADA mensagem do lote em SEQUÊNCIA, com `await sleep(delayMs)` — o delay antiban
+// configurado POR CAMPANHA — entre uma mensagem e a PRÓXIMA DO LOTE, mesmo que a próxima fosse de
+// uma campanha (ou conta) completamente diferente. Uma única campanha com delay customizado alto
+// (achado ao vivo: 7,5-15 min, "Comercial" da conta mentoark@gmail.com) monopolizava o motor
+// inteiro — nenhuma mensagem de NENHUMA outra conta saía enquanto essa campanha estivesse "dormindo"
+// entre mensagens, porque o loop inteiro (e a flag `disparosRunning`, index.ts) ficava preso num
+// único `await sleep()` de até 15 minutos, repetido a cada mensagem do lote. Resultado real
+// observado: a campanha "campanha atendimento" da cotinedeborah ficou 100% parada (2661/2661
+// `disparo_logs` ainda 'pending', nenhuma tentativa sequer) só porque outra campanha, de outra
+// conta, tinha entrado na fila global antes dela.
+//
+// [AUDITORIA] FIX APLICADO: delay antiban vira um ESTADO POR CAMPANHA (`proximoEnvioPermitidoPor
+// Campanha`, abaixo) em vez de um `sleep()` bloqueante compartilhado — cada tick busca um lote
+// maior, agrupa por campanha, processa NO MÁXIMO 1 mensagem por campanha por tick, e todas as
+// campanhas elegíveis do tick rodam CONCORRENTEMENTE (`Promise.allSettled`, dentro de
+// `processarDisparos`). Uma campanha com delay de 15 min só atrasa ELA MESMA — outras campanhas
+// (mesma conta ou conta diferente) continuam avançando no próprio ritmo, a cada tick de 2s.
+// Circuit breaker de erros consecutivos (`errosConsecutivosPorCampanha`) também vira por-campanha
+// e persistente entre ticks (antes resetava a cada novo lote, então só detectava erro consecutivo
+// DENTRO de um único lote de 5 — bug menor na mesma família, corrigido de graça aqui).
+const proximoEnvioPermitidoPorCampanha = new Map<string, number>(); // disparo_id -> epoch ms
+const errosConsecutivosPorCampanha = new Map<string, number>(); // disparo_id -> contagem
 
 // Cache flag humanizar_ia por disparo_id (evita query por mensagem)
 const humanizarCache = new Map<string, boolean>();
@@ -147,6 +173,71 @@ async function requeuePendentes(pool: Pool, rows: { log_id: string }[]) {
   ).catch(err => log.error('DISPARO', 'Falha ao reenfileirar mensagens pendentes', { err: err?.message }));
 }
 
+// [AUDITORIA] FIX APLICADO (2026-07-23): a tela (src/pages/Disparos.tsx) manda literalmente
+// "safe"/"moderate"/"fast" e promete 30-60s/15-30s/5-15s. Faixas alinhadas com a tela;
+// 'normal'/'seguro'/'slow'/'rapido' mantidos como aliases legados (campanha antiga pode ter
+// gravado esse valor). Perfil desconhecido cai no perfil mais seguro (nunca um valor fixo sem
+// jitter), por precaução. [AUDITORIA] LÓGICA (revisão 2026-09-11): hoisted pra nível de módulo —
+// antes vivia dentro do loop sequencial de `processarDisparos`; agora `calcularDelayMs` (usada
+// concorrentemente por campanha, ver nota grande no topo do arquivo) precisa delas fora de
+// qualquer escopo de função.
+const FAIXAS_DELAY_MS: Record<string, [number, number]> = {
+  safe: [30000, 60000],
+  moderate: [15000, 30000],
+  fast: [5000, 15000],
+  // Atalho da tela (StepAntiBan) pro caso de uso "pelo menos 8-10 minutos de diferença" — só
+  // entra em jogo se as colunas de intervalo customizado vierem nulas mesmo com
+  // `perfil_velocidade='ultra_safe'` gravado (campanha nova sempre preenche
+  // `delay_min_segundos`/`delay_max_segundos` explicitamente).
+  ultra_safe: [480000, 720000],
+};
+const ALIAS_PERFIL: Record<string, string> = {
+  seguro: 'safe', slow: 'safe',
+  normal: 'moderate',
+  rapido: 'fast',
+};
+const DELAY_MINIMO_ABSOLUTO_MS = 5000;
+
+/**
+ * Calcula o delay antiban (ms) até a PRÓXIMA mensagem desta campanha — intervalo customizado
+ * (`delay_min_segundos`/`delay_max_segundos`) tem prioridade sobre `perfil_velocidade`. Usada
+ * pra popular `proximoEnvioPermitidoPorCampanha` depois de cada mensagem (nunca mais como um
+ * `sleep()` bloqueante — ver nota grande no topo do arquivo).
+ */
+async function calcularDelayMs(pool: Pool, disparoId: string): Promise<number> {
+  try {
+    const campanhaRes = await pool.query(
+      `SELECT perfil_velocidade, delay_min_segundos, delay_max_segundos FROM disparos WHERE id = $1 LIMIT 1`,
+      [disparoId]
+    );
+    const row = campanhaRes.rows[0];
+    const customMin = row?.delay_min_segundos;
+    const customMax = row?.delay_max_segundos;
+    if (customMin != null && customMax != null) {
+      let minMs = Math.max(Number(customMin) * 1000, DELAY_MINIMO_ABSOLUTO_MS);
+      let maxMs = Math.max(Number(customMax) * 1000, DELAY_MINIMO_ABSOLUTO_MS);
+      if (minMs > maxMs) [minMs, maxMs] = [maxMs, minMs];
+      return Math.floor(Math.random() * (maxMs - minMs) + minMs);
+    }
+    const perfilBruto = String(row?.perfil_velocidade || '').toLowerCase();
+    const perfil = FAIXAS_DELAY_MS[perfilBruto] ? perfilBruto : (ALIAS_PERFIL[perfilBruto] || 'safe');
+    const [min, max] = FAIXAS_DELAY_MS[perfil];
+    return Math.floor(Math.random() * (max - min) + min);
+  } catch (errDb: any) {
+    log.warn('DISPARO', 'Falha ao buscar configuração de delay, usando faixa segura', { err: errDb.message });
+    const [min, max] = FAIXAS_DELAY_MS.safe;
+    return Math.floor(Math.random() * (max - min) + min);
+  }
+}
+
+// Cache de URL de mídia estabilizada por campanha (Sprint 6, item 1 — mídia expirada em campanhas
+// de múltiplos dias). [AUDITORIA] LÓGICA (revisão 2026-09-11): promovida de cache-por-lote pra
+// cache-por-módulo (mesmo padrão de `humanizarCache`/`cooldownHorasCache`) — o novo motor
+// concorrente não tem mais um "lote" sequencial único cujo tempo de vida fazia sentido pra esse
+// cache; ele já era, na prática, "resolve uma vez por campanha e reaproveita", então vive tão bem
+// (ou melhor: sobrevive entre ticks, não só dentro de um lote) como cache de módulo.
+const urlMidiaEstavelPorCampanha = new Map<string, string>();
+
 export async function processarDisparos(pool: Pool) {
   try {
     // [AUDITORIA] FIX APLICADO (Sprint Disparos/Agendamento, 2026-07-25): promove campanhas
@@ -157,66 +248,113 @@ export async function processarDisparos(pool: Pool) {
     await pool.query('SELECT promover_disparos_agendados()')
       .catch(err => log.warn('DISPARO', 'Falha ao promover campanhas agendadas', { err: err?.message }));
 
-    // 1. Buscar lote de mensagens pendentes usando a função SQL atômica
-    const batch = await pool.query('SELECT * FROM public.get_next_disparo_batch(5)');
-    
+    // 1. Buscar lote de mensagens pendentes usando a função SQL atômica.
+    // [AUDITORIA] FIX APLICADO (Sprint Fila Por Campanha, 2026-09-11 — ver nota grande no topo do
+    // arquivo): tamanho do lote subiu de 5 pra 40 — não pra processar 40 mensagens em sequência
+    // (o motor novo processa no máximo 1 mensagem POR CAMPANHA por tick, concorrentemente), mas
+    // pra ter uma amostra grande o suficiente de conter mensagens de VÁRIAS campanhas/contas
+    // diferentes num único tick, mesmo quando uma campanha grande (milhares de linhas 'pending'
+    // criadas juntas) domina a ordenação por `created_at` da fila.
+    // [AUDITORIA] BUG CORRIGIDO (achado no próprio deploy deste fix, 2026-09-11): `$1` parametrizado
+    // chega ao Postgres como tipo `unknown` — com mais de uma versão de `get_next_disparo_batch`
+    // no banco (histórico de `CREATE OR REPLACE`/`DROP FUNCTION` de sprints anteriores), a função
+    // deixou de ser resolvível de forma única ("function ... is not unique"), e o motor inteiro
+    // passou a lançar erro em TODO tick, sem processar nenhuma campanha. `TAMANHO_LOTE` é uma
+    // constante fixa do código (nunca input de usuário) — interpolar direto no texto do SQL é
+    // seguro aqui (mesmo padrão da chamada original, `get_next_disparo_batch(5)`, que nunca teve
+    // esse problema por passar um literal inteiro, não um parâmetro `$1`) e resolve a ambiguidade
+    // de overload sem precisar de `::integer` (Postgres já vê um literal inteiro no texto do SQL).
+    const TAMANHO_LOTE = 40;
+    const batch = await pool.query(`SELECT * FROM public.get_next_disparo_batch(${TAMANHO_LOTE})`);
+
     if (!batch.rows.length) return;
 
-    log.info('DISPARO', 'Processando lote de mensagens', { tamanhoLote: batch.rows.length });
-
-    let errosConsecutivos = 0;
-    let ultimaCampanhaId = '';
-    // [AUDITORIA] LÓGICA (Sprint 5 — salvaguarda antiban de teto diário): um único lote pode
-    // conter mensagens de campanhas diferentes (get_next_disparo_batch não filtra por
-    // campanha). Se a checagem de teto pausar a campanha A no meio do lote, as mensagens
-    // seguintes da campanha A que já vieram claimadas ('sending') neste mesmo lote precisam
-    // ser puladas e reenfileiradas também — sem isso, a campanha ficaria com status
-    // 'pausado' mas o loop continuaria enviando as mensagens restantes dela normalmente.
-    const campanhasPausadasNesteLote = new Set<string>();
-    // [AUDITORIA] FIX APLICADO (Sprint 6, item 1 — mídia expirada em campanhas de múltiplos
-    // dias, 2026-07-23): `disparos.url_midia` é compartilhado por TODOS os destinatários da
-    // campanha — sem cache, o mesmo link externo instável seria re-testado (e continuaria
-    // quebrado) em cada uma das centenas/milhares de mensagens. Estabiliza uma vez por
-    // campanha por execução deste lote (ver bloco de transição de campanha abaixo) e persiste
-    // de volta em `disparos.url_midia`, então a partir da PRÓXIMA leitura (mesmo lote ou dias
-    // depois) `get_next_disparo_batch()` já devolve a URL estável direto, sem precisar
-    // recachear.
-    const urlMidiaEstavelPorCampanha = new Map<string, string>();
-
-    for (let i = 0; i < batch.rows.length; i++) {
-      const msg = batch.rows[i];
-      const { log_id, disparo_id, user_id, telefone, mensagem, tipo_midia, url_midia, legenda_midia } = msg;
-
-      if (campanhasPausadasNesteLote.has(disparo_id)) {
-        await requeuePendentes(pool, [{ log_id }]);
+    // [AUDITORIA] LÓGICA (Sprint Fila Por Campanha, 2026-09-11): agrupa o lote por `disparo_id` —
+    // só a mensagem MAIS ANTIGA (lote já vem ordenado por `created_at ASC`) de cada campanha é
+    // processada neste tick; qualquer mensagem extra da MESMA campanha volta pra fila na hora
+    // (será a próxima candidata dela no tick seguinte em que ela estiver liberada). Isso é o que
+    // transforma "5 mensagens em sequência, não importa de quem" em "até 1 mensagem por campanha,
+    // todas as campanhas elegíveis em paralelo".
+    const primeiraPorCampanha = new Map<string, any>();
+    const paraReenfileirarJa: { log_id: string }[] = [];
+    for (const msg of batch.rows) {
+      if (primeiraPorCampanha.has(msg.disparo_id)) {
+        paraReenfileirarJa.push({ log_id: msg.log_id });
         continue;
       }
+      primeiraPorCampanha.set(msg.disparo_id, msg);
+    }
 
-      // Reset do contador de falhas consecutivas ao mudar de campanha dentro do mesmo lote
-      if (disparo_id !== ultimaCampanhaId) {
-        errosConsecutivos = 0;
-        ultimaCampanhaId = disparo_id;
+    // [AUDITORIA] LÓGICA (Sprint Fila Por Campanha, 2026-09-11): campanha ainda dentro do próprio
+    // delay antiban (última mensagem dela saiu há menos tempo que `calcularDelayMs` decidiu) não
+    // está pronta pra outra mensagem AINDA — reenfileira sem tentar. Substitui o antigo
+    // `await sleep(delayMs)` bloqueante: aqui é só uma checagem de timestamp, nunca segura o tick.
+    const agora = Date.now();
+    const selecionadas: any[] = [];
+    for (const msg of primeiraPorCampanha.values()) {
+      const proximoPermitido = proximoEnvioPermitidoPorCampanha.get(msg.disparo_id) || 0;
+      if (agora < proximoPermitido) {
+        paraReenfileirarJa.push({ log_id: msg.log_id });
+      } else {
+        selecionadas.push(msg);
+      }
+    }
 
-        // [AUDITORIA] FIX APLICADO (Sprint 5, 2026-07-23 — teto diário; revisado 2026-07-29 pra
-        // ser POR INSTÂNCIA): antes de processar a primeira mensagem de uma campanha neste
-        // lote, resolve as instâncias candidatas (seleção manual da tela via
-        // `resolverInstanciasCampanha`, ou o único fallback pra campanhas sem seleção) e conta,
-        // pra CADA uma delas separadamente, quantas mensagens já foram efetivamente ENVIADAS
-        // (status='sent') nas últimas 24h corridas — não mais uma soma única por `user_id`
-        // (ver `disparo_logs.instancia`, preenchida no UPDATE de envio abaixo). Instâncias que já
-        // bateram o teto saem da lista de disponíveis; a campanha só pausa de vez quando TODAS
-        // as candidatas estiverem no teto. Teto configurável por campanha
-        // (`disparos.limite_diario_mensagens`, default 500 no banco / 200 sugerido na UI) —
-        // mesmo padrão já usado por `limite_erros_consecutivos`.
-        try {
-          const capMetaRes = await pool.query(
-            `SELECT user_id, COALESCE(limite_diario_mensagens, 500) AS limite_diario_mensagens
+    if (paraReenfileirarJa.length) await requeuePendentes(pool, paraReenfileirarJa);
+    if (!selecionadas.length) return;
+
+    log.info('DISPARO', 'Processando lote de mensagens', {
+      tamanhoLoteBruto: batch.rows.length, campanhasSelecionadasNesteTick: selecionadas.length,
+    });
+
+    // [AUDITORIA] LÓGICA (Sprint Fila Por Campanha, 2026-09-11): cada campanha selecionada roda em
+    // paralelo (`Promise.allSettled` — uma campanha lançando exceção nunca derruba as outras).
+    // Nenhum `await sleep()` bloqueante mais neste arquivo: o pacing antiban de cada campanha vive
+    // só em `proximoEnvioPermitidoPorCampanha`, escrito ao final de `processarUmaMensagem`.
+    await Promise.allSettled(selecionadas.map(msg => processarUmaMensagem(pool, msg)));
+  } catch (err: any) {
+    log.error('DISPARO', 'Erro crítico no motor de processamento', { err: err?.message, stack: err?.stack });
+  }
+}
+
+/**
+ * Processa UMA mensagem (a mais antiga pendente de UMA campanha, já selecionada por
+ * `processarDisparos`) — janela de horário/fim de semana, teto diário por instância, opt-out,
+ * cooldown entre campanhas, humanização, envio de verdade, classificação de erro e circuit
+ * breaker por campanha. Chamada concorrentemente, uma vez por campanha elegível, a cada tick de
+ * 2s — nunca faz `await sleep()` bloqueante; ao final, grava em `proximoEnvioPermitidoPorCampanha`
+ * quando esta campanha pode mandar a PRÓXIMA mensagem, sem travar o motor até lá.
+ */
+async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
+  const { log_id, disparo_id, user_id, telefone, mensagem, tipo_midia, url_midia, legenda_midia, variar_imagem } = msg;
+  try {
+    // [AUDITORIA] FIX APLICADO (Sprint 5, 2026-07-23 — teto diário; revisado 2026-07-29 pra
+    // ser POR INSTÂNCIA): antes de processar a mensagem desta campanha, resolve as
+    // instâncias candidatas (seleção manual da tela via `resolverInstanciasCampanha`, ou o
+    // único fallback pra campanhas sem seleção) e conta, pra CADA uma delas separadamente,
+    // quantas mensagens já foram efetivamente ENVIADAS (status='sent') nas últimas 24h
+    // corridas — não mais uma soma única por `user_id` (ver `disparo_logs.instancia`,
+    // preenchida no UPDATE de envio abaixo). Instâncias que já bateram o teto saem da lista
+    // de disponíveis; a campanha só pausa de vez quando TODAS as candidatas estiverem no
+    // teto. Teto configurável por campanha (`disparos.limite_diario_mensagens`), com teto
+    // ABSOLUTO de 50/dia por instância.
+    // [AUDITORIA] FIX APLICADO (Sprint Limite Diário Seguro, 2026-09-11 — pedido explícito do
+    // usuário: "limite os usuarios a disparar menos de 50 por dia para não travar ou banir a
+    // conta deles"): default caiu de 500 pra 50 (COALESCE e fallback `|| 500` abaixo), e um
+    // `Math.min(50, ...)` reforça isso mesmo se a coluna, por algum caminho fora de
+    // `routes/disparos.ts` (que já clampa no POST/PUT), guardar um valor maior — este é o
+    // ponto que decide de verdade quantas mensagens saem, então é o lugar certo pro teto valer
+    // sempre, não só confiar que todo caminho de escrita passou pelo clamp.
+    {
+      try {
+        const capMetaRes = await pool.query(
+            `SELECT user_id, COALESCE(limite_diario_mensagens, 50) AS limite_diario_mensagens
              FROM disparos WHERE id = $1 LIMIT 1`,
             [disparo_id]
           );
           if (capMetaRes.rows.length) {
             const donoCampanha = capMetaRes.rows[0].user_id;
-            const limiteDiario = Number(capMetaRes.rows[0].limite_diario_mensagens) || 500;
+            const limiteDiario = Math.min(50, Number(capMetaRes.rows[0].limite_diario_mensagens) || 50);
 
             const instanciasSelecionadas = await resolverInstanciasCampanha(pool, disparo_id, donoCampanha);
             let candidatos: InstanciaElegivel[] = instanciasSelecionadas;
@@ -254,9 +392,8 @@ export async function processarDisparos(pool: Pool) {
                  WHERE id = $1`,
                 [disparo_id, aviso]
               );
-              campanhasPausadasNesteLote.add(disparo_id);
               await requeuePendentes(pool, [{ log_id }]);
-              continue;
+              return;
             }
           }
         } catch (errCap: any) {
@@ -301,8 +438,8 @@ export async function processarDisparos(pool: Pool) {
 
           if (pausa_fins_semana && (diaSemana === 0 || diaSemana === 6)) {
             log.info('DISPARO', 'Campanha suspensa: pausa de fim de semana ativa', { disparo_id });
-            await requeuePendentes(pool, batch.rows.slice(i));
-            break;
+            await requeuePendentes(pool, [{ log_id }]);
+            return;
           }
 
           const inicio = horario_inicio ? Number(String(horario_inicio).split(':')[0]) : 8;
@@ -310,8 +447,8 @@ export async function processarDisparos(pool: Pool) {
 
           if (horaSP < inicio || horaSP >= fim) {
             log.info('DISPARO', 'Campanha suspensa: fora da janela de horário comercial permitida', { disparo_id, horaSP, inicio, fim });
-            await requeuePendentes(pool, batch.rows.slice(i));
-            break;
+            await requeuePendentes(pool, [{ log_id }]);
+            return;
           }
         }
       } catch (errMeta: any) {
@@ -336,7 +473,7 @@ export async function processarDisparos(pool: Pool) {
             [log_id]
           ).catch(err => log.error('DISPARO', 'Falha ao marcar log como cancelado_pelo_cliente', { err: err?.message }));
           log.info('DISPARO', 'Mensagem pulada — contato em opt-out', { disparo_id, telefone });
-          continue;
+          return;
         }
 
         // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): checagem defensiva
@@ -358,7 +495,7 @@ export async function processarDisparos(pool: Pool) {
               [log_id]
             ).catch(err => log.error('DISPARO', 'Falha ao marcar log como cooldown', { err: err?.message }));
             log.info('DISPARO', 'Mensagem pulada — contato em cooldown (camada defensiva)', { disparo_id, telefone, cooldownHoras });
-            continue;
+            return;
           }
         }
 
@@ -391,30 +528,119 @@ export async function processarDisparos(pool: Pool) {
         // 3. Normalizar telefone
         const digits = telefone.replace(/\D/g, '');
 
+        // [AUDITORIA] BUG (achado real, Sprint Continuidade — Vistoria de Problemas, 2026-08-25,
+        // investigando `SPRINT_GRUPOS_DIAGNOSTICO_COMPLETO.md`): nada em `contatos` distingue a
+        // linha sintética de um GRUPO (criada por `webhook.ts` pro backfill de nome/foto — mesmo
+        // `origem = 'WhatsApp'` de um contato pessoa real, sem coluna `is_group`) de um contato de
+        // verdade — confirmado em produção: a conta `mentoark@gmail.com` já tem 4 grupos reais
+        // como linha em `contatos` hoje. Nada em `StepContacts`/`disparoProcessor` os excluía —
+        // um grupo podia ser selecionado numa campanha de Disparo e `number: digits` (sem `@g.us`)
+        // ia direto pro `/message/sendText` da Evolution, com risco real da Evolution/Baileys
+        // resolver por tamanho e mandar a mensagem de campanha (com dado de outro contato via
+        // `{{nome}}`) pra DENTRO do grupo, visível pra todo mundo lá. [AUDITORIA] FIX APLICADO:
+        // JID de grupo do WhatsApp é sempre um ID longo (`120363...`, 18+ dígitos) ou o formato
+        // antigo com hífen (`5511952927886-1398018374`, 24+ dígitos após stripar não-dígito) —
+        // nenhum telefone real (nem com DDI de outro país, E.164 tem no máximo 15 dígitos) chega
+        // nem perto disso. `> 15` é uma barreira segura: bloqueia os 2 formatos de grupo
+        // conhecidos sem risco de rejeitar número de cliente real.
+        if (digits.length > 15) {
+          await pool.query(
+            `UPDATE disparo_logs SET status = 'failed', erro = 'destino_parece_grupo_nao_contato' WHERE id = $1`,
+            [log_id]
+          ).catch(err => log.error('DISPARO', 'Falha ao marcar log como destino_parece_grupo_nao_contato', { err: err?.message }));
+          // [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, revisão pós-Sprint Grupos/Template):
+          // este `continue` pula por cima do bloco de contabilidade que todo outro caminho de
+          // falha passa (`catch` mais abaixo, `falhas = falhas + 1`) — campanha com N contatos
+          // que na verdade são grupo tinha N linhas marcadas 'failed' em `disparo_logs` mas
+          // `disparos.falhas` (o contador agregado que `MonitoringDashboard.tsx` mostra e usa
+          // pra calcular taxa de falha) nunca via esse número. Resultado real: barra de progresso
+          // (`enviados`/`total_leads`) nunca fecha 100%, sem nenhuma "falha" visível que explique
+          // a diferença. [AUDITORIA] FIX APLICADO: incrementa `falhas` aqui também — mas
+          // deliberadamente NÃO mexe em `errosConsecutivos` (o freio de pausa automática por erro
+          // consecutivo, ver comentário logo acima): isso aqui é validação de dado de entrada, não
+          // falha operacional de envio/API, incluir no circuit-breaker pausaria campanhas
+          // legítimas só por terem alguns contatos de grupo misturados.
+          await pool.query(
+            `UPDATE disparos SET falhas = falhas + 1 WHERE id = $1`,
+            [disparo_id]
+          ).catch(err => log.error('DISPARO', 'Falha ao incrementar contador de falhas (destino_parece_grupo_nao_contato)', { err: err?.message }));
+          log.warn('DISPARO_GRUPO_BLOQUEADO', 'Disparo bloqueado — destino parece ser grupo do WhatsApp, não contato individual', { disparo_id, telefone, digitos: digits.length });
+          return;
+        }
+
         // 3.1. Humanizar mensagem via IA — withAiFallback garante que erros 401/429
         //      não travam o disparo; a mensagem original é usada como contingência.
         let textoFinal: string = mensagem;
-        let legendaFinal: string = legenda_midia || mensagem;
+        // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): prioridade invertida
+        // — `mensagem` (disparo_logs.mensagem_enviada) é a legenda JÁ PERSONALIZADA por contato
+        // (substituirPlaceholders rodou no frontend, StepReview.handleStart, ao criar cada log);
+        // `legenda_midia` (disparos.legenda_midia) é o texto CRU da campanha inteira, compartilhado
+        // por todos os destinatários, sem substituição de placeholder nenhuma — não existe coluna
+        // de "legenda por contato" em disparo_logs, então usar `legenda_midia` como preferência (como
+        // antes) mandava `{{nome}}`/`{{primeiro_nome}}`/etc. literais pra campanhas de mídia com
+        // placeholder na legenda, sempre que essa coluna viesse preenchida (ex: campanha criada a
+        // partir de um template, ou qualquer campanha após o fix de
+        // "Textarea sempre escreve em form.mensagem" em Disparos.tsx, que agora preenche
+        // `legenda_midia` de verdade). `legenda_midia` void o fallback só quando `mensagem` vier
+        // vazio (ex: campanha antiga, criada antes deste fix, sem log personalizado equivalente).
+        let legendaFinal: string = mensagem || legenda_midia;
+        // [AUDITORIA] BUG (achado 2026-09-02, revisão de gastos de IA pedida pelo usuário: "preciso
+        // que não ocorra mais os gastos absurdos"): `humanizarMensagem` paga OpenAI de verdade a
+        // cada variação nova (cache reaproveita ~70% depois das 5 primeiras, mas o resto é chamada
+        // real) e isso nunca era registrado em `ai_uso_diario` — invisível no dashboard de custo,
+        // mesmo padrão que deixou o gasto de mídia de grupo passar batido até o saldo zerar em
+        // 14/08. [AUDITORIA] FIX APLICADO: `humanizarMensagem` agora devolve os tokens usados;
+        // registrado aqui com `registrarUsoIA` sempre que a chamada realmente aconteceu (tokens > 0
+        // — cache hit ou fallback por erro não contam, porque não pagaram nada de verdade).
+        const registrarCustoHumanizacao = (r: { tokensEntrada: number; tokensSaida: number; modelo: string }) => {
+          if (!r.tokensEntrada && !r.tokensSaida) return;
+          registrarUsoIA(pool, {
+            userId: user_id, providerSlug: 'openai', modelo: r.modelo,
+            tokensEntrada: r.tokensEntrada, tokensSaida: r.tokensSaida,
+            custoUsd: estimarCustoUsd(r.modelo, r.tokensEntrada, r.tokensSaida),
+          }).catch(() => {});
+        };
         if (await deveHumanizar(pool, disparo_id)) {
           if (tipo_midia === 'texto' || !tipo_midia) {
-            textoFinal = await withAiFallback(
-              () => humanizarMensagem(mensagem),
-              mensagem,
+            const r = await withAiFallback(
+              () => humanizarMensagem(mensagem, pool, user_id),
+              { texto: mensagem, tokensEntrada: 0, tokensSaida: 0, modelo: '' },
               'humanizarMensagem(texto)',
             );
-          } else if (legenda_midia) {
-            legendaFinal = await withAiFallback(
-              () => humanizarMensagem(legenda_midia),
-              legenda_midia,
+            textoFinal = r.texto;
+            registrarCustoHumanizacao(r);
+          } else if (legendaFinal) {
+            // [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): humaniza
+            // `legendaFinal` (já resolvido acima, prioritariamente a versão PERSONALIZADA por
+            // contato) em vez do `legenda_midia` cru — humanizar o texto cru reescreveria a
+            // mensagem inteira sem nunca substituir `{{placeholders}}` (a humanização roda antes
+            // de qualquer substituição, e não existe um segundo passo de substituição depois dela).
+            const r = await withAiFallback(
+              () => humanizarMensagem(legendaFinal, pool, user_id),
+              { texto: legendaFinal, tokensEntrada: 0, tokensSaida: 0, modelo: '' },
               'humanizarMensagem(legenda)',
             );
+            legendaFinal = r.texto;
+            registrarCustoHumanizacao(r);
           }
         }
 
         // 4. Enviar mensagem
         // Usa a URL estável já cacheada pra esta campanha (ver bloco de transição de campanha
         // acima), com fallback pra `url_midia` crua se a estabilização falhou/não rodou.
-        const urlMidiaFinal = urlMidiaEstavelPorCampanha.get(disparo_id) || url_midia;
+        let urlMidiaFinal = urlMidiaEstavelPorCampanha.get(disparo_id) || url_midia;
+        // [AUDITORIA] FIX APLICADO (Sprint Variação de Imagem, 2026-08-25, pedido do usuário —
+        // anti-fingerprint): campanha com `variar_imagem=true` gera uma variação de hash único
+        // POR MENSAGEM aqui (nunca cacheada — diferente da URL estável acima, que É cacheada de
+        // propósito por campanha) — cada destinatário recebe um arquivo com hash diferente,
+        // visualmente idêntico. Opt-in, default false — nenhuma campanha existente muda de
+        // comportamento sem o operador ligar o toggle explicitamente. Só faz sentido pra imagem
+        // (documento/áudio corromperiam com reencode de imagem); qualquer falha do sharp
+        // (formato não suportado, arquivo não encontrado) devolve a URL original inalterada —
+        // nunca bloqueia o envio por conta desta variação.
+        if (variar_imagem && tipo_midia === 'imagem' && urlMidiaFinal) {
+          urlMidiaFinal = await gerarVariacaoImagem(urlMidiaFinal);
+        }
         let endpoint = `${baseUrl}/message/sendText/${instancia}`;
         let body: any = { number: digits, text: textoFinal };
 
@@ -480,7 +706,12 @@ export async function processarDisparos(pool: Pool) {
           throw httpErr;
         }
 
-        const respData = await resp.json().catch(() => ({}));
+        // [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, typecheck escopado): sem anotação, TS
+        // infere `respData` como `{}` (não `any`) — `resp.json()` resolve pra `Promise<unknown>`
+        // nos tipos reais instalados (`undici-types`), e o `.catch(() => ({}))` acaba virando o
+        // tipo do resultado. Mesmo padrão já usado em outros pontos do projeto pra JSON de
+        // resposta de formato variável (ex: `whatsappMediaStorage.ts`, `buscarInfoGrupo`).
+        const respData: any = await resp.json().catch(() => ({}));
         const realMsgId = respData?.key?.id || `disparo_${log_id}`;
 
         if (respData?.key?.id) {
@@ -513,8 +744,8 @@ export async function processarDisparos(pool: Pool) {
           ]
         )).catch(err => log.error('DISPARO INSERT whatsapp_messages ERROR', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
 
-        // Sucesso no envio: reseta o contador de falhas consecutivas
-        errosConsecutivos = 0;
+        // Sucesso no envio: reseta o contador de falhas consecutivas DESTA campanha.
+        errosConsecutivosPorCampanha.set(disparo_id, 0);
 
         // 5. Atualizar status para enviado
         await pool.query(
@@ -611,7 +842,13 @@ export async function processarDisparos(pool: Pool) {
         // pular o delay logo depois de um erro de rede/infra bateria a Evolution mais rápido
         // bem no momento em que ela está instável).
         if (statusFinalLog !== 'pending') {
-          errosConsecutivos++;
+          // [AUDITORIA] LÓGICA (revisão Sprint Fila Por Campanha, 2026-09-11): contador por
+          // campanha, persistente entre ticks (`errosConsecutivosPorCampanha`, módulo) — antes
+          // vivia como `let errosConsecutivos` local a um único lote sequencial e resetava a cada
+          // novo lote, então só detectava erro consecutivo DENTRO de um mesmo lote de 5. Agora
+          // detecta de verdade "N erros seguidos desta campanha", mesmo em ticks diferentes.
+          const errosConsecutivos = (errosConsecutivosPorCampanha.get(disparo_id) || 0) + 1;
+          errosConsecutivosPorCampanha.set(disparo_id, errosConsecutivos);
           try {
             const limitRes = await pool.query(
               `SELECT limite_erros_consecutivos, pausa_erros_consecutivos FROM disparos WHERE id = $1 LIMIT 1`,
@@ -626,8 +863,7 @@ export async function processarDisparos(pool: Pool) {
                 `UPDATE disparos SET status = 'pausado', updated_at = NOW() WHERE id = $1`,
                 [disparo_id]
               );
-              await requeuePendentes(pool, batch.rows.slice(i + 1));
-              break;
+              return;
             }
           } catch (errDb: any) {
             log.warn('DISPARO', 'Erro ao processar limite de erros consecutivos', { err: errDb.message });
@@ -635,76 +871,16 @@ export async function processarDisparos(pool: Pool) {
         }
       }
 
-      // [AUDITORIA] FIX APLICADO (2026-07-23): a tela (src/pages/Disparos.tsx) manda literalmente
-      // "safe"/"moderate"/"fast" e promete 30-60s/15-30s/5-15s — mas esse switch só reconhecia
-      // 'slow'/'seguro'/'safe', 'normal', 'fast'/'rapido', com faixas que NÃO batiam com o que a
-      // tela promete. "moderate" (a opção recomendada) não batia com nenhum branch e caía no
-      // default `delayMs = 1500` FIXO, sem aleatoriedade nenhuma — mais rápido e mais mecânico
-      // que o próprio "RÁPIDO" (que pelo menos tinha jitter). Faixas agora alinhadas com a tela;
-      // 'normal'/'seguro'/'slow'/'rapido' mantidos como aliases legados (campanha antiga pode ter
-      // gravado esse valor). Perfil desconhecido cai no perfil mais seguro (nunca mais um valor
-      // fixo sem jitter), por precaução.
-      const FAIXAS_DELAY_MS: Record<string, [number, number]> = {
-        safe: [30000, 60000],
-        moderate: [15000, 30000],
-        fast: [5000, 15000],
-        // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): atalho novo da tela
-        // (StepAntiBan) pro caso de uso citado pelo usuário ("pelo menos 8-10 minutos de
-        // diferença") — só existe aqui como rede de segurança: campanhas novas sempre preenchem
-        // `delay_min_segundos`/`delay_max_segundos` explicitamente (ver bloco abaixo), então este
-        // valor só entraria em jogo se as colunas custom viessem nulas por algum motivo mesmo com
-        // `perfil_velocidade='ultra_safe'` gravado.
-        ultra_safe: [480000, 720000],
-      };
-      const ALIAS_PERFIL: Record<string, string> = {
-        seguro: 'safe', slow: 'safe',
-        normal: 'moderate',
-        rapido: 'fast',
-      };
-
-      // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): antes o delay vinha
-      // só do perfil fixo (teto de 60s). Agora, se a campanha tiver um intervalo customizado
-      // (`delay_min_segundos`/`delay_max_segundos`, preenchido pela tela em minutos e convertido
-      // pra segundos), ele tem prioridade — permite qualquer intervalo, incluindo os 8-10+ min
-      // pedidos. NULO nas duas colunas (campanha criada antes deste fix) cai no comportamento
-      // antigo por `perfil_velocidade`, sem quebrar nada existente. Piso absoluto de 5000ms
-      // (mesmo mínimo já usado pelo perfil "Rápido") aplicado aqui de novo, mesmo que o frontend
-      // já valide — segunda camada de segurança pro backend nunca aceitar um valor
-      // perigosamente baixo, mesmo que a validação do frontend seja contornada. `min > max`
-      // (dado corrompido/editado direto no banco) é corrigido trocando os dois em vez de travar
-      // o envio inteiro.
-      const DELAY_MINIMO_ABSOLUTO_MS = 5000;
-      let delayMs: number;
-      try {
-        const campanhaRes = await pool.query(
-          `SELECT perfil_velocidade, delay_min_segundos, delay_max_segundos FROM disparos WHERE id = $1 LIMIT 1`,
-          [disparo_id]
-        );
-        const row = campanhaRes.rows[0];
-        const customMin = row?.delay_min_segundos;
-        const customMax = row?.delay_max_segundos;
-
-        if (customMin != null && customMax != null) {
-          let minMs = Math.max(Number(customMin) * 1000, DELAY_MINIMO_ABSOLUTO_MS);
-          let maxMs = Math.max(Number(customMax) * 1000, DELAY_MINIMO_ABSOLUTO_MS);
-          if (minMs > maxMs) [minMs, maxMs] = [maxMs, minMs];
-          delayMs = Math.floor(Math.random() * (maxMs - minMs) + minMs);
-        } else {
-          const perfilBruto = String(row?.perfil_velocidade || '').toLowerCase();
-          const perfil = FAIXAS_DELAY_MS[perfilBruto] ? perfilBruto : (ALIAS_PERFIL[perfilBruto] || 'safe');
-          const [min, max] = FAIXAS_DELAY_MS[perfil];
-          delayMs = Math.floor(Math.random() * (max - min) + min);
-        }
-      } catch (errDb: any) {
-        log.warn('DISPARO', 'Falha ao buscar configuração de delay, usando faixa segura', { err: errDb.message });
-        const [min, max] = FAIXAS_DELAY_MS.safe;
-        delayMs = Math.floor(Math.random() * (max - min) + min);
-      }
-
-      log.info('DISPARO', 'Aguardando delay antiban antes de prosseguir', { disparo_id, delayMs });
-      await sleep(delayMs);
-    }
+    // [AUDITORIA] FIX APLICADO (Sprint Fila Por Campanha, 2026-09-11 — ver nota grande no topo do
+    // arquivo): fim do processamento desta mensagem (sucesso ou falha, os dois caminhos acima já
+    // trataram cada um o que precisavam) — grava quando ESTA campanha pode mandar a PRÓXIMA
+    // mensagem. Substitui `log.info(...); await sleep(delayMs);`: antes isso travava o motor
+    // inteiro até o delay passar; agora é só uma escrita de timestamp, o tick de 2s segue livre
+    // pra atender qualquer OUTRA campanha imediatamente.
+    const delayMs = await calcularDelayMs(pool, disparo_id);
+    proximoEnvioPermitidoPorCampanha.set(disparo_id, Date.now() + delayMs);
+    log.info('DISPARO', 'Próxima mensagem desta campanha liberada após o delay antiban', { disparo_id, delayMs });
   } catch (err: any) {
-    log.error('DISPARO', 'Erro crítico no motor de processamento', { err: err?.message, stack: err?.stack });
+    log.error('DISPARO', 'Erro crítico ao processar mensagem', { disparo_id, logId: log_id, err: err?.message, stack: err?.stack });
   }
 }

@@ -12,12 +12,12 @@ import {
   Search,
 } from "lucide-react";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -190,11 +190,15 @@ const ModalTarefa = ({
   };
 
   return (
-    <Dialog open={aberto} onOpenChange={onFechar}>
-      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 overflow-hidden">
-        <DialogHeader className="p-6 pb-0">
-          <DialogTitle>{tarefa ? "Editar Tarefa" : "Nova Tarefa"}</DialogTitle>
-        </DialogHeader>
+    <Sheet open={aberto} onOpenChange={(v) => { if (!v) onFechar(); }}>
+      <SheetContent
+        side="right"
+        onInteractOutside={(e) => e.preventDefault()}
+        className="w-full sm:max-w-xl flex flex-col p-0 gap-0"
+      >
+        <SheetHeader className="p-6 pb-4 border-b text-left">
+          <SheetTitle>{tarefa ? "Editar Tarefa" : "Nova Tarefa"}</SheetTitle>
+        </SheetHeader>
 
         <ScrollArea className="flex-1 px-6 py-4">
           <div className="space-y-6">
@@ -453,12 +457,12 @@ const ModalTarefa = ({
           </div>
         </ScrollArea>
 
-        <DialogFooter className="p-6 pt-2 bg-slate-50/50 border-t flex items-center justify-between sm:justify-between">
+        <SheetFooter className="p-6 pt-4 border-t bg-muted/30 !flex-row !items-center !justify-between !space-x-0">
           <div>
             {tarefa && onExcluir && (
               <Button
                 variant="ghost"
-                className="text-red-500 hover:text-red-600 hover:bg-red-50 gap-2"
+                className="text-destructive hover:text-destructive hover:bg-destructive/10 gap-2"
                 onClick={() => onExcluir(tarefa.id)}
               >
                 <Trash2 className="w-4 h-4" /> Excluir
@@ -469,9 +473,9 @@ const ModalTarefa = ({
             <Button variant="outline" onClick={onFechar}>Cancelar</Button>
             <Button onClick={handleSalvar}>Salvar</Button>
           </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 };
 

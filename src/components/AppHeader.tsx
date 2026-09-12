@@ -46,17 +46,7 @@ export function AppHeader() {
         />
       </div>
 
-      <div className="absolute bottom-0 left-0 right-0 h-[2px] pointer-events-none overflow-hidden">
-        <div
-          className="h-full w-full opacity-80"
-          style={{
-            background:
-              "linear-gradient(90deg, transparent, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--primary)), transparent)",
-            backgroundSize: "200% 100%",
-            animation: "gradient-shift 3s linear infinite",
-          }}
-        />
-      </div>
+      <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-px bg-border/70" />
 
       <div className="flex items-center gap-2">
         <SidebarTrigger className="text-muted-foreground hover:text-foreground" />

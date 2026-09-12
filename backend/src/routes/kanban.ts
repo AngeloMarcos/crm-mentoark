@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import { registrarUsoIA, estimarCustoUsd } from '../utils/aiCusto';
 import { log } from '../logger';
 
 export default function kanban(pool: Pool): Router {
@@ -57,6 +58,19 @@ export default function kanban(pool: Pool): Router {
 
           const aiJson: any = await aiResp.json();
           const text = aiJson.content?.[0]?.text || '';
+          // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): esta chamada
+          // (Anthropic, chave própria/global do ambiente) nunca gravava custo_usd — ficava fora
+          // do dashboard de custo (que só cobre a conversa 1:1, `agentEngine.ts`) mesmo pagando
+          // de verdade a cada "criar tarefa da conversa" clicado. `usage` da Anthropic vem como
+          // `input_tokens`/`output_tokens` (nomes diferentes do formato OpenAI).
+          if (aiJson.usage) {
+            await registrarUsoIA(pool, {
+              userId, providerSlug: 'anthropic', modelo: 'claude-3-haiku-20240307',
+              tokensEntrada: Number(aiJson.usage.input_tokens) || 0,
+              tokensSaida: Number(aiJson.usage.output_tokens) || 0,
+              custoUsd: estimarCustoUsd('claude-3-haiku-20240307', Number(aiJson.usage.input_tokens) || 0, Number(aiJson.usage.output_tokens) || 0),
+            });
+          }
           const match = text.match(/\{.*\}/s);
           if (match) {
             const parsed = JSON.parse(match[0]);

@@ -3,6 +3,21 @@ import { pool, withTenantContext } from './db';
 import { log } from './logger';
 import { reconciliarInstanciasEvolution } from './services/evolutionReconciliation';
 import { retentarMidiaPendente } from './services/mediaRetry';
+import { recalcularTodosScores } from './services/instanceScore';
+import { processarMaturador } from './services/maturadorProcessor';
+import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
+
+// [AUDITORIA] FIX APLICADO (Sprint Limpeza de Disco, 2026-08-23): dias de retenção pra mídia
+// recebida (áudio/imagem/vídeo/documento) salva em disco — configurável via env pra poder
+// apertar/afrouxar sem novo deploy, default 30 dias (decisão explícita do usuário, ver
+// AUDITORIA_LOG.md). Ver `limparMidiaExpirada()` (utils/whatsappMediaStorage.ts) pro porquê.
+const DIAS_RETENCAO_MIDIA = Number(process.env.DIAS_RETENCAO_MIDIA_WHATSAPP) || 30;
+
+// [AUDITORIA] FIX APLICADO (Sprint Grupos/Template, 2026-09-04): retenção bem mais curta que a
+// de mídia recebida — arquivo de variação (`gerarVariacaoImagem()`, `variar_imagem` em
+// Disparos) é gerado um por MENSAGEM e descartável assim que a Evolution buscou a URL pra
+// entregar; poucas horas já é folga generosa contra retry lento.
+const HORAS_RETENCAO_VARIANTES = Number(process.env.HORAS_RETENCAO_VARIANTES_IMAGEM) || 12;
 
 export function initCronJobs() {
   // Todo dia às 03:00 (horário de Brasília) — Limpeza diária de tabelas de crescimento
@@ -41,6 +56,25 @@ export function initCronJobs() {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // A cada 6 horas — limpeza das variações de imagem geradas por `variar_imagem` (Disparos).
+  // [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, revisão pós-Sprint Grupos/Template):
+  // `gerarVariacaoImagem()` grava um arquivo novo POR MENSAGEM enviada com essa opção ligada,
+  // sem nenhuma limpeza — campanha de milhares de destinatários acumulava milhares de arquivos
+  // pra sempre em disco (a limpeza de mídia semanal, `limparMidiaExpirada` abaixo, só cobre
+  // mídia RECEBIDA rastreada em `whatsapp_messages`, não isso). Retenção curta (12h default,
+  // ver `HORAS_RETENCAO_VARIANTES_IMAGEM`) e cadência mais frequente que a limpeza semanal —
+  // proporcional ao volume real (pode chegar a milhares de arquivos/dia numa campanha grande).
+  cron.schedule('0 */6 * * *', async () => {
+    try {
+      const r = await limparVariantesExpiradas(HORAS_RETENCAO_VARIANTES);
+      if (r.arquivosRemovidos) {
+        log.info('CRON', 'Limpeza de variações de imagem concluída', r);
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro na limpeza de variações de imagem', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Todo domingo às 02:00 (horário de Brasília) — limpeza de retenção LGPD (longo prazo)
   cron.schedule('0 2 * * 0', async () => {
     try {
@@ -75,11 +109,23 @@ export function initCronJobs() {
         "DELETE FROM whatsapp_messages WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '90 days'"
       )).catch(() => ({ rowCount: 0 }));
 
+      // 6. Mídia de WhatsApp em disco (áudio/imagem/vídeo/documento) mais velha que
+      // DIAS_RETENCAO_MIDIA — ver [AUDITORIA] em whatsappMediaStorage.ts. Achado real: 9GB/mês
+      // acumulando sem nenhuma limpeza, na mesma VPS que já teve disco cheio derrubar o Postgres
+      // 2x. Só o ARQUIVO é removido — a mensagem continua no histórico, só sem anexo.
+      const midia = await limparMidiaExpirada(pool, DIAS_RETENCAO_MIDIA).catch((err: any) => {
+        log.error('CRON', 'Erro na limpeza de mídia expirada', { err: err?.message });
+        return { arquivosRemovidos: 0, bytesLiberados: 0, mensagensAtualizadas: 0 };
+      });
+
       log.info('CRON', 'Limpeza semanal concluída', {
         disparos: logs.rowCount,
         catalogos: catLogs.rowCount,
         chats: chats.rowCount,
         waMessagesExpurgadas: waMessages.rowCount,
+        midiaArquivosRemovidos: midia.arquivosRemovidos,
+        midiaBytesLiberados: midia.bytesLiberados,
+        diasRetencaoMidia: DIAS_RETENCAO_MIDIA,
       });
     } catch (err: any) {
       log.error('CRON', 'Erro na limpeza semanal', { err: err.message });
@@ -116,7 +162,7 @@ export function initCronJobs() {
     }
   });
 
-  // A cada 15 minutos — reconciliar integracoes_config/agent_configs contra o estado
+  // A cada 15 minutos — reconciliar integracoes_config/agentes contra o estado
   // real das instâncias na Evolution (ver services/evolutionReconciliation.ts — corrige
   // o drift que ficava acumulando silenciosamente, causa raiz documentada em AUDITORIA_LOG.md)
   cron.schedule('*/15 * * * *', async () => {
@@ -129,6 +175,44 @@ export function initCronJobs() {
       log.error('CRON', 'Erro na reconciliação de instâncias Evolution', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
+
+  // [AUDITORIA] FIX APLICADO (Sprint Score Real, 2026-08-09): Score de Saúde deixou de ser
+  // 100% mock (Math.random(), só rodava com clique manual, fallback de exibição sem cálculo
+  // nenhum = 100/"Saudável" — achado grave: 2 números banidos na semana e o score mostrava
+  // 100/100 nos dois). Recalcula TODAS as instâncias conectadas a cada 15min (mesma cadência da
+  // reconciliação Evolution logo acima — não precisa ser mais frequente, é uma métrica de
+  // tendência, não algo que precise de segundo-a-segundo) com dado real (`instanceScore.ts`,
+  // ver comentário completo lá). Botão "Recalcular score" (frontend) chama o cálculo sob
+  // demanda pra feedback imediato sem esperar o próximo tick deste cron.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { atualizados, falhas } = await recalcularTodosScores(pool);
+      if (atualizados > 0 || falhas > 0) {
+        log.info('CRON', 'Score de Saúde recalculado', { atualizados, falhas });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro ao recalcular Score de Saúde', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09, item 2): motor do Maturador
+  // de Números — mesmo espírito de `disparoProcessor.ts` (ciclo com delay variável, nunca
+  // rajada), mas trocando mensagem PRÉ-ESCRITA (zero IA/token) entre 2 instâncias da MESMA
+  // conta, pra simular tráfego orgânico em número novo. Cadência de 1min (bem mais lenta que os
+  // 2s do disparoProcessor de propósito — aqui não tem fila de contatos reais esperando, só
+  // pares `ativo=true`, o motor só precisa checar se já passou tempo suficiente desde a última
+  // troca daquele par). `ativo` nasce sempre `false` (ver migrations.ts) — este cron não faz
+  // nada até o usuário ativar pelo menos 1 par manualmente na UI.
+  cron.schedule('*/1 * * * *', async () => {
+    try {
+      const { processados, enviados } = await processarMaturador(pool);
+      if (enviados > 0) {
+        log.info('CRON', 'Maturador de Números: mensagens trocadas', { processados, enviados });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro no motor do Maturador de Números', { err: err.message });
+    }
+  });
 
   // Todo dia às 04:00 (horário de Brasília) — Sprint A do plano de mídia (ver
   // diagnosticos/AUDITORIA_LOG.md): retenta decriptografar/salvar mídia cuja media_url ainda
@@ -143,6 +227,22 @@ export function initCronJobs() {
       }
     } catch (err: any) {
       log.error('CRON', 'Erro no retry diário de mídia', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // [AUDITORIA] LÓGICA (2026-09-10 — trial de 3 dias): marca assinaturas de trial vencido como
+  // 'expirada'. `subscription.ts` já resolve isso em tempo real a cada request (não depende deste
+  // cron), mas o job mantém a coluna coerente pro painel super-admin e pra relatórios. Cadência
+  // de 30min é folgada de sobra pra uma janela de 3 dias.
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      const r = await pool.query(
+        `UPDATE assinaturas SET status = 'expirada', updated_at = now()
+         WHERE status = 'trial' AND trial_fim IS NOT NULL AND trial_fim < now()`
+      );
+      if (r.rowCount) log.info('CRON', 'Assinaturas de trial expiradas', { count: r.rowCount });
+    } catch (err: any) {
+      log.error('CRON', 'Erro ao expirar assinaturas de trial', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 

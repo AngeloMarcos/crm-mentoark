@@ -4,6 +4,7 @@
 // NÃO usa Database real — zero dependência externa
 import { getAuthToken } from "@/lib/api-token";
 import { withCooldown, CooldownError, hasExceededRetries, friendlyError } from "@/lib/requestGuard";
+import { isReadOnly, avisarBloqueado } from "@/lib/readonly";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'https://api.mentoark.com.br';
 
@@ -341,11 +342,13 @@ class QueryBuilder {
   single()           { this._single = true; return this; }
   maybeSingle()      { this._maybeSingle = true; return this; }
 
-  // [AUDITORIA] BUG (achado em homologação, typecheck escopado): `reject` era obrigatório na
+  // [AUDITORIA] BUG (achado 2026-09-04, typecheck escopado): `reject` era obrigatório na
   // assinatura, mas `QueryBuilder` não estende `Promise` de verdade — TS type-checa chamadas
   // diretas de `.then(cb)` contra ESTA assinatura (não a de `PromiseLike`, que aceita
-  // `onrejected` opcional). Qualquer `.then(fn)` com 1 argumento só dava erro de tipo "Expected
-  // 2 arguments, but got 1" no build com `--noEmit` — inofensivo em runtime, mas real no build.
+  // `onrejected` opcional). Qualquer `.then(fn)` com 1 argumento só (ex: Disparos.tsx, carregar
+  // campanha aberta) dava erro de tipo "Expected 2 arguments, but got 1" — inofensivo em
+  // runtime (JS não valida aridade), mas real no build com `--noEmit`. [AUDITORIA] FIX APLICADO:
+  // `reject` opcional, do jeito que `PromiseLike.then` já declara.
   then(resolve: (v: any) => any, reject?: (r: any) => any) {
     return this._exec()
       .catch((err: any) => ({
@@ -376,6 +379,12 @@ class QueryBuilder {
   private _idFilter(): Filter | undefined { return this._filters.find(f => f.col === 'id' && f.op === 'eq'); }
 
   private async _exec(): Promise<{ data: any; count?: number | null; error: any }> {
+    // [AUDITORIA] Fase 2 do trial: se a assinatura do tenant expirou, corta escrita antes de
+    // sair pela rede (o backend também recusa com 403 SUBSCRIPTION_INACTIVE — isto é só a UX).
+    if ((this._op === 'insert' || this._op === 'update' || this._op === 'delete') && isReadOnly()) {
+      avisarBloqueado();
+      return { data: null, error: { message: 'Assinatura inativa — modo somente leitura', code: 'SUBSCRIPTION_INACTIVE' } };
+    }
     const token = _getToken();
     if (token && _isExpired(token)) {
       const ok = await auth._refreshSilent();

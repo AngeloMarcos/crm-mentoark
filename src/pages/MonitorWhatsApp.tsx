@@ -29,18 +29,32 @@ import {
   FileText,
   ShieldCheck,
   ExternalLink,
+  Send,
+  ChevronRight,
 } from "lucide-react";
 import { authHeader } from "@/lib/api-token";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useNavigate } from "react-router-dom";
-import { 
-  Sheet, 
-  SheetContent, 
-  SheetHeader, 
-  SheetTitle, 
-  SheetDescription 
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription
 } from "@/components/ui/sheet";
+import { api } from "@/integrations/database/client";
+// [AUDITORIA] LÓGICA (Sprint Monitor Persistente de Campanhas, 2026-08-11 — achado real do
+// usuário, conta mentoark@gmail.com: campanha "teste" disparando mensagem real sem NENHUMA tela
+// pra ver ou parar, campanha "pessoal" com 131 leads em_andamento há dias no mesmo estado —
+// fecha `diagnosticos/SPRINT_MONITOR_CAMPANHAS_DISPARO.md`). Originalmente esta página tinha a
+// lista completa de campanhas + o mesmo `MonitoringDashboard` aberto via `?campanha=` que
+// `Disparos.tsx` também tinha — duas telas cheias mantendo a mesma lógica em paralelo.
+// [AUDITORIA] FIX APLICADO (Sprint Estruturar Disparo, 2026-08-11 — pedido explícito do usuário:
+// "reorganizar a tela/fluxo de Disparos"): `Disparos.tsx` virou o dono único da gestão de
+// campanhas (lista + abrir/pausar/cancelar). Aqui fica só um card-resumo compacto que aponta pra
+// lá — evita manter duas UIs completas fazendo a mesma coisa (uma delas inevitavelmente atrasa
+// e desalinha da outra com o tempo).
 
 const API_URL = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
@@ -84,6 +98,28 @@ const MonitorWhatsApp = () => {
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
   const [loadingMensagens, setLoadingMensagens] = useState(false);
   const navigate = useNavigate();
+
+  // [AUDITORIA] FIX APLICADO (Sprint Estruturar Disparo, 2026-08-11): só o resumo (contagens),
+  // não a lista inteira nem o detalhe aberto — isso agora vive só em `Disparos.tsx`. Busca
+  // simples, sem paginação (volume real observado é baixo).
+  const [campanhas, setCampanhas] = useState<any[]>([]);
+  const [loadingCampanhas, setLoadingCampanhas] = useState(true);
+
+  const fetchCampanhas = useCallback(async () => {
+    setLoadingCampanhas(true);
+    try {
+      const { data } = await api.from("disparos").select("*").order("created_at", { ascending: false });
+      setCampanhas(data || []);
+    } finally {
+      setLoadingCampanhas(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCampanhas();
+    const timer = setInterval(fetchCampanhas, 15000);
+    return () => clearInterval(timer);
+  }, [fetchCampanhas]);
 
   const fetchSystemStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -309,6 +345,42 @@ const MonitorWhatsApp = () => {
                   )}
                 </div>
               ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Campanhas de Disparo — ponteiro compacto (Sprint Estruturar Disparo, 2026-08-11) ── */}
+        {/* [AUDITORIA] FIX APLICADO: antes esta card tinha a lista inteira + abria o mesmo painel
+            de detalhe que `Disparos.tsx` também tinha — duas UIs completas pra gerenciar a mesma
+            coisa. Agora é só o resumo (o que importa saber AGORA, sem clicar em nada: tem algo
+            em_andamento?) com um botão pra tela de gestão de verdade. */}
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3">
+                <Send className="w-4 h-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-semibold">Campanhas de Disparo</h3>
+                  <p className="text-xs text-muted-foreground">
+                    {loadingCampanhas
+                      ? "Carregando…"
+                      : campanhas.some(c => c.status === 'em_andamento')
+                        ? `${campanhas.filter(c => c.status === 'em_andamento').length} em andamento agora · ${campanhas.length} no total`
+                        : campanhas.length > 0
+                          ? `Nenhuma em andamento · ${campanhas.length} no total`
+                          : "Nenhuma campanha criada ainda"}
+                  </p>
+                </div>
+                {campanhas.some(c => c.status === 'em_andamento') && (
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px] gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    ativo
+                  </Badge>
+                )}
+              </div>
+              <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => navigate('/disparos')}>
+                <ChevronRight className="w-3.5 h-3.5" /> Ver campanhas
+              </Button>
             </div>
           </CardContent>
         </Card>
