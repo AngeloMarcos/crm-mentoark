@@ -10,8 +10,10 @@ import LoginPage from "./pages/Login";
 import RegisterPage from "./pages/Register";
 import TermsPage from "./pages/Terms";
 import PrivacyPage from "./pages/Privacy";
+import ExclusaoDadosPage from "./pages/ExclusaoDados";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
+import ExportarDadosPage from "./pages/ExportarDados";
 import TagsPage from "./pages/Tags";
 import ContatosPage from "./pages/Contatos";
 import ContatoDetalhePage from "./pages/ContatoDetalhe";
@@ -20,8 +22,10 @@ import FunilPage from "./pages/Funil";
 import WhatsAppPage from "./pages/WhatsApp";
 import SLAPage from "./pages/SLA";
 import RespostasRapidasPage from "./pages/RespostasRapidas";
+import CorridasPendentesPage from "./pages/CorridasPendentes";
 import DisparosPage from "./pages/Disparos";
 import DisparoTemplatesPage from "./pages/DisparoTemplates";
+import DisparoTemplateEditorPage from "./pages/DisparoTemplateEditor";
 import CampanhasPage from "./pages/Campanhas";
 import IntegracoesPage from "./pages/Integracoes";
 import CerebroPage from "./pages/Cerebro";
@@ -52,6 +56,7 @@ import CargosPage from "./pages/Cargos";
 import FirewallPage from "./pages/admin/Firewall";
 import CopilotoPage from "./pages/admin/Copiloto";
 import DiagnosticoWhatsApp from "./pages/admin/DiagnosticoWhatsApp";
+import StyleLabPage from "./pages/StyleLab";
 
 
 
@@ -71,11 +76,14 @@ const App = () => (
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/termos" element={<TermsPage />} />
               <Route path="/privacidade" element={<PrivacyPage />} />
+              <Route path="/exclusao-de-dados" element={<ExclusaoDadosPage />} />
               <Route path="/convite/:token" element={<AceitarConvitePage />} />
+              <Route path="/style-lab" element={<StyleLabPage />} />
 
               <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
               <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />
               <Route path="/leads"        element={<ProtectedRoute requireModulo="leads">       <LeadsPage /></ProtectedRoute>} />
+              <Route path="/exportar-dados" element={<ProtectedRoute requireModulo="leads">     <ExportarDadosPage /></ProtectedRoute>} />
               <Route path="/tags-funil"   element={<ProtectedRoute requireModulo="leads">       <TagsPage /></ProtectedRoute>} />
               <Route path="/contatos"     element={<ProtectedRoute requireModulo="contatos">    <ContatosPage /></ProtectedRoute>} />
               <Route path="/contatos/:id" element={<ProtectedRoute requireModulo="contatos">    <ContatoDetalhePage /></ProtectedRoute>} />
@@ -85,8 +93,10 @@ const App = () => (
               <Route path="/sla"          element={<ProtectedRoute requireModulo="whatsapp">    <SLAPage /></ProtectedRoute>} />
               <Route path="/monitor-whatsapp" element={<ProtectedRoute requireModulo="whatsapp"> <MonitorWhatsApp /></ProtectedRoute>} />
               <Route path="/respostas-rapidas" element={<ProtectedRoute requireModulo="whatsapp"> <RespostasRapidasPage /></ProtectedRoute>} />
+              <Route path="/corridas-pendentes" element={<ProtectedRoute requireModulo="whatsapp"> <CorridasPendentesPage /></ProtectedRoute>} />
               <Route path="/disparos"     element={<ProtectedRoute requireModulo="disparos">    <DisparosPage /></ProtectedRoute>} />
               <Route path="/disparos/templates" element={<ProtectedRoute requireModulo="disparos"> <DisparoTemplatesPage /></ProtectedRoute>} />
+              <Route path="/disparos/templates/:id" element={<ProtectedRoute requireModulo="disparos"> <DisparoTemplateEditorPage /></ProtectedRoute>} />
               <Route path="/campanhas"    element={<ProtectedRoute requireModulo="campanhas">   <CampanhasPage /></ProtectedRoute>} />
               <Route path="/marketing-digital" element={<ProtectedRoute requireModulo="campanhas"> <MarketingDigitalPage /></ProtectedRoute>} />
               <Route path="/integracoes"  element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />

@@ -1,3 +1,14 @@
+/**
+ * [AUDITORIA] APOSENTADA (Sprint 1 unificação, 2026-08-07) — este componente não é mais
+ * renderizado em lugar nenhum (era a aba "Fluxo IA" de Cerebro.tsx, agora substituída por um
+ * aviso apontando pra /agentes). Configuração de agente foi unificada na tabela `agentes`/tela
+ * Agentes.tsx — ver diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md. Arquivo mantido
+ * (não apagado) só pelo histórico de fixes documentados nos comentários abaixo (incidente
+ * "Cris", bug de rota /api/agent_configs vs /api/agent-config, etc.) — não editar/reativar sem
+ * repetir essa mesma unificação primeiro. A rota backend que ele chama (GET/POST
+ * /api/agent-config, backend/src/routes/agent-config.ts) também segue intacta e funcional, só
+ * sem nenhum consumidor no frontend.
+ */
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";

@@ -141,6 +141,131 @@ export default function contatos(pool: Pool): Router {
     }
   });
 
+  // [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): endpoint leve chamado assim que o
+  // arquivo é lido (antes de qualquer clique em "Confirmar Importação") — pré-validação hoje
+  // (`preAnalise`, Disparos.tsx) só valida formato de telefone sem tocar o banco, então não sabe
+  // dizer quantos telefones "válidos" já existem na conta. Match EXATO de telefone (não por
+  // sufixo de 11 dígitos como em `/status-envio`) de propósito: o índice único real
+  // (`idx_contatos_user_tel_unique`) e o `ON CONFLICT` de `/importar-lote` (abaixo) também
+  // comparam por igualdade exata — usar o mesmo critério aqui evita a pré-validação prometer um
+  // número que a importação de fato não confirma.
+  router.post('/checar-telefones', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const telefones = Array.isArray(req.body?.telefones)
+      ? Array.from(new Set(req.body.telefones.filter((t: any) => typeof t === 'string' && t.trim())))
+      : [];
+    if (!telefones.length) return res.json({ existentes: [] });
+    try {
+      const r = await pool.query(
+        `SELECT telefone FROM contatos WHERE user_id = $1 AND telefone = ANY($2::text[])`,
+        [userId, telefones]
+      );
+      return res.json({ existentes: r.rows.map((row: any) => row.telefone) });
+    } catch (err: any) {
+      log.error('CONTATOS', 'Erro em checar-telefones', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): substitui o `POST /` genérico
+  // (`makeCrud`, `crud.ts`) só pra importação em lote de Disparos — aquele bulk-insert não tem
+  // `ON CONFLICT` nenhum (não é específico de `contatos`, é compartilhado por toda tabela que usa
+  // `makeCrud`, um `ON CONFLICT (user_id, telefone)` fixo lá quebraria qualquer outra tabela sem
+  // esse índice), então UM telefone duplicado no lote inteiro (já existente na conta, ou repetido
+  // dentro do próprio arquivo) rejeitava o `INSERT` inteiro com `23505` — nenhuma linha do lote
+  // era gravada. Aqui, `ON CONFLICT ... DO NOTHING` preserva o contato já existente intocado
+  // (nome/notas/tags/status de um lead em atendimento não são sobrescritos por uma reimportação)
+  // e deixa as linhas novas entrarem mesmo que outras do mesmo lote colidam. `WHERE telefone IS
+  // NOT NULL` repetido na cláusula de conflito é OBRIGATÓRIO — o índice de destino
+  // (`idx_contatos_user_tel_unique`, migrations.ts) é parcial, e o Postgres só reconhece um índice
+  // parcial como alvo de inferência do `ON CONFLICT` se o predicado bater exatamente (mesmo bug já
+  // documentado e corrigido em outros pontos do sistema — grupo do webhook, sync-profiles).
+  // `user_id` sempre de `req.userId` (nunca do body) — nenhum client decide em qual conta grava.
+  // Lotes de até 500 linhas por INSERT (mesmo teto já usado em `fetchAllContatos`, Disparos.tsx)
+  // — evita um único INSERT com milhares de VALUES numa importação grande.
+  router.post('/importar-lote', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const itens = Array.isArray(req.body?.contatos) ? req.body.contatos : [];
+    if (!itens.length) return res.status(400).json({ message: 'Nenhum contato enviado' });
+
+    // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): cidade/estado/
+    // interesse/data_nascimento adicionados — mesmas 4 colunas novas de `contatos`
+    // (migrations.ts) e mesmas 4 variáveis novas em `motorTexto.ts`. Sem essa entrada aqui, o
+    // frontend já mandaria esses campos no payload (Disparos.tsx, `confirmarImportacao`) mas o
+    // INSERT ignoraria silenciosamente — `COLS` é a lista fixa que decide o que de fato grava.
+    const COLS = ['user_id', 'nome', 'telefone', 'email', 'empresa', 'cargo', 'cidade', 'estado', 'interesse', 'data_nascimento', 'notas', 'origem', 'status', 'tags', 'lista_id'];
+    const BATCH = 500;
+    const inseridos: { id: string; telefone: string }[] = [];
+    // Set (não array) — dedupe telefone repetido dentro do próprio arquivo antes de calcular
+    // "jaExistiam" por diferença (linha 2/3/... do mesmo telefone não deve inflar essa contagem;
+    // ON CONFLICT DO NOTHING já garante que só a 1ª linha de cada telefone repetido entra).
+    const telefonesEnviados = new Set<string>();
+
+    try {
+      for (let offset = 0; offset < itens.length; offset += BATCH) {
+        const lote = itens.slice(offset, offset + BATCH);
+        const placeholders: string[] = [];
+        const vals: any[] = [];
+        let idx = 1;
+
+        for (const raw of lote) {
+          // Defesa extra: nunca confiar só na validação do frontend pra não gravar linha sem
+          // telefone (o índice único é `WHERE telefone IS NOT NULL` — telefone nulo/vazio nem
+          // participa da checagem de conflito, então uma linha assim sempre insere, mesmo
+          // duplicada, se deixada passar).
+          const telefone = String(raw?.telefone || '').trim();
+          if (!telefone) continue;
+          telefonesEnviados.add(telefone);
+
+          const row = [
+            userId,
+            raw?.nome || telefone,
+            telefone,
+            raw?.email || null,
+            raw?.empresa || null,
+            raw?.cargo || null,
+            raw?.cidade || null,
+            raw?.estado || null,
+            raw?.interesse || null,
+            // [AUDITORIA] LÓGICA: `data_nascimento` gravada como TEXT (não DATE) de propósito —
+            // planilha de cliente real vem em formatos variados (DD/MM/AAAA, "12 de maio", etc.)
+            // e um tipo DATE rejeitaria a linha inteira em qualquer formato ambíguo ou fora do
+            // padrão ISO. Mesma filosofia já usada pro resto do import (nunca descarta a linha por
+            // causa de um campo extra malformado, só grava como veio).
+            raw?.data_nascimento || null,
+            raw?.notas || null,
+            raw?.origem || 'Importado (Disparos)',
+            raw?.status || 'novo',
+            Array.isArray(raw?.tags) ? raw.tags : [],
+            raw?.lista_id || null,
+          ];
+          placeholders.push(`(${row.map(() => `$${idx++}`).join(', ')})`);
+          vals.push(...row);
+        }
+
+        if (!placeholders.length) continue;
+
+        const sql = `INSERT INTO contatos (${COLS.join(', ')}) VALUES ${placeholders.join(', ')}
+          ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
+          RETURNING id, telefone`;
+        const r = await pool.query(sql, vals);
+        inseridos.push(...r.rows);
+      }
+
+      const telefonesInseridos = new Set(inseridos.map(r => r.telefone));
+      const telefonesJaExistiam = Array.from(telefonesEnviados).filter(t => !telefonesInseridos.has(t));
+
+      return res.json({
+        inseridos: inseridos.length,
+        jaExistiam: telefonesJaExistiam.length,
+        telefonesJaExistiam,
+      });
+    } catch (err: any) {
+      log.error('CONTATOS', 'Erro em importar-lote', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // PATCH /:id/pausa-ia — ativa ou desativa pausa de atendimento humano
   // Body: { ativo: boolean, duracao_min?: number }
   router.patch('/:id/pausa-ia', async (req: AuthRequest, res: Response) => {

@@ -41,6 +41,8 @@ import { makeCrud } from './crud';
 import authRouter from './auth';
 import contatosRouter from './routes/contatos';
 import disparosRouter from './routes/disparos';
+import instanceScoreRouter from './routes/instanceScore';
+import maturadorRouter from './routes/maturador';
 import agentPromptsRouter from './routes/agent_prompts';
 import agentConfigRouter from './routes/agent-config';
 import documentsRouter from './routes/documents';
@@ -56,6 +58,7 @@ import galeriaRouter from './routes/galeria';
 import modulosRouter from './routes/modulos';
 import whatsappRouter from './routes/whatsapp';
 import cargosRouter from './routes/cargos';
+import corridasRouter from './routes/corridas';
 import { mcpRouter } from './routes/mcp';
 import marketingRouter from './routes/marketing';
 import teamRouter, { teamInvitePublicRouter } from './routes/team';
@@ -290,14 +293,60 @@ for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
 
+// [AUDITORIA] BUG GRAVE CORRIGIDO (achado 2026-08-10 — cliente real, número caiu da tela do
+// CRM repetidas vezes no mesmo dia): `DELETE /api/agentes/:id` genérico (makeCrud, abaixo) apaga
+// a linha sem nenhuma noção de que ela é o único vínculo entre o CRM e uma instância WhatsApp
+// REALMENTE conectada na Evolution — a sessão continua viva no servidor (não desconecta o
+// WhatsApp de verdade), mas o número some de Instâncias/Disparos/Score/Maturador, todos os
+// quais leem de `agentes`. Rota dedicada de desconexão (`POST /whatsapp/disconnect`,
+// `DELETE /whatsapp/instances/:name`) já faz a limpeza coordenada certa (loga fora da Evolution
+// e só então limpa o banco) — o problema era só existir um atalho pelo CRUD genérico que pula
+// tudo isso. [AUDITORIA] FIX APLICADO: bloqueia especificamente o DELETE de uma linha com
+// `evolution_instancia` preenchida, direcionando pro fluxo de desconexão de verdade. Registrada
+// ANTES do `app.use('/api/agentes', makeCrud(...))` — Express casa a primeira rota que bate,
+// então esta intercepta o mesmo método+path sem precisar mexer no crud.ts genérico (usado por
+// outras ~20 tabelas que não têm essa mesma regra de negócio).
+app.delete('/api/agentes/:id', async (req: AuthRequest, res, next) => {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+  try {
+    const r = await pool.query(
+      `SELECT evolution_instancia FROM agentes WHERE id = $1 AND user_id = $2`,
+      [req.params.id, userId]
+    );
+    if (r.rows.length && r.rows[0].evolution_instancia) {
+      return res.status(409).json({
+        message: `Este agente está vinculado à instância WhatsApp "${r.rows[0].evolution_instancia}". ` +
+          `Apagar aqui deixaria o número conectado "órfão" (some do painel, mas continua ligado na Evolution). ` +
+          `Use "Desconectar" na aba Instâncias em vez de apagar o agente diretamente.`,
+      });
+    }
+  } catch (err: any) {
+    log.warn('AGENTES', 'Falha ao checar evolution_instancia antes de excluir agente', { err: err?.message });
+    // Falha na checagem não deve bloquear a exclusão — segue pro CRUD genérico normalmente.
+  }
+  next(); // sem vínculo ativo — segue pro DELETE genérico (makeCrud, registrado logo abaixo)
+});
+
 // Agentes: campos do Lovable que não existem na tabela são ignorados silenciosamente
 app.use('/api/agentes', makeCrud(pool, 'agentes', {
   stripFields: [
     // Campos que o Lovable envia mas não existem em agentes
     'tipo', 'config', 'provider_slug', 'instancia', 'active',
     // Campos de outras versões/aliases
-    'provider', 'modelo_id', 'modalidade_audio', 'modalidade_imagem',
-    'modalidade_video', 'mcp_tools', 'name', 'description',
+    // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): `mcp_tools` SAIU desta lista —
+    // virou coluna real em `agentes` (migrations.ts) e agentEngine.ts agora filtra as tools MCP
+    // por ela. Antes disso, qualquer POST/PATCH que o frontend mandasse com `mcp_tools` era
+    // descartado silenciosamente aqui — por isso o toggle da aba Motor nunca teve efeito nenhum,
+    // mesmo antes da unificação (achado desta sprint, não só "não lido", também "nunca salvo").
+    // [AUDITORIA] FIX APLICADO (Sprint Modalidades Opcionais, 2026-08-23 — pedido explícito do
+    // usuário: "não tire essa funcionalidade... deixe como opcional"): `modalidade_audio`/
+    // `modalidade_imagem` SAÍRAM desta lista — mesmo caso do `mcp_tools` acima, viraram colunas
+    // reais (`migrations.ts`) lidas de verdade em `webhook.ts`/`agentEngine.ts` antes de pagar
+    // Whisper/Vision. `modalidade_video` continua stripada — vídeo não tem NENHUM processamento
+    // de IA implementado ainda (a própria UI mostra "em breve"), guardar essa config não faria
+    // nada de qualquer forma.
+    'provider', 'modelo_id', 'modalidade_video', 'name', 'description',
     'is_active', 'enabled', 'settings', 'metadata',
   ],
   transformRow: (row: any) => {
@@ -321,6 +370,12 @@ for (const table of SHARED_TABLES) {
 // Specialized routes
 app.use('/api/contatos', contatosRouter(pool));
 app.use('/api/disparos', disparosRouter(pool));
+// [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): prefixo próprio
+// (`/api/instancias`), não `/api/agentes/...` — evita qualquer colisão de rota com o CRUD
+// genérico já montado em `/api/agentes` (makeCrud, abaixo) e deixa claro que estas rotas são
+// sobre a INSTÂNCIA WhatsApp em si (score, maturador), não sobre a config do agente de IA.
+app.use('/api/instancias', instanceScoreRouter(pool));
+app.use('/api/maturador', maturadorRouter(pool));
 app.use('/api/agent_prompts', agentPromptsRouter(pool));
 app.use('/api/agent-config',  agentConfigRouter(pool));
 app.use('/api/documents', documentsRouter(pool));
@@ -344,6 +399,7 @@ app.use('/api/ai-providers', aiProvidersRouter(pool));
 app.use('/api/ai', aiUsoRouter(pool));
 app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));
+app.use('/api/corridas', corridasRouter(pool));
 app.use('/api/suporte',        suporteCopilotoRouter(pool));
 app.use('/api/admin/firewall', adminFirewallRouter(pool));
 

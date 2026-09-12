@@ -87,6 +87,17 @@ interface Agente {
   modalidade_imagem?: boolean | null;
   modalidade_video?: boolean | null;
   mcp_tools?: string[] | null;
+  // Config unificada (Sprint 1 — antes vivia em agent_configs, tabela hoje aposentada)
+  prompt_sistema?: string | null;
+  saudacao_inicial?: string | null;
+  bloco_qualificacao?: string | null;
+  mensagem_encaminhamento?: string | null;
+  mensagem_encerramento?: string | null;
+  palavra_reativar?: string | null;
+  sinal_pausa?: string | null;
+  tempo_espera_mensagem?: number | null;
+  tempo_espera_resposta?: number | null;
+  grupo_notificacao?: string | null;
 }
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
@@ -120,17 +131,23 @@ export const PROVIDERS = [
   },
 ] as const;
 
+// [AUDITORIA] FIX APLICADO (Sprint 1 unificação, 2026-08-07): esta lista tinha vários ids que
+// não correspondem a NENHUMA tool real do backend (`criar_contato`, `buscar_leads`, `criar_lead`,
+// `atualizar_lead`, `buscar_agendamentos`, `registrar_pausa_ia`) e faltavam 3 tools reais
+// (`consultar_faq`, `buscar_documentos`, `criar_corrida`) — os toggles nunca bateram com o que a
+// IA de fato pode chamar. Lista abaixo agora espelha exatamente `backend/src/services/mcp/tools.ts`
+// (MCP_TOOLS.map(t => t.name)) — mantenha as duas em sincronia manualmente se uma tool for
+// adicionada/removida lá.
 export const MCP_TOOLS = [
-  { id: "buscar_contato",      label: "Buscar contato"        },
-  { id: "criar_contato",       label: "Criar contato"         },
-  { id: "buscar_historico",    label: "Buscar histórico"      },
-  { id: "buscar_leads",        label: "Buscar leads"          },
-  { id: "criar_lead",          label: "Criar lead"            },
-  { id: "atualizar_lead",      label: "Atualizar lead"        },
-  { id: "buscar_produtos",     label: "Buscar produtos"       },
-  { id: "buscar_agendamentos", label: "Buscar agendamentos"   },
-  { id: "criar_agendamento",   label: "Criar agendamento"     },
-  { id: "registrar_pausa_ia",  label: "Pausar IA p/ humano"   },
+  { id: "buscar_contato",              label: "Buscar contato"              },
+  { id: "criar_ou_atualizar_contato",  label: "Criar/atualizar contato"     },
+  { id: "buscar_historico",            label: "Buscar histórico"            },
+  { id: "registrar_pausa",             label: "Pausar IA p/ humano"         },
+  { id: "buscar_produtos",             label: "Buscar produtos"             },
+  { id: "criar_agendamento",           label: "Criar agendamento"           },
+  { id: "consultar_faq",               label: "Consultar FAQ"               },
+  { id: "buscar_documentos",           label: "Buscar documentos (RAG)"     },
+  { id: "criar_corrida",               label: "Criar corrida"               },
 ];
 
 const MCP_TOOLS_DEFAULT = MCP_TOOLS.map((t) => t.id);
@@ -162,6 +179,17 @@ const formInicial = {
   modalidade_imagem: true,
   modalidade_video: false,
   mcp_tools: MCP_TOOLS_DEFAULT as string[],
+  // Config unificada (Sprint 1)
+  prompt_sistema: "",
+  saudacao_inicial: "",
+  bloco_qualificacao: "",
+  mensagem_encaminhamento: "",
+  mensagem_encerramento: "",
+  palavra_reativar: "atendimento finalizado",
+  sinal_pausa: "251213",
+  tempo_espera_mensagem: 3,
+  tempo_espera_resposta: 0,
+  grupo_notificacao: "",
 };
 
 function formatarData(iso: string) {
@@ -242,6 +270,16 @@ export default function AgentesPage() {
       modalidade_imagem: a.modalidade_imagem ?? true,
       modalidade_video: a.modalidade_video ?? false,
       mcp_tools: a.mcp_tools ?? MCP_TOOLS_DEFAULT,
+      prompt_sistema: a.prompt_sistema ?? "",
+      saudacao_inicial: a.saudacao_inicial ?? "",
+      bloco_qualificacao: a.bloco_qualificacao ?? "",
+      mensagem_encaminhamento: a.mensagem_encaminhamento ?? "",
+      mensagem_encerramento: a.mensagem_encerramento ?? "",
+      palavra_reativar: a.palavra_reativar ?? "atendimento finalizado",
+      sinal_pausa: a.sinal_pausa ?? "251213",
+      tempo_espera_mensagem: a.tempo_espera_mensagem ?? 3,
+      tempo_espera_resposta: a.tempo_espera_resposta ?? 0,
+      grupo_notificacao: a.grupo_notificacao ?? "",
     });
     setShowKey(false);
     setModal(true);
@@ -251,6 +289,14 @@ export default function AgentesPage() {
     if (!user) return;
     if (!form.nome.trim()) {
       toast.error("Informe o nome do agente.");
+      return;
+    }
+    // [AUDITORIA] LÓGICA (guard-rail do incidente "Cris", preservado na unificação — mesma regra
+    // que existia em ConfigAgenteIA.tsx): não deixa ativar um agente sem prompt real. Sem isso,
+    // agentEngine.ts simplesmente não responde (outro guard, no backend) — mas é melhor travar
+    // aqui, na hora de salvar, do que deixar o operador achar que ativou e a IA ficar muda.
+    if (form.ativo && !form.prompt_sistema.trim()) {
+      toast.error("Este agente está marcado como ativo mas não tem Prompt do Sistema — a IA não vai responder. Preencha o prompt ou desative o agente.");
       return;
     }
     setSalvando(true);
@@ -281,6 +327,17 @@ export default function AgentesPage() {
       modalidade_imagem: form.modalidade_imagem,
       modalidade_video: form.modalidade_video,
       mcp_tools: form.mcp_tools,
+      // Config unificada (Sprint 1 — antes vivia em agent_configs)
+      prompt_sistema: form.prompt_sistema.trim() || null,
+      saudacao_inicial: form.saudacao_inicial.trim() || null,
+      bloco_qualificacao: form.bloco_qualificacao.trim() || null,
+      mensagem_encaminhamento: form.mensagem_encaminhamento.trim() || null,
+      mensagem_encerramento: form.mensagem_encerramento.trim() || null,
+      palavra_reativar: form.palavra_reativar.trim() || "atendimento finalizado",
+      sinal_pausa: form.sinal_pausa.trim() || "251213",
+      tempo_espera_mensagem: form.tempo_espera_mensagem,
+      tempo_espera_resposta: form.tempo_espera_resposta,
+      grupo_notificacao: form.grupo_notificacao.trim() || null,
     };
 
     if (editing) {
@@ -527,12 +584,32 @@ export default function AgentesPage() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Persona</Label>
+                <Label>Prompt do Sistema {form.ativo && "*"}</Label>
+                <Textarea
+                  value={form.prompt_sistema}
+                  onChange={(e) => setForm({ ...form, prompt_sistema: e.target.value })}
+                  placeholder="Ex: Você é Ana, atendente da Mentoark. Seja simpática, objetiva, e sempre..."
+                  rows={10}
+                  className="font-mono text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Este é o texto que a IA realmente recebe e usa pra responder (config unificada,
+                  antes ficava numa tela separada). Sem isso preenchido, um agente ativo não
+                  responde — é proposital, pra nunca sair no ar com uma persona genérica ou de
+                  outro cliente.
+                </p>
+              </div>
+              {/* [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): Persona/Objetivo abaixo
+                  NUNCA foram lidos por agentEngine.ts (confirmado no código) — são só anotação
+                  interna, não vão pra IA. Mantidos por não apagar dado já preenchido por quem já
+                  usava; Prompt do Sistema acima é o campo que de fato importa. */}
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground">Persona (anotação interna, não é enviada pra IA)</Label>
                 <Textarea
                   value={form.persona}
                   onChange={(e) => setForm({ ...form, persona: e.target.value })}
                   placeholder="Ex: Você é Ana, uma atendente simpática e profissional..."
-                  rows={4}
+                  rows={3}
                 />
               </div>
               {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade):
@@ -576,7 +653,7 @@ export default function AgentesPage() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>Objetivo Principal</Label>
+                <Label className="text-muted-foreground">Objetivo Principal (anotação interna, não é enviado pra IA)</Label>
                 <Textarea
                   value={form.objetivo}
                   onChange={(e) =>
@@ -590,22 +667,93 @@ export default function AgentesPage() {
 
             <TabsContent value="comportamento" className="space-y-4 pt-4">
               <div className="space-y-1.5">
-                <Label>Mensagem de Boas-Vindas</Label>
+                <Label>Saudação Inicial</Label>
+                <Textarea
+                  value={form.saudacao_inicial}
+                  onChange={(e) => setForm({ ...form, saudacao_inicial: e.target.value })}
+                  placeholder="Ex: Olá! Aqui é a Ana da Mentoark 😊"
+                  rows={2}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Bloco de Qualificação</Label>
+                <Textarea
+                  value={form.bloco_qualificacao}
+                  onChange={(e) => setForm({ ...form, bloco_qualificacao: e.target.value })}
+                  rows={3}
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Mensagem de Encaminhamento</Label>
+                  <Textarea
+                    value={form.mensagem_encaminhamento}
+                    onChange={(e) => setForm({ ...form, mensagem_encaminhamento: e.target.value })}
+                    rows={2}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Mensagem de Encerramento</Label>
+                  <Textarea
+                    value={form.mensagem_encerramento}
+                    onChange={(e) => setForm({ ...form, mensagem_encerramento: e.target.value })}
+                    rows={2}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Palavra pra Reativar a IA</Label>
+                  <Input
+                    value={form.palavra_reativar}
+                    onChange={(e) => setForm({ ...form, palavra_reativar: e.target.value })}
+                    placeholder="atendimento finalizado"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Sinal de Pausa (código interno)</Label>
+                  <Input
+                    value={form.sinal_pausa}
+                    onChange={(e) => setForm({ ...form, sinal_pausa: e.target.value })}
+                    placeholder="251213"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Espera antes de responder (segundos)</Label>
+                  <Input
+                    type="number" min={0}
+                    value={form.tempo_espera_mensagem ?? 0}
+                    onChange={(e) => setForm({ ...form, tempo_espera_mensagem: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Grupo de Notificação (JID, opcional)</Label>
+                  <Input
+                    value={form.grupo_notificacao}
+                    onChange={(e) => setForm({ ...form, grupo_notificacao: e.target.value })}
+                    placeholder="120363...@g.us"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground">Mensagem de Boas-Vindas (anotação interna, não é enviada pra IA)</Label>
                 <Textarea
                   value={form.mensagem_boas_vindas}
                   onChange={(e) =>
                     setForm({ ...form, mensagem_boas_vindas: e.target.value })
                   }
-                  rows={3}
+                  rows={2}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Regras e Restrições</Label>
+                <Label className="text-muted-foreground">Regras e Restrições (anotação interna, não é enviada pra IA)</Label>
                 <Textarea
                   value={form.regras}
                   onChange={(e) => setForm({ ...form, regras: e.target.value })}
                   placeholder="Ex: Não mencionar concorrentes. Não inventar preços."
-                  rows={3}
+                  rows={2}
                 />
               </div>
               <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground bg-muted/30">
@@ -720,6 +868,21 @@ export default function AgentesPage() {
                   Quando ligado, o agente aceita mensagens nesse formato e processa via pipeline
                   multimodal (transcrição/visão).
                 </p>
+                {/* [AUDITORIA] FIX APLICADO (Sprint Modalidades Opcionais, 2026-08-23 — pedido
+                    explícito do usuário: "não tire essa funcionalidade... deixe como opcional"):
+                    até aqui estes 2 toggles (Áudio/Imagem) não controlavam nada no backend —
+                    ficaram assim de propósito desde 2026-08-07 (decisão de escopo, não limitação
+                    técnica; ver AUDITORIA_LOG.md). Agora lidos de verdade em webhook.ts/
+                    agentEngine.ts antes de pagar Whisper/Vision — desligar aqui impede a chamada
+                    de verdade, não só esconde a config. */}
+                <p className="text-xs text-muted-foreground">
+                  Desligar aqui impede a chamada de Whisper/Vision de verdade (economiza token) —
+                  o áudio/imagem continua sendo salvo normalmente no chat, só sem transcrição ou
+                  descrição automática. <span className="font-medium text-foreground">Nunca se
+                  aplica a mensagens de grupo</span>, ligado ou desligado: grupo só processa mídia
+                  com IA se estiver explicitamente autorizado em "Tarefa por Grupo", e mesmo assim
+                  é uma trava totalmente separada desta.
+                </p>
 
                 <div className="flex items-center justify-between rounded-md border p-3">
                   <div className="flex items-center gap-2">
@@ -743,7 +906,7 @@ export default function AgentesPage() {
                     <div>
                       <p className="text-sm font-medium">Imagem (visão)</p>
                       <p className="text-xs text-muted-foreground">
-                        Modelo descreve e responde sobre fotos enviadas.
+                        Modelo descreve e responde sobre fotos enviadas (ex: comprovante de Pix, foto de produto).
                       </p>
                     </div>
                   </div>

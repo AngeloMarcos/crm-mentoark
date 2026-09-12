@@ -8,10 +8,15 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: "border-transparent bg-primary text-primary-foreground hover:bg-primary/80",
+        default: "border-transparent bg-primary text-primary-foreground hover:bg-primary/90",
         secondary: "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        destructive: "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
+        destructive: "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline: "text-foreground",
+        // Sinais semânticos — separados do laranja de marca. Fundo translúcido + anel da própria cor.
+        success: "border-transparent bg-success/15 text-success ring-1 ring-inset ring-success/30",
+        warning: "border-transparent bg-warning/15 text-warning ring-1 ring-inset ring-warning/30",
+        info: "border-transparent bg-info/15 text-info ring-1 ring-inset ring-info/30",
+        muted: "border-transparent bg-muted text-muted-foreground",
       },
     },
     defaultVariants: {

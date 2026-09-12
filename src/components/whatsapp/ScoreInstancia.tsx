@@ -28,9 +28,22 @@ interface ScoreInstanciaProps {
   score: number;
   fatores: ScoreFatores;
   onRefresh?: () => void;
+  // [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): override crítico do achado
+  // original — uma instância desconectada/banida (`state !== 'open'` em
+  // `InstanceManagementPanel.tsx`, dado real e fresco, poll a cada 30s direto na Evolution) NUNCA
+  // pode mostrar "Saudável", independente do que os 4 fatores calculariam. `desconectado=true`
+  // troca a exibição inteira por um aviso vermelho — o número por baixo continua existindo (não é
+  // zerado), só deixa de ser a fonte da verdade visual enquanto a instância não está `open`.
+  desconectado?: boolean;
+  // `whatsapp_score`/`score_fatores` nunca foram calculados de verdade pra esta instância ainda
+  // (`agentes.score_updated_at IS NULL` — cron de 15min ainda não passou por ela, ou é uma
+  // conexão nova). Antes desta sprint, esse caso caía no fallback `?? 100` e mostrava "Saudável"
+  // sem nenhum dado real — a raiz do bug reportado. Agora mostra "Ainda não calculado" em vez de
+  // inventar um número.
+  naoCalculado?: boolean;
 }
 
-export function ScoreInstancia({ score, fatores }: ScoreInstanciaProps) {
+export function ScoreInstancia({ score, fatores, desconectado, naoCalculado }: ScoreInstanciaProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   const getScoreColor = (s: number) => {
@@ -45,6 +58,25 @@ export function ScoreInstancia({ score, fatores }: ScoreInstanciaProps) {
     return "Saudável";
   };
 
+  // [AUDITORIA] FIX APLICADO (Sprint Score Real + Maturador, 2026-08-09): override renderizado
+  // ANTES de qualquer cálculo baseado em `score` — desconexão/banimento é sempre a informação
+  // mais importante e mais fresca disponível, tem prioridade sobre um score que pode estar
+  // desatualizado em até 15min (cadência do cron, ver `cron.ts`).
+  if (desconectado) {
+    return (
+      <div className="space-y-2 py-2">
+        <div className="flex flex-col items-center justify-center py-2 gap-1">
+          <Ban className="h-8 w-8 text-red-500" />
+          <span className="text-sm font-black text-red-600 uppercase tracking-wide">Desconectado</span>
+        </div>
+        <p className="text-[11px] text-center text-muted-foreground leading-snug">
+          Instância não está conectada agora — pode ser queda temporária ou banimento. Score de
+          Saúde não é exibido enquanto desconectada: reconecte para voltar a calcular.
+        </p>
+      </div>
+    );
+  }
+
   const getFactorColor = (val: number) => {
     if (val >= 20) return "text-green-500";
     if (val >= 10) return "text-yellow-500";
@@ -56,6 +88,24 @@ export function ScoreInstancia({ score, fatores }: ScoreInstanciaProps) {
     if (val >= 10) return <AlertTriangle className="h-4 w-4 text-yellow-500" />;
     return <Ban className="h-4 w-4 text-red-500" />;
   };
+
+  // [AUDITORIA] FIX APLICADO (Sprint Score Real + Maturador, 2026-08-09): a causa raiz do achado
+  // original — `whatsapp_score ?? 100` no componente pai mostrava "Saudável" sem NENHUM cálculo
+  // ter rodado. Agora o pai passa `naoCalculado=true` explicitamente nesse caso, em vez de
+  // inventar um valor — mostra um estado neutro (cinza, sem nota), não "Saudável" nem "Risco".
+  if (naoCalculado) {
+    return (
+      <div className="space-y-2 py-2">
+        <div className="flex flex-col items-center justify-center py-2 gap-1">
+          <Info className="h-8 w-8 text-muted-foreground/50" />
+          <span className="text-sm font-bold text-muted-foreground uppercase tracking-wide">Ainda não calculado</span>
+        </div>
+        <p className="text-[11px] text-center text-muted-foreground leading-snug">
+          O cálculo automático roda a cada 15 minutos para instâncias conectadas — a primeira leitura ainda não passou por esta.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <TooltipProvider>

@@ -25,6 +25,23 @@ export default function agentConfigRouter(pool: Pool): Router {
 
   // POST /api/agent-config — UPSERT único por user_id
   // Aceita qualquer subconjunto dos campos; os não enviados mantêm valor atual.
+  // [AUDITORIA] BUG (achado no relatório de status, 2026-08-06): `nome_agente`/`prompt_sistema`
+  // são colunas `NOT NULL DEFAULT` (`'Cris'`/`''` respectivamente, ver migrations.ts) — o
+  // DEFAULT do Postgres só entra em ação quando a coluna é OMITIDA do INSERT, nunca quando um
+  // valor `NULL` é passado explicitamente. O parâmetro sempre chegava como `NULL` explícito
+  // quando o campo não vinha no body (`req.body.x ?? null`, undefined vira null) — um POST sem
+  // `nome_agente` (client legítimo mandando só um subconjunto de campos, como o comentário acima
+  // já descrevia como caso suportado) quebrava com 500
+  // (`null value in column "nome_agente" violates not-null constraint`), mesmo a coluna tendo um
+  // DEFAULT pronto pra cobrir exatamente esse caso.
+  // [AUDITORIA] FIX APLICADO: ver os comentários pontuais no VALUES/ON CONFLICT abaixo — a
+  // correção fica só no SQL (não em `?? 'Cris'` no lado do JS), de propósito: aplicar o fallback
+  // já em JS faria o UPDATE (`ON CONFLICT`) usar sempre `EXCLUDED.x` (que já teria virado
+  // 'Cris'/'' antes de chegar no COALESCE do SET), sobrescrevendo silenciosamente um valor real
+  // já configurado em qualquer POST parcial que não reenviasse esses 2 campos — regressão pior
+  // que o 500 original. O parâmetro cru (`?? null`, inalterado) continua sendo passado; só o SQL
+  // decide, separadamente, o que fazer com o NULL em cada metade da instrução (DEFAULT só no
+  // INSERT, preserva valor atual só no UPDATE).
   router.post('/', wrap(async (req: AuthRequest, res: Response) => {
     const {
       prompt_sistema,
@@ -48,6 +65,16 @@ export default function agentConfigRouter(pool: Pool): Router {
       ativo,
     } = req.body;
 
+    // [AUDITORIA] LÓGICA: no VALUES abaixo, $2 (prompt_sistema) e $3 (nome_agente) entram via
+    // COALESCE com o mesmo literal do DEFAULT da coluna (migrations.ts: '' e 'Cris') — cobre o
+    // caso de INSERT (primeira gravação da conta) sem quebrar NOT NULL quando o campo não veio
+    // no body. No ON CONFLICT DO UPDATE logo abaixo, esses 2 campos usam o parâmetro CRU ($2/$3)
+    // em vez de EXCLUDED.x — EXCLUDED.x já reflete o COALESCE do VALUES (sempre ''/'Cris' quando
+    // o campo não veio), o que faria um POST parcial (ex: só a aba "Motor", sem tocar em
+    // "Identidade") sobrescrever silenciosamente um valor real já configurado. Com $2/$3 direto,
+    // a semântica "campo não enviado = mantém valor atual" (igual aos demais campos) continua
+    // intacta pra UPDATE — o fallback pro DEFAULT só se aplica de fato no primeiro INSERT da
+    // conta, quando não existe "valor atual" nenhum pra preservar.
     const r = await pool.query(
       `INSERT INTO agent_configs
          (user_id, prompt_sistema, nome_agente, sinal_pausa, palavra_reativar,
@@ -56,10 +83,10 @@ export default function agentConfigRouter(pool: Pool): Router {
           tempo_espera_mensagem, tempo_espera_resposta, grupo_notificacao,
           evolution_server_url, evolution_api_key, evolution_instancia,
           operation_mode, distribution_mode, ativo, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW())
+       VALUES ($1,COALESCE($2,''),COALESCE($3,'Cris'),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW())
        ON CONFLICT (user_id) DO UPDATE SET
-         prompt_sistema          = COALESCE(EXCLUDED.prompt_sistema,          agent_configs.prompt_sistema),
-         nome_agente             = COALESCE(EXCLUDED.nome_agente,             agent_configs.nome_agente),
+         prompt_sistema          = COALESCE($2,                              agent_configs.prompt_sistema),
+         nome_agente             = COALESCE($3,                              agent_configs.nome_agente),
          sinal_pausa             = COALESCE(EXCLUDED.sinal_pausa,             agent_configs.sinal_pausa),
          palavra_reativar        = COALESCE(EXCLUDED.palavra_reativar,        agent_configs.palavra_reativar),
          modelo_llm              = COALESCE(EXCLUDED.modelo_llm,              agent_configs.modelo_llm),

@@ -17,11 +17,17 @@ const PROMPT_ANALISE_IMAGEM =
   'de Pix no valor de X, foto de produto, captura de tela de erro, etc.). Seja extremamente ' +
   'direto e objetivo.';
 
+export interface ResultadoAnaliseImagem {
+  descricao: string;
+  tokensEntrada: number;
+  tokensSaida: number;
+}
+
 export async function analisarImagem(
   imageBuffer: Buffer,
   mimeType: string,
   openAiApiKey: string,
-): Promise<string | null> {
+): Promise<ResultadoAnaliseImagem | null> {
   if (!imageBuffer?.length || !openAiApiKey) return null;
 
   const controller = new AbortController();
@@ -72,7 +78,15 @@ export async function analisarImagem(
     const descricao = (data as any)?.choices?.[0]?.message?.content;
     if (typeof descricao !== 'string' || !descricao.trim()) return null;
 
-    return descricao.trim();
+    // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): `usage` sempre veio
+    // na resposta e sempre foi descartado — sem isso não dava pra calcular custo_usd nenhum pra
+    // essas chamadas (o dashboard de custo nunca as via).
+    const usage = (data as any)?.usage || {};
+    return {
+      descricao: descricao.trim(),
+      tokensEntrada: Number(usage.prompt_tokens) || 0,
+      tokensSaida: Number(usage.completion_tokens) || 0,
+    };
   } catch (err: any) {
     if (err?.name === 'AbortError') {
       log.warn('VISION', `Timeout (${VISION_TIMEOUT_MS}ms) ao chamar Vision API`);

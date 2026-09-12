@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -16,7 +17,7 @@ import {
   Clock, Calendar, MessageSquare, Image as ImageIcon,
   FileText, Headphones, AlertTriangle, CheckCircle2,
   Table as TableIcon, Send, XCircle, Activity, AlertCircle,
-  LayoutTemplate, Loader2, Save
+  LayoutTemplate, Loader2, Save, Trash2, Pencil, Plus, Download
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, getFreshToken } from "@/integrations/database/client";
@@ -24,6 +25,27 @@ import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
 import { useStatusEnvio, chaveTelefone } from "@/hooks/useStatusEnvio";
 import { TagStatusEnvio } from "@/components/TagStatusEnvio";
+// [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08): `substituirPlaceholders`,
+// `resolverSpintax`, `textoTemSpintax`, `mensagemSemPersonalizacao`, `BIBLIOTECA_VARIACOES` e
+// `escolherVariante` viviam inline neste arquivo desde as Sprints "Variação sem IA" (2026-08-06) e
+// "Motor Nativo de Disparo" (2026-08-07) — extraídas pra `src/lib/motorTexto.ts` (módulo
+// compartilhado) pra serem reaproveitadas fora de Disparos (Respostas Rápidas,
+// `WhatsAppInterface.tsx`, e qualquer feature futura que precise variar texto sem IA). Histórico
+// completo de cada bug/fix já documentado nos comentários `[AUDITORIA]` do próprio módulo — não
+// duplicado aqui. `personalizarMensagem`/`temTermoVariavel` são a camada nova (item 2, variação
+// automática por sinônimo, ligada por padrão).
+import {
+  substituirPlaceholders,
+  resolverSpintax,
+  textoTemSpintax,
+  mensagemSemPersonalizacao,
+  BIBLIOTECA_VARIACOES,
+  escolherVariante,
+  personalizarMensagem,
+  temTermoVariavel,
+  TAMANHO_DICIONARIO_VARIACAO,
+} from "@/lib/motorTexto";
+import { baixarModeloContatosXLSX, VARIAVEIS_MENSAGEM_CONTATO } from "@/lib/modeloImportacao";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +54,35 @@ import {
   DialogFooter,
   DialogDescription,
 } from "@/components/ui/dialog";
+// [AUDITORIA] LÓGICA (Sprint Monitor Persistente de Campanhas, 2026-08-11): `MonitoringDashboard`
+// (e `EditarConfiguracaoPausada`, usado só internamente por ele) foram extraídos pra
+// `components/disparos/MonitoringDashboard.tsx` — reaproveitado agora também por
+// `MonitorWhatsApp.tsx` (lista persistente "Campanhas de Disparo"), fechando a pendência de
+// `diagnosticos/SPRINT_MONITOR_CAMPANHAS_DISPARO.md`. Comportamento aqui em `Disparos.tsx`
+// inalterado — mesmo componente, só importado em vez de definido localmente.
+import { MonitoringDashboard } from "@/components/disparos/MonitoringDashboard";
+// [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): mesmo espírito da importação
+// acima — lista de campanhas extraída pra componente compartilhado, agora a tela PADRÃO desta
+// página (pedido explícito do usuário: "reorganizar a tela/fluxo de Disparos"). Antes, a única
+// forma de ver uma campanha depois de criada era o estado em memória `activeCampaign` — sumia ao
+// sair da tela. Agora a campanha aberta vive em `?campanha=<id>` (useSearchParams), sobrevive a
+// F5/link direto, mesmo padrão já usado e comprovado em `MonitorWhatsApp.tsx`.
+import { CampanhasList } from "@/components/disparos/CampanhasList";
+import { useSearchParams } from "react-router-dom";
+
+// [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): "há X min/h/dias" em pt-BR sem
+// depender de `date-fns` (não importado neste arquivo até agora) — usado no badge "usada em N
+// campanhas" (StepContacts) e no aviso de reenvio recente.
+function formatRelativoPtBr(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return "agora mesmo";
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h}h`;
+  const dias = Math.floor(h / 24);
+  return `há ${dias} dia${dias > 1 ? "s" : ""}`;
+}
 
 // [AUDITORIA] BUG (Sprint Disparos/Importação, revisão 2026-07-25): usuário reportou nomes
 // corrompidos na importação real (ex: "GraÃ§a" em vez de "Graça", "JosÃ©" em vez de "José") —
@@ -150,14 +201,75 @@ function sanitizarTelefoneImportacao(raw: string): TelefoneImportado {
 }
 
 interface ContatoImportado {
-  nome: string; telefone: string; email: string; empresa: string; cargo: string; notas: string;
+  nome: string; telefone: string; email: string; empresa: string; cargo: string;
+  cidade: string; estado: string; interesse: string; data_nascimento: string; notas: string;
 }
+
+interface LinhaSuspeita { linha: number; motivo: string }
 
 interface AnaliseImportacao {
   novos: ContatoImportado[];
   totalLinhas: number;
   corrigidos: number;
   descartados: number;
+  suspeitos: LinhaSuspeita[];
+}
+
+// [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): DDDs brasileiros válidos hoje — lista
+// fechada (não "adivinhada" por faixa contínua, já que a numeração real tem buracos: não existe
+// DDD 20, 23(SP não usa), 26, 29, 30, 36, 39, 40, 50, 52, 56-60, 70, 72, 76, 78, 80, 83... alguns
+// desses na real existem — por isso a lista é explícita, conferida, não uma regex de faixa).
+const DDDS_BRASIL_VALIDOS = new Set([
+  "11", "12", "13", "14", "15", "16", "17", "18", "19",
+  "21", "22", "24",
+  "27", "28",
+  "31", "32", "33", "34", "35", "37", "38",
+  "41", "42", "43", "44", "45", "46", "47", "48", "49",
+  "51", "53", "54", "55",
+  "61", "62", "63", "64", "65", "66", "67", "68", "69",
+  "71", "73", "74", "75", "77", "79",
+  "81", "82", "83", "84", "85", "86", "87", "88", "89",
+  "91", "92", "93", "94", "95", "96", "97", "98", "99",
+]);
+
+// [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): validação de linha suspeita — só
+// regras determinísticas, sem IA, decisão explícita do usuário (custo zero por importação, motivada
+// pelo incidente de esgotamento de crédito OpenAI já registrado em AUDITORIA_LOG.md). Sinaliza,
+// nunca bloqueia — a linha sinalizada continua entrando em `novos` normalmente.
+function nomePareceTelefone(nome: string): boolean {
+  const limpo = nome.replace(/[\s.\-()]/g, "");
+  return limpo.length >= 8 && /^\d+$/.test(limpo);
+}
+
+function telefoneParecePlaceholder(telefone: string): boolean {
+  // Ignora o prefixo DDI "55" fixo pra não confundir esses 2 dígitos repetidos com o padrão —
+  // o que importa é DDD+número, que é o que a planilha realmente "digitou" errado/de teste.
+  const digitos = telefone.startsWith("55") ? telefone.slice(2) : telefone;
+  if (digitos.length < 8) return false;
+  if (/^(\d)\1+$/.test(digitos)) return true; // todos os dígitos iguais (ex: 11111111111)
+  // Sequência ascendente/descendente de 6+ dígitos CONSECUTIVOS em qualquer trecho do número
+  // (não precisa ser o número inteiro) — cobre "12345678900" e também um número real com um
+  // trecho de teste colado no meio. 6 dígitos seguidos em ordem é praticamente impossível por
+  // acaso num telefone real.
+  let runAsc = 1, runDesc = 1;
+  for (let i = 1; i < digitos.length; i++) {
+    const anterior = Number(digitos[i - 1]);
+    const atual = Number(digitos[i]);
+    runAsc = atual === anterior + 1 ? runAsc + 1 : 1;
+    runDesc = atual === anterior - 1 ? runDesc + 1 : 1;
+    if (runAsc >= 6 || runDesc >= 6) return true;
+  }
+  return false;
+}
+
+function dddInvalido(telefone: string): string | null {
+  // Só valida quando o formato bate exatamente com o que `sanitizarTelefoneImportacao` produz
+  // pra um celular/fixo brasileiro normal (55 + DDD + número, 12 ou 13 dígitos) — telefone fora
+  // desse formato (o caso raro "mantém como veio" da sanitização) não tem DDD confiável pra
+  // checar, e sinalizar nesse caso daria falso positivo.
+  if (!telefone.startsWith("55") || (telefone.length !== 12 && telefone.length !== 13)) return null;
+  const ddd = telefone.slice(2, 4);
+  return DDDS_BRASIL_VALIDOS.has(ddd) ? null : ddd;
 }
 
 // [AUDITORIA] LÓGICA (Sprint Disparos/Importação, revisão 2026-07-25): extraída de dentro de
@@ -192,6 +304,13 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
   let corrigidos = 0;
   let descartados = 0;
   const novos: ContatoImportado[] = [];
+  const suspeitos: LinhaSuspeita[] = [];
+  // [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): telefone (já sanitizado) -> linhas
+  // onde apareceu — detecta duplicata DENTRO do próprio arquivo depois do loop principal. Hoje
+  // isso silenciosamente virava 2 tentativas de insert pro mesmo (user_id, telefone); com o
+  // upsert de `/importar-lote` (backend) isso não quebra mais o lote, mas o operador continua sem
+  // saber que a planilha tinha duplicata interna — vale sinalizar mesmo assim.
+  const linhasPorTelefone = new Map<string, number[]>();
 
   for (let i = 1; i < rows.length; i++) {
     const cols = (rows[i] || []).map(c => (c || "").replace(/^["']|["']$/g, "").trim());
@@ -225,12 +344,22 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
     const atividade = getPorSubstring(cols, "atividades_principal", "atividade principal", "atividade", "cnae", "segmento", "ramo");
     const naturezaJuridica = getPorSubstring(cols, "natureza_juridica", "natureza jurídica");
     const porte = getPorSubstring(cols, "porte_empresa", "porte");
+    // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): cidade/estado
+    // extraídos numa variável própria (antes só entravam no `endereco` composto abaixo, dentro de
+    // `notas`) — pedido do usuário: "todas as colunas da planilha tem que ser uma variável do
+    // sistema", então viram campos de primeira classe (`contatos.cidade`/`contatos.estado`,
+    // {{cidade}}/{{estado}} em `motorTexto.ts`), sem tirar do `endereco` — continua registrado ali
+    // por completude (junto com logradouro/número/bairro, que não têm variável própria).
+    const cidade = getPorSubstring(cols, "municipio", "município", "cidade");
+    const estadoContato = getPorSubstring(cols, "estado", "uf");
+    const interesse = getPorSubstring(cols, "interesse", "produto de interesse", "produto_interesse", "produto");
+    const dataNascimento = getPorSubstring(cols, "data de nascimento", "data_nascimento", "nascimento", "aniversario", "aniversário");
     const endereco = [
       getPorSubstring(cols, "logradouro"),
       getPorSubstring(cols, "numero", "número"),
       getPorSubstring(cols, "bairro"),
-      getPorSubstring(cols, "municipio", "município"),
-      getPorSubstring(cols, "estado", "uf"),
+      cidade,
+      estadoContato,
     ].filter(Boolean).join(", ");
 
     const notasExtra: string[] = [];
@@ -241,20 +370,61 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
     if (porte) notasExtra.push(`Porte: ${porte}`);
     if (endereco) notasExtra.push(`Endereço: ${endereco}`);
 
+    // [AUDITORIA] BUG (achado real — campanha "Importação cnpj_biz" já enviada em produção,
+    // 2026-08-05): planilha de CNPJ/empresa não tem coluna de nome de PESSOA, só razão
+    // social/nome fantasia (que só ia pro campo `empresa`) — `nome` ficava vazio e caía direto
+    // pro fallback `nome || telefone`, então o "nome" do contato virava o próprio telefone.
+    // `substituirPlaceholders()` não tinha nenhuma proteção contra isso, e `{{primeiro_nome}}`/
+    // `{{nome}}` substituíam pelo telefone cru na mensagem real ("Oi 5511984849872, tudo
+    // tranquilo?"). [AUDITORIA] FIX APLICADO: `empresa` extraída ANTES do `push()` (não mais
+    // inline) pra poder entrar no fallback de `nome` — planilha de empresa sem nome de pessoa
+    // agora usa a razão social/nome fantasia como "nome" do contato, só caindo pro telefone cru
+    // quando NEM ISSO existir. Segunda camada de proteção (pro caso de nome==telefone escapar
+    // mesmo assim, ou já existir na base de dados anterior) em `substituirPlaceholders()`, abaixo.
+    const empresa = getPorSubstring(cols, "razão social", "razao_social", "nome fantasia", "nome_fantasia", "empresa", "company");
+    const nomeFinal = nome || empresa || telefone;
     novos.push({
-      nome: nome || telefone,
+      nome: nomeFinal,
       telefone,
       email: getPorSubstring(cols, "e-mail", "email", "mail"),
-      // "razão social"/"nome_fantasia" checados antes da chave genérica "empresa"/"company" —
-      // evita a colisão com "porte_empresa" descrita acima quando a planilha não tem uma coluna
-      // literalmente chamada "empresa".
-      empresa: getPorSubstring(cols, "razão social", "razao_social", "nome fantasia", "nome_fantasia", "empresa", "company"),
+      empresa,
       cargo: getPorSubstring(cols, "cargo", "função", "role", "profissão", "profissao") || atividade,
+      cidade,
+      estado: estadoContato,
+      interesse,
+      data_nascimento: dataNascimento,
       notas: notasExtra.join(" | "),
     });
+
+    // [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): validação determinística de linha
+    // suspeita, sem IA (decisão explícita — custo zero por importação). Sinaliza, nunca descarta;
+    // a linha já entrou em `novos` acima igual antes.
+    const linha = i + 1; // linha 1 = cabeçalho, primeira linha de dado = linha 2
+    const motivos: string[] = [];
+    if (nomePareceTelefone(nomeFinal)) motivos.push("nome parece ser um telefone");
+    if (telefoneParecePlaceholder(telefone)) motivos.push("telefone com padrão de teste/placeholder (dígitos repetidos ou sequência óbvia)");
+    const dddSuspeito = dddInvalido(telefone);
+    if (dddSuspeito) motivos.push(`DDD ${dddSuspeito} fora da lista de DDDs brasileiros válidos`);
+    if (motivos.length) suspeitos.push({ linha, motivo: motivos.join("; ") });
+
+    const linhasExistentes = linhasPorTelefone.get(telefone) || [];
+    linhasExistentes.push(linha);
+    linhasPorTelefone.set(telefone, linhasExistentes);
   }
 
-  return { novos, totalLinhas, corrigidos, descartados };
+  // Duplicata dentro do próprio arquivo — checado depois do loop principal (só dá pra saber
+  // depois de ver todas as linhas). Sinaliza TODAS as ocorrências do telefone repetido, não só a
+  // 2ª em diante, pra o operador conseguir localizar todas no arquivo original.
+  for (const [telefone, linhas] of linhasPorTelefone) {
+    if (linhas.length > 1) {
+      for (const linha of linhas) {
+        suspeitos.push({ linha, motivo: `telefone duplicado no arquivo (também aparece na linha ${linhas.filter(l => l !== linha).join(", ")})` });
+      }
+    }
+  }
+  suspeitos.sort((a, b) => a.linha - b.linha);
+
+  return { novos, totalLinhas, corrigidos, descartados, suspeitos };
 }
 
 // [AUDITORIA] FIX APLICADO (2026-07-29): busca de contatos-alvo (por tag/estágio/lista) caía no
@@ -277,37 +447,36 @@ async function fetchAllContatos(build: () => any): Promise<any[]> {
   return all;
 }
 
-// [AUDITORIA] BUG (achado na Sprint Placeholders/Upload, 2026-07-30): dos 5 atalhos de
-// personalização oferecidos em StepMessage ({{nome}}, {{primeiro_nome}}, {{telefone}}, {{data}},
-// {{empresa}}), só {{nome}}/{{primeiro_nome}} eram de fato substituídos (em StepReview.handleStart,
-// via `.replace()` simples) — {{telefone}}/{{data}}/{{empresa}} chegavam LITERALMENTE escritos
-// (com as chaves) na mensagem real recebida pelo cliente, sem nenhum erro visível pro operador.
-// Confirmado que `disparoProcessor.ts` não faz nenhuma substituição adicional — ele só lê
-// `disparo_logs.mensagem_enviada` já pronta (preenchida por `handleStart` abaixo). [AUDITORIA] FIX
-// APLICADO: função única compartilhada entre a prévia (StepMessage) e o envio real
-// (StepReview.handleStart) — evita que a prévia prometa uma substituição que o envio real não
-// cumpre (ou vice-versa). `.replaceAll()` em vez de `.replace()` cobre múltiplas ocorrências do
-// mesmo placeholder na mesma mensagem (antes, só a 1ª ocorrência era trocada).
-function substituirPlaceholders(mensagem: string, contato: { nome?: string; telefone?: string; empresa?: string }): string {
-  const nome = contato.nome || "cliente";
-  const primeiroNome = nome.split(" ")[0];
-  const dataHoje = new Date().toLocaleDateString("pt-BR");
-  return mensagem
-    .replaceAll("{{nome}}", nome)
-    .replaceAll("{{primeiro_nome}}", primeiroNome)
-    .replaceAll("{{telefone}}", contato.telefone || "")
-    .replaceAll("{{data}}", dataHoje)
-    .replaceAll("{{empresa}}", contato.empresa || "");
-}
-
 const Steps = ["Lista de Contatos", "Mensagem", "Proteção Anti-ban", "Revisar e Agendar"];
 
 export default function DisparosPage() {
   const { user } = useAuth();
   const [step, setStep] = useState(0);
-  const [activeCampaign, setActiveCampaign] = useState<any>(null);
   const [targetContacts, setTargetContacts] = useState<any[]>([]);
   const [loadingCount, setLoadingCount] = useState(false);
+  // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): `modo` substitui a lógica antiga
+  // de "sempre abre no wizard" — tela padrão agora é a lista de campanhas (`CampanhasList`),
+  // wizard só aparece sob ação explícita ("+ Nova Campanha"). Campanha aberta pra
+  // acompanhamento/controle não usa mais `activeCampaign` (estado em memória, perdido ao sair da
+  // tela) — vive em `?campanha=<id>`, resolvido contra a lista real do banco a cada render.
+  const [modo, setModo] = useState<'lista' | 'nova'>('lista');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const campanhaAbertaId = searchParams.get('campanha');
+  const [campanhaAberta, setCampanhaAberta] = useState<any>(null);
+  const [carregandoCampanhaAberta, setCarregandoCampanhaAberta] = useState(false);
+
+  const abrirCampanha = (id: string) => setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('campanha', id); return p; });
+  const fecharCampanha = () => setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('campanha'); return p; });
+
+  useEffect(() => {
+    if (!campanhaAbertaId) { setCampanhaAberta(null); return; }
+    let cancelado = false;
+    setCarregandoCampanhaAberta(true);
+    api.from("disparos").select("*").eq("id", campanhaAbertaId).single().then(({ data }: any) => {
+      if (!cancelado) { setCampanhaAberta(data || null); setCarregandoCampanhaAberta(false); }
+    });
+    return () => { cancelado = true; };
+  }, [campanhaAbertaId]);
 
   const [form, setForm] = useState({
     nome: "",
@@ -322,10 +491,13 @@ export default function DisparosPage() {
     // [AUDITORIA] FIX APLICADO (2026-07-29): campo existia na tabela `disparos`
     // (`limite_diario_mensagens`, default 500 no banco) mas não tinha nenhum controle na UI —
     // toda campanha nascia fixa em 500/dia sem o operador conseguir configurar algo mais
-    // conservador pra chip novo/em aquecimento. Default aqui é mais baixo que o do banco de
-    // propósito (200 vs. 500) — evita que quem nunca mexer neste campo herde o teto mais
-    // permissivo sem perceber.
-    limite_diario_mensagens: 200,
+    // conservador pra chip novo/em aquecimento.
+    // [AUDITORIA] FIX APLICADO (Sprint Limite Diário Seguro, 2026-09-11 — pedido explícito do
+    // usuário: "limite os usuarios a disparar menos de 50 por dia para não travar ou banir a
+    // conta deles"): default derrubado de 200 pra 30, e o campo abaixo ganhou `max={50}` — teto
+    // de verdade é reforçado no backend (`routes/disparos.ts`), então nem um POST/PUT direto na
+    // API consegue herdar um valor maior que 50, mesmo sem passar pela UI.
+    limite_diario_mensagens: 30,
     // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): janela (em horas) que
     // um contato precisa esperar antes de poder receber outra campanha — bloqueia reenvio pro
     // mesmo número em campanhas DIFERENTES (não confundir com a dedupe já existente, que só evita
@@ -347,7 +519,45 @@ export default function DisparosPage() {
     listas_selecionadas: [] as string[],
     url_midia: "",
     legenda_midia: "",
-    humanizar_ia: true,
+    // [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): default trocado de `true`
+    // pra `false` — toda campanha nascia chamando OpenAI uma vez por contato (via
+    // `disparoProcessor.ts`/`humanizationService.ts`), mesmo quando o operador nunca decidiu
+    // isso ativamente (só via se quisesse desligar). Pesquisa registrada nesta sessão (política
+    // de spam da WhatsApp Business Platform 2026, guias de anti-ban pra API não-oficial) aponta
+    // texto byte-idêntico pra lista grande, sem personalização nenhuma, como o sinal de risco
+    // mais citado — não "ausência de reescrita por IA". `substituirPlaceholders()` já resolve
+    // isso de graça quando a mensagem usa `{{primeiro_nome}}`/etc, e o motor de spintax novo
+    // (`resolverSpintax()`, abaixo) cobre variação de texto sem custo nenhum de IA — humanização
+    // por IA vira reforço opcional, não o comportamento padrão de toda campanha nova. Campanhas
+    // já criadas/agendadas não são afetadas (cada uma já tem `humanizar_ia` gravado no próprio
+    // registro em `disparos`, só o valor inicial do formulário de campanha NOVA muda).
+    humanizar_ia: false,
+    // [AUDITORIA] LÓGICA (Sprint Variação de Imagem, 2026-08-25, pedido do usuário —
+    // anti-fingerprint): campanha de imagem mandava o mesmo arquivo (mesmo hash) pra todo
+    // destinatário — sinal de spam real. Opt-in, default false pelo mesmo motivo de
+    // `humanizar_ia` acima: mudar o valor padrão de todo formulário novo é uma decisão de
+    // produto, não algo pra ligar sozinho sem o operador decidir. Só usado quando
+    // `tipo_midia === 'imagem'` (ver toggle condicional em StepMessage).
+    variar_imagem: false,
+    // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): variação por mensagens-base
+    // COMPLETAS (item 2), mais forte que só spintax por palavra — array vazio = comportamento
+    // atual inalterado (só `form.mensagem`/`legenda_midia`, resolvido por
+    // substituirPlaceholders+resolverSpintax como sempre). Com 2+ entradas, StepReview.handleStart
+    // sorteia/alterna uma por contato ANTES de aplicar as mesmas 2 funções — zero mudança de
+    // comportamento pra quem não usar isso.
+    mensagens_variantes: [] as string[],
+    // 'round_robin' (default, alterna em sequência) ou 'regra' (usa regra_variante_por_tag, com
+    // fallback pra round_robin quando nenhuma tag do contato bate com a regra).
+    distribuicao_variantes: "round_robin" as "round_robin" | "regra",
+    // Mapa tag (texto exato de contatos.tags) -> índice da variante em mensagens_variantes.
+    regra_variante_por_tag: {} as Record<string, number>,
+    // [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08): camada de variação automática por
+    // sinônimo (item 2, `aplicarVariacaoAutomatica` em `motorTexto.ts`) — LIGADA por padrão pra
+    // toda campanha nova. Fecha o gap real do print do usuário: template salvo sem `{{nome}}` nem
+    // `{a|b}` (a maioria dos templates reais em produção) passa a variar de verdade sem o operador
+    // precisar fazer nada. Só desliga se o operador explicitamente decidir um texto 100% fixo (ver
+    // toggle em StepMessage) — nesse caso volta ao comportamento de antes desta sprint.
+    variacao_automatica: true,
   });
 
   // Live contact count — recalcula sempre que os filtros mudam
@@ -384,8 +594,14 @@ export default function DisparosPage() {
       // [AUDITORIA] FIX APLICADO (Sprint Colunas de Status de Envio, 2026-07-31): `funil_estagio_id`
       // adicionado ao select das 3 fontes — usado pela coluna nova "Situação no CRM" na prévia de
       // contatos (StepContacts), mesma fonte já usada na aba "Por Estágio" desta mesma tela.
+      // [AUDITORIA] FIX APLICADO (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): email/
+      // cargo/cidade/estado/interesse/data_nascimento adicionados ao select das 3 fontes — mesmo
+      // motivo do `empresa` acima: sem o campo no select, a variável correspondente
+      // (substituirPlaceholders, motorTexto.ts) sempre sai vazia no envio real, mesmo com o dado
+      // preenchido no contato. `email`/`cargo` já eram variável desde sempre mas nunca tinham sido
+      // selecionados aqui — lacuna antiga, fechada junto com os 4 campos novos.
       if (form.tags_selecionadas.length > 0) {
-        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, tags, opt_out, ultimo_disparo_em, funil_estagio_id"));
+        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, opt_out, ultimo_disparo_em, funil_estagio_id"));
         const filtered = data.filter((c: any) =>
           Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
         );
@@ -395,7 +611,11 @@ export default function DisparosPage() {
         const data = await fetchAllContatos(() =>
           api
             .from("contatos")
-            .select("id, nome, telefone, empresa, opt_out, ultimo_disparo_em, funil_estagio_id")
+            // [AUDITORIA] FIX APLICADO (Sprint Motor Nativo de Disparo, 2026-08-07): `tags`
+            // adicionado ao select — necessário pra regra de variante por tag (ver item 3,
+            // StepReview.handleStart) funcionar independente de qual dos 3 modos (tag/estágio/
+            // lista) selecionou o contato, não só quando a busca em si foi por tag.
+            .select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, opt_out, ultimo_disparo_em, funil_estagio_id")
             .in("funil_estagio_id", form.estagios_selecionados)
         );
         list = [...list, ...data];
@@ -414,14 +634,15 @@ export default function DisparosPage() {
           // instâncias do anti-ban nesta mesma tela). Operador ainda pode incluir esses contatos
           // de propósito atribuindo tag/lista/estágio manualmente — os outros 2 modos continuam
           // trazendo qualquer contato, sem essa exclusão.
-          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem"));
+          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem"));
           const semGrupo = data.filter((c: any) => c.origem !== "Grupo WhatsApp");
           list = [...list, ...semGrupo];
         } else {
           const data = await fetchAllContatos(() =>
             api
               .from("contatos")
-              .select("id, nome, telefone, empresa, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id")
+              // tags adicionado — ver comentário no bloco de estágio acima (mesmo motivo)
+              .select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id")
               .in("lista_id", form.listas_selecionadas)
           );
           list = [...list, ...data];
@@ -432,7 +653,47 @@ export default function DisparosPage() {
       // encontrado — mesma checagem reforçada no backend (get_next_disparo_batch, ver
       // migrations.ts), essa aqui evita que ele nem apareça na prévia/contagem.
       const semOptOut = list.filter((c: any) => c.opt_out !== true);
-      const unique = Array.from(new Map(semOptOut.map(c => [c.telefone, c])).values());
+      // [AUDITORIA] BUG (achado real do usuário, print em produção, 2026-08-06):
+      // `disparo_logs.telefone` é NOT NULL — um único contato sem telefone (`nome`
+      // preenchido, `telefone` null/vazio, possível via criação manual em Leads.tsx, que só
+      // exige `nome`) na seleção derrubava o `INSERT` multi-linha inteiro em `handleStart`
+      // (sem `ON CONFLICT`/tratamento por linha, mesma classe de bug já corrigida na
+      // importação — ver `SPRINT_IMPORTACAO_INTELIGENTE_UPSERT.md`), impedindo a campanha
+      // inteira de ser criada — mesmo com 246 dos 247 contatos perfeitamente válidos. Pior:
+      // a linha em `disparos` já tinha sido criada num INSERT anterior separado, gerando
+      // campanha órfã (status `em_andamento`, zero `disparo_logs`) a cada tentativa.
+      // [AUDITORIA] FIX APLICADO: filtra aqui — camada única que já protege as 4 fontes de
+      // alvo (tag/estágio/lista/"Todos os Leads", todas alimentam `list` antes deste ponto)
+      // — nunca deixa um contato sem telefone chegar em `targetContacts`. Aviso não-bloqueante
+      // (mesmo espírito da validação determinística de linha suspeita da importação) avisa o
+      // operador em vez de simplesmente sumir com o contato em silêncio.
+      const comTelefone = semOptOut.filter((c: any) => c.telefone && String(c.telefone).trim());
+      const semTelefoneCount = semOptOut.length - comTelefone.length;
+      if (semTelefoneCount > 0) {
+        toast.warning(
+          `${semTelefoneCount} contato(s) sem telefone válido foram excluídos da seleção`,
+          { description: "Contatos sem telefone não podem receber campanha de WhatsApp." }
+        );
+      }
+      // [AUDITORIA] BUG (achado real, Sprint Continuidade — Vistoria de Problemas, 2026-08-25,
+      // investigando `SPRINT_GRUPOS_DIAGNOSTICO_COMPLETO.md`): a linha sintética que `webhook.ts`
+      // cria em `contatos` pro GRUPO EM SI (backfill de nome/foto, `origem = 'WhatsApp'` — igual
+      // a qualquer contato pessoa real, sem coluna `is_group`) não tinha filtro nenhum aqui —
+      // diferente do participante importado (`origem = 'Grupo WhatsApp'`, já filtrado acima só no
+      // modo "Todos os Leads"), o grupo em si passava por QUALQUER um dos 3 modos (tag/estágio/
+      // lista) se o operador o tivesse marcado sem perceber que era um grupo. Mesma defesa
+      // aplicada no backend (`disparoProcessor.ts`) — JID de grupo é sempre um ID longo (18+
+      // dígitos) ou o formato antigo com hífen (24+ dígitos após stripar não-dígito); nenhum
+      // telefone real chega perto disso (E.164 tem no máximo 15 dígitos).
+      const semGrupoSintetico = comTelefone.filter((c: any) => String(c.telefone).replace(/\D/g, "").length <= 15);
+      const grupoCount = comTelefone.length - semGrupoSintetico.length;
+      if (grupoCount > 0) {
+        toast.warning(
+          `${grupoCount} grupo(s) do WhatsApp foram excluídos da seleção`,
+          { description: "Grupos não podem receber campanha individual de Disparo." }
+        );
+      }
+      const unique = Array.from(new Map(semGrupoSintetico.map(c => [c.telefone, c])).values());
       setTargetContacts(unique);
       setLoadingCount(false);
     };
@@ -473,8 +734,45 @@ export default function DisparosPage() {
     return null;
   }, [stepValid, step, form]);
 
-  if (activeCampaign) {
-    return <MonitoringDashboard campaign={activeCampaign} onCancel={() => setActiveCampaign(null)} />;
+  // [AUDITORIA] FIX APLICADO (Sprint Estruturar Disparo, 2026-08-11 — substitui o `if
+  // (activeCampaign)` antigo): campanha aberta agora vem de `?campanha=<id>` + fetch real, não de
+  // estado em memória — sobrevive a F5/link direto/voltar depois de navegar pra outro módulo.
+  // `<CRMLayout>` preservado (mesmo fix de 08/08, sidebar/navegação continuam visíveis).
+  if (campanhaAbertaId) {
+    return (
+      <CRMLayout>
+        {carregandoCampanhaAberta ? (
+          <div className="p-12 text-center text-muted-foreground text-sm">Carregando campanha…</div>
+        ) : campanhaAberta ? (
+          <>
+            <div className="max-w-6xl mx-auto mb-2">
+              <Button variant="ghost" size="sm" className="gap-1 -ml-2" onClick={fecharCampanha}>
+                ← Voltar pras Campanhas
+              </Button>
+            </div>
+            <MonitoringDashboard campaign={campanhaAberta} onCancel={fecharCampanha} />
+          </>
+        ) : (
+          <div className="p-12 text-center text-muted-foreground text-sm">
+            Campanha não encontrada.
+            <Button variant="link" onClick={fecharCampanha}>Voltar pras Campanhas</Button>
+          </div>
+        )}
+      </CRMLayout>
+    );
+  }
+
+  // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11 — pedido explícito do usuário:
+  // "reorganizar a tela/fluxo de Disparos"): tela padrão passa a ser a LISTA de campanhas, não o
+  // wizard — era exatamente a falta disso que deixou 3 campanhas reais (conta mentoark@gmail.com,
+  // mesma sessão) `em_andamento` sem ninguém saber, uma delas disparando mensagem de verdade.
+  // Wizard de criação só aparece sob ação explícita.
+  if (modo === 'lista') {
+    return (
+      <CRMLayout>
+        <CampanhasList onOpen={abrirCampanha} onNova={() => setModo('nova')} />
+      </CRMLayout>
+    );
   }
 
   return (
@@ -482,6 +780,9 @@ export default function DisparosPage() {
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
+            <Button variant="ghost" size="sm" className="gap-1 -ml-2 mb-1" onClick={() => setModo('lista')}>
+              ← Campanhas
+            </Button>
             <h1 className="text-2xl font-bold">Novo Disparo em Massa</h1>
             <p className="text-sm text-muted-foreground">Configure em 4 passos rápidos</p>
           </div>
@@ -524,10 +825,14 @@ export default function DisparosPage() {
         </div>
 
         <div className="min-h-[400px]">
-          {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} targetContacts={targetContacts} />}
+          {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} targetContacts={targetContacts} setTargetContacts={setTargetContacts} />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
-          {step === 3 && <StepReview form={form} targetContacts={targetContacts} loadingContacts={loadingCount} onStart={(campaignData: any) => setActiveCampaign(campaignData)} />}
+          {/* [AUDITORIA] FIX APLICADO (Sprint Estruturar Disparo, 2026-08-11): `onStart` não seta
+              mais estado em memória (`activeCampaign`, perdido ao sair da tela) — abre a campanha
+              recém-criada via `?campanha=<id>`, mesma rota persistente usada pra reabrir qualquer
+              campanha existente a partir da lista. */}
+          {step === 3 && <StepReview form={form} targetContacts={targetContacts} loadingContacts={loadingCount} onStart={(campaignData: any) => abrirCampanha(campaignData.id)} />}
         </div>
 
         {/* Footer: na revisão escondemos para evitar duplicidade com os CTAs internos */}
@@ -552,10 +857,19 @@ export default function DisparosPage() {
   );
 }
 
-function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [] }: any) {
+function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [], setTargetContacts }: any) {
   const { user } = useAuth();
   const [previewSearch, setPreviewSearch] = useState("");
+  // [AUDITORIA] LÓGICA (achado real, `SPRINT_NOME_REAL_CONTATOS_GRUPO.md`): participante de grupo
+  // importado nasce com `nome = telefone` quando a Evolution não devolve nome de perfil (padrão
+  // documentado — endpoint hoje usado só devolve JID/admin, sem pushName). Contagem/filtro/edição
+  // aqui dão visibilidade e uma correção rápida pro operador, mesmo sem uma fonte automática de
+  // nome real disponível hoje (testado: `whatsapp_messages` não guarda o telefone do remetente
+  // individual em mensagem de grupo, só o JID do grupo — não dá pra cruzar por lá).
+  const [soSemNome, setSoSemNome] = useState(false);
+  const semNomeCount = targetContacts.filter((c: any) => c.nome && c.telefone && c.nome === c.telefone).length;
   const filteredPreview = targetContacts.filter((c: any) => {
+    if (soSemNome && !(c.nome && c.telefone && c.nome === c.telefone)) return false;
     if (!previewSearch.trim()) return true;
     const q = previewSearch.toLowerCase();
     return (c.nome || "").toLowerCase().includes(q) || (c.telefone || "").toLowerCase().includes(q);
@@ -564,9 +878,25 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
   const [estagios, setEstagios] = useState<any[]>([]);
   const [listas, setListas] = useState<any[]>([]);
   const [listasCounts, setListasCounts] = useState<Record<string, number>>({});
+  // [AUDITORIA] LÓGICA (Sprint Gerenciar Listas em Disparos, 2026-08-06): estado da aba "Por
+  // Lista" pra excluir/renomear lista direto daqui, sem precisar ir em Leads.tsx — mesmo padrão
+  // (api.from("listas"), makeCrud genérico já suporta DELETE/PATCH por id) já usado e validado
+  // em produção por `removerLista()` de Leads.tsx.
+  const [renomeandoLista, setRenomeandoLista] = useState<{ id: string; nome: string } | null>(null);
+  const [salvandoRenomeio, setSalvandoRenomeio] = useState(false);
+  const [limpandoVazias, setLimpandoVazias] = useState(false);
   const [totalContatos, setTotalContatos] = useState<number>(0);
   const [csvPreview, setCsvPreview] = useState<string[][]>([]);
   const [tagSearch, setTagSearch] = useState("");
+  // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): histórico de campanhas que já
+  // usaram cada lista — achado real do usuário ("ver por lista quais campanhas já usaram ela" +
+  // "avisar reenvio pra lista já usada"). Busca TODAS as campanhas do tenant (volume real é
+  // baixo, dezenas por conta — mesmo padrão já usado por `fetchTargets` pra tags/estágios/
+  // listas) e agrupa client-side por `listas_ids`, em vez de filtrar no banco por array-contains
+  // — o QueryBuilder deste projeto (`integrations/database/client.ts`) só suporta
+  // eq/in/gte/lte/gt/lt/ilike, sem operador de array, confirmado por leitura antes de tentar usar
+  // um que não existe.
+  const [campanhasPorLista, setCampanhasPorLista] = useState<Record<string, { total: number; ultima: { nome: string; created_at: string; status: string } }>>({});
 
   // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): mapa funil_estagio_id ->
   // {nome, cor} pra coluna "Situação no CRM" na prévia — mesma fonte (`estagios`, já buscada em
@@ -576,6 +906,28 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
     for (const e of estagios) mapa[e.id] = e;
     return mapa;
   }, [estagios]);
+
+  // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11 — pedido explícito do usuário:
+  // "avisar reenvio pra lista já usada"): olha as listas JÁ SELECIONADAS agora contra
+  // `campanhasPorLista` — status rascunho/cancelado não conta (nunca chegou a mandar mensagem de
+  // verdade). Aviso não-bloqueante de propósito (mesmo espírito do aviso de cooldown por contato
+  // já existente em StepReview) — reenviar pra uma lista recente às vezes é intencional; o
+  // cooldown por contato (backend, `get_next_disparo_batch`) já protege o envio duplicado de
+  // verdade, isso aqui é só visibilidade adiantada, antes do usuário chegar no Passo 4.
+  const listasRecentesReenviadas = useMemo(() => {
+    const cooldownMs = (Number(form.cooldown_horas) || 0) * 60 * 60 * 1000;
+    if (cooldownMs <= 0) return [];
+    return form.listas_selecionadas
+      .filter((id: string) => id !== "__all__")
+      .map((id: string) => {
+        const info = campanhasPorLista[id];
+        if (!info || info.ultima.status === 'rascunho' || info.ultima.status === 'cancelado') return null;
+        if (Date.now() - new Date(info.ultima.created_at).getTime() >= cooldownMs) return null;
+        const lista = listas.find(l => l.id === id);
+        return { nome: lista?.nome || id, ultima: info.ultima };
+      })
+      .filter(Boolean);
+  }, [form.listas_selecionadas, form.cooldown_horas, campanhasPorLista, listas]);
 
   // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): busca "última campanha"
   // só pros contatos REALMENTE VISÍVEIS na prévia (até 500, já limitado abaixo) — não pra
@@ -612,9 +964,173 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
       );
       setListasCounts(counts);
     }
+
+    // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): agrega, por lista, quantas
+    // campanhas já a usaram e qual foi a mais recente — rascunho/cancelada não contam pro aviso
+    // de reenvio (nunca chegaram a mandar mensagem de verdade), mas contam pro contador
+    // informativo "usada em N campanhas" (o usuário pode querer ver até tentativa cancelada).
+    if (listasData && listasData.length) {
+      const { data: disparosData } = await api
+        .from("disparos")
+        .select("id, nome, status, created_at, listas_ids");
+      const agregado: Record<string, { total: number; ultima: { nome: string; created_at: string; status: string } }> = {};
+      for (const d of disparosData || []) {
+        for (const listaId of (d.listas_ids || [])) {
+          const atual = agregado[listaId];
+          if (!atual || new Date(d.created_at).getTime() > new Date(atual.ultima.created_at).getTime()) {
+            agregado[listaId] = {
+              total: (atual?.total || 0) + 1,
+              ultima: { nome: d.nome, created_at: d.created_at, status: d.status },
+            };
+          } else {
+            atual.total += 1;
+          }
+        }
+      }
+      setCampanhasPorLista(agregado);
+    }
   };
 
   useEffect(() => { fetchTargets(); }, []);
+
+  // [AUDITORIA] LÓGICA (Sprint Gerenciar Listas em Disparos, 2026-08-06): mesmo padrão de
+  // removerLista() em Leads.tsx (confirm() nativo, api.from("listas").delete().eq("id", id),
+  // backend já faz lista_id->null nos contatos via FK ON DELETE SET NULL — contato nunca é
+  // apagado, só perde o vínculo com a lista). Diferença daqui pra lá: se a lista removida
+  // estivesse selecionada em form.listas_selecionadas (alvo da campanha em edição), precisa sair
+  // do array também — senão a campanha ficaria "mirando" um id que não existe mais.
+  const removerLista = async (id: string, nome: string) => {
+    if (!confirm(`Remover a lista "${nome}"? Os contatos ficarão sem lista mas não serão apagados.`)) return;
+    const { error } = await api.from("listas").delete().eq("id", id);
+    if (error) {
+      toast.error("Erro ao remover lista", { description: error.message });
+      return;
+    }
+    setForm((prev: any) => ({
+      ...prev,
+      listas_selecionadas: prev.listas_selecionadas.filter((lid: string) => lid !== id),
+    }));
+    toast.success("Lista removida");
+    fetchTargets();
+  };
+
+  // [AUDITORIA] LÓGICA: renomear é só um PATCH — makeCrud genérico (crud.ts) já expõe
+  // PUT /api/listas/:id, nunca usado antes nesta tela (Leads.tsx só cria/exclui). Modal simples
+  // reaproveitando os mesmos componentes Dialog já importados nesta página.
+  const abrirRenomeio = (l: any) => setRenomeandoLista({ id: l.id, nome: l.nome });
+
+  const confirmarRenomeio = async () => {
+    if (!renomeandoLista) return;
+    const nomeNovo = renomeandoLista.nome.trim();
+    if (!nomeNovo) {
+      toast.error("Nome não pode ficar vazio");
+      return;
+    }
+    setSalvandoRenomeio(true);
+    try {
+      const { error } = await api.from("listas").update({ nome: nomeNovo }).eq("id", renomeandoLista.id);
+      if (error) {
+        toast.error("Erro ao renomear lista", { description: error.message });
+        return;
+      }
+      toast.success("Lista renomeada");
+      setRenomeandoLista(null);
+      fetchTargets();
+    } finally {
+      setSalvandoRenomeio(false);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA: não existe endpoint de bulk-delete por lista de ids (makeCrud genérico
+  // só faz um registro por vez) — dado que o cenário real (print do usuário) é umas poucas
+  // dezenas de listas vazias de teste/reimportação, sequencial é aceitável (não vale criar rota
+  // nova só pra isso). `listasCounts` já é a mesma contagem usada no badge de cada linha —
+  // reaproveitada aqui, sem query nova.
+  const listasVazias = useMemo(() => listas.filter(l => (listasCounts[l.id] ?? 0) === 0), [listas, listasCounts]);
+
+  const limparListasVazias = async () => {
+    if (listasVazias.length === 0) return;
+    if (!confirm(`Excluir ${listasVazias.length} lista(s) vazia(s) (0 contatos)? Esta ação não pode ser desfeita.`)) return;
+    setLimpandoVazias(true);
+    try {
+      let falhas = 0;
+      for (const l of listasVazias) {
+        const { error } = await api.from("listas").delete().eq("id", l.id);
+        if (error) falhas++;
+      }
+      setForm((prev: any) => ({
+        ...prev,
+        listas_selecionadas: prev.listas_selecionadas.filter((lid: string) => !listasVazias.some(l => l.id === lid)),
+      }));
+      if (falhas > 0) {
+        toast.error(`${falhas} lista(s) não puderam ser removidas`, { description: "As demais foram removidas normalmente." });
+      } else {
+        toast.success(`${listasVazias.length} lista(s) vazia(s) removida(s)`);
+      }
+      fetchTargets();
+    } finally {
+      setLimpandoVazias(false);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Excluir Contato na Prévia, 2026-08-06): mesmo padrão já
+  // validado em produção por `removerLista()` de Leads.tsx (confirm nativo,
+  // `api.from("contatos").delete().eq("id", id)`) — backend genérico (`makeCrud`) já suporta.
+  // [AUDITORIA] BUG (achado real, corrige a premissa do pedido original): a sprint que pediu
+  // este botão presumiu "confirmado por leitura de migrations.ts: não existe FOREIGN KEY ...
+  // REFERENCES contatos(id) em nenhuma tabela" — **checado direto no banco (information_schema,
+  // não só o arquivo de migração) e é falso**: `chamadas`, `tarefas` e `timeline_eventos` têm FK
+  // pra `contatos(id)` com `ON DELETE CASCADE` — excluir o contato aqui apaga de verdade
+  // ligações/tarefas do Kanban/histórico de timeline associados a ele, não é uma operação
+  // isolada. Só `disparo_logs` (a preocupação original) é `ON DELETE SET NULL` — confirmado com
+  // teste real que o log de uma campanha já enviada sobrevive intacto (nome/telefone/mensagem/
+  // status preservados, só `contato_id` vira null). Aviso abaixo corrigido pra refletir o
+  // alcance real, não a premissa errada do pedido original.
+  const [removendoContatoId, setRemovendoContatoId] = useState<string | null>(null);
+  const removerContatoDaPreview = async (id: string, nome: string) => {
+    if (!confirm(`Remover o contato "${nome || 'sem nome'}"? Isso apaga o contato do CRM de vez, junto com tarefas do Kanban, chamadas e histórico de timeline associados a ele. O histórico de campanhas já enviadas (disparo_logs) não é afetado.`)) return;
+    setRemovendoContatoId(id);
+    try {
+      const { error } = await api.from("contatos").delete().eq("id", id);
+      if (error) {
+        toast.error("Erro ao remover contato", { description: error.message });
+        return;
+      }
+      // [AUDITORIA] FIX APLICADO: atualiza `targetContacts` do componente pai direto (sem
+      // refetch completo — a seleção pode ter centenas/milhares de linhas, refazer a busca
+      // inteira só pra tirar 1 contato seria lento e desnecessário). Tabela e contador
+      // ("X de Y totais") refletem na hora.
+      setTargetContacts((prev: any[]) => prev.filter(c => c.id !== id));
+      toast.success("Contato removido");
+    } finally {
+      setRemovendoContatoId(null);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (item 4, `SPRINT_NOME_REAL_CONTATOS_GRUPO.md`): edição inline do nome
+  // direto na prévia de seleção — corrige na hora quem ficou com telefone no lugar do nome (ex:
+  // participante de grupo importado sem pushName disponível), sem sair do fluxo de criação da
+  // campanha. `PATCH /api/contatos/:id` já existe (rota genérica `makeCrud`), só faltava a UI.
+  const [editandoNomeId, setEditandoNomeId] = useState<string | null>(null);
+  const [nomeEditado, setNomeEditado] = useState("");
+  const [salvandoNomeId, setSalvandoNomeId] = useState<string | null>(null);
+  const salvarNomeEditado = async (id: string) => {
+    const novoNome = nomeEditado.trim();
+    if (!novoNome) { toast.error("Nome não pode ficar vazio"); return; }
+    setSalvandoNomeId(id);
+    try {
+      const { error } = await api.from("contatos").update({ nome: novoNome }).eq("id", id);
+      if (error) {
+        toast.error("Erro ao salvar nome", { description: error.message });
+        return;
+      }
+      setTargetContacts((prev: any[]) => prev.map(c => c.id === id ? { ...c, nome: novoNome } : c));
+      setEditandoNomeId(null);
+      toast.success("Nome atualizado");
+    } finally {
+      setSalvandoNomeId(null);
+    }
+  };
 
   // [AUDITORIA] BUG (Sprint Disparos/Importação, 2026-07-25, ver
   // diagnosticos/SPRINT_DISPAROS_IMPORTACAO_CSV_XLSX.md): `handleCsvUpload` só sabia ler XLSX
@@ -692,6 +1208,40 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
     [pendingImportRows]
   );
 
+  // [AUDITORIA] LÓGICA (Sprint Importação Upsert, 2026-08-06): pergunta ao backend quais telefones
+  // já existem na conta assim que o arquivo é lido (antes de qualquer clique em "Confirmar
+  // Importação") — abordagem escolhida (endpoint leve dedicado, `POST /contatos/checar-telefones`)
+  // em vez de só mostrar o número real depois de confirmar: é pouco código a mais e entrega o que
+  // foi pedido de verdade (resumo de PRÉ-importação com novos vs. já existentes, não só depois do
+  // fato). `api.post` lança em erro HTTP — falha aqui não deve travar a tela de importação, só
+  // deixa a contagem de "já existentes" temporariamente indisponível (cai pra 0, mostrado como
+  // "não verificado" na UI abaixo).
+  const [checandoExistentes, setCheckandoExistentes] = useState(false);
+  const [telefonesExistentes, setTelefonesExistentes] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (!preAnalise || !preAnalise.novos.length) { setTelefonesExistentes(null); return; }
+    let cancelado = false;
+    setCheckandoExistentes(true);
+    (async () => {
+      try {
+        const { data } = await api.post("/api/contatos/checar-telefones", {
+          telefones: preAnalise.novos.map(c => c.telefone),
+        });
+        if (!cancelado) setTelefonesExistentes(new Set(data?.existentes || []));
+      } catch {
+        if (!cancelado) setTelefonesExistentes(null);
+      } finally {
+        if (!cancelado) setCheckandoExistentes(false);
+      }
+    })();
+    return () => { cancelado = true; };
+  }, [preAnalise]);
+
+  const jaExistiamCount = useMemo(
+    () => (preAnalise && telefonesExistentes ? preAnalise.novos.filter(c => telefonesExistentes.has(c.telefone)).length : 0),
+    [preAnalise, telefonesExistentes]
+  );
+
   const confirmarImportacao = async () => {
     if (!pendingImportRows || !user) return;
     setImportLoading(true);
@@ -702,7 +1252,6 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         origem: "Importado (Disparos)",
         status: "novo",
         tags: [] as string[],
-        user_id: user.id,
       }));
 
       if (!novos.length) {
@@ -724,18 +1273,26 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         return;
       }
 
-      const { error: insertError } = await api
-        .from("contatos")
-        .insert(novos.map(n => ({ ...n, lista_id: listaCriada.id })));
-
-      if (insertError) {
-        toast.error("Erro ao importar contatos", { description: insertError.message });
-        return;
-      }
+      // [AUDITORIA] FIX APLICADO (Sprint Importação Upsert, 2026-08-06): antes usava o bulk-insert
+      // genérico (`api.from("contatos").insert(...)`, POST / de crud.ts), sem ON CONFLICT — UM
+      // telefone colidindo (já existente na conta, ou duplicado dentro do próprio arquivo)
+      // rejeitava o INSERT inteiro (23505), e NENHUMA linha do lote era gravada, mesmo as que não
+      // colidiam com nada. Endpoint dedicado (`/api/contatos/importar-lote`) faz upsert real
+      // (ON CONFLICT DO NOTHING) — contato já existente não é sobrescrito (nome/notas/tags/status
+      // de um lead em atendimento continuam intocados), e as linhas novas do lote entram mesmo que
+      // outras colidam. `api.post` lança exceção em erro HTTP (diferente de `.from()`, que devolve
+      // `{data,error}`) — por isso dentro do try/catch já existente, não um `if (error)` separado.
+      const { data: resultadoImportacao } = await api.post("/api/contatos/importar-lote", {
+        contatos: novos.map(n => ({ ...n, lista_id: listaCriada.id })),
+      });
+      const inseridos: number = resultadoImportacao?.inseridos ?? 0;
+      const jaExistiam: number = resultadoImportacao?.jaExistiam ?? 0;
 
       // [AUDITORIA] FIX APLICADO: marca a lista recém-criada como selecionada — é isso que faz o
       // useEffect de targetContacts (componente pai) de fato puxar esses contatos pra campanha,
-      // fechando a ponte que faltava entre "arquivo importado" e "quem recebe o disparo".
+      // fechando a ponte que faltava entre "arquivo importado" e "quem recebe o disparo". Mesmo
+      // contatos que já existiam (não entraram de novo, mas já pertenciam à conta) ficam
+      // acessíveis pela lista — ela foi criada de qualquer forma pra agrupar a importação.
       setForm({
         ...form,
         listas_selecionadas: Array.from(new Set([
@@ -745,7 +1302,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
       });
 
       toast.success("Importação concluída", {
-        description: `${totalLinhas} linha(s) lidas · ${novos.length} importado(s) · ${corrigidos} telefone(s) corrigido(s) automaticamente · ${descartados} descartado(s) por telefone inválido.`,
+        description: `${totalLinhas} linha(s) lidas · ${inseridos} importado(s) · ${jaExistiam} já existia(m) na sua base (não sobrescritos) · ${corrigidos} telefone(s) corrigido(s) automaticamente · ${descartados} descartado(s) por telefone inválido.`,
       });
 
       await fetchTargets();
@@ -786,20 +1343,50 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
         </TabsList>
 
         <TabsContent value="lista" className="p-4 border rounded-lg bg-card space-y-4">
-          <div className="flex items-center justify-between">
+          {listasRecentesReenviadas.length > 0 && (
+            <div className="p-3 text-xs rounded-lg bg-amber-50 border border-amber-200 text-amber-700 dark:bg-amber-950/30 dark:border-amber-900 dark:text-amber-400">
+              <p className="font-semibold flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5" /> Lista já usada recentemente
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {listasRecentesReenviadas.map((r: any) => (
+                  <li key={r.nome}>
+                    "{r.nome}" foi alvo da campanha "{r.ultima.nome}" {formatRelativoPtBr(r.ultima.created_at)} — contatos que já receberam serão pulados automaticamente pelo cooldown de {form.cooldown_horas}h, os demais recebem normalmente.
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <p className="text-sm font-medium">Selecione uma ou mais listas de leads:</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => {
-                const allIds = listas.map(l => l.id);
-                const allSelected = listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id));
-                setForm({ ...form, listas_selecionadas: allSelected ? [] : allIds });
-              }}
-            >
-              {listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id)) ? "Limpar" : "Selecionar todas"}
-            </Button>
+            <div className="flex items-center gap-2">
+              {listasVazias.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-destructive hover:text-destructive"
+                  disabled={limpandoVazias}
+                  onClick={limparListasVazias}
+                >
+                  {limpandoVazias
+                    ? <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    : <Trash2 className="h-3 w-3 mr-1" />}
+                  Limpar {listasVazias.length} vazia{listasVazias.length > 1 ? "s" : ""}
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  const allIds = listas.map(l => l.id);
+                  const allSelected = listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id));
+                  setForm({ ...form, listas_selecionadas: allSelected ? [] : allIds });
+                }}
+              >
+                {listas.length > 0 && listas.every(l => form.listas_selecionadas.includes(l.id)) ? "Limpar seleção" : "Selecionar todas"}
+              </Button>
+            </div>
           </div>
 
           {/* Opção especial: Todos os Leads (ignora lista_id) */}
@@ -861,11 +1448,42 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                       }}
                     />
                     <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: l.cor || "hsl(217 91% 45%)" }} />
-                    <span className="text-sm truncate">{l.nome}</span>
+                    <div className="min-w-0 flex flex-col">
+                      <span className="text-sm truncate">{l.nome}</span>
+                      {/* [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): visibilidade
+                          cedo (Passo 1, não só no resumo final do Passo 4) de que essa lista já
+                          foi alvo de campanha antes — pedido explícito do usuário. */}
+                      {campanhasPorLista[l.id] && (
+                        <span className="text-[10px] text-muted-foreground truncate">
+                          Usada em {campanhasPorLista[l.id].total} campanha{campanhasPorLista[l.id].total > 1 ? "s" : ""} — última: {formatRelativoPtBr(campanhasPorLista[l.id].ultima.created_at)}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <Badge variant="outline" className="text-[10px] flex-shrink-0">
-                    {listasCounts[l.id] ?? "..."}
-                  </Badge>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <Badge variant="outline" className="text-[10px]">
+                      {listasCounts[l.id] ?? "..."}
+                    </Badge>
+                    {/* [AUDITORIA] LÓGICA: stopPropagation obrigatório nos dois botões — a linha
+                        inteira é um <label> que dispara o toggle do checkbox ao clicar em
+                        qualquer lugar dela, inclusive nestes ícones, se não fosse isolado aqui. */}
+                    <button
+                      type="button"
+                      title="Renomear lista"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); abrirRenomeio(l); }}
+                      className="p-1 rounded hover:bg-muted-foreground/10 text-muted-foreground hover:text-foreground"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Excluir lista"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); removerLista(l.id, l.nome); }}
+                      className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </label>
               );
             })}
@@ -876,6 +1494,31 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
             )}
           </div>
         </TabsContent>
+
+        {/* [AUDITORIA] LÓGICA (Sprint Gerenciar Listas em Disparos, 2026-08-06): modal de
+            renomeio — reaproveita os mesmos componentes Dialog já importados nesta página. */}
+        <Dialog open={!!renomeandoLista} onOpenChange={(open) => { if (!open) setRenomeandoLista(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Renomear lista</DialogTitle>
+              <DialogDescription>O novo nome fica visível em todas as telas que usam esta lista (Leads, Disparos).</DialogDescription>
+            </DialogHeader>
+            <Input
+              value={renomeandoLista?.nome ?? ""}
+              onChange={(e) => setRenomeandoLista(prev => prev ? { ...prev, nome: e.target.value } : prev)}
+              onKeyDown={(e) => { if (e.key === "Enter") confirmarRenomeio(); }}
+              autoFocus
+              maxLength={100}
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRenomeandoLista(null)} disabled={salvandoRenomeio}>Cancelar</Button>
+              <Button onClick={confirmarRenomeio} disabled={salvandoRenomeio}>
+                {salvandoRenomeio ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                Salvar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
 
 
@@ -1001,6 +1644,15 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
             <Button variant="outline" size="sm" className="mt-4" onClick={() => document.getElementById('csv-upload')?.click()}>
               Selecionar Arquivo
             </Button>
+            {/* [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas, 2026-09-11): mesmo modelo baixável
+                de Leads.tsx (nome/telefone/email/empresa/cargo/origem/status/tags/notas) — os dois
+                importam pra `contatos`, então um modelo só serve pros dois pontos de import. */}
+            <p className="text-xs text-muted-foreground mt-3">
+              Não tem uma planilha pronta?{" "}
+              <button type="button" onClick={baixarModeloContatosXLSX} className="text-primary font-medium underline-offset-2 hover:underline inline-flex items-center gap-1">
+                <Download className="h-3 w-3" /> Baixar modelo
+              </button>
+            </p>
           </div>
           {csvPreview.length > 0 && (
             <div className="space-y-3 text-left">
@@ -1032,6 +1684,33 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                       <span className="font-bold text-destructive">{preAnalise.descartados}</span> linha(s) serão descartadas por telefone vazio ou inválido (fora do padrão de 10 a 13 dígitos, ou mais de um telefone colado na mesma célula) — a preview acima mostra o arquivo cru, essas linhas não geram contato.
                     </p>
                   )}
+                  {/* [AUDITORIA] FIX APLICADO (Sprint Importação Upsert, 2026-08-06): novos vs. já
+                      existentes na conta, checado contra o banco (POST /contatos/checar-telefones)
+                      assim que o arquivo é lido — antes não tinha como saber isso ANTES de
+                      confirmar (só depois, e olhe lá, já que o insert antigo nem devolvia essa
+                      contagem separada). */}
+                  {checandoExistentes ? (
+                    <p className="text-muted-foreground italic">Verificando quais já existem na sua base...</p>
+                  ) : telefonesExistentes && preAnalise.novos.length > 0 ? (
+                    <p>
+                      Desses, <span className="font-bold text-emerald-600">{preAnalise.novos.length - jaExistiamCount}</span> são novos
+                      {jaExistiamCount > 0 && <> e <span className="font-bold text-amber-600">{jaExistiamCount}</span> já existem na sua base (não serão sobrescritos — nome/notas/tags de um contato já existente permanecem como estão)</>}.
+                    </p>
+                  ) : null}
+                  {preAnalise.suspeitos.length > 0 && (() => {
+                    const contagemMotivos: Record<string, number> = {};
+                    for (const s of preAnalise.suspeitos) {
+                      for (const m of s.motivo.split("; ")) contagemMotivos[m] = (contagemMotivos[m] || 0) + 1;
+                    }
+                    const motivoMaisComum = Object.entries(contagemMotivos).sort((a, b) => b[1] - a[1])[0];
+                    // Linhas únicas (uma linha pode ter mais de 1 motivo, ex: nome=telefone E DDD inválido)
+                    const linhasUnicas = new Set(preAnalise.suspeitos.map(s => s.linha)).size;
+                    return (
+                      <p className="text-amber-700 dark:text-amber-500">
+                        ⚠️ <span className="font-bold">{linhasUnicas}</span> linha(s) sinalizada(s) como suspeita(s) — mais comum: "{motivoMaisComum?.[0]}" ({motivoMaisComum?.[1]}×). Serão importadas normalmente, só revise antes de disparar.
+                      </p>
+                    );
+                  })()}
                 </div>
               )}
               <div className="flex items-center justify-end gap-2">
@@ -1055,14 +1734,28 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
               <p className="text-sm font-medium">Contatos selecionados</p>
               <p className="text-xs text-muted-foreground">
                 {filteredPreview.length} de {targetContacts.length} {previewSearch ? "(filtrados)" : "totais"}
+                {semNomeCount > 0 && <span className="text-amber-600 dark:text-amber-500"> · {semNomeCount} sem nome identificado</span>}
               </p>
             </div>
-            <Input
-              placeholder="Buscar por nome ou telefone..."
-              value={previewSearch}
-              onChange={e => setPreviewSearch(e.target.value)}
-              className="h-8 max-w-xs"
-            />
+            <div className="flex items-center gap-2">
+              {semNomeCount > 0 && (
+                <Button
+                  type="button"
+                  variant={soSemNome ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setSoSemNome(v => !v)}
+                >
+                  {soSemNome ? "Mostrando só sem nome" : "Mostrar só sem nome"}
+                </Button>
+              )}
+              <Input
+                placeholder="Buscar por nome ou telefone..."
+                value={previewSearch}
+                onChange={e => setPreviewSearch(e.target.value)}
+                className="h-8 max-w-xs"
+              />
+            </div>
           </div>
           {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28): faltava overflow-x-auto — só a tabela
               de importação de CSV/XLSX do sistema sem essa proteção (achado na auditoria de
@@ -1083,6 +1776,7 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                   <th className="px-3 py-2 font-medium text-xs">Status de envio</th>
                   <th className="px-3 py-2 font-medium text-xs">Último envio</th>
                   <th className="px-3 py-2 font-medium text-xs">Última campanha</th>
+                  <th className="px-3 py-2 font-medium text-xs w-8"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1091,7 +1785,43 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                   const statusEnvio = statusEnvioPorTelefone[chaveTelefone(c.telefone)];
                   return (
                     <tr key={c.id || c.telefone || i} className="border-t hover:bg-muted/30">
-                      <td className="px-3 py-1.5 truncate max-w-[200px]">{c.nome || "—"}</td>
+                      <td className="px-3 py-1.5 truncate max-w-[200px]">
+                        {editandoNomeId === c.id ? (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              autoFocus
+                              value={nomeEditado}
+                              onChange={e => setNomeEditado(e.target.value)}
+                              onKeyDown={e => { if (e.key === "Enter") salvarNomeEditado(c.id); if (e.key === "Escape") setEditandoNomeId(null); }}
+                              className="h-6 text-xs px-1.5"
+                            />
+                            <button
+                              type="button"
+                              title="Salvar"
+                              disabled={salvandoNomeId === c.id}
+                              onClick={() => salvarNomeEditado(c.id)}
+                              className="p-0.5 rounded hover:bg-primary/20 text-primary disabled:opacity-50 shrink-0"
+                            >
+                              {salvandoNomeId === c.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 group/nome">
+                            <span>{c.nome || "—"}</span>
+                            {c.nome && c.telefone && c.nome === c.telefone && (
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 text-amber-600 dark:text-amber-500 border-amber-600/40 shrink-0">sem nome</Badge>
+                            )}
+                            <button
+                              type="button"
+                              title="Editar nome"
+                              onClick={() => { setEditandoNomeId(c.id); setNomeEditado(c.nome === c.telefone ? "" : (c.nome || "")); }}
+                              className="p-0.5 rounded hover:bg-muted opacity-0 group-hover/nome:opacity-100 text-muted-foreground shrink-0"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-1.5 font-mono text-xs">{c.telefone || "—"}</td>
                       <td className="px-3 py-1.5">
                         {estagio ? (
@@ -1110,11 +1840,27 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
                       <td className="px-3 py-1.5 text-xs text-muted-foreground truncate max-w-[160px]">
                         {statusEnvio?.campanha_nome || "—"}
                       </td>
+                      <td className="px-3 py-1.5">
+                        {/* [AUDITORIA] LÓGICA (Sprint Excluir Contato na Prévia, 2026-08-06):
+                            só remove da seleção atual/futuras — não afeta campanha já enviada
+                            (sem FK/CASCADE pra contatos, ver removerContatoDaPreview). */}
+                        <button
+                          type="button"
+                          title="Remover contato"
+                          disabled={removendoContatoId === c.id}
+                          onClick={() => removerContatoDaPreview(c.id, c.nome)}
+                          className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive disabled:opacity-50"
+                        >
+                          {removendoContatoId === c.id
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Trash2 className="h-3.5 w-3.5" />}
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
                 {filteredPreview.length === 0 && (
-                  <tr><td colSpan={6} className="px-3 py-4 text-center text-xs text-muted-foreground">Nenhum contato corresponde à busca.</td></tr>
+                  <tr><td colSpan={7} className="px-3 py-4 text-center text-xs text-muted-foreground">Nenhum contato corresponde à busca.</td></tr>
                 )}
               </tbody>
             </table>
@@ -1143,6 +1889,196 @@ const TIPO_MIDIA_PARA_UPLOAD: Record<string, string> = { imagem: "image", audio:
 // novo, independente desta validação de UI.
 const DELAY_MIN_ABSOLUTO_MINUTOS = 5 / 60;
 
+// [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): editor de mensagens-base
+// completas (item 2) + regra de seleção por tag (item 3) — seção own colapsável, separada do
+// campo de mensagem única acima, porque é um modo de uso mais avançado (a maioria das campanhas
+// continua usando só uma mensagem + spintax). Com 0 ou 1 variante preenchida, `handleStart`
+// (StepReview) ignora completamente esta seção e usa o campo único de sempre — zero risco pra
+// quem não abrir isso.
+function VariantesMensagem({ form, setForm }: any) {
+  const [aberto, setAberto] = useState(false);
+  const [gerando, setGerando] = useState(false);
+  const [quantidadeGerar, setQuantidadeGerar] = useState(3);
+  const variantes: string[] = form.mensagens_variantes;
+  const variantesValidas = variantes.filter((v: string) => v.trim()).length;
+
+  // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, bloco 2 — item 4, 2026-08-07): botão
+  // "Gerar variações com IA" — chama o backend UMA vez ao clicar (nunca em loop, nunca por
+  // contato). Resultado vira texto estático em `mensagens_variantes` (append, não substitui o
+  // que o operador já escreveu) — depois deste clique, zero chamada de IA nova pra essa
+  // campanha, por maior que seja a lista de contatos.
+  const gerarComIA = async () => {
+    const textoBase = form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia;
+    if (!textoBase?.trim()) {
+      toast.error("Escreva uma mensagem-base no campo acima antes de gerar variações.");
+      return;
+    }
+    setGerando(true);
+    try {
+      const token = await getFreshToken();
+      const res = await fetch(`${API_BASE}/api/disparos/gerar-variacoes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ mensagem: textoBase, quantidade: quantidadeGerar }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Falha ao gerar variações");
+      const novas = [...variantes.filter((v: string) => v.trim()), ...data.variantes];
+      setForm({ ...form, mensagens_variantes: novas });
+      setAberto(true);
+      toast.success(`${data.variantes.length} variações geradas (1 chamada de IA, não repete por contato).`);
+    } catch (err: any) {
+      toast.error("Erro ao gerar variações", { description: err?.message });
+    } finally {
+      setGerando(false);
+    }
+  };
+
+  const atualizarVariante = (i: number, valor: string) => {
+    const novas = [...variantes];
+    novas[i] = valor;
+    setForm({ ...form, mensagens_variantes: novas });
+  };
+  const removerVariante = (i: number) => {
+    const novas = variantes.filter((_: string, idx: number) => idx !== i);
+    // Remove também qualquer regra de tag que apontava pro índice removido/deslocado — evita
+    // regra órfã apontando pra uma variante que não existe mais.
+    const regra: Record<string, number> = {};
+    for (const [tag, idx] of Object.entries(form.regra_variante_por_tag) as [string, number][]) {
+      if (idx === i) continue;
+      regra[tag] = idx > i ? idx - 1 : idx;
+    }
+    setForm({ ...form, mensagens_variantes: novas, regra_variante_por_tag: regra });
+  };
+  const adicionarVariante = () => setForm({ ...form, mensagens_variantes: [...variantes, ""] });
+
+  const adicionarRegra = () => {
+    // chave temporária vazia — o operador preenche a tag no input; usar índice como placeholder
+    // evita colidir chaves quando duas linhas novas são adicionadas antes de preencher a tag.
+    const regra = { ...form.regra_variante_por_tag, [`__nova_${Date.now()}`]: 0 };
+    setForm({ ...form, regra_variante_por_tag: regra });
+  };
+  const atualizarRegraTag = (tagAntiga: string, tagNova: string) => {
+    const regra = { ...form.regra_variante_por_tag };
+    const idx = regra[tagAntiga];
+    delete regra[tagAntiga];
+    regra[tagNova] = idx;
+    setForm({ ...form, regra_variante_por_tag: regra });
+  };
+  const atualizarRegraIndice = (tag: string, idx: number) => {
+    setForm({ ...form, regra_variante_por_tag: { ...form.regra_variante_por_tag, [tag]: idx } });
+  };
+  const removerRegra = (tag: string) => {
+    const regra = { ...form.regra_variante_por_tag };
+    delete regra[tag];
+    setForm({ ...form, regra_variante_por_tag: regra });
+  };
+
+  return (
+    <div className="border rounded-lg">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between p-3 text-sm font-medium"
+        onClick={() => setAberto(!aberto)}
+      >
+        <span className="flex items-center gap-2">
+          🧩 Múltiplas mensagens-base (avançado, opcional)
+          {variantesValidas >= 2 && <Badge variant="secondary" className="text-[10px]">{variantesValidas} ativas</Badge>}
+        </span>
+        <span className="text-xs text-muted-foreground">{aberto ? "Ocultar" : "Configurar"}</span>
+      </button>
+      {aberto && (
+        <div className="p-3 pt-0 space-y-3 border-t">
+          <p className="text-[10px] text-muted-foreground">
+            Em vez de UMA mensagem com spintax por dentro, cadastre {"2+"} mensagens completas diferentes — o motor alterna entre elas por contato. Precisa de pelo menos 2 preenchidas pra ativar; com 0 ou 1, a campanha usa só o campo "Mensagem" acima, normalmente.
+          </p>
+
+          {/* [AUDITORIA] LÓGICA (item 4): texto do botão e ajuda deixam explícito "1 vez", de
+              propósito — fácil o operador achar que roda por mensagem se não estiver claro. */}
+          <div className="flex items-center gap-2 flex-wrap p-2 rounded-md bg-muted/40 border border-dashed">
+            <Button size="sm" variant="secondary" className="h-7 text-[10px] gap-1" disabled={gerando} onClick={gerarComIA}>
+              {gerando ? <Loader2 className="h-3 w-3 animate-spin" /> : "✨"} Gerar variações com IA
+            </Button>
+            <Select value={String(quantidadeGerar)} onValueChange={v => setQuantidadeGerar(Number(v))}>
+              <SelectTrigger className="h-7 text-[10px] w-24"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {[2, 3, 4, 5].map(n => <SelectItem key={n} value={String(n)}>{n} variações</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <span className="text-[10px] text-muted-foreground">
+              Roda 1 vez só, agora — usa a mensagem do campo acima como base. Depois disso, zero chamada de IA no envio, pra qualquer quantidade de contatos.
+            </span>
+          </div>
+
+          {variantes.map((v: string, i: number) => (
+            <div key={i} className="flex gap-2 items-start">
+              <span className="text-[10px] text-muted-foreground mt-2 w-4">{i + 1}.</span>
+              <Textarea
+                className="min-h-[80px] font-mono text-xs"
+                value={v}
+                onChange={e => atualizarVariante(i, e.target.value)}
+                placeholder={`Mensagem-base ${i + 1}...`}
+              />
+              <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => removerVariante(i)}>
+                <Trash2 className="h-3.5 w-3.5 text-destructive" />
+              </Button>
+            </div>
+          ))}
+          <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1" onClick={adicionarVariante}>
+            <Plus className="h-3 w-3" /> Adicionar mensagem-base
+          </Button>
+
+          {variantesValidas >= 2 && (
+            <div className="space-y-2 pt-2 border-t">
+              <Label className="text-[10px]">Como escolher qual mensagem cada contato recebe</Label>
+              <Select value={form.distribuicao_variantes} onValueChange={(v: any) => setForm({ ...form, distribuicao_variantes: v })}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="round_robin">Alternar em sequência (round-robin)</SelectItem>
+                  <SelectItem value="regra">Por tag do contato (regra abaixo)</SelectItem>
+                </SelectContent>
+              </Select>
+
+              {form.distribuicao_variantes === "regra" && (
+                <div className="space-y-2 pt-1">
+                  <p className="text-[10px] text-muted-foreground">
+                    Contato sem nenhuma tag da lista abaixo cai no round-robin normal, entre as variantes.
+                  </p>
+                  {Object.entries(form.regra_variante_por_tag).map(([tag, idx]: [string, any]) => (
+                    <div key={tag} className="flex gap-2 items-center">
+                      <Input
+                        className="h-7 text-xs"
+                        placeholder="nome exato da tag"
+                        defaultValue={tag.startsWith("__nova_") ? "" : tag}
+                        onBlur={e => e.target.value.trim() && atualizarRegraTag(tag, e.target.value.trim())}
+                      />
+                      <span className="text-[10px] text-muted-foreground shrink-0">→</span>
+                      <Select value={String(idx)} onValueChange={v => atualizarRegraIndice(tag, Number(v))}>
+                        <SelectTrigger className="h-7 text-xs w-40"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {variantes.map((_: string, i: number) => (
+                            <SelectItem key={i} value={String(i)}>Mensagem-base {i + 1}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => removerRegra(tag)}>
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1" onClick={adicionarRegra}>
+                    <Plus className="h-3 w-3" /> Adicionar regra por tag
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepMessage({ form, setForm }: any) {
   const { user } = useAuth();
   const mediaTypes = [
@@ -1160,6 +2096,29 @@ function StepMessage({ form, setForm }: any) {
   const campoAtivo: "mensagem" | "legenda_midia" = form.tipo_midia === "texto" ? "mensagem" : "legenda_midia";
   const textoAtivo: string = form[campoAtivo] || "";
   const setTextoAtivo = (valor: string) => setForm({ ...form, [campoAtivo]: valor });
+
+  // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, print em produção, 2026-09-11: "quando
+  // clico nos botoes de variaveis nao funciona"): os botões de variável/spintax sempre jogavam o
+  // texto no FINAL da mensagem (`setTextoAtivo(textoAtivo + v)`) — numa mensagem de várias linhas
+  // com o cursor no topo (ex: editando o começo, "{{primeiro_nome}}, tudo certo?"), o clique
+  // "funcionava" de verdade (o state mudava), mas o resultado aparecia lá embaixo, fora da vista,
+  // parecendo que não tinha feito nada. Mesmo fix já aplicado em `DisparoTemplateEditor.tsx`
+  // (`inserirNoCursor`) nesta mesma sessão — trazido aqui pro StepMessage, a tela ORIGINAL de onde
+  // aquele padrão foi copiado, fechando a inconsistência entre as duas.
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const inserirNoCursor = (texto: string) => {
+    const el = textareaRef.current;
+    if (!el) { setTextoAtivo(textoAtivo + texto); return; }
+    const inicio = el.selectionStart ?? textoAtivo.length;
+    const fim = el.selectionEnd ?? textoAtivo.length;
+    const novoTexto = `${textoAtivo.slice(0, inicio)}${texto}${textoAtivo.slice(fim)}`;
+    const novoCursor = inicio + texto.length;
+    setTextoAtivo(novoTexto);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(novoCursor, novoCursor);
+    });
+  };
 
   // [AUDITORIA] LÓGICA (Sprint Templates de Disparo, 2026-07-30): carregar/salvar template
   // reaproveita a mesma tabela genérica (`disparo_templates`, CRUD via makeCrud) usada pela tela
@@ -1196,6 +2155,19 @@ function StepMessage({ form, setForm }: any) {
       mensagem: tpl.tipo_midia === "texto" ? tpl.mensagem : "",
       legenda_midia: tpl.tipo_midia === "texto" ? "" : (tpl.legenda_midia || tpl.mensagem || ""),
       url_midia: tpl.url_midia || "",
+      // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): round-trip das
+      // mensagens-base/regra — `|| []`/`|| {}` cobre templates salvos antes desta sprint
+      // (colunas novas, ainda sem valor gravado neles).
+      mensagens_variantes: tpl.mensagens_variantes || [],
+      distribuicao_variantes: tpl.distribuicao_variantes || "round_robin",
+      regra_variante_por_tag: tpl.regra_variante_por_tag || {},
+      // [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08): `?? true` (não `||`) — template
+      // salvo ANTES desta sprint não tem a coluna preenchida (`undefined`/`null`), e o default
+      // correto pra esse caso é LIGADO (mesmo comportamento de qualquer campanha nova). `|| true`
+      // teria o mesmo efeito aqui, mas `??` deixa explícito que só `undefined`/`null` cai no
+      // default — um `false` gravado de propósito (operador desligou e salvou) tem que persistir
+      // como `false` ao recarregar, não virar `true` de novo.
+      variacao_automatica: tpl.variacao_automatica ?? true,
     });
     setLoadedTemplateId(tpl.id);
     setLoadedTemplateNome(tpl.nome);
@@ -1269,6 +2241,10 @@ function StepMessage({ form, setForm }: any) {
       mensagem: form.tipo_midia === "texto" ? form.mensagem : "",
       url_midia: form.url_midia || null,
       legenda_midia: form.tipo_midia === "texto" ? null : form.legenda_midia,
+      mensagens_variantes: form.mensagens_variantes.filter((v: string) => v.trim()),
+      distribuicao_variantes: form.distribuicao_variantes,
+      regra_variante_por_tag: form.regra_variante_por_tag,
+      variacao_automatica: form.variacao_automatica,
       updated_at: new Date().toISOString(),
     };
     const { data, error } = (!comoNovo && loadedTemplateId)
@@ -1353,19 +2329,78 @@ function StepMessage({ form, setForm }: any) {
             <span className={`text-[10px] ${textoAtivo.length > 4096 ? "text-destructive font-bold" : "text-muted-foreground"}`}>{textoAtivo.length}/4096</span>
           </div>
           <Textarea
+            ref={textareaRef}
             className="min-h-[150px] font-mono text-sm"
             value={textoAtivo}
             onChange={e => setTextoAtivo(e.target.value)}
             placeholder={form.tipo_midia === 'texto' ? "Olá {{primeiro_nome}}, tudo bem?" : "Legenda do arquivo..."}
           />
           <div className="flex gap-2 flex-wrap">
-            {["{{nome}}", "{{primeiro_nome}}", "{{telefone}}", "{{data}}", "{{empresa}}"].map(v => (
-              <Button key={v} size="sm" variant="secondary" className="text-[10px] h-7" onClick={() => {
-                setTextoAtivo(textoAtivo + v);
-              }}>+{v}</Button>
+            {VARIAVEIS_MENSAGEM_CONTATO.map(v => (
+              <Button key={v} type="button" size="sm" variant="secondary" className="text-[10px] h-7" onClick={() => inserirNoCursor(v)}>
+                +{v}
+              </Button>
             ))}
           </div>
+          {/* [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): biblioteca curada de
+              variações prontas (item 1), pra quem não vai lembrar/saber escrever a sintaxe
+              `{a|b|c}` na mão. */}
+          <div className="flex gap-2 flex-wrap items-center">
+            <span className="text-[10px] text-muted-foreground">Variar:</span>
+            {BIBLIOTECA_VARIACOES.map(v => (
+              <Button key={v.label} type="button" size="sm" variant="outline" className="text-[10px] h-7" onClick={() => inserirNoCursor(v.spintax)}>
+                🎲 {v.label}
+              </Button>
+            ))}
+          </div>
+          {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): dica de sintaxe do
+              spintax, perto dos atalhos de placeholder — mesmo lugar que `DisparoTemplates.tsx`
+              usa pro texto de ajuda equivalente. */}
+          <p className="text-[10px] text-muted-foreground">
+            💡 Use <code className="px-1 rounded bg-muted">{"{opção 1|opção 2|opção 3}"}</code> pra variar o texto por contato sem custo de IA — ex: <code className="px-1 rounded bg-muted">{"{Oi|Olá|E aí}"}</code>.
+          </p>
+          {/* [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08, item 2): indicador + controle
+              da camada de variação automática por sinônimo — LIGADA por padrão (ver default do
+              form). Só relevante quando a mensagem NÃO tem spintax manual: se tiver, a camada
+              automática nunca roda em cima dela (`personalizarMensagem`, motorTexto.ts, respeita o
+              que o operador já configurou à mão) — mostrar o toggle nesse caso seria enganoso,
+              então mostra uma explicação em vez do controle. */}
+          {textoTemSpintax(textoAtivo) ? (
+            <p className="text-[10px] text-muted-foreground italic">
+              Variação automática por sinônimo desligada nesta mensagem — você já configurou variação manual (spintax) acima, ela tem prioridade.
+            </p>
+          ) : (
+            <div className="flex items-center justify-between gap-3 p-2 rounded border bg-muted/30">
+              <div className="flex items-center gap-2 min-w-0">
+                <Badge variant={form.variacao_automatica ? "default" : "outline"} className="text-[10px] gap-1 shrink-0">
+                  🔀 {form.variacao_automatica ? "Variação automática ativa" : "Variação automática desligada"}
+                </Badge>
+                <span className="text-[10px] text-muted-foreground">
+                  Troca palavras/expressões por sinônimos equivalentes ({TAMANHO_DICIONARIO_VARIACAO} termos no dicionário), sem IA e sem mudar o sentido — cada contato recebe uma combinação diferente, mesmo sem {"{{nome}}"} nem spintax.
+                </span>
+              </div>
+              <Switch checked={form.variacao_automatica} onCheckedChange={v => setForm({ ...form, variacao_automatica: v })} />
+            </div>
+          )}
+          {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): aviso NÃO bloqueante
+              (mesmo espírito da decisão já tomada na sprint de importação — avisa, não trava) —
+              mensagem sem nenhum placeholder nem spintax sai byte-idêntica pra todo mundo, o
+              sinal de risco de spam mais citado na pesquisa desta sessão (política WhatsApp
+              Business Platform 2026), mais forte que "sem humanização por IA".
+              [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08, item 3): passa
+              `form.variacao_automatica` — mensagem sem `{{nome}}`/spintax manual mas com termo
+              reconhecido pelo dicionário (e a camada ligada) não dispara mais este aviso, porque a
+              variação real está acontecendo por outra via (ver `mensagemSemPersonalizacao` em
+              motorTexto.ts). */}
+          {mensagemSemPersonalizacao(textoAtivo, form.variacao_automatica) && (
+            <p className="text-[10px] text-amber-700 dark:text-amber-500 flex items-start gap-1">
+              <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+              Esta mensagem vai sair idêntica para todos os destinatários — considere usar {"{{primeiro_nome}}"} ou variações {"{a|b}"} para reduzir risco de bloqueio.
+            </p>
+          )}
         </div>
+
+        <VariantesMensagem form={form} setForm={setForm} />
 
         {/* Preview Card */}
         <div className="p-4 border rounded-lg bg-emerald-50/30 dark:bg-emerald-950/10">
@@ -1384,10 +2419,32 @@ function StepMessage({ form, setForm }: any) {
                 [AUDITORIA] FIX APLICADO (Sprint Fix Legenda de Mídia, 2026-08-02): usa `textoAtivo`
                 (mensagem OU legenda, conforme tipo_midia) em vez de `form.mensagem` sempre — pra
                 mídia, a prévia agora mostra de fato o que vai virar `mensagem_enviada` (legenda
-                personalizada) e não o campo errado (que ficava vazio). */}
+                personalizada) e não o campo errado (que ficava vazio).
+                [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): `resolverSpintax`
+                encadeado por cima — mostra UMA resolução possível (a prévia já ajuda o operador a
+                visualizar o formato), não promete que é o texto exato que todo mundo vai receber
+                (aviso explícito logo abaixo, já que cada contato sorteia sua própria combinação
+                no envio real).
+                [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08): `personalizarMensagem`
+                (motorTexto.ts) no lugar de `resolverSpintax(substituirPlaceholders(...))` direto —
+                compõe as 3 camadas (placeholder → spintax manual → variação automática) na mesma
+                ordem usada no envio real (StepReview.handleStart), incluindo a camada nova (item 2)
+                respeitando `form.variacao_automatica`. */}
             <p className="text-sm whitespace-pre-wrap">
-              {substituirPlaceholders(textoAtivo, { nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo" })}
+              {personalizarMensagem(textoAtivo, {
+                nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo",
+                cidade: "São Paulo", estado: "SP", interesse: "Consórcio de imóvel", data_nascimento: "12/05/1990",
+              }, form.variacao_automatica)}
             </p>
+            {textoTemSpintax(textoAtivo) ? (
+              <p className="text-[10px] text-muted-foreground italic mt-1">
+                🎲 Mensagem tem variação (spintax) — cada contato recebe uma combinação sorteada de verdade; esta prévia mostra só um exemplo.
+              </p>
+            ) : form.variacao_automatica && temTermoVariavel(textoAtivo) ? (
+              <p className="text-[10px] text-muted-foreground italic mt-1">
+                🔀 Variação automática por sinônimo ativa — cada contato recebe uma combinação diferente de palavras equivalentes; esta prévia mostra só um exemplo.
+              </p>
+            ) : null}
             <span className="text-[10px] text-muted-foreground float-right">10:45</span>
           </div>
         </div>
@@ -1479,6 +2536,17 @@ function StepAntiBan({ form, setForm }: any) {
   const [apenasSaudaveis, setApenasSaudaveis] = useState(false);
   const LIMIAR_SAUDAVEL = 70;
   const LIMIAR_PADRAO = 40;
+  // [AUDITORIA] BUG CORRIGIDO (achado 2026-08-10 — usuário reportou disparo bloqueado por
+  // "score baixo" num número com score real 70/100): `(i.whatsapp_score || 0)` tratava
+  // `whatsapp_score === null` ("nunca calculado ainda" — cron de 15min ou primeira conexão,
+  // ver `instanceScore.ts`) exatamente como "score 0" (pior caso possível), bloqueando pra
+  // disparo qualquer instância recém-conectada só por falta de dado, não por sinal real de
+  // problema. `InstanceManagementPanel.tsx` já tinha esse mesmo cuidado (`naoCalculado`) —
+  // esta tela ficou pra trás na sprint anterior. [AUDITORIA] FIX APLICADO: `scoreCalculado`
+  // usa `score_updated_at` (preenchido só quando existe cálculo real) pra distinguir "nunca
+  // avaliado" de "avaliado e crítico"; só o segundo caso bloqueia.
+  const scoreCalculado = (i: any) => !!i.score_updated_at;
+  const scoreDe = (i: any) => i.whatsapp_score ?? 0;
 
   useEffect(() => {
     const fetchInstancias = async () => {
@@ -1507,7 +2575,7 @@ function StepAntiBan({ form, setForm }: any) {
   }, []);
 
   const instanciasVisiveis = apenasSaudaveis
-    ? instancias.filter(i => (i.whatsapp_score || 0) > LIMIAR_SAUDAVEL)
+    ? instancias.filter(i => scoreCalculado(i) && scoreDe(i) > LIMIAR_SAUDAVEL)
     : instancias;
 
   // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): cada perfil agora carrega
@@ -1543,7 +2611,9 @@ function StepAntiBan({ form, setForm }: any) {
               className="h-7 text-xs"
               onClick={() => {
                 const available = instancias
-                  .filter(i => apenasSaudaveis ? (i.whatsapp_score || 0) > LIMIAR_SAUDAVEL : (i.whatsapp_score || 0) >= LIMIAR_PADRAO)
+                  .filter(i => apenasSaudaveis
+                    ? (scoreCalculado(i) && scoreDe(i) > LIMIAR_SAUDAVEL)
+                    : (!scoreCalculado(i) || scoreDe(i) >= LIMIAR_PADRAO))
                   .map(i => i.id);
                 const allSelected = available.length > 0 && available.every(id => form.instancias_ids.includes(id));
                 setForm({ ...form, instancias_ids: allSelected ? [] : available });
@@ -1559,7 +2629,7 @@ function StepAntiBan({ form, setForm }: any) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           {instanciasVisiveis.map(inst => {
-            const isBlocked = (inst.whatsapp_score || 0) < LIMIAR_PADRAO;
+            const isBlocked = scoreCalculado(inst) && scoreDe(inst) < LIMIAR_PADRAO;
             return (
               <div key={inst.id} className={`flex items-center justify-between p-3 border rounded-lg ${isBlocked ? 'bg-red-50/50 dark:bg-red-950/10 border-red-200' : ''}`}>
                 <div className="flex items-center gap-3">
@@ -1582,7 +2652,7 @@ function StepAntiBan({ form, setForm }: any) {
                 </div>
                 <div className="text-right">
                   <Badge variant={isBlocked ? "destructive" : "outline"} className="text-[10px]">
-                    Score: {inst.whatsapp_score || 0}
+                    {scoreCalculado(inst) ? `Score: ${inst.whatsapp_score}` : "Ainda não avaliado"}
                   </Badge>
                   {isBlocked && <p className="text-[9px] text-red-500 font-bold mt-1 uppercase">Bloqueada</p>}
                 </div>
@@ -1697,12 +2767,23 @@ function StepAntiBan({ form, setForm }: any) {
               <span className="text-[10px] uppercase text-muted-foreground">Limite Diário de Mensagens por Instância</span>
               <Input
                 type="number"
+                min={1}
+                max={50}
                 value={form.limite_diario_mensagens}
-                onChange={e => setForm({ ...form, limite_diario_mensagens: parseInt(e.target.value) })}
+                // [AUDITORIA] FIX APLICADO (Sprint Limite Diário Seguro, 2026-09-11 — pedido do
+                // usuário): clamp no próprio onChange, não só o atributo HTML `max` — `max` no
+                // input type=number bloqueia as setinhas/scroll, mas ainda deixa o operador digitar
+                // "500" manualmente sem travar nada visualmente até o submit. Backend
+                // (routes/disparos.ts) reforça o mesmo teto de 50 de qualquer forma, mas a UI não
+                // devia deixar o campo mostrar um número que o servidor vai reduzir depois.
+                onChange={e => {
+                  const v = parseInt(e.target.value);
+                  setForm({ ...form, limite_diario_mensagens: Number.isFinite(v) ? Math.min(50, Math.max(1, v)) : 1 });
+                }}
                 className="h-8"
               />
               <p className="text-[10px] text-muted-foreground">
-                Recomendado: 150 a 200 para chips novos/em aquecimento; até 500 para chips antigos.
+                Máximo permitido: 50/dia por instância — teto de segurança pra não travar/banir o número. Recomendado começar mais baixo (20 a 30) em chips novos/em aquecimento.
               </p>
             </div>
             {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): campo novo —
@@ -1726,12 +2807,18 @@ function StepAntiBan({ form, setForm }: any) {
         </Card>
 
         {/* Humanização IA */}
+        {/* [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06; copy reforçada na Sprint
+            Motor Nativo de Disparo, 2026-08-07 — item 5): texto deixa explícito que o motor
+            nativo (placeholders + spintax + mensagens-base múltiplas, Passo 2) é o caminho
+            recomendado/default, e "Humanizar com IA" é a opção avançada/paga por cima disso —
+            não a única forma de variar mensagem. Card continua funcional (toggle liga/desliga
+            normalmente) — só o texto e o default (acima) mudaram. */}
         <Card className="p-4 space-y-3 border-primary/30 bg-primary/5">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <Label className="font-bold">Humanizar com IA</Label>
+              <Label className="font-bold">Humanizar com IA <span className="font-normal text-[10px] text-muted-foreground">(avançado)</span></Label>
               <p className="text-[11px] text-muted-foreground">
-                Reescreve cada mensagem com leve variação para reduzir risco de bloqueio pela Meta.
+                Reescreve cada mensagem via IA a cada envio — tem custo por contato. <strong>O motor nativo do Passo 2 (placeholders, spintax, mensagens-base múltiplas) já resolve variação sem custo nenhum e é o caminho recomendado</strong> — use isto só se quiser um nível extra de variação, por cima do que o motor nativo já faz.
               </p>
             </div>
             <Switch
@@ -1740,6 +2827,29 @@ function StepAntiBan({ form, setForm }: any) {
             />
           </div>
         </Card>
+
+        {/* [AUDITORIA] LÓGICA (Sprint Variação de Imagem, 2026-08-25, pedido do usuário —
+            anti-fingerprint): só aparece pra campanha de imagem — documento/áudio não fazem
+            sentido pra essa técnica (reencode arriscaria corromper o arquivo). Opt-in, default
+            desligado (mesmo espírito de "Humanizar com IA" acima — não muda o comportamento de
+            ninguém sem decisão explícita). Perturbação é imperceptível (brilho <3% + reencode);
+            o objetivo é só mudar o hash do arquivo, não a aparência. */}
+        {form.tipo_midia === "imagem" && (
+          <Card className="p-4 space-y-3 border-primary/30 bg-primary/5">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label className="font-bold">Variar imagem a cada envio <span className="font-normal text-[10px] text-muted-foreground">(anti-fingerprint)</span></Label>
+                <p className="text-[11px] text-muted-foreground">
+                  Mandar o mesmo arquivo de imagem (mesmo hash) pra centenas/milhares de contatos é um sinal de spam usado pra bloquear números. Com isto ligado, cada envio recebe uma variação imperceptível (hash diferente, aparência idêntica) — sem custo de IA, quase instantâneo.
+                </p>
+              </div>
+              <Switch
+                checked={form.variar_imagem}
+                onCheckedChange={v => setForm({...form, variar_imagem: v})}
+              />
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   );
@@ -1783,12 +2893,21 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
   // contato de teste recebendo a mesma mensagem mais de uma vez, em campanhas diferentes criadas
   // em sequência — a dedupe existente (`Array.from(new Map(...))` por telefone, componente pai)
   // só evita duplicata DENTRO da mesma seleção de alvo; nada avisava sobre contatos que já tinham
-  // recebido OUTRA campanha recentemente. [AUDITORIA] FIX APLICADO: aviso aqui (camada 1, UI) —
-  // não bloqueia sozinho, só avisa e exige confirmação explícita antes de habilitar os botões de
-  // disparo (pode ser um follow-up legítimo). O bloqueio de verdade é no backend
-  // (disparoProcessor.ts + get_next_disparo_batch, migrations.ts) — funciona mesmo se este aviso
-  // for ignorado ou contornado (ex: log inserido direto no banco).
-  const [confirmarCooldown, setConfirmarCooldown] = useState(false);
+  // recebido OUTRA campanha recentemente. [AUDITORIA] FIX APLICADO (2026-07-30): aviso aqui
+  // (camada 1, UI), exigindo confirmação explícita (checkbox) antes de habilitar os botões.
+  // [AUDITORIA] BUG (achado do usuário, Sprint Cooldown vira filtro automático, 2026-08-06): o
+  // checkbox nunca teve efeito real no envio — o bloqueio de verdade sempre foi (e continua
+  // sendo) o backend (`disparoProcessor.ts` + `get_next_disparo_batch()`, `migrations.ts`), que
+  // pula silenciosamente qualquer contato em cooldown (`status='cooldown'` no log) INDEPENDENTE
+  // de qualquer coisa marcada aqui na tela — já testado com envio real na sprint original
+  // (2026-07-30). Marcar o checkbox não forçava envio pros contatos em cooldown (o backend
+  // continuava pulando); só liberava os botões pros DEMAIS contatos, sem problema nenhum,
+  // poderem receber a campanha. Era uma trava de UI sem efeito prático, só atrapalhando o
+  // operador com uma pergunta sobre algo que ele não tem como realmente forçar.
+  // [AUDITORIA] FIX APLICADO: removido o checkbox `confirmarCooldown` e `bloqueadoPorCooldown` —
+  // `contatosCooldown` (cálculo mantido, ainda usado pro aviso informativo abaixo) deixa de
+  // travar os botões. O backend não muda em nada (já fazia — e continua fazendo — o descarte
+  // real sozinho).
   const contatosCooldown = useMemo(() => {
     const cooldownMs = (Number(form.cooldown_horas) || 0) * 60 * 60 * 1000;
     if (cooldownMs <= 0) return [];
@@ -1796,7 +2915,6 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       c.ultimo_disparo_em && (Date.now() - new Date(c.ultimo_disparo_em).getTime()) < cooldownMs
     );
   }, [targetContacts, form.cooldown_horas]);
-  const bloqueadoPorCooldown = contatosCooldown.length > 0 && !confirmarCooldown;
 
   const handleStart = async (now = true) => {
     try {
@@ -1833,6 +2951,18 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         limite_diario_mensagens: form.limite_diario_mensagens,
         pausa_bloqueios_detectados: form.pausa_bloqueios_detectados,
         humanizar_ia: form.humanizar_ia,
+        variar_imagem: form.tipo_midia === "imagem" ? form.variar_imagem : false,
+        // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, 2026-08-07): gravado por
+        // auditoria/reuso (mesmo espírito informativo de `mensagem_template`, não lido por
+        // `disparoProcessor.ts` — a personalização já roda aqui embaixo, no `.map()` de
+        // `disparo_logs`, igual sempre funcionou pro spintax/placeholders).
+        mensagens_variantes: form.mensagens_variantes.filter(v => v.trim()),
+        distribuicao_variantes: form.distribuicao_variantes,
+        regra_variante_por_tag: form.regra_variante_por_tag,
+        // [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08): mesmo espírito informativo das
+        // 3 colunas acima — não lido por `disparoProcessor.ts`, a variação automática já roda
+        // aqui embaixo, no `.map()` de `disparo_logs` (via `personalizarMensagem`).
+        variacao_automatica: form.variacao_automatica,
         cooldown_horas: form.cooldown_horas,
         // [AUDITORIA] FIX APLICADO (Sprint Intervalo em Minutos, 2026-07-31): sempre preenchido
         // pra campanhas novas (arredondado pra segundo inteiro) — `disparoProcessor.ts` usa estes
@@ -1843,6 +2973,19 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         // nunca faria de qualquer forma).
         delay_min_segundos: Math.round((Number(form.delay_min_minutos) || 0) * 60),
         delay_max_segundos: Math.round((Number(form.delay_max_minutos) || 0) * 60),
+        // [AUDITORIA] BUG CORRIGIDO (Sprint Estruturar Disparo, 2026-08-11): estas 3 colunas
+        // (mesmo espírito informativo de `mensagem_template`/`mensagens_variantes` acima, não
+        // lidas por `disparoProcessor.ts`) já existiam no schema pra `tags_selecionadas`/
+        // `estagios_selecionados`, mas NUNCA eram gravadas aqui — toda campanha nascia sem
+        // registro nenhum de qual tag/estágio/lista a originou, mesmo já existindo coluna pronta
+        // pra isso. `listas_ids` é nova (`migrations.ts`) — `"__all__"` (sentinela de "Todos os
+        // Leads", não é um UUID real de lista) filtrado antes de gravar, senão o INSERT falharia
+        // contra o tipo `UUID[]`. Habilita o badge "usada em N campanhas" por lista
+        // (`StepContacts`, aba "Por Lista") e o aviso de reenvio recente, os dois pedidos
+        // explicitamente pelo usuário nesta sprint.
+        tags_selecionadas: form.tags_selecionadas,
+        estagios_selecionados: form.estagios_selecionados,
+        listas_ids: form.listas_selecionadas.filter((id: string) => id !== "__all__"),
       };
 
 
@@ -1866,20 +3009,74 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       // `mensagem_enviada` viraria "" pra cada contato e `disparoProcessor.ts` usaria a legenda
       // crua (com `{{placeholders}}` literais) da campanha, nunca a versão personalizada. Ver fix
       // relacionado em `disparoProcessor.ts` (prioridade de `legendaFinal` invertida pro mesmo motivo).
-      const logs = targetContacts.map(c => ({
-        disparo_id: campaignData.id,
-        user_id: user?.id,
-        contato_id: c.id,
-        telefone: c.telefone,
-        nome: c.nome,
-        mensagem_enviada: substituirPlaceholders(form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia, c),
-        status: 'pending'
-      }));
+      // [AUDITORIA] FIX APLICADO (Sprint Variação sem IA, 2026-08-06): `resolverSpintax` encadeado
+      // por cima de `substituirPlaceholders` (placeholders primeiro, spintax depois — mesma ordem
+      // documentada na declaração de `resolverSpintax`). Chamado dentro do `.map()`, uma vez por
+      // contato — cada `Math.random()` roda de forma independente, então dois contatos com a
+      // mesma mensagem-base podem sortear opções diferentes, sem precisar tocar em
+      // `disparoProcessor.ts` (o backend só lê `mensagem_enviada` já pronta).
+      // [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08, item 2): `resolverSpintax(
+      // substituirPlaceholders(...))` trocado por `personalizarMensagem(...)` (motorTexto.ts) —
+      // mesmas 2 camadas de sempre, mais a camada nova de variação automática por sinônimo (só
+      // roda quando `textoBase` original não tem spintax manual, ver `personalizarMensagem`).
+      // Continua chamado uma vez por contato dentro do `.map()`, mesmo padrão de sempre.
+      // [AUDITORIA] FIX APLICADO (achado real do usuário, print em produção, 2026-08-06):
+      // segunda camada de proteção, defesa em profundidade — mesmo já filtrando na origem
+      // (`targetContacts`, ver comentário completo lá), filtra de novo aqui, imediatamente
+      // antes do `INSERT` que exige `telefone NOT NULL`. Nunca depende só de um ponto de
+      // filtragem: se `targetContacts` chegar aqui por algum caminho futuro que não passou
+      // pelo filtro de cima, a campanha ainda não quebra.
+      const contatosValidos = targetContacts.filter((c: any) => c.telefone && String(c.telefone).trim());
+      // [AUDITORIA] FIX APLICADO (Sprint Motor Nativo de Disparo, 2026-08-07): variantes completas
+      // (item 2/3) só entram em jogo com 2+ mensagens-base configuradas — com 0 ou 1, `textoBase`
+      // cai exatamente no comportamento de sempre (`form.mensagem`/`legenda_midia`), sem mudança
+      // nenhuma pra campanha que não usa essa aba. `escolherVariante` roda ANTES de
+      // substituirPlaceholders/resolverSpintax — mesma ordem de composição de sempre, só com uma
+      // camada nova por baixo.
+      const variantesValidas = form.mensagens_variantes.filter(v => v.trim());
+      const logs = contatosValidos.map((c, i) => {
+        const textoBase = variantesValidas.length >= 2
+          ? escolherVariante(variantesValidas, form.distribuicao_variantes, form.regra_variante_por_tag, c, i)
+          : (form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia);
+        return {
+          disparo_id: campaignData.id,
+          user_id: user?.id,
+          contato_id: c.id,
+          telefone: c.telefone,
+          nome: c.nome,
+          mensagem_enviada: personalizarMensagem(textoBase, c, form.variacao_automatica),
+          status: 'pending'
+        };
+      });
 
 
       const { error: logsError } = await api.from("disparo_logs").insert(logs);
-      if (logsError) throw logsError;
-      
+      if (logsError) {
+        // [AUDITORIA] FIX APLICADO (achado real do usuário — campanha órfã em produção,
+        // 2026-08-06): antes, se este INSERT falhasse por qualquer motivo, a linha em
+        // `disparos` (já criada acima, INSERT separado) ficava órfã pra sempre — existia sem
+        // nenhum `disparo_logs` correspondente, status preso em 'em_andamento'/'rascunho'.
+        // Desfaz a criação da campanha nesse caso, pra falhar de forma limpa (usuário só vê
+        // o erro e tenta de novo, sem lixo acumulando no banco a cada tentativa).
+        // [AUDITORIA] BUG CORRIGIDO (achado 2026-09-04, typecheck escopado): `.catch()` chamado
+        // direto no QueryBuilder — ele não é uma Promise de verdade (só thenable, ver
+        // `client.ts`), não tem método `.catch`. Isso lançava `TypeError: ...catch is not a
+        // function` TODA VEZ que este rollback rodava (ou seja, toda vez que o INSERT em
+        // `disparo_logs` falhava depois do de `disparos` já ter sido criado) — o DELETE de
+        // limpeza nunca chegava a executar (o erro estoura antes do `await` valer alguma coisa),
+        // e o erro real (`logsError`) virava um "api.from(...).catch is not a function" confuso
+        // no catch externo. Ou seja: a campanha órfã que este bloco existe pra evitar (achado
+        // 2026-08-06) continuava acontecendo, só que mascarada. [AUDITORIA] FIX APLICADO: try/catch
+        // de verdade em volta do rollback — best-effort, nunca deixa uma falha aqui esconder o
+        // `logsError` original lançado logo abaixo.
+        try {
+          await api.from("disparos").delete().eq("id", campaignData.id);
+        } catch {
+          // rollback é best-effort — se falhar, segue pro throw do erro original mesmo assim.
+        }
+        throw logsError;
+      }
+
       toast.success(now ? "Campanha iniciada!" : "Campanha agendada!");
       if (now) onStart(campaignData);
     } catch (err: any) {
@@ -1905,6 +3102,15 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
 
               </div>
               <p className="text-[10px] text-muted-foreground mt-1">Duplicados removidos automaticamente</p>
+              {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown vira filtro automático, 2026-08-06,
+                  item 4): número de quem efetivamente recebe já calculado (`contatosCooldown`,
+                  usado também no aviso abaixo) — mostrado aqui em cima pra ficar visível de cara,
+                  sem precisar rolar até o aviso. */}
+              {contatosCooldown.length > 0 && (
+                <p className="text-[10px] text-amber-600 dark:text-amber-500 mt-1 font-medium">
+                  {targetContacts.length - contatosCooldown.length} serão enviados agora — {contatosCooldown.length} pulados por cooldown
+                </p>
+              )}
             </div>
             
             <div>
@@ -1955,26 +3161,19 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           <p className="text-xs italic text-muted-foreground line-clamp-3">"{form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia}"</p>
         </div>
 
-        {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): aviso não-bloqueante
-            — mostra quantos contatos já receberam campanha recentemente, exige confirmação
-            explícita antes de habilitar os botões de disparo (ver bloqueadoPorCooldown acima). */}
+        {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown vira filtro automático, 2026-08-06): virou
+            informativo puro — sem checkbox, sem exigir ação nenhuma. O operador continua sabendo
+            que X contatos serão pulados (informação útil), mas nada aqui bloqueia o início da
+            campanha; quem decide de verdade quem recebe é sempre o backend (ver comentário
+            completo na declaração de `contatosCooldown` acima). */}
         {contatosCooldown.length > 0 && (
-          <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-500/30 rounded-lg space-y-2">
+          <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-500/30 rounded-lg">
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
               <p className="text-xs text-amber-800 dark:text-amber-400">
-                <span className="font-bold">{contatosCooldown.length} de {targetContacts.length}</span> contatos selecionados já receberam uma mensagem de campanha nas últimas {form.cooldown_horas}h — enviar mesmo assim?
+                <span className="font-bold">{contatosCooldown.length} de {targetContacts.length}</span> contatos selecionados já receberam campanha nas últimas {form.cooldown_horas}h e serão pulados automaticamente — os demais recebem normalmente.
               </p>
             </div>
-            <label className="flex items-center gap-2 pl-6 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={confirmarCooldown}
-                onChange={e => setConfirmarCooldown(e.target.checked)}
-                className="h-4 w-4"
-              />
-              <span className="text-xs text-amber-800 dark:text-amber-400">Sim, quero enviar mesmo assim (ex: follow-up legítimo)</span>
-            </label>
           </div>
         )}
       </Card>
@@ -1982,7 +3181,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       <Card className="p-6 flex flex-col justify-between">
         <div className="space-y-4">
           <h3 className="font-bold">Ações</h3>
-          <Button className="w-full gap-2 h-12 text-lg font-bold" disabled={bloqueadoPorCooldown} onClick={() => handleStart(true)}>
+          <Button className="w-full gap-2 h-12 text-lg font-bold" onClick={() => handleStart(true)}>
             <Play className="h-5 w-5 fill-current" /> Disparar Agora
           </Button>
 
@@ -1994,7 +3193,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           <div className="space-y-2">
             <Label className="text-xs">Agendar para:</Label>
             <Input type="datetime-local" value={agendarAt} onChange={e => setAgendarAt(e.target.value)} />
-            <Button variant="outline" className="w-full gap-2" disabled={!agendarAt || bloqueadoPorCooldown} onClick={() => handleStart(false)}>
+            <Button variant="outline" className="w-full gap-2" disabled={!agendarAt} onClick={() => handleStart(false)}>
               <Calendar className="h-4 w-4" /> Agendar Disparo
             </Button>
           </div>
@@ -2007,182 +3206,4 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
     </div>
   );
 }
-
-function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onCancel: () => void }) {
-  const [currentCampaign, setCurrentCampaign] = useState(campaign);
-  const [logs, setLogs] = useState<any[]>([]);
-
-  useEffect(() => {
-    const fetchProgress = async () => {
-      // 1. Atualizar dados da campanha
-      const { data: campaignData } = await api
-        .from("disparos")
-        .select("*")
-        .eq("id", campaign.id)
-        .single();
-      
-      if (campaignData) {
-        setCurrentCampaign(campaignData);
-      }
-
-      // 2. Buscar logs recentes
-      const { data: logsData } = await api
-        .from("disparo_logs")
-        .select("*")
-        .eq("disparo_id", campaign.id)
-        .order("created_at", { ascending: false })
-        .limit(20);
-      
-      if (logsData) {
-        setLogs(logsData);
-      }
-    };
-
-    fetchProgress();
-    const timer = setInterval(fetchProgress, 3000);
-    return () => clearInterval(timer);
-  }, [campaign.id]);
-
-  const stats = [
-    { label: "Enviados", val: currentCampaign.enviados || 0, total: currentCampaign.total_leads || 0, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10" },
-    { label: "Entregues", val: currentCampaign.entregues || 0, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10" },
-    { label: "Respondidos", val: currentCampaign.respondidos || 0, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10" },
-    { label: "Falhas", val: currentCampaign.falhas || 0, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
-  ];
-
-  const failureRate = currentCampaign.enviados > 0 ? (currentCampaign.falhas / (currentCampaign.enviados + currentCampaign.falhas)) * 100 : 0;
-
-  const handleStatusChange = async (newStatus: string) => {
-    const { error } = await api
-      .from("disparos")
-      .update({ status: newStatus })
-      .eq("id", campaign.id);
-    
-    if (error) {
-      toast.error("Erro ao alterar status: " + error.message);
-    } else {
-      toast.success(`Campanha ${newStatus === 'pausado' ? 'pausada' : 'cancelada'}!`);
-      if (newStatus === 'cancelado') onCancel();
-    }
-  };
-
-  return (
-    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in zoom-in duration-300">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <Activity className="h-6 w-6 text-primary animate-pulse" />
-            Monitoramento: {currentCampaign.nome}
-          </h2>
-          <Badge className={`mt-1 ${currentCampaign.status === 'em_andamento' ? 'bg-emerald-500/20 text-emerald-600' : 'bg-yellow-500/20 text-yellow-600'}`}>
-            {currentCampaign.status.toUpperCase()}
-          </Badge>
-        </div>
-        <div className="flex gap-2">
-          {currentCampaign.status === 'em_andamento' ? (
-            <Button variant="outline" onClick={() => handleStatusChange('pausado')}><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
-          ) : (
-            <Button variant="outline" onClick={() => handleStatusChange('em_andamento')}><Play className="w-4 h-4 mr-2" /> Retomar</Button>
-          )}
-          <Button variant="destructive" onClick={() => handleStatusChange('cancelado')}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
-        </div>
-      </div>
-
-      {failureRate > 10 && (
-        <Alert variant={failureRate > 25 ? "destructive" : "default"} className={`animate-bounce ${failureRate <= 25 ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950/20' : ''}`}>
-          <AlertCircle className={`h-4 w-4 ${failureRate <= 25 ? 'text-yellow-500' : ''}`} />
-          <AlertTitle className={failureRate <= 25 ? 'text-yellow-600' : ''}>{failureRate > 25 ? "Pausa Automática Ativada" : "Taxa de Falha Elevada"}</AlertTitle>
-          <AlertDescription className={failureRate <= 25 ? 'text-yellow-600/80' : ''}>
-            {failureRate > 25 
-              ? "A campanha foi pausada automaticamente devido a uma taxa de erro superior a 25%." 
-              : "Detectamos que mais de 10% dos disparos estão falhando. Recomendamos revisar suas instâncias."}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade): 4 colunas
-          fixas espremiam os cards de estatística abaixo de ~768px; grid agora recolhe pra 2
-          colunas em telas pequenas/médias antes de abrir pra 4 em desktop. */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map(s => (
-          <Card key={s.label} className="p-5 border-none shadow-sm overflow-hidden relative group">
-            <div className={`absolute top-0 right-0 p-4 transition-transform group-hover:scale-110`}>
-              <s.icon className={`h-12 w-12 opacity-10 ${s.color}`} />
-            </div>
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">{s.label}</p>
-            <div className="flex items-baseline gap-1">
-              <span className={`text-3xl font-black ${s.color}`}>{s.val}</span>
-              {s.total !== null && <span className="text-sm text-muted-foreground font-bold">/ {s.total}</span>}
-            </div>
-            {s.total !== null && <Progress value={(s.val/s.total)*100} className={`h-1.5 mt-3 ${s.bg}`} />}
-            {s.label === "Respondidos" && s.val > 0 && (
-              <p className="text-[10px] text-purple-600 font-bold mt-2">
-                Conversão: {((s.val / currentCampaign.enviados) * 100).toFixed(1)}%
-              </p>
-            )}
-          </Card>
-        ))}
-      </div>
-
-      <Card className="border-none shadow-sm overflow-hidden">
-        <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
-          <h3 className="font-bold text-sm flex items-center gap-2"><TableIcon className="h-4 w-4" /> Log de Envios (Tempo Real)</h3>
-          <Badge variant="outline" className="text-[10px]">Atualizando a cada 3s</Badge>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/10">
-                <th className="p-3 text-left font-bold">Nome</th>
-                <th className="p-3 text-left font-bold">Número</th>
-                <th className="p-3 text-left font-bold">Status</th>
-                <th className="p-3 text-left font-bold">Erro</th>
-                <th className="p-3 text-left font-bold">Horário</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {logs.map((log, i) => (
-                <tr key={log.id} className="hover:bg-muted/5 transition-colors">
-                  <td className="p-3 font-medium">{log.nome || "Contato"}</td>
-                  <td className="p-3 text-xs font-mono">{log.telefone}</td>
-                  <td className="p-3">
-                    {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): sem um
-                        case explícito, 'cooldown' caía no fallback 'outline'/"Pendente" — enganoso,
-                        já que um log em cooldown nunca vai ser processado (não é "pendente" de
-                        verdade, foi bloqueado por design). */}
-                    <Badge variant={
-                      log.status === 'sent' ? 'secondary' :
-                      log.status === 'failed' ? 'destructive' :
-                      log.status === 'cooldown' ? 'outline' :
-                      log.status === 'sending' ? 'default' : 'outline'
-                    } className={`text-[10px] px-2 py-0 ${log.status === 'cooldown' ? 'border-amber-500 text-amber-600' : ''}`}>
-                      {log.status === 'sent' ? 'Enviado' :
-                       log.status === 'failed' ? 'Falha' :
-                       log.status === 'cooldown' ? 'Bloqueado (cooldown)' :
-                       log.status === 'sending' ? 'Enviando...' : 'Pendente'}
-                    </Badge>
-                  </td>
-                  <td className="p-3 text-xs text-red-500 max-w-[200px] truncate" title={log.erro}>
-                    {log.erro || "-"}
-                  </td>
-                  <td className="p-3 text-xs text-muted-foreground">
-                    {new Date(log.enviado_at || log.created_at).toLocaleTimeString()}
-                  </td>
-                </tr>
-              ))}
-              {logs.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="p-8 text-center text-muted-foreground italic">
-                    Nenhum envio registrado ainda.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
 

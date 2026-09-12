@@ -5,6 +5,11 @@ import { log } from '../logger';
 interface EvolutionInstanceInfo {
   name: string;
   connectionStatus: string;
+  // [AUDITORIA] LÓGICA (achado 2026-08-10 — loop de LOGOUT 401 em produção): campo novo, usado
+  // pelo guard-rail de POST /whatsapp/connect (routes/whatsapp.ts) pra detectar quando o número
+  // que o tenant está tentando conectar já tem uma sessão genuinamente aberta sob OUTRO nome de
+  // instância — sem isso não dava pra comparar "mesmo número" entre instâncias diferentes.
+  ownerJid?: string;
 }
 
 export async function fetchInstancesFromServer(url: string, apiKey: string): Promise<EvolutionInstanceInfo[] | null> {
@@ -16,7 +21,7 @@ export async function fetchInstancesFromServer(url: string, apiKey: string): Pro
     if (!resp.ok) return null;
     const data = await resp.json().catch(() => null);
     if (!Array.isArray(data)) return null;
-    return data.map((i: any) => ({ name: i?.name, connectionStatus: i?.connectionStatus }));
+    return data.map((i: any) => ({ name: i?.name, connectionStatus: i?.connectionStatus, ownerJid: i?.ownerJid }));
   } catch (err: any) {
     log.warn('EVOLUTION_SYNC', 'Falha ao consultar fetchInstances', { url, err: err?.message });
     return null;
@@ -25,7 +30,7 @@ export async function fetchInstancesFromServer(url: string, apiKey: string): Pro
 
 // [AUDITORIA] LÓGICA: Checagem pontual usada por syncEvolution() (integracoes.ts) antes de
 // aceitar status='conectado' vindo do frontend — evita confiar cegamente no cliente (era a
-// causa raiz do drift entre integracoes_config/agent_configs e a Evolution de verdade).
+// causa raiz do drift entre integracoes_config/agentes e a Evolution de verdade).
 export async function verificarInstanciaAberta(url: string, apiKey: string, instancia: string): Promise<boolean> {
   const instancias = await fetchInstancesFromServer(url, apiKey);
   if (!instancias) return false; // servidor indisponível — não assume conectado
@@ -36,8 +41,8 @@ export async function verificarInstanciaAberta(url: string, apiKey: string, inst
 // tem registrado, corrigindo divergência (drift) que se acumula silenciosamente — ver
 // BUG histórico em syncEvolution() (integracoes.ts) que confiava no status enviado pelo
 // frontend sem checar a Evolution de verdade. Nunca deleta linhas de integracoes_config,
-// só corrige o campo `status`; e só sincroniza agent_configs com uma instância que esteja
-// genuinamente `connectionStatus: 'open'`.
+// só corrige o campo `status`; e só sincroniza credenciais em `agentes` pra uma instância que
+// esteja genuinamente `connectionStatus: 'open'`.
 export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corrigidos: number }> {
   let corrigidos = 0;
 
@@ -51,17 +56,11 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
   const cacheServidor = new Map<string, Promise<EvolutionInstanceInfo[] | null>>();
   const chaveServidor = (url: string, apiKey: string) => `${url}::${apiKey}`;
 
-  // [AUDITORIA] FIX APLICADO (2026-07-23, multi-instância): antes, o loop só sabia AVANÇAR
-  // agent_configs.evolution_instancia pra uma instância que acabou de abrir — não tinha
-  // nenhum caminho pra REVERTER quando a instância que agent_configs aponta hoje deixa de
-  // existir/abrir (achado real em homolog: uma instância `_2` criada e nunca finalizada de
-  // conexão chegou a reportar `open` uma vez, agent_configs foi atualizado pra ela, depois ela
-  // sumiu da Evolution e agent_configs ficou travado apontando pra uma instância morta —
-  // webhook.ts ainda resolvia certo via fallback nível 2 (agentes), mas a config de IA ficava
-  // baseada numa instância inexistente). Agora agrupa por tenant e decide DEPOIS de saber o
-  // estado de TODAS as instâncias do tenant: se a que agent_configs aponta não está aberta e
-  // existe outra do mesmo tenant que está, redireciona pra ela; sem nenhuma aberta, deixa como
-  // está (não tem pra onde reverter com segurança).
+  // [AUDITORIA] LÓGICA (histórico, pré-Sprint 1): esta rotina existia originalmente pra corrigir
+  // `agent_configs.evolution_instancia` — uma ÚNICA linha por tenant que podia ficar "travada"
+  // apontando pra uma instância morta quando outra do mesmo tenant abria no lugar dela. Ver
+  // AUDITORIA_LOG.md (achado 2026-07-23) pro histórico completo desse bug e do fix por tenant
+  // que existia aqui antes.
   const porTenant = new Map<string, { instancia: string; aberta: boolean; url: string; api_key: string }[]>();
 
   for (const conector of conectores) {
@@ -98,43 +97,34 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
     porTenant.set(conector.user_id, lista);
   }
 
+  // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): `agentes` guarda uma linha POR
+  // instância (criada por syncEvolution()/saveEvolutionConfig() em integracoes.ts/whatsapp.ts
+  // quando o usuário conecta pela tela do CRM) — diferente de `agent_configs`, não existe mais
+  // "a" linha única do tenant pra redirecionar quando uma instância fecha e outra abre no lugar.
+  // O que resta de valor real nesta rotina de fundo: manter as credenciais
+  // (evolution_server_url/api_key) de cada linha `agentes` já existente sincronizadas com o que
+  // a Evolution reportou agora, cobrindo o caso de a instância ter reaberto/reconectado sem
+  // passar pela tela de Integrações (ex: reconexão automática do lado da Evolution). Não cria
+  // linha nova aqui de propósito — criação de linha é ação explícita do usuário (conectar via
+  // UI), não algo que um cron de reconciliação deva fazer silenciosamente em segundo plano.
   for (const [userId, lista] of porTenant) {
     const abertas = lista.filter(l => l.aberta);
-    if (!abertas.length) continue; // nenhuma instância aberta pra esse tenant — nada pra redirecionar
+    if (!abertas.length) continue; // nenhuma instância aberta pra esse tenant — nada pra corrigir
 
-    const { rows: agentConfigRows } = await pool.query(
-      `SELECT evolution_instancia FROM agent_configs WHERE user_id = $1`,
-      [userId]
-    );
-    const atual = agentConfigRows[0]?.evolution_instancia;
-
-    // Se a instância atual do agent_configs já está entre as abertas, não mexe — evita
-    // trocar de instância à toa quando o tenant tem mais de uma aberta simultaneamente.
-    if (atual && abertas.some(a => a.instancia === atual)) continue;
-
-    const alvo = abertas[0];
-    // [AUDITORIA] BUG (achado 2026-07-28 — "IA não pode vir ativada sem antes estar
-    // configurada"): este INSERT ligava `ativo=true` na hora em que a instância era
-    // reconciliada, mesmo sem prompt/persona configurados ainda — cliente novo passava a
-    // responder mensagens reais com um prompt genérico (ou, em outro achado da mesma sessão,
-    // um prompt de outro tenant, via bug separado em `agent-config.ts`/ConfigAgenteIA.tsx).
-    // [AUDITORIA] FIX APLICADO: nasce `false`; ON CONFLICT não toca `ativo` (só nos campos de
-    // conexão), então isso só afeta a criação inicial da linha — nunca desliga um agente que o
-    // usuário já ativou de propósito.
-    await pool.query(
-      `INSERT INTO agent_configs (user_id, evolution_instancia, evolution_server_url, evolution_api_key, ativo)
-       VALUES ($1, $2, $3, $4, false)
-       ON CONFLICT (user_id) DO UPDATE SET
-         evolution_instancia  = EXCLUDED.evolution_instancia,
-         evolution_server_url = EXCLUDED.evolution_server_url,
-         evolution_api_key    = EXCLUDED.evolution_api_key,
-         updated_at           = NOW()`,
-      [userId, alvo.instancia, alvo.url, alvo.api_key]
-    );
-    log.info('EVOLUTION_SYNC', 'agent_configs.evolution_instancia corrigido', {
-      userId, de: atual, para: alvo.instancia,
-    });
-    corrigidos++;
+    for (const instAberta of abertas) {
+      const upd = await pool.query(
+        `UPDATE agentes SET evolution_server_url = $1, evolution_api_key = $2, updated_at = NOW()
+         WHERE user_id = $3 AND evolution_instancia = $4
+           AND (evolution_server_url IS DISTINCT FROM $1 OR evolution_api_key IS DISTINCT FROM $2)`,
+        [instAberta.url, instAberta.api_key, userId, instAberta.instancia]
+      );
+      if (upd.rowCount) {
+        log.info('EVOLUTION_SYNC', 'agentes.evolution_server_url/api_key corrigido (drift)', {
+          userId, instancia: instAberta.instancia,
+        });
+        corrigidos++;
+      }
+    }
   }
 
   return { corrigidos };
