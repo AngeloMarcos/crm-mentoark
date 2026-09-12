@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
+import { registrarUsoIA, estimarCustoUsd } from '../utils/aiCusto';
 import { log } from '../logger';
 
 async function getKey(pool: Pool, userId: string, tipo: string, envKey: string): Promise<string | null> {
@@ -337,6 +338,16 @@ export default function leadsBuscarRouter(pool: Pool): Router {
           if (aiRes.ok) {
             const aiData = (await aiRes.json()) as any;
             const raw: string = aiData.choices[0].message.content;
+            // [AUDITORIA] BUG (achado 2026-09-02, revisão de gastos de IA pedida pelo usuário
+            // antes de reconectar a chave da OpenAI): esta chamada de scoring (até 20 leads por
+            // busca) pagava de verdade e nunca era registrada em `ai_uso_diario` — mesmo padrão
+            // de gasto invisível já corrigido em outros pontos em 14/08 (ver AUDITORIA_LOG.md).
+            await registrarUsoIA(pool, {
+              userId, providerSlug: 'openai', modelo: 'gpt-4o-mini',
+              tokensEntrada: aiData?.usage?.prompt_tokens || 0,
+              tokensSaida: aiData?.usage?.completion_tokens || 0,
+              custoUsd: estimarCustoUsd('gpt-4o-mini', aiData?.usage?.prompt_tokens || 0, aiData?.usage?.completion_tokens || 0),
+            });
             const scores: any[] = JSON.parse(raw.replace(/```json\n?|```\n?/g, '').trim());
             leadsComScore = leads.map((lead, i) => {
               const s = scores[i] ?? { score: 50, temperatura: 'morno', resumo: '', tags: [], motivo_score: '' };

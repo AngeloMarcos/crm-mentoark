@@ -1,9 +1,10 @@
-import { Router, Response } from 'express';
+import { Router, Response, NextFunction } from 'express';
 import { Pool } from 'pg';
 import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { evolutionFetch } from '../utils/resilientFetch';
+import { criarProvider, OpenAIProvider } from '../services/providers';
 
 // ── Rate limiting persistente via banco ──────────────────────────────────────
 async function checkRateLimit(pool: Pool, userId: string): Promise<boolean> {
@@ -37,6 +38,26 @@ function normalizarTelefone(raw: string): string | null {
   const digits = raw.replace(/[+\s\-]/g, '');
   if (digits.length < 10 || digits.length > 15) return null;
   return digits;
+}
+
+// [AUDITORIA] LÓGICA (Sprint Limite Diário Seguro, 2026-09-11 — pedido explícito do usuário:
+// "limite os usuarios a disparar menos de 50 por dia para não travar ou banir a conta deles"):
+// teto ABSOLUTO de 50 mensagens/dia por instância, reforçado aqui no servidor — `Disparos.tsx`
+// já limita o campo a max=50 na UI, mas confiar só no frontend deixaria a porta aberta pra
+// qualquer POST/PUT direto na API (Postman, script, integração externa) herdar o default antigo
+// de 500 do banco ou qualquer valor digitado manualmente. Clamp, não rejeita a requisição
+// inteira — campanha continua sendo criada/atualizada normalmente, só com o valor travado no
+// teto seguro (silencioso de propósito: o operador não perde a ação por causa de um número que a
+// própria UI já devia ter impedido de chegar aqui).
+const TETO_SEGURO_DISPARO_DIARIO = 50;
+function clamparLimiteDiario(req: AuthRequest, _res: Response, next: NextFunction) {
+  if (req.body && req.body.limite_diario_mensagens != null) {
+    const v = Number(req.body.limite_diario_mensagens);
+    if (Number.isFinite(v)) {
+      req.body.limite_diario_mensagens = Math.max(1, Math.min(TETO_SEGURO_DISPARO_DIARIO, Math.trunc(v)));
+    }
+  }
+  next();
 }
 
 function dentroDaJanela(): boolean {
@@ -252,6 +273,85 @@ export default function disparos(pool: Pool): Router {
     }
   });
 
+  // ── POST /disparos/gerar-variacoes ──────────────────────────────────────────
+  // [AUDITORIA] LÓGICA (Sprint Motor Nativo de Disparo, bloco 2 — item 4, 2026-08-07): autoria
+  // assistida por IA UMA VEZ POR CAMPANHA, nunca por contato — diferente de `humanizar_ia`
+  // (`humanizationService.ts`), que chama IA a cada envio. Chamada aqui acontece só quando o
+  // operador clica o botão em StepMessage, ao MONTAR a campanha — resultado vira texto estático
+  // em `mensagens_variantes` (item 2), zero chamada de IA depois disso, pros 1, 10 ou 10.000
+  // contatos que a campanha tiver. Reaproveita `criarProvider()` (mesmo helper de
+  // `agentEngine.ts`) — provider/modelo já configurado pra conta, não hardcoded pra OpenAI;
+  // fallback pro OPENAI_API_KEY do .env quando a conta não tem `ai_providers` próprio (mesmo
+  // padrão de `agentEngine.ts`).
+  router.post('/gerar-variacoes', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const mensagem = String(req.body?.mensagem ?? '').trim();
+    const quantidade = Math.min(Math.max(Number(req.body?.quantidade) || 3, 2), 5);
+
+    if (!mensagem) {
+      return res.status(400).json({ message: 'Campo "mensagem" é obrigatório — escreva um rascunho antes de gerar variações.' });
+    }
+    if (mensagem.length > 2000) {
+      return res.status(400).json({ message: 'Mensagem-base muito longa (máx. 2000 caracteres) para gerar variações.' });
+    }
+
+    try {
+      const providerInfo = await criarProvider(pool, userId, null);
+      const envKey = process.env.OPENAI_API_KEY || '';
+      if (!providerInfo && !envKey) {
+        return res.status(503).json({ message: 'Nenhum provider de IA configurado (Integrações > Configuração de IA) e OPENAI_API_KEY não definida no servidor.' });
+      }
+      const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
+      const modelo = providerInfo?.modelo || 'gpt-4o-mini';
+
+      const systemPrompt = `Você reescreve mensagens de WhatsApp de vendas/atendimento em variações diferentes, mantendo o mesmo sentido e tom da original.
+REGRAS ESTRITAS:
+- Preserve EXATAMENTE qualquer trecho entre chaves duplas, como {{nome}}, {{primeiro_nome}}, {{telefone}}, {{data}}, {{empresa}} — nunca traduza, remova ou altere esses tokens.
+- Cada variação deve ser uma mensagem COMPLETA e pronta pra enviar, não um resumo nem uma lista de sugestões.
+- Varie a estrutura da frase de verdade (não só trocar 1-2 palavras) — objetivo é reduzir padrão repetitivo em envio em massa.
+- Responda APENAS com um JSON array de strings, sem markdown, sem texto antes ou depois. Exemplo: ["variação 1", "variação 2"]`;
+
+      // [AUDITORIA] LÓGICA: UMA chamada só (sem loop, sem tool, `tools: []`) — a garantia de "1
+      // chamada por clique" pedida no ticket vem exatamente daqui: nada neste handler itera sobre
+      // contatos nem chama `provider.complete()` mais de uma vez.
+      const resp = await provider.complete(
+        [{ role: 'user', content: `Mensagem original:\n${mensagem}\n\nGere ${quantidade} variações completas em JSON array, seguindo as regras.` }],
+        systemPrompt,
+        [],
+        { model: modelo, temperature: 0.9, maxTokens: 800 },
+      );
+
+      if (!resp.text) {
+        return res.status(502).json({ message: 'Provider de IA não retornou texto — tente novamente.' });
+      }
+
+      let variantes: string[];
+      try {
+        const limpo = resp.text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+        const parsed = JSON.parse(limpo);
+        if (!Array.isArray(parsed) || !parsed.every(v => typeof v === 'string')) throw new Error('formato inesperado');
+        variantes = parsed.filter(v => v.trim()).slice(0, quantidade);
+      } catch (parseErr: any) {
+        log.warn('DISPARO/GERAR_VARIACOES', 'Falha ao parsear JSON do provider', { texto: resp.text.slice(0, 300), err: parseErr?.message });
+        return res.status(502).json({ message: 'IA retornou um formato inesperado — tente novamente.' });
+      }
+
+      if (!variantes.length) {
+        return res.status(502).json({ message: 'Nenhuma variação válida retornada — tente novamente.' });
+      }
+
+      log.info('DISPARO/GERAR_VARIACOES', '1 chamada de IA — variações geradas', {
+        userId, quantidadePedida: quantidade, quantidadeRetornada: variantes.length,
+        tokensIn: resp.inputTokens, tokensOut: resp.outputTokens, modelo,
+      });
+
+      return res.json({ variantes, tokensIn: resp.inputTokens, tokensOut: resp.outputTokens });
+    } catch (err: any) {
+      log.error('DISPARO/GERAR_VARIACOES', 'Erro', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message || 'Erro ao gerar variações' });
+    }
+  });
+
   // ── GET /disparos/:id/logs ─────────────────────────────────────────────────
   router.get('/:id/logs', async (req: AuthRequest, res: Response) => {
     try {
@@ -263,6 +363,58 @@ export default function disparos(pool: Pool): Router {
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
+  });
+
+  // [AUDITORIA] BUG (achado real, Sprint Continuidade — Vistoria de Problemas, 2026-08-25 —
+  // investigando `SPRINT_DISPARO_TRAVANDO_FILA_GLOBAL_SERIAL.md`): `get_next_disparo_batch()`
+  // marca linhas como `sending` ao dequeueá-las (`migrations.ts`); se o motor processa a
+  // mensagem com sucesso, vira `sent`; se falha, vira `failed`. Mas se a CAMPANHA for
+  // pausada/cancelada enquanto uma linha está no meio desse processamento (pelo operador na UI,
+  // ou por uma intervenção direta como a desta mesma sessão em 10/08 — 3 campanhas pausadas
+  // direto no banco por um achado urgente), essa linha específica fica presa em `sending` **pra
+  // sempre**: `get_next_disparo_batch()` só busca `pending`, e nada mais nunca toca `sending`.
+  // Confirmado com dado real de produção: 25 linhas de 2 campanhas já pausada/cancelada,
+  // travadas em `sending` desde 07/08 (18 dias), miscontando o progresso real da campanha
+  // (`enviados`/`falhas` nunca bateram com `total_leads`).
+  // [AUDITORIA] FIX APLICADO: ao transicionar pra `pausado`/`cancelado` (via este mesmo PUT
+  // genérico que a UI já usa, `MonitoringDashboard.tsx` → `handleStatusChange`), reseta
+  // qualquer `disparo_logs.status='sending'` daquela campanha de volta pra `pending` — 100%
+  // seguro contra reenvio duplicado porque `get_next_disparo_batch()` só enfileira linhas de
+  // campanhas com `disparos.status='em_andamento'` (confirmado lendo a função SQL,
+  // `migrations.ts`): campanha cancelada nunca mais processa essas linhas (inertes, mas agora
+  // contabilizadas corretamente como "não enviadas" em vez de presas num limbo); campanha
+  // pausada e depois retomada as reprocessa do zero — mesmo comportamento já usado e testado
+  // pra `requeuePendentes()` (`disparoProcessor.ts`) no caso irmão (motor aborta o lote antes
+  // de processar todas as linhas já dequeueadas).
+  // Cria campanha (POST '/') cai direto no CRUD genérico (`base`, abaixo) — intercepta só pra
+  // aplicar o teto de 50/dia antes do INSERT.
+  router.post('/', clamparLimiteDiario);
+
+  router.put('/:id', clamparLimiteDiario, async (req: AuthRequest, res: Response, next: NextFunction) => {
+    const novoStatus = req.body?.status;
+    if (novoStatus === 'pausado' || novoStatus === 'cancelado') {
+      // [AUDITORIA] BUG DE SEGURANÇA CORRIGIDO (achado 2026-09-04, revisão pós-Sprint Grupos/
+      // Template): este UPDATE rodava só com `req.params.id`, sem checar dono nenhum — qualquer
+      // usuário autenticado mandando PUT /api/disparos/<id de OUTRO tenant> com
+      // {status:'cancelado'} já resetava as linhas `sending` daquele disparo alheio pra `pending`
+      // ANTES do `next()` chegar no PUT genérico (`base`, logo abaixo) que aí sim rejeita a
+      // mudança de status de verdade por dono (`WHERE id=$1 AND user_id=$2` em `crud.ts`). O
+      // dano não é leitura de dado (nada vaza), é escrita: linha marcada `sending` costuma
+      // significar requisição já em voo pra Evolution — resetá-la pra `pending` sem autorização
+      // arrisca reenvio duplicado real pro contato quando o motor do dono de verdade retomar
+      // aquele lote (mesmo mecanismo que este bloco existe pra corrigir, só que virado arma
+      // contra outro tenant). [AUDITORIA] FIX APLICADO: mesmo padrão de escopo por dono que
+      // `crud.ts`/o resto deste router já usa (`user_id = req.userId`, sem admin bypass — nenhuma
+      // tabela deste projeto usa bypass hoje) — `EXISTS` confirma que o disparo_id pedido
+      // realmente pertence ao caller antes de tocar em `disparo_logs`.
+      await pool.query(
+        `UPDATE disparo_logs SET status = 'pending'
+         WHERE disparo_id = $1 AND status = 'sending'
+           AND EXISTS (SELECT 1 FROM disparos d WHERE d.id = $1 AND d.user_id = $2)`,
+        [req.params.id, req.userId]
+      ).catch(err => log.warn('DISPARO', 'Falha ao resetar disparo_logs travados em sending', { disparoId: req.params.id, err: err?.message }));
+    }
+    next();
   });
 
   router.use('/', base);

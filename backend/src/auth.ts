@@ -45,6 +45,19 @@ function signAccessToken(user: { id: string; email: string; role: string; displa
   );
 }
 
+// [AUDITORIA] LÓGICA (2026-09-10 — trial de 3 dias): todo cadastro novo é um tenant-raiz (sem
+// owner_id) e nasce com uma linha 'trial' de 3 dias. `ON CONFLICT DO NOTHING` mantém idempotente
+// (login social que reusa e-mail existente não reseta o trial). Falha aqui nunca bloqueia o
+// cadastro — `subscription.ts` recria a linha on-the-fly se faltar.
+async function criarAssinaturaTrial(userId: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO assinaturas (owner_id, status, plano, trial_inicio, trial_fim)
+     VALUES ($1, 'trial', 'free', now(), now() + interval '3 days')
+     ON CONFLICT (owner_id) DO NOTHING`,
+    [userId]
+  ).catch(err => log.warn('AUTH', 'Falha ao criar assinatura trial', { userId, err: err?.message }));
+}
+
 async function createRefreshToken(userId: string): Promise<string> {
   const token = uuidv4();
   const expiresAt = new Date();
@@ -157,6 +170,7 @@ router.post('/register', registerLimiter, async (req: Request, res: Response) =>
       [email.toLowerCase().trim(), password_hash, name]
     );
     const user = rows[0];
+    await criarAssinaturaTrial(user.id);
 
     const access_token = signAccessToken({ id: user.id, email: user.email, role: user.role, display_name: user.display_name });
     const refresh_token = await createRefreshToken(user.id);
@@ -451,6 +465,7 @@ router.get('/callback/google', async (req: Request, res: Response) => {
         [email, randomHash, display_name, avatar_url]
       );
       user = ins.rows[0];
+      await criarAssinaturaTrial(user.id);
     }
 
     // 4) Emitir nossos JWTs

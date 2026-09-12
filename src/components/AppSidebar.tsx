@@ -3,12 +3,13 @@ import {
   PhoneCall, Filter, MessageCircle, Timer, Zap,
   Send, Megaphone, Rocket, GitBranch, Bot, Plug,
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut, ShieldOff,
-  Lock, MessagesSquare, Inbox, Smartphone,
-  Library, Settings as SettingsIcon, Wrench, Users as UsersIcon, Link2, Monitor, Users2,
-  Activity, Webhook, Database, Sparkles, LayoutTemplate,
+  Lock, MessagesSquare, Car,
+  Library, Settings as SettingsIcon, Users as UsersIcon, Link2, Monitor, Users2,
+  Activity, LayoutTemplate, Download, CreditCard,
 } from "lucide-react";
 import { useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useAssinatura } from "@/hooks/useAssinatura";
 import logo from "@/assets/mentoark-app-icon-2026.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -26,6 +27,8 @@ interface NavItem {
   modulo: string;
   color: string;
   adminOnly?: boolean;
+  /** Só o master do sistema (MASTER_EMAILS) vê — ver `assinatura.sou_master`. */
+  masterOnly?: boolean;
 }
 
 interface NavGroup {
@@ -36,10 +39,18 @@ interface NavGroup {
   items: NavItem[];
 }
 
-// ── Estrutura ─────────────────────────────────────────────────────────────────
-// Categorias sempre abertas (sem accordion) — cada uma já mostra seus itens
-// direto, sem precisar clicar pra expandir.
-
+// [AUDITORIA] FIX APLICADO (2026-09-11 — pedido do usuário: "quero que elas fiquem sempre
+// abertas mais facil de usar e de um agrupamento melhor com titulo melhor e dinamica melhor"):
+// estrutura antes tinha 2 níveis (Categoria → Subgrupo colapsável → Itens), mas 7 das 8
+// categorias tinham exatamente 1 subgrupo — o "subgrupo" só repetia um título parecido com o da
+// categoria (ex: categoria "VENDAS" > subgrupo "Pipeline Comercial") atrás de um clique extra
+// pra abrir, sem agrupar nada de verdade. Achatado pra 1 nível só: cada categoria já mostra sua
+// lista de itens direto, sem accordion — nada mais precisa de clique pra aparecer. O único
+// subgrupo que era genuinamente 2 seções distintas ("WhatsApp Chat" + "Telefonia", dentro de
+// ATENDIMENTO) foi unificado numa lista só (Discagem entrou junto com WhatsApp/Monitor/etc. —
+// telefonia É atendimento, não precisa de seção própria pra 1 item). Ícone de cada categoria
+// (antes só no cabeçalho do subgrupo colapsável) sobe pro título da categoria — título mais
+// informativo, sem depender de emoji no meio da string pra dar identidade visual.
 const navGroups: NavGroup[] = [
   {
     label: "Visão Geral",
@@ -66,6 +77,7 @@ const navGroups: NavGroup[] = [
     color: "text-orange-500",
     items: [
       { title: "Leads", url: "/leads", icon: UserPlus, modulo: "leads", color: "text-indigo-500" },
+      { title: "Exportar Dados", url: "/exportar-dados", icon: Download, modulo: "leads", color: "text-emerald-500" },
       { title: "Contatos", url: "/contatos", icon: BookUser, modulo: "contatos", color: "text-purple-500" },
       { title: "Tags e Funil", url: "/tags-funil", icon: Tags, modulo: "leads", color: "text-violet-500" },
       { title: "Funil de Vendas", url: "/funil", icon: Filter, modulo: "funil", color: "text-orange-500" },
@@ -80,6 +92,7 @@ const navGroups: NavGroup[] = [
       { title: "WhatsApp", url: "/whatsapp", icon: MessageCircle, modulo: "whatsapp", color: "text-green-500" },
       { title: "Monitor", url: "/monitor-whatsapp", icon: Monitor, modulo: "whatsapp", color: "text-blue-400" },
       { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap, modulo: "whatsapp", color: "text-amber-500" },
+      { title: "Corridas Pendentes", url: "/corridas-pendentes", icon: Car, modulo: "whatsapp", color: "text-cyan-500" },
       { title: "SLA / Gestão", url: "/sla", icon: Timer, modulo: "whatsapp", color: "text-yellow-500" },
       { title: "Discagem", url: "/discagem", icon: PhoneCall, modulo: "discagem", color: "text-emerald-500" },
     ],
@@ -122,6 +135,7 @@ const navGroups: NavGroup[] = [
     color: "text-teal-600",
     items: [
       { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
+      { title: "Assinaturas", url: "/admin/assinaturas", icon: CreditCard, modulo: "usuarios", color: "text-emerald-500", adminOnly: true, masterOnly: true },
       { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400", adminOnly: true },
       { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
     ],
@@ -136,7 +150,7 @@ function isRouteActive(pathname: string, url: string) {
   return pathname === base || pathname.startsWith(base + "/");
 }
 
-// ── Categoria (sempre expandida — sem accordion) ────────────────────────────────
+// ── Categoria (sempre expandida — sem accordion) ───────────────────────────────
 
 function NavGroupSection({
   group,
@@ -150,33 +164,28 @@ function NavGroupSection({
   location: { pathname: string };
 }) {
   const { isAdmin, equipeRole } = useAuth();
-  if (group.adminOnly && !isAdmin && equipeRole !== 'gerente') return null;
+  const { assinatura } = useAssinatura();
+  const souMaster = !!assinatura?.sou_master;
 
   const visibleItems = useMemo(() => {
     return group.items.filter((i) => {
-      // 1. Permissão por módulo
       if (!hasModulo(i.modulo)) return false;
-
-      // 2. Admin logic
       if (i.adminOnly && !isAdmin) return false;
-
-      // 3. Equipe logic para 'membro' (admin bypassa essa restrição)
-      if (equipeRole === 'membro' && !isAdmin) {
+      if (i.masterOnly && !souMaster) return false;
+      if (equipeRole === "membro" && !isAdmin) {
         const allowedPaths = ["/dashboard", "/leads", "/contatos", "/whatsapp", "/equipe"];
-        const isAllowed = allowedPaths.some(path => i.url.startsWith(path));
-        if (!isAllowed) return false;
+        if (!allowedPaths.some((path) => i.url.startsWith(path))) return false;
       }
-
       return true;
     });
-  }, [group.items, hasModulo, isAdmin, equipeRole]);
+  }, [group.items, hasModulo, isAdmin, equipeRole, souMaster]);
 
-  if (visibleItems.length === 0) return null;
+  if (visibleItems.length === 0 || (group.adminOnly && !isAdmin)) return null;
 
   const Icon = group.icon;
   const hasActive = visibleItems.some((i) => isRouteActive(location.pathname, i.url));
 
-  // Modo colapsado (sidebar mini): mostra só os ícones dos itens, sem cabeçalho de categoria
+  // Modo colapsado (sidebar mini): só os ícones dos itens, sem cabeçalho de categoria.
   if (collapsed) {
     return (
       <SidebarMenu className="px-1">
@@ -185,16 +194,16 @@ function NavGroupSection({
           return (
             <SidebarMenuItem key={item.title}>
               <SidebarMenuButton asChild>
-                  <NavLink
-                    to={item.url}
-                    end={item.url === "/dashboard"}
-                    title={item.title}
-                    className={`group relative flex items-center justify-center px-2 py-2 rounded-lg transition-all ${
-                      active
-                        ? "gradient-brand-subtle shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.18),0_0_12px_hsl(217_91%_45%/0.12)]"
-                        : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.05)]"
-                    }`}
-                  >
+                <NavLink
+                  to={item.url}
+                  end={item.url === "/dashboard"}
+                  title={item.title}
+                  className={`group relative flex items-center justify-center px-2 py-2 rounded-lg transition-all ${
+                    active
+                      ? "gradient-brand-subtle shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.18),0_0_12px_hsl(var(--primary)/0.12)]"
+                      : "hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(var(--primary)/0.05)]"
+                  }`}
+                >
                   <item.icon className={`h-5 w-5 ${active ? item.color : "text-muted-foreground"}`} />
                 </NavLink>
               </SidebarMenuButton>
@@ -226,16 +235,16 @@ function NavGroupSection({
                     end={item.url === "/dashboard"}
                     className={`group relative flex items-center gap-2.5 px-2.5 py-2 rounded-md transition-all duration-200 ${
                       active
-                        ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(217_91%_45%/0.14),0_0_14px_hsl(217_91%_45%/0.10)]"
-                        : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.04)]"
+                        ? "gradient-brand-subtle font-medium shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.14),0_0_14px_hsl(var(--primary)/0.10)]"
+                        : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:translate-x-0.5 hover:shadow-[inset_0_1px_0_hsl(var(--primary)/0.04)]"
                     }`}
                   >
                     {active && (
-                      <span className="absolute -left-1 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(217_91%_45%/0.7)]" />
+                      <span className="absolute -left-1 top-1/2 -translate-y-1/2 h-5 w-[2px] rounded-r gradient-brand shadow-[0_0_10px_hsl(var(--primary)/0.7)]" />
                     )}
                     <item.icon
                       className={`h-4 w-4 shrink-0 transition-all duration-300 ${
-                        active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(217_91%_45%/0.3)]" : "text-muted-foreground group-hover:" + item.color
+                        active ? item.color + " scale-110 drop-shadow-[0_0_5px_hsl(var(--primary)/0.3)]" : "text-muted-foreground group-hover:" + item.color
                       }`}
                     />
                     <span className={`text-[13px] ${active ? "gradient-brand-text" : ""}`}>{item.title}</span>
@@ -257,7 +266,7 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const navigate = useNavigate();
-  const { hasModulo, signOut, isAdmin, equipeRole } = useAuth();
+  const { hasModulo, signOut } = useAuth();
 
   const handleLogout = async () => {
     await signOut();
@@ -301,7 +310,7 @@ export function AppSidebar() {
       <SidebarFooter className="relative border-t border-sidebar-border/50 p-3 before:content-[''] before:absolute before:top-0 before:left-3 before:right-3 before:h-px before:gradient-brand before:opacity-40">
         <SidebarMenuButton
           onClick={handleLogout}
-          className="flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(217_91%_45%/0.04)] transition-all duration-200"
+          className="flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground w-full rounded-lg hover:bg-sidebar-accent hover:shadow-[inset_0_1px_0_hsl(var(--primary)/0.04)] transition-all duration-200"
         >
           <LogOut className="h-5 w-5 shrink-0" />
           {!collapsed && <span>Sair</span>}

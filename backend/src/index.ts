@@ -35,12 +35,14 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 import { pool, migrationsPool } from './db';
-import { authMiddleware, adminMiddleware, tenantContextMiddleware, AuthRequest } from './middleware';
+import { authMiddleware, adminMiddleware, tenantContextMiddleware, assinaturaGuard, masterOnly, AuthRequest } from './middleware';
 import { makeCrud } from './crud';
 
 import authRouter from './auth';
 import contatosRouter from './routes/contatos';
 import disparosRouter from './routes/disparos';
+import instanceScoreRouter from './routes/instanceScore';
+import maturadorRouter from './routes/maturador';
 import agentPromptsRouter from './routes/agent_prompts';
 import agentConfigRouter from './routes/agent-config';
 import documentsRouter from './routes/documents';
@@ -56,6 +58,7 @@ import galeriaRouter from './routes/galeria';
 import modulosRouter from './routes/modulos';
 import whatsappRouter from './routes/whatsapp';
 import cargosRouter from './routes/cargos';
+import corridasRouter from './routes/corridas';
 import { mcpRouter } from './routes/mcp';
 import marketingRouter from './routes/marketing';
 import teamRouter, { teamInvitePublicRouter } from './routes/team';
@@ -64,12 +67,18 @@ import subPerfisRouter from './routes/subperfis';
 import kanbanRouter, { kanbanWebhookN8n } from './routes/kanban';
 import funisRouter from './routes/funis';
 import conversasRouter from './routes/conversas';
+import { testarAgentePlayground } from './services/agentEngine';
+import metaOficialRouter from './routes/metaOficial';
+import metaWebhookRouter from './routes/metaWebhook';
 import aiProvidersRouter from './routes/ai-providers';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
 import adminFirewallRouter, { createFirewallMiddleware } from './routes/admin_firewall';
 import suporteCopilotoRouter from './routes/suporte_copiloto';
+import assinaturaRouter from './routes/assinatura';
+import adminAssinaturasRouter from './routes/admin_assinaturas';
+import organizacaoRouter from './routes/organizacao';
 import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
@@ -131,7 +140,13 @@ app.use(cors({
 // Evolution tentou reenviar 10x, todas falharam com PayloadTooLargeError, e o evento foi
 // perdido de vez (sem retry futuro) — sintoma reportado: "instância conectada mas não
 // atualiza mensagens". Ver diagnosticos/AUDITORIA_LOG.md. Elevado para 50mb.
-app.use(express.json({ limit: '50mb' }));
+// [AUDITORIA] LÓGICA (Sprint Estruturar API Oficial, 2026-09-06): `verify` guarda o corpo CRU
+// (Buffer, antes do parse) em `req.rawBody` — necessário só pro webhook da Meta Cloud API
+// (routes/metaWebhook.ts), que assina o corpo com HMAC-SHA256 (`X-Hub-Signature-256`); validar
+// a assinatura contra o JSON re-serializado por `JSON.stringify(req.body)` falharia às vezes
+// (ordem de chave/espaço em branco podem diferir do que a Meta mandou de verdade). Não muda nada
+// pra nenhuma outra rota — só guarda uma referência a mais ao buffer já lido, sem custo real.
+app.use(express.json({ limit: '50mb', verify: (req: any, _res, buf) => { req.rawBody = buf; } }));
 
 // ── Servir imagens de upload com log de auditoria ──────────────────────────
 app.use('/uploads', (req, res, next) => {
@@ -150,6 +165,11 @@ const marketing = marketingRouter(pool);
 app.use('/auth', authRouter);
 app.use('/auth', teamInvitePublicRouter(pool)); // /auth/invite/:token + /auth/accept-invite
 app.use('/webhook', webhookRouter(pool));
+// [AUDITORIA] LÓGICA (Sprint Estruturar API Oficial, 2026-09-06): montado ANTES do
+// `app.use('/api', authMiddleware)` abaixo, mesmo padrão do webhookRouter da Evolution logo
+// acima — a Meta chama esta URL diretamente, sem JWT nosso; segurança real é o handshake de
+// verificação (GET) + assinatura HMAC (POST), ver routes/metaWebhook.ts.
+app.use('/webhook/meta', metaWebhookRouter(pool));
 // ── MCP com CORS específico para n8n Cloud ─────────────────────────────────
 app.use('/mcp', (req, res, next) => {
   const mcpOrigins = (process.env.MCP_ALLOWED_ORIGINS || 'https://fierceparrot-n8n.cloudfy.live')
@@ -260,6 +280,8 @@ app.get('/api/catalogo/n8n/:userId', async (req, res) => {
 // ── Protected routes (JWT required) ─────────────────────────
 app.use('/api', authMiddleware);
 app.use('/api', tenantContextMiddleware);
+// [AUDITORIA] Fase 2 do trial: no-op enquanto TRIAL_ENFORCEMENT !== 'on' (ver middleware.ts).
+app.use('/api', assinaturaGuard);
 
 // Standard CRUD tables (generic factory)
 const SIMPLE_TABLES = [
@@ -290,14 +312,107 @@ for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
 }
 
+// [AUDITORIA] BUG GRAVE CORRIGIDO (achado 2026-08-10 — cliente real, número caiu da tela do
+// CRM repetidas vezes no mesmo dia): `DELETE /api/agentes/:id` genérico (makeCrud, abaixo) apaga
+// a linha sem nenhuma noção de que ela é o único vínculo entre o CRM e uma instância WhatsApp
+// REALMENTE conectada na Evolution — a sessão continua viva no servidor (não desconecta o
+// WhatsApp de verdade), mas o número some de Instâncias/Disparos/Score/Maturador, todos os
+// quais leem de `agentes`. Rota dedicada de desconexão (`POST /whatsapp/disconnect`,
+// `DELETE /whatsapp/instances/:name`) já faz a limpeza coordenada certa (loga fora da Evolution
+// e só então limpa o banco) — o problema era só existir um atalho pelo CRUD genérico que pula
+// tudo isso. [AUDITORIA] FIX APLICADO: bloqueia especificamente o DELETE de uma linha com
+// `evolution_instancia` preenchida, direcionando pro fluxo de desconexão de verdade. Registrada
+// ANTES do `app.use('/api/agentes', makeCrud(...))` — Express casa a primeira rota que bate,
+// então esta intercepta o mesmo método+path sem precisar mexer no crud.ts genérico (usado por
+// outras ~20 tabelas que não têm essa mesma regra de negócio).
+app.delete('/api/agentes/:id', async (req: AuthRequest, res, next) => {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+  try {
+    const r = await pool.query(
+      `SELECT evolution_instancia FROM agentes WHERE id = $1 AND user_id = $2`,
+      [req.params.id, userId]
+    );
+    if (r.rows.length && r.rows[0].evolution_instancia) {
+      return res.status(409).json({
+        message: `Este agente está vinculado à instância WhatsApp "${r.rows[0].evolution_instancia}". ` +
+          `Apagar aqui deixaria o número conectado "órfão" (some do painel, mas continua ligado na Evolution). ` +
+          `Use "Desconectar" na aba Instâncias em vez de apagar o agente diretamente.`,
+      });
+    }
+  } catch (err: any) {
+    log.warn('AGENTES', 'Falha ao checar evolution_instancia antes de excluir agente', { err: err?.message });
+    // Falha na checagem não deve bloquear a exclusão — segue pro CRUD genérico normalmente.
+  }
+  next(); // sem vínculo ativo — segue pro DELETE genérico (makeCrud, registrado logo abaixo)
+});
+
+// [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): rota própria
+// (não cabe no CRUD genérico — é leitura de outra tabela, `agente_execucoes`, filtrada por
+// `agente_id`) pra aba "Execuções" (`Agentes.tsx`). Registrada ANTES do `app.use('/api/agentes',
+// makeCrud(...))` pelo mesmo motivo do DELETE acima — Express casa a rota mais específica
+// primeiro. Confirma que o agente pertence ao caller antes de listar (mesmo padrão de ownership
+// do resto do arquivo) — sem isso, `agente_id` de outro tenant vazaria histórico de execução
+// (prompt/resposta reais de cliente) pra quem não deveria ver.
+app.get('/api/agentes/:id/execucoes', async (req: AuthRequest, res) => {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+  try {
+    const dono = await pool.query(`SELECT 1 FROM agentes WHERE id = $1 AND user_id = $2`, [req.params.id, userId]);
+    if (!dono.rows.length) return res.status(404).json({ message: 'Agente não encontrado' });
+    const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
+    const r = await pool.query(
+      `SELECT id, trigger_origem, status, modelo, latencia_ms, tokens_entrada, tokens_saida,
+              custo_usd, entrada_texto, saida_texto, erro_msg, trace, created_at
+       FROM agente_execucoes WHERE agente_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [req.params.id, limit]
+    );
+    return res.json(r.rows);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
+});
+
+// [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): aba "Teste"
+// (`Agentes.tsx`) — roda uma mensagem através do MESMO motor de IA (`testarAgentePlayground`,
+// agentEngine.ts) mas isolado do fluxo real de WhatsApp: nunca envia mensagem de verdade, nunca
+// grava `whatsapp_messages`, e ferramentas que escrevem dado (criar contato/agendamento/corrida,
+// pausar IA) rodam em modo preview (`dryRun`, ver `mcp/tools.ts`) — nada é afetado no banco além
+// do próprio log de execução (`agente_execucoes`, `trigger_origem='playground'`). Checa dono do
+// agente antes de rodar, mesmo padrão do resto do arquivo.
+app.post('/api/agentes/:id/testar', async (req: AuthRequest, res) => {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+  const historico = Array.isArray(req.body?.historico) ? req.body.historico : [];
+  if (!historico.length) return res.status(400).json({ message: 'Envie ao menos uma mensagem no histórico.' });
+  try {
+    const resultado = await testarAgentePlayground(pool, userId, req.params.id, historico);
+    return res.json(resultado);
+  } catch (err: any) {
+    log.error('AGENTES TESTE', 'Falha ao rodar playground', { err: err?.message, stack: err?.stack });
+    return res.status(500).json({ message: err.message });
+  }
+});
+
 // Agentes: campos do Lovable que não existem na tabela são ignorados silenciosamente
 app.use('/api/agentes', makeCrud(pool, 'agentes', {
   stripFields: [
     // Campos que o Lovable envia mas não existem em agentes
     'tipo', 'config', 'provider_slug', 'instancia', 'active',
     // Campos de outras versões/aliases
-    'provider', 'modelo_id', 'modalidade_audio', 'modalidade_imagem',
-    'modalidade_video', 'mcp_tools', 'name', 'description',
+    // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): `mcp_tools` SAIU desta lista —
+    // virou coluna real em `agentes` (migrations.ts) e agentEngine.ts agora filtra as tools MCP
+    // por ela. Antes disso, qualquer POST/PATCH que o frontend mandasse com `mcp_tools` era
+    // descartado silenciosamente aqui — por isso o toggle da aba Motor nunca teve efeito nenhum,
+    // mesmo antes da unificação (achado desta sprint, não só "não lido", também "nunca salvo").
+    // [AUDITORIA] FIX APLICADO (Sprint Modalidades Opcionais, 2026-08-23 — pedido explícito do
+    // usuário: "não tire essa funcionalidade... deixe como opcional"): `modalidade_audio`/
+    // `modalidade_imagem` SAÍRAM desta lista — mesmo caso do `mcp_tools` acima, viraram colunas
+    // reais (`migrations.ts`) lidas de verdade em `webhook.ts`/`agentEngine.ts` antes de pagar
+    // Whisper/Vision. `modalidade_video` continua stripada — vídeo não tem NENHUM processamento
+    // de IA implementado ainda (a própria UI mostra "em breve"), guardar essa config não faria
+    // nada de qualquer forma.
+    'provider', 'modelo_id', 'modalidade_video', 'name', 'description',
     'is_active', 'enabled', 'settings', 'metadata',
   ],
   transformRow: (row: any) => {
@@ -321,6 +436,12 @@ for (const table of SHARED_TABLES) {
 // Specialized routes
 app.use('/api/contatos', contatosRouter(pool));
 app.use('/api/disparos', disparosRouter(pool));
+// [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): prefixo próprio
+// (`/api/instancias`), não `/api/agentes/...` — evita qualquer colisão de rota com o CRUD
+// genérico já montado em `/api/agentes` (makeCrud, abaixo) e deixa claro que estas rotas são
+// sobre a INSTÂNCIA WhatsApp em si (score, maturador), não sobre a config do agente de IA.
+app.use('/api/instancias', instanceScoreRouter(pool));
+app.use('/api/maturador', maturadorRouter(pool));
 app.use('/api/agent_prompts', agentPromptsRouter(pool));
 app.use('/api/agent-config',  agentConfigRouter(pool));
 app.use('/api/documents', documentsRouter(pool));
@@ -341,10 +462,17 @@ app.use('/api/kanban', kanbanRouter(pool));
 app.use('/api/funis', funisRouter(pool));
 app.use('/api/conversas', conversasRouter(pool));
 app.use('/api/ai-providers', aiProvidersRouter(pool));
+app.use('/api/meta-oficial', metaOficialRouter(pool));
 app.use('/api/ai', aiUsoRouter(pool));
 app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));
+app.use('/api/corridas', corridasRouter(pool));
 app.use('/api/suporte',        suporteCopilotoRouter(pool));
+app.use('/api/assinatura', assinaturaRouter(pool));
+app.use('/api/admin/assinaturas', masterOnly, adminAssinaturasRouter(pool));
+app.use('/api/departamentos', organizacaoRouter(pool, 'departamentos'));
+app.use('/api/filiais', organizacaoRouter(pool, 'filiais'));
+app.use('/api/squads', organizacaoRouter(pool, 'squads'));
 app.use('/api/admin/firewall', adminFirewallRouter(pool));
 
 // Virtual tables for Database compatibility

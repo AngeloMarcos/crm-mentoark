@@ -284,7 +284,7 @@ function Painel({
             </h3>
             <Button size="sm" onClick={() => setConviteOpen(true)}>
               <UserPlus className="w-4 h-4 mr-2" />
-              Adicionar Corretor
+              Adicionar Membro
             </Button>
           </div>
 
@@ -368,6 +368,7 @@ function Painel({
 }
 
 function AdicionarCorretorDialog({
+  open,
   equipe,
   onClose,
   onAdd,
@@ -395,13 +396,13 @@ function AdicionarCorretorDialog({
       const res = await fetch(`${API_BASE}/api/equipes/${equipe?.id}/membros-disponiveis`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (!res.ok) throw new Error("Erro ao buscar corretores disponíveis");
+      if (!res.ok) throw new Error("Erro ao buscar pessoas disponíveis");
       const data = await res.json();
       
       setProfiles(data || []);
     } catch (e) {
       console.error("Erro ao buscar perfis", e);
-      toast.error("Erro ao carregar lista de corretores");
+      toast.error("Erro ao carregar lista de pessoas");
     } finally {
       setIsLoading(false);
     }
@@ -450,9 +451,9 @@ function AdicionarCorretorDialog({
     <Dialog open={!!open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Adicionar Corretor à Equipe</DialogTitle>
+          <DialogTitle>Adicionar à Equipe</DialogTitle>
           <DialogDescription>
-            Selecione um ou mais corretores para adicionar ao seu time.
+            Selecione uma ou mais pessoas para adicionar ao seu time.
           </DialogDescription>
         </DialogHeader>
 
@@ -472,13 +473,13 @@ function AdicionarCorretorDialog({
               {isLoading ? (
                 <div className="p-8 text-center text-sm text-muted-foreground">
                   <Loader2 className="w-4 h-4 animate-spin mx-auto mb-2" />
-                  Carregando corretores...
+                  Carregando...
                 </div>
               ) : filteredProfiles.length === 0 ? (
                 <div className="p-8 text-center text-sm text-muted-foreground">
                   {profiles.length === 0 ? (
                     <>
-                      Nenhum corretor disponível.<br />
+                      Ninguém disponível.<br />
                       Cadastre usuários primeiro em Gerenciar Usuários.
                     </>
                   ) : (
@@ -649,11 +650,11 @@ function GestaoMembros() {
     <div className="space-y-6">
       <header className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold">Corretores e Membros</h2>
+          <h2 className="text-xl font-bold">Membros da Equipe</h2>
           <p className="text-sm text-muted-foreground">Gerencie os acessos que você criou</p>
         </div>
         <Button onClick={() => setModalAdicionar(true)} className="gap-2">
-          <UserPlus2 className="w-4 h-4" /> Adicionar Corretor
+          <UserPlus2 className="w-4 h-4" /> Adicionar Membro
         </Button>
       </header>
 
@@ -665,7 +666,7 @@ function GestaoMembros() {
           </div>
         ) : profiles.length === 0 ? (
           <div className="col-span-full py-20 text-center text-muted-foreground border-2 border-dashed rounded-lg">
-            Nenhum corretor cadastrado ainda.
+            Nenhum membro cadastrado ainda.
           </div>
         ) : (
           profiles.map((p) => (
@@ -760,12 +761,12 @@ function ModalAdicionarCorretor({ open, onClose, onSuccess }: { open: boolean, o
         email: form.email,
         password: form.senha
       });
-      toast.success("Corretor criado e adicionado à equipe!");
+      toast.success("Pessoa criada e adicionada à equipe!");
       onSuccess();
       onClose();
       setForm({ nome: "", email: "", senha: "" });
     } catch (err: any) {
-      toast.error(err.message || "Erro ao criar corretor");
+      toast.error(err.message || "Erro ao criar pessoa");
     } finally {
       setSaving(false);
     }
@@ -775,9 +776,9 @@ function ModalAdicionarCorretor({ open, onClose, onSuccess }: { open: boolean, o
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Adicionar Corretor</DialogTitle>
+          <DialogTitle>Criar Nova Pessoa</DialogTitle>
           <DialogDescription>
-            Crie um novo acesso. Ele terá acesso aos módulos Dashboard, Leads e WhatsApp por padrão.
+            Crie um novo acesso. Ela terá acesso aos módulos Dashboard, Leads e WhatsApp por padrão.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">

@@ -2,8 +2,10 @@
  * agentEngine.ts — Motor de resposta automática da IA para mensagens do WhatsApp.
  *
  * Chamado por webhook.ts (via processarComDebounce, 3s de debounce por telefone) após uma
- * mensagem recebida ser atribuída a um userId. Resolve o agente (tabela agentes) e a config de
- * IA (agent_configs: prompt, modelo, provider), monta o histórico (n8n_chat_histories), chama o
+ * mensagem recebida ser atribuída a um userId. Resolve o agente e toda a config de IA (prompt,
+ * modelo, provider, MCP tools habilitadas) numa única fonte — tabela `agentes` (unificação Sprint
+ * 1, ver diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md; `agent_configs` existe fisicamente
+ * mas não é mais lida/escrita por este arquivo), monta o histórico (n8n_chat_histories), chama o
  * provider (OpenAI/Claude/Gemini), faz parsing nativo da resposta (quebra em até 2
  * mensagens, detecta sinal de pausa) e envia via Evolution API (enviarResposta ou, quando
  * configurado por agente e a mensagem recebida foi um áudio, enviarRespostaVoz — TTS via
@@ -11,7 +13,6 @@
  * globais botMessageIds/botSentTexts que webhook.ts usa para não confundir a própria resposta
  * do bot com uma intervenção humana (ver [WEBHOOK_ANTILOOP] em webhook.ts).
  */
-import OpenAI from 'openai';
 import { Pool } from 'pg';
 import fs from 'fs';
 import path from 'path';
@@ -20,21 +21,15 @@ import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
 import { sintetizarVoz } from '../utils/elevenlabs';
+import { baixarMidiaDecriptografada } from '../utils/whatsappMediaStorage';
+import { transcreverAudio } from '../utils/transcribe';
+import { registrarUsoIA, estimarCustoUsd, estimarCustoWhisperUsd } from '../utils/aiCusto';
+import { analisarImagem } from '../utils/vision';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
-
-// Cliente global — usado como fallback; substituído pela chave do banco sempre que possível
-// [AUDITORIA] LÓGICA (correção de segurança pós-incidente 2026-07-28/31 — loop bot-a-bot que
-// esgotou o crédito): o SDK `openai` tem retry automático embutido (default maxRetries=2, 3
-// tentativas totais em 429/5xx) nunca desabilitado neste código. Durante um esgotamento real de
-// crédito (429 sustentado), isso faz cada chamada tentar de novo 2x contra a mesma parede,
-// amplificando tráfego exatamente no pior momento. `maxRetries: 1` (não 0) mantém uma
-// retentativa para falha transitória legítima (timeout de rede, 5xx pontual) sem multiplicar por
-// 3 o tráfego/custo potencial de cada chamada.
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '', maxRetries: 1 });
 
 export interface MensagemEntrada {
   instancia: string;
@@ -140,99 +135,66 @@ async function pausarPorLoopDetectado(
   });
 }
 
-// ── Cria cliente OpenAI com chave do provider (fallback para env) ─────────────
-function criarClienteOpenAI(apiKey?: string): OpenAI {
-  const key = apiKey || process.env.OPENAI_API_KEY || '';
-  return key ? new OpenAI({ apiKey: key, maxRetries: 1 }) : openai;
-}
-
-// [AUDITORIA] BUG (Cenário E desta auditoria — timeouts em chamadas externas do motor de IA,
-// 2026-07-23): as duas chamadas fetch abaixo (download do áudio + Whisper) rodavam sem
-// AbortController/timeout — mesma classe de bug já corrigida em webhook.ts (achado B da
-// revisão externa: fetch nativo do Node não tem timeout padrão). Se o servidor de mídia
-// (Evolution/WhatsApp CDN) ou a API da OpenAI travarem/ficarem lentos, esta chamada síncrona
-// dentro de processarMensagem() ficava pendurada indefinidamente, seguravel o lock
-// `atendimentosAtivos` daquele telefone por tempo indeterminado (nenhuma outra mensagem do
-// mesmo contato seria processada enquanto isso). Não prende conexão de banco (nenhum client
-// do pool fica aberto durante estas chamadas — pool.query() de antes já liberou a conexão),
-// mas prende o processamento daquele chat e o worker do event loop.
-// [AUDITORIA] FIX APLICADO: AbortController com timeout em ambas — 15s pro download do áudio
-// (arquivo de voz costuma ser pequeno, mas a rede pode ser lenta), 30s pro Whisper (serviço
-// de transcrição, mais lento por natureza que uma chamada de API comum).
-async function transcreverAudio(url: string, apiKey?: string): Promise<string | null> {
+// [AUDITORIA] BUG (Sprint duplicação Whisper/Vision, 2026-08-06): este arquivo tinha suas
+// PRÓPRIAS cópias locais de transcreverAudio()/analisarImagem() (removidas aqui), que recebiam
+// `entrada.midiaUrl` — a URL crua do CDN do WhatsApp, sempre CRIPTOGRAFADA (ver cabeçalho de
+// whatsappMediaStorage.ts) — e tentavam mandar essa URL direto pro Whisper/Vision, SEM
+// decriptografar primeiro. Isso rodava em paralelo ao que webhook.ts já faz corretamente
+// (decripta via Evolution ANTES de chamar Whisper/Vision, grava o resultado em `entrada.texto`
+// como `[Áudio Transcrito: "..."]` / `[Mídia - Imagem: "..."]`) — ou seja, toda mensagem de
+// áudio/imagem gerava DUAS chamadas independentes à OpenAI. Confirmado com teste real (áudio e
+// imagem genuínos do WhatsApp, ambiente homolog, 2026-08-06, replicando exatamente a lógica que
+// existia aqui): baixar a URL crua retorna bytes cifrados (não bate a assinatura de nenhum
+// formato de áudio/imagem válido — nem "OggS", nem JPEG) — Whisper rejeita com HTTP 400
+// "Invalid file format", Vision rejeita com HTTP 400 "invalid_image_url". Pra ÁUDIO isso não
+// era só uma chamada duplicada e desperdiçada: a função local retornava `null`, e o call site
+// tinha `if (!transcrito) { ...; return; }` — ou seja, a IA NUNCA respondia à mensagem de
+// áudio, mesmo o webhook.ts já tendo transcrito com sucesso segundos antes. Bug funcional real
+// de perda de resposta, não só de custo. Pra IMAGEM o efeito era mais brando (o catch engolia o
+// erro e caía no fallback `caption || '[imagem]'`), mas ainda assim descartava a descrição real
+// já gerada pelo webhook.ts e respondia com base numa legenda genérica ou vazia.
+// [AUDITORIA] FIX APLICADO: removidas as cópias locais. O passo 5 abaixo agora usa
+// `entrada.texto` diretamente quando webhook.ts já processou a mídia (prefixo reconhecível) —
+// zero chamada nova a Whisper/Vision no caso normal. Só cai no fallback (mesmas funções
+// compartilhadas de webhook.ts: `utils/transcribe.ts`/`utils/vision.ts`, chamadas aqui só
+// depois de decriptografar via `baixarMidiaDecriptografada()` — nunca mais um fetch cru na URL
+// cifrada) quando webhook.ts não processou por algum motivo (ex: `OPENAI_API_KEY` global vazio
+// no momento do webhook mas o tenant tem provider OpenAI próprio configurado, usado só aqui;
+// decrypt falhou transitoriamente na Evolution; etc.) — mantendo as duas implementações
+// unificadas numa só (decidido não manter uma segunda cópia local só pra fallback: o ganho de
+// isolamento não compensa o risco de as duas divergirem de novo no futuro).
+async function buscarConfigEvolutionFallback(pool: Pool, userId: string): Promise<{ url: string; apiKey: string } | null> {
   try {
-    const downloadController = new AbortController();
-    const downloadTimer = setTimeout(() => downloadController.abort(), 15_000);
-    let r: globalThis.Response;
-    try {
-      r = await fetch(url, { signal: downloadController.signal });
-    } finally {
-      clearTimeout(downloadTimer);
-    }
-    if (!r.ok) return null;
-    const buf = await r.arrayBuffer();
-    const blob = new Blob([buf], { type: 'audio/ogg' });
-    const form = new FormData();
-    form.append('file', blob, 'audio.ogg');
-    form.append('model', 'whisper-1');
-    form.append('language', 'pt');
-    const key = apiKey || process.env.OPENAI_API_KEY || '';
-    const whisperController = new AbortController();
-    const whisperTimer = setTimeout(() => whisperController.abort(), 30_000);
-    let resp: globalThis.Response;
-    try {
-      resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${key}` },
-        body: form,
-        signal: whisperController.signal,
-      });
-    } finally {
-      clearTimeout(whisperTimer);
-    }
-    if (!resp.ok) {
-      log.warn('ENGINE', 'Whisper erro', { status: resp.status, body: await resp.text().catch(() => '') });
-      return null;
-    }
-    return ((await resp.json()) as any).text || null;
+    // [AUDITORIA] LÓGICA (Sprint 1 unificação, ver agentEngine.ts topo): fonte repontada de
+    // `agent_configs` pra `agentes`. Um tenant pode ter mais de uma linha em `agentes` — prioriza
+    // a mais recentemente atualizada com credenciais preenchidas, mesmo critério de desempate já
+    // usado pra resolver `agente` lá em cima (`ORDER BY updated_at DESC`).
+    const r = await pool.query(
+      `SELECT evolution_server_url AS url, evolution_api_key AS api_key
+       FROM agentes
+       WHERE user_id = $1 AND ativo = true
+         AND evolution_server_url IS NOT NULL AND evolution_api_key IS NOT NULL
+       ORDER BY updated_at DESC LIMIT 1`,
+      [userId],
+    );
+    const row = r.rows[0];
+    if (!row?.url || !row?.api_key) return null;
+    return { url: row.url, apiKey: row.api_key };
   } catch (err: any) {
-    log.warn('ENGINE', 'transcreverAudio falhou (timeout ou erro de rede)', { err: err?.message });
+    log.warn('ENGINE', 'buscarConfigEvolutionFallback falhou', { err: err?.message });
     return null;
   }
 }
 
-// [AUDITORIA] LÓGICA (Cenário E): esta chamada usa o SDK oficial `openai`, não fetch cru — o
-// SDK já aplica um timeout padrão próprio (documentado como 10 minutos, configurável via
-// `timeout` no client) mesmo sem passarmos nada explícito aqui, diferente das duas chamadas
-// fetch cruas de transcreverAudio() (corrigidas acima). 10min ainda é bastante tempo para um
-// travamento acidental prender o lock `atendimentosAtivos` do contato — vale revisar se
-// compensa apertar esse timeout explicitamente numa próxima sessão, mas não é o mesmo tipo de
-// lacuna (ausência total de timeout) encontrado nas chamadas fetch cruas.
-// ── Análise de imagem via GPT-4o-mini Vision ─────────────────────────────────
-async function analisarImagem(url: string, caption?: string, apiKey?: string): Promise<string> {
-  try {
-    const client = criarClienteOpenAI(apiKey);
-    const r = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url } },
-          {
-            type: 'text',
-            text: caption
-              ? `Imagem com legenda: "${caption}". Descreva em 1-2 frases.`
-              : 'Descreva esta imagem brevemente.',
-          },
-        ],
-      }],
-      max_tokens: 200,
-    });
-    return r.choices[0]?.message?.content || caption || '[imagem]';
-  } catch {
-    return caption || '[imagem]';
-  }
-}
+// [AUDITORIA] LÓGICA (Sprint Diagnóstico "ainda gastando token no disparo", 2026-08-07 — item 1
+// de SPRINT_VISTORIA_COMPLETA_GASTO_IA.md): `ai_uso_diario` tem coluna `custo_usd` e dashboard
+// pronto (`GET /api/ai/uso/resumo`), mas o único INSERT que escrevia na tabela (aqui embaixo)
+// nunca preenchia esse campo — o dashboard sempre mostrou $0, mesmo com gasto real.
+// [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): tabela de preço +
+// `estimarCustoUsd` extraídos pra `utils/aiCusto.ts` (módulo compartilhado) — Vision, Whisper e
+// embeddings (RAG) pagavam de verdade e nunca apareciam nesse dashboard, mesma causa raiz que
+// deixou o desperdício de mídia de grupo invisível até o saldo da OpenAI zerar (ver webhook.ts).
+// Preço mantido em um único lugar em vez de duplicado por call-site novo.
 
 // ── Divide resposta em até 2 partes para simular digitação humana ─────────────
 function dividirMensagem(texto: string): string[] {
@@ -423,11 +385,18 @@ function parsearRespostaNativo(texto: string, sinalPausa: string): { messages: s
 }
 
 // ── Upsert de contato ─────────────────────────────────────────────────────────
+// [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-27 — pedido explícito
+// do usuário, depois de confirmado que `fetchProfile`/`group/participants` têm cobertura
+// dependente da reputação do número: "ainda não estamos conseguindo baixar o nome do lead"):
+// `nome`/`nome_verificado` agora voltam junto do upsert — usados por quem chama pra decidir se
+// injeta a instrução "pergunte o nome" no prompt (ver `systemPrompt` mais abaixo). Via mais
+// confiável que as automáticas: não depende de configuração de privacidade de ninguém, só do
+// lead responder pelo menos uma mensagem.
 async function upsertContato(
   pool: Pool, userId: string, telefone: string, nome: string
-): Promise<{ id: string; opt_out: boolean }> {
+): Promise<{ id: string; opt_out: boolean; nome: string; nome_verificado: boolean | null }> {
   const ex = await pool.query(
-    `SELECT id, opt_out FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+    `SELECT id, opt_out, nome, nome_verificado FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
     [userId, `%${telefone.slice(-11)}`]
   );
   if (ex.rows.length) return ex.rows[0];
@@ -441,7 +410,7 @@ async function upsertContato(
     `INSERT INTO contatos (user_id, nome, telefone, origem, status)
      VALUES ($1, $2, $3, 'WhatsApp', 'novo')
      ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
-     RETURNING id, opt_out`,
+     RETURNING id, opt_out, nome, nome_verificado`,
     [userId, nome || telefone, telefone]
   );
   if (novo.rows.length) return novo.rows[0];
@@ -449,7 +418,7 @@ async function upsertContato(
   // Conflito concorrente: outra chamada (ex: upsert antecipado do webhook.ts) venceu a
   // corrida e criou o contato entre o SELECT e o INSERT acima — busca o registro já existente.
   const pos = await pool.query(
-    `SELECT id, opt_out FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
+    `SELECT id, opt_out, nome, nome_verificado FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
     [userId, `%${telefone.slice(-11)}`]
   );
   return pos.rows[0];
@@ -608,6 +577,20 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   const userIdFinal = agente.user_id || entrada.userId!;
 
+  // [AUDITORIA] LÓGICA (Sprint 0 do plano em diagnosticos/PLANO_MOTOR_MULTIAGENTE_ECONOMIA_TOKEN.md):
+  // scaffolding da flag de segurança pro motor multi-agente — só lê e loga por enquanto, não
+  // muda comportamento nenhum. Não existe ainda nenhum motor novo pra rotear quando `true`
+  // (Sprints 1+ do plano, ainda não implementadas) — todo mundo (flag `true` ou `false`) segue
+  // pelo caminho único de sempre logo abaixo. Ponto de extensão pronto pra quando existir de
+  // fato algo diferente pra fazer aqui.
+  const multiAgentFlagRes = await pool.query(
+    `SELECT multi_agent_enabled FROM users WHERE id = $1`,
+    [userIdFinal]
+  ).catch(() => ({ rows: [] as any[] }));
+  if (multiAgentFlagRes.rows[0]?.multi_agent_enabled) {
+    log.info('ENGINE', 'multi_agent_enabled=true pra esta conta, mas o motor novo ainda não existe — seguindo pelo caminho único atual', { userId: userIdFinal });
+  }
+
   // 2. Verificar opt-out
   const contato = await upsertContato(pool, userIdFinal, entrada.telefone, entrada.pushName);
   if (contato.opt_out) {
@@ -661,58 +644,104 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     || envKey;
 
   // 5. Resolver mídia (usa apiKey do provider para Whisper/Vision)
+  // [AUDITORIA] FIX APLICADO (Sprint duplicação Whisper/Vision, 2026-08-06 — ver comentário
+  // completo acima de buscarConfigEvolutionFallback()): webhook.ts já decriptografa e
+  // transcreve/analisa a mídia ANTES de chamar processarComDebounce, gravando o resultado em
+  // `entrada.texto` com um prefixo reconhecível. O debounce (bufferMensagens) preserva esse
+  // texto — mesmo numa rajada mista com uma mensagem de texto puro no meio, o prefixo continua
+  // presente em algum ponto da string unida por `.join(' ')`. Detectando esse prefixo evitamos
+  // a segunda chamada (redundante e, no caso de áudio, quebrada — ver comentário acima) e usamos
+  // o texto já pronto diretamente. Só decripta e chama Whisper/Vision de novo aqui (via
+  // baixarMidiaDecriptografada() + as MESMAS funções de utils/transcribe.ts e utils/vision.ts
+  // usadas por webhook.ts, nunca mais um fetch cru na URL cifrada) quando o prefixo não está
+  // presente — sinal de que webhook.ts não processou essa mídia (ex: OPENAI_API_KEY global
+  // vazio no momento do webhook, decrypt falhou transitoriamente, etc.).
   let textoFinal = entrada.texto;
-  if (entrada.tipo === 'audio' && entrada.midiaUrl) {
-    const transcrito = await transcreverAudio(entrada.midiaUrl, openaiApiKey);
-    if (!transcrito) { log.warn('ENGINE', 'Falha na transcrição'); return; }
-    // [AUDITORIA] FIX APLICADO (2026-07-29): antes, `textoFinal = transcrito` descartava
-    // `entrada.texto` incondicionalmente — inofensivo pra um áudio isolado (normalmente vem sem
-    // texto), mas destruía silenciosamente uma mensagem de texto puro que o debounce mesclou
-    // aqui na mesma rajada (ex: cliente manda um áudio e, <3s depois, um texto — ver fix em
-    // `processarComDebounce`/`bufferMensagens` acima). Agora concatena em vez de sobrescrever.
-    textoFinal = entrada.texto ? `${entrada.texto}\n${transcrito}` : transcrito;
-    log.info('ENGINE', 'Áudio transcrito', { textoTranscrito: textoFinal.slice(0, 60) });
-  } else if (entrada.tipo === 'image' && entrada.midiaUrl) {
-    textoFinal = await analisarImagem(entrada.midiaUrl, entrada.texto || undefined, openaiApiKey);
+  const audioJaProcessado = entrada.tipo === 'audio' && !!entrada.texto?.includes('[Áudio Transcrito: "');
+  const imagemJaProcessada = entrada.tipo === 'image' && !!entrada.texto?.includes('[Mídia - Imagem: "');
+
+  // [AUDITORIA] FIX APLICADO (Sprint Modalidades Opcionais, 2026-08-23 — pedido explícito do
+  // usuário: manter a funcionalidade, só torná-la opcional): `agente.modalidade_audio`/
+  // `modalidade_imagem` já vêm carregados no `SELECT *` de `agente` lá em cima — `?? true`
+  // preserva o comportamento atual (sempre ligado) pra linha nunca configurada. Mesmo gate agora
+  // aplicado em webhook.ts (bloco principal); aqui cobre só o fallback local (webhook.ts não
+  // processou a mídia por algum motivo).
+  const modalidadeAudioHabilitada = agente.modalidade_audio ?? true;
+  const modalidadeImagemHabilitada = agente.modalidade_imagem ?? true;
+
+  if (entrada.tipo === 'audio' && entrada.midiaUrl && !audioJaProcessado && modalidadeAudioHabilitada) {
+    const evo = await buscarConfigEvolutionFallback(pool, userIdFinal);
+    const midiaDecriptografada = evo
+      ? await baixarMidiaDecriptografada({
+          evoUrl: evo.url, apiKey: evo.apiKey, instancia: entrada.instancia,
+          messageId: entrada.messageId, remoteJid: `${entrada.telefone}@s.whatsapp.net`, fromMe: false,
+        })
+      : null;
+    const resultadoTranscricao = midiaDecriptografada
+      ? await transcreverAudio(midiaDecriptografada.buffer, midiaDecriptografada.mimetype || 'audio/ogg', openaiApiKey)
+      : null;
+    if (!resultadoTranscricao) { log.warn('ENGINE', 'Falha na transcrição (fallback local — webhook.ts não processou este áudio)'); return; }
+    // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): este fallback local
+    // também paga Whisper de verdade — nunca gravava custo_usd, mesmo achado do bloco principal
+    // em webhook.ts.
+    await registrarUsoIA(pool, {
+      userId: userIdFinal, providerSlug: 'openai', modelo: 'whisper-1',
+      tokensEntrada: 0, tokensSaida: 0,
+      custoUsd: estimarCustoWhisperUsd(resultadoTranscricao.duracaoSegundos),
+    });
+    // [AUDITORIA] FIX APLICADO (2026-07-29, preservado): concatena em vez de sobrescrever, pra
+    // não descartar uma mensagem de texto puro que o debounce mesclou na mesma rajada.
+    textoFinal = entrada.texto ? `${entrada.texto}\n${resultadoTranscricao.texto}` : resultadoTranscricao.texto;
+    log.info('ENGINE', 'Áudio transcrito via fallback local (webhook.ts não havia processado)', { textoTranscrito: textoFinal.slice(0, 60) });
+  } else if (entrada.tipo === 'image' && entrada.midiaUrl && !imagemJaProcessada && modalidadeImagemHabilitada) {
+    const evo = await buscarConfigEvolutionFallback(pool, userIdFinal);
+    const midiaDecriptografada = evo
+      ? await baixarMidiaDecriptografada({
+          evoUrl: evo.url, apiKey: evo.apiKey, instancia: entrada.instancia,
+          messageId: entrada.messageId, remoteJid: `${entrada.telefone}@s.whatsapp.net`, fromMe: false,
+        })
+      : null;
+    const resultadoVisao = midiaDecriptografada
+      ? await analisarImagem(midiaDecriptografada.buffer, midiaDecriptografada.mimetype || 'image/jpeg', openaiApiKey)
+      : null;
+    if (resultadoVisao) {
+      // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): mesmo fix do
+      // bloco de áudio acima — este fallback local também paga Vision de verdade.
+      await registrarUsoIA(pool, {
+        userId: userIdFinal, providerSlug: 'openai', modelo: 'gpt-4o-mini',
+        tokensEntrada: resultadoVisao.tokensEntrada, tokensSaida: resultadoVisao.tokensSaida,
+        custoUsd: estimarCustoUsd('gpt-4o-mini', resultadoVisao.tokensEntrada, resultadoVisao.tokensSaida),
+      });
+    }
+    textoFinal = resultadoVisao?.descricao || entrada.texto || '[imagem]';
+    log.info('ENGINE', 'Imagem analisada via fallback local (webhook.ts não havia processado)');
   }
   if (!textoFinal) return;
 
-  // 6. Configuração unificada — fonte única: agent_configs (por user_id)
-  const configRes = await pool.query(
-    `SELECT prompt_sistema, nome_agente, sinal_pausa, palavra_reativar,
-            modelo_llm, evolution_server_url, evolution_api_key,
-            operation_mode, distribution_mode,
-            saudacao_inicial, bloco_qualificacao,
-            mensagem_encaminhamento, mensagem_encerramento,
-            resposta_voz_habilitada, resposta_voz_id
-     FROM agent_configs
-     WHERE user_id = $1 AND ativo = true
-     LIMIT 1`,
-    [userIdFinal]
-  );
-
-  const agentConfig = configRes.rows[0] ?? null;
+  // 6. Configuração unificada — fonte única: agentes (Sprint 1 do plano em
+  // diagnosticos/PLANO_MOTOR_MULTIAGENTE_ECONOMIA_TOKEN.md, spec completa em
+  // diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md). `agente` já foi carregado com
+  // `SELECT *` lá em cima (linha ~506) — os campos que antes vinham de uma segunda query em
+  // `agent_configs` (prompt_sistema, sinal_pausa, saudacao_inicial, etc.) agora vivem na mesma
+  // linha. `agent_configs` deixa de ser lida/escrita a partir desta sprint — a tabela continua
+  // existindo fisicamente (não foi apagada), só não é mais consultada por nenhum código.
 
   // [AUDITORIA] BUG (achado 2026-07-28, reportado pelo usuário — cliente novo com IA
   // respondendo e usando o prompt configurado pra OUTRO cliente já existente): antes, sem
   // `agent_configs.prompt_sistema` nem `agent_prompts` real, o motor caía num prompt genérico
   // hardcoded ("Você é um assistente prestativo.") e RESPONDIA mesmo assim — violando a regra
-  // "a IA não pode responder sem antes estar configurada". Isso, somado a `agent_configs`
-  // nascendo `ativo=true` por padrão em pelo menos 3 pontos do sistema (agent-config.ts,
-  // integracoes.ts, evolutionReconciliation.ts — todos corrigidos na mesma sessão) e ao bug
-  // separado de roteamento em `ConfigAgenteIA.tsx`/`agent-config.ts` (rota `/api/agent_configs`
-  // usada pelo frontend nunca existiu — `/api/agent-config`, singular/hífen, é a rota real —
-  // fazendo a tela de configuração falhar silenciosamente ao carregar/salvar, então o operador
-  // nunca via se a config realmente tinha sido salva pro cliente certo), formava exatamente o
-  // cenário reportado. [AUDITORIA] FIX APLICADO: prompt do sistema só é considerado "real" com
-  // conteúdo genuíno vindo de `agent_configs`/`agent_prompts` — sem isso, a IA NÃO responde
-  // (mesmo comportamento de "agente não encontrado" já usado linhas acima), em vez de
-  // silenciosamente assumir uma persona genérica que não é a do cliente.
-  // Prompt do sistema: usa agent_configs.prompt_sistema como fonte principal.
-  // Fallback para agent_prompts apenas para compatibilidade com contas antigas sem migração.
+  // "a IA não pode responder sem antes estar configurada". [AUDITORIA] FIX APLICADO (preservado
+  // na unificação): prompt do sistema só é considerado "real" com conteúdo genuíno vindo de
+  // `agentes.prompt_sistema`/`agent_prompts` — sem isso, a IA NÃO responde (mesmo comportamento
+  // de "agente não encontrado" já usado linhas acima), em vez de silenciosamente assumir uma
+  // persona genérica que não é a do cliente. Esse guard-rail é o motivo pelo qual a migração de
+  // dados desta sprint NUNCA cria automaticamente uma linha `agentes` com prompt vazio pra uma
+  // conta que tinha prompt real em `agent_configs` — ver script de migração e AUDITORIA_LOG.md.
+  // Prompt do sistema: usa agentes.prompt_sistema como fonte principal.
+  // Fallback para agent_prompts apenas para compatibilidade com contas ainda não migradas.
   let systemPromptBase: string | null = null;
-  if (agentConfig?.prompt_sistema) {
-    systemPromptBase = agentConfig.prompt_sistema;
+  if (agente.prompt_sistema) {
+    systemPromptBase = agente.prompt_sistema;
   } else {
     const legacyRes = await pool.query(
       `SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`,
@@ -725,19 +754,48 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     return;
   }
 
-  const nomeAgente = agentConfig?.nome_agente || agente.nome || 'Assistente';
-  const sinalPausa = agentConfig?.sinal_pausa || '251213';
+  const nomeAgente = agente.nome || 'Assistente';
+  const sinalPausa = agente.sinal_pausa || '251213';
 
-  // Override de Evolution a partir do agent_configs (tem precedência sobre o agente)
-  // [AUDITORIA] LÓGICA: só url e api_key vêm de agent_configs — evolution_instancia continua
-  // vindo exclusivamente de `agentes` (linha ~253 acima). É uma terceira variação de como este
-  // módulo trata agent_configs vs. agentes/integracoes_config — ver o achado mais completo sobre
-  // essa inconsistência entre tabelas em backend/src/routes/whatsapp.ts (getEvolutionConfig).
-  if (agentConfig?.evolution_server_url) agente.evolution_server_url = agentConfig.evolution_server_url;
-  if (agentConfig?.evolution_api_key)    agente.evolution_api_key    = agentConfig.evolution_api_key;
+  // MCP tools habilitadas por agente (Aba Motor, Agentes.tsx) — `agente.mcp_tools` é
+  // TEXT[] | null. null/ausente = todas habilitadas (comportamento anterior, sem regressão pra
+  // quem nunca mexeu nessa aba); array (mesmo vazio) = filtro explícito pelos ids salvos.
+  const mcpToolsHabilitadas = agente.mcp_tools == null
+    ? MCP_TOOLS
+    : MCP_TOOLS.filter(t => (agente.mcp_tools as string[]).includes(t.name));
+
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-27 — pedido explícito
+  // do usuário, confirmado antes de implementar: "sim, implementar" pra TODAS as contas, não só
+  // leads de grupo): instrução genérica, injetada pelo motor — não depende do operador editar o
+  // próprio `prompt_sistema` customizado pra funcionar em nenhuma conta. Só entra quando (1) a
+  // ferramenta `criar_ou_atualizar_contato` está de fato habilitada pra este agente (senão a IA
+  // tentaria chamar uma tool que não existe pra ela) e (2) o contato ainda não tem nome real
+  // conhecido — `nome_verificado !== true` E `nome` ainda é literalmente o telefone (mesmo sinal
+  // já usado em `Disparos.tsx`/`substituirPlaceholders`; evita perguntar de novo pra quem já tem
+  // nome curado no CRM mas nunca passou pela cadeia nova, `nome_verificado` ainda NULL). Fica
+  // como orientação de tom ("num momento natural", "sem parecer formulário") de propósito — o
+  // objetivo é continuar a conversa, não virar uma pergunta robótica logo de cara.
+  const nomeAindaEhPlaceholder = contato.nome === entrada.telefone || contato.nome.replace(/\D/g, '') === entrada.telefone.replace(/\D/g, '').slice(-11);
+  const devePedirNome = nomeAindaEhPlaceholder && contato.nome_verificado !== true
+    && mcpToolsHabilitadas.some(t => t.name === 'criar_ou_atualizar_contato');
+  // [AUDITORIA] LÓGICA: esta instrução é reavaliada a CADA mensagem recebida (mesma conta,
+  // mesmo contato) até `nome_verificado` virar `true` — sem o aviso explícito de não repetir, o
+  // risco real é a IA perguntar o nome de novo a cada turno enquanto a pessoa não responde com o
+  // nome especificamente (ex: só respondeu a pergunta de negócio e ignorou a pergunta do nome),
+  // o que seria pior que nunca ter perguntado. O histórico (`historico`, mensagens anteriores já
+  // enviadas ao modelo) é a única forma da IA saber que já perguntou — instrução aponta isso
+  // explicitamente em vez de confiar que o modelo vai inferir sozinho.
+  const instrucaoNome = devePedirNome
+    ? `\n\nVocê ainda não sabe o nome verdadeiro desta pessoa (o CRM só tem o número de telefone). ` +
+      `Em algum momento natural da conversa — sem parecer formulário nem interromper o assunto — pergunte o nome dela, ` +
+      `UMA ÚNICA VEZ. Confira o histórico da conversa: se você já perguntou o nome antes e ela não respondeu ainda, ` +
+      `NÃO pergunte de novo — só volte a perguntar se um bom tempo depois surgir uma deixa natural. ` +
+      `Assim que ela responder com o nome, chame a ferramenta criar_ou_atualizar_contato com o nome (mesmo telefone, campo nome preenchido).`
+    : '';
 
   const systemPrompt = systemPromptBase +
-    `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
+    `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
+    instrucaoNome;
 
   // [AUDITORIA] LÓGICA (Sprint 7, 2026-07-23 — verificação de ordem do histórico enviado à
   // LLM, pedida pelo usuário): `ORDER BY created_at DESC` abaixo busca as 20 mais recentes
@@ -780,7 +838,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   // 8. Finalizar configuração do provider
   const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
-  const modelo = providerInfo?.modelo || agentConfig?.modelo_llm || agente.modelo || 'gpt-4o-mini';
+  const modelo = providerInfo?.modelo || agente.modelo || 'gpt-4o-mini';
   const providerSlug = providerInfo?.providerSlug || 'openai';
   log.info('ENGINE', 'Provider selecionado', {
     provider: providerInfo ? providerSlug + '/' + modelo : 'FALLBACK env',
@@ -788,12 +846,42 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     apiKeyPresente: !!openaiApiKey,
   });
 
-  // 8. Loop agêntico — máximo 5 iterações
-  const MAX_ITER = 5;
+  // 8. Loop agêntico — máximo de iterações configurável por agente (Sprint Agentes
+  // Configurações Avançadas, 2026-09-04; campo "Limite de passos" na aba Configurações,
+  // `Agentes.tsx`). [AUDITORIA] LÓGICA: default 5 preserva o comportamento de sempre pra
+  // qualquer agente que nunca tocou nesse campo (coluna nova, começa NULL); clamp 1-20 evita
+  // tanto um valor inválido (0/negativo travaria a resposta) quanto um loop desproporcional
+  // (custo de IA por turno cresce direto com isso — mesma preocupação de gasto já documentada
+  // em SPRINT_DIAGNOSTICO_APROFUNDADO_CUSTO_IA.md).
+  const MAX_ITER = Math.min(Math.max(Number(agente.limite_passos) || 5, 1), 20);
   let respostaFinal = '';
   let tokensEntrada = 0;
   let tokensSaida = 0;
   let pausaAtivada = false;
+
+  // [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): base pra
+  // aba "Execuções" (`Agentes.tsx`) — mede só o loop agêntico (chamadas de IA + ferramentas), não
+  // o tempo de resolução do agente/RAG antes dele, pra bater com o que o operador entende como
+  // "quanto demorou pra responder". `traceLoop` acumula um resumo por iteração (não o payload
+  // bruto da API — ver comentário na migration) pro "Ver trace" da tela. `registrarExecucao` é
+  // chamado em todo caminho de saída do loop (sucesso ou erro) — ver os 3 pontos de retorno
+  // antecipado logo abaixo, e o caminho de sucesso lá no final da função.
+  const inicioExecucao = Date.now();
+  const traceLoop: any[] = [];
+  const registrarExecucao = (status: 'sucesso' | 'erro', extra: { saidaTexto?: string | null; erroMsg?: string } = {}) => {
+    pool.query(
+      `INSERT INTO agente_execucoes
+         (agente_id, user_id, trigger_origem, status, modelo, latencia_ms,
+          tokens_entrada, tokens_saida, custo_usd, entrada_texto, saida_texto, erro_msg, trace)
+       VALUES ($1,$2,'sistema',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        agente.id, userIdFinal, status, modelo, Date.now() - inicioExecucao,
+        tokensEntrada, tokensSaida, estimarCustoUsd(modelo, tokensEntrada, tokensSaida),
+        textoFinal?.slice(0, 4000) ?? null, extra.saidaTexto?.slice(0, 4000) ?? null,
+        extra.erroMsg?.slice(0, 2000) ?? null, JSON.stringify(traceLoop),
+      ]
+    ).catch(err => log.error('ENGINE', 'Falha ao gravar agente_execucoes', { err: err?.message }));
+  };
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
     // ── [RASTREIO IA] Log pré-chamada ────────────────────────────────────────
@@ -810,10 +898,12 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     let resp: Awaited<ReturnType<typeof provider.complete>> | null = null;
     try {
       resp = await withAiFallback(
-        () => provider.complete(mensagens, systemPrompt, MCP_TOOLS, {
+        () => provider.complete(mensagens, systemPrompt, mcpToolsHabilitadas, {
           model: modelo,
           temperature: Number(agente.temperatura) || 0.7,
           maxTokens: agente.max_tokens || 1024,
+          serviceTier: agente.tier_servico || null,
+          reasoningEffort: agente.esforco_raciocinio || null,
         }),
         null,
         `ENGINE provider.complete (${modelo})`,
@@ -832,6 +922,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       // `finally` de `processarMensagem` liberar o lock. Cliente ficava sem resposta e sem
       // ninguém do lado humano ser avisado. Ver `pausarPorFalhaLLM` (declarada acima).
       await pausarPorFalhaLLM(pool, userIdFinal, entrada, err?.message || 'erro desconhecido na chamada à LLM');
+      registrarExecucao('erro', { erroMsg: err?.message || 'erro desconhecido na chamada à LLM' });
       return;
     }
 
@@ -846,6 +937,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       // cenários citados explicitamente na auditoria ("chave de API sem saldo, limite de
       // requisições excedido"). Antes só retornava em silêncio; ver `pausarPorFalhaLLM`.
       await pausarPorFalhaLLM(pool, userIdFinal, entrada, 'Provider retornou null — chave inválida (401) ou sem créditos/rate limit (429)');
+      registrarExecucao('erro', { erroMsg: 'Provider retornou null — chave inválida (401) ou sem créditos/rate limit (429)' });
       return;
     }
 
@@ -861,6 +953,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     tokensEntrada += resp.inputTokens;
     tokensSaida += resp.outputTokens;
     if (resp.text) respostaFinal = resp.text;
+    traceLoop.push({
+      iter, texto: resp.text?.slice(0, 500) ?? null,
+      toolCalls: resp.toolCalls.map(tc => ({ nome: tc.name, input: tc.input })),
+      finishReason: resp.finishReason,
+    });
 
     // Sem tool_calls → resposta final
     if (!resp.toolCalls.length) break;
@@ -868,6 +965,14 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     // Executar ferramentas e adicionar resultados
     const toolResults: AIMessage[] = [];
     for (const tc of resp.toolCalls) {
+      // Defesa em profundidade: a tool já não é oferecida no `provider.complete()` acima quando
+      // desabilitada em `agente.mcp_tools`, então isto só dispara se o modelo tentar chamar algo
+      // fora da lista oferecida (ex: nome reaproveitado de uma mensagem antiga do histórico).
+      if (!mcpToolsHabilitadas.some(t => t.name === tc.name)) {
+        log.warn('ENGINE', 'Tool chamada pelo modelo mas desabilitada pra este agente — ignorando', { nome: tc.name, userId: userIdFinal });
+        toolResults.push({ role: 'user', content: `[Resultado de ${tc.name}]: ferramenta não disponível.` });
+        continue;
+      }
       log.info('ENGINE', 'Executando tool', { nome: tc.name, input: JSON.stringify(tc.input).slice(0, 80) });
       const resultado = await executarFerramenta(pool, userIdFinal, tc.name, tc.input, {
         telefone: entrada.telefone,
@@ -886,6 +991,10 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       });
     }
 
+    // Anexa os resultados das tools ao trace desta mesma iteração (empurrado acima, logo após a
+    // resposta do modelo) — pro "Ver trace" mostrar entrada→ferramenta→resultado junto.
+    if (traceLoop.length) traceLoop[traceLoop.length - 1].toolResultados = toolResults.map(t => (typeof t.content === 'string' ? t.content.slice(0, 300) : null));
+
     if (pausaAtivada) break;
 
     mensagens.push({ role: 'assistant', content: respostaFinal || '[usando ferramentas]' });
@@ -894,6 +1003,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   if (!respostaFinal && !pausaAtivada) {
     log.warn('ENGINE', 'Sem resposta após loop agêntico');
+    registrarExecucao('erro', { erroMsg: 'Sem resposta após loop agêntico (limite de passos atingido sem resposta final)' });
     return;
   }
 
@@ -946,13 +1056,13 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     }
 
     // [AUDITORIA] LÓGICA (Sprint TTS): resposta em voz é opt-in por agente
-    // (agent_configs.resposta_voz_habilitada + resposta_voz_id) e só é tentada quando a
+    // (agentes.resposta_voz_habilitada + voice_id) e só é tentada quando a
     // mensagem RECEBIDA do cliente foi um áudio (espelha o canal — critério simples e seguro
     // sugerido pelo usuário). Fora dessas condições, comportamento 100% idêntico ao anterior
     // (texto em pedaços, sem nenhuma mudança pra tenants sem a flag ativada).
     const deveResponderEmVoz =
-      agentConfig?.resposta_voz_habilitada === true &&
-      !!agentConfig?.resposta_voz_id &&
+      agente.resposta_voz_habilitada === true &&
+      !!agente.voice_id &&
       entrada.tipo === 'audio';
 
     let vozEnviada = false;
@@ -961,7 +1071,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         pool, userIdFinal,
         agente.evolution_server_url, agente.evolution_api_key,
         agente.evolution_instancia || entrada.instancia,
-        entrada.telefone, respostaFinal, agentConfig.resposta_voz_id,
+        entrada.telefone, respostaFinal, agente.voice_id,
       );
       if (resultado.ok) {
         vozEnviada = true;
@@ -1019,18 +1129,15 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   // 13. Registrar uso de tokens
   if (tokensEntrada || tokensSaida) {
-    await pool.query(
-      `INSERT INTO ai_uso_diario
-         (user_id, data, provider_slug, modelo, total_mensagens, tokens_entrada, tokens_saida)
-       VALUES ($1, CURRENT_DATE, $2, $3, 1, $4, $5)
-       ON CONFLICT (user_id, data, provider_slug, modelo) DO UPDATE
-       SET total_mensagens = ai_uso_diario.total_mensagens + 1,
-           tokens_entrada  = ai_uso_diario.tokens_entrada  + $4,
-           tokens_saida    = ai_uso_diario.tokens_saida    + $5,
-           updated_at = now()`,
-      [userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida]
-    ).catch(err => log.error('ENGINE INSERT ai_uso_diario', 'Falha ao registrar uso de tokens', { err: err?.message, stack: err?.stack }));
+    await registrarUsoIA(pool, {
+      userId: userIdFinal, providerSlug, modelo, tokensEntrada, tokensSaida,
+      custoUsd: estimarCustoUsd(modelo, tokensEntrada, tokensSaida),
+    });
   }
+
+  // 13.1 Registrar execução (aba "Execuções") — turno completou (com ou sem pausa acionada,
+  // ambos contam como execução bem-sucedida do ponto de vista do motor de IA).
+  registrarExecucao('sucesso', { saidaTexto: respostaFinal || null });
 
   // 14. Ações de pausa
   if (pausaAtivada) {
@@ -1108,6 +1215,156 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 //      deixa o lock preso pra sempre.
 // Veredito: sim, o mecanismo evita eficazmente chamadas paralelas à IA pro mesmo chat nesse
 // cenário e em cenários adjacentes (gaps maiores, erros durante o processamento).
+
+// ── Playground de teste (aba "Teste", Sprint Agentes Configurações Avançadas — fase 2,
+// 2026-09-04) ─────────────────────────────────────────────────────────────────────────────────
+// [AUDITORIA] LÓGICA: função NOVA e ISOLADA — deliberadamente não reaproveita `processarMensagem`
+// acima, que está profundamente acoplada ao fluxo real de WhatsApp (resolve/cria `contato` de
+// verdade a partir de `entrada.telefone`, dispara transcrição/visão, humanização, TTS, envio via
+// Evolution, grava `whatsapp_messages`, mexe no lock `atendimentosAtivos` e no circuit-breaker
+// anti-loop entre contas — nada disso faz sentido nem é seguro rodar a partir de uma tela de
+// teste sem contato/telefone real). Reproduz só o essencial pro teste ter valor real (mesmo
+// prompt, mesmo modelo/parâmetros, mesmas ferramentas habilitadas, mesmo loop agêntico) e
+// interrompe exatamente onde o resto seria específico de WhatsApp: nunca chama `enviarResposta`/
+// `enviarRespostaVoz`, nunca grava `whatsapp_messages`, e passa `dryRun: true` pra
+// `executarFerramenta()` — as 4 ferramentas que escrevem dado real ou disparam efeito externo
+// (`criar_ou_atualizar_contato`, `registrar_pausa`, `criar_agendamento`, `criar_corrida`, ver
+// `mcp/tools.ts`) devolvem só uma prévia textual nesse modo. Ainda assim grava uma linha em
+// `agente_execucoes` (`trigger_origem='playground'`) — mesmo histórico/aba "Execuções" da
+// função real, só filtrável por origem.
+export interface ResultadoTeste {
+  resposta: string;
+  tokensEntrada: number;
+  tokensSaida: number;
+  custoUsd: number;
+  latenciaMs: number;
+  modelo: string;
+  trace: any[];
+  erro?: string;
+}
+
+export async function testarAgentePlayground(
+  pool: Pool,
+  userId: string,
+  agenteId: string,
+  historico: { role: 'user' | 'assistant'; content: string }[],
+): Promise<ResultadoTeste> {
+  const inicio = Date.now();
+  const traceLoop: any[] = [];
+  let tokensEntrada = 0;
+  let tokensSaida = 0;
+  let modeloUsado = '';
+
+  const vazio = (erro: string, modelo = ''): ResultadoTeste =>
+    ({ resposta: '', tokensEntrada: 0, tokensSaida: 0, custoUsd: 0, latenciaMs: Date.now() - inicio, modelo, trace: [], erro });
+
+  const agenteRes = await pool.query(`SELECT * FROM agentes WHERE id = $1 AND user_id = $2`, [agenteId, userId]);
+  const agente = agenteRes.rows[0];
+  if (!agente) return vazio('Agente não encontrado.');
+
+  let systemPromptBase: string | null = agente.prompt_sistema || null;
+  if (!systemPromptBase) {
+    const legacy = await pool.query(`SELECT conteudo FROM agent_prompts WHERE user_id = $1 AND ativo = true LIMIT 1`, [userId]);
+    systemPromptBase = legacy.rows[0]?.conteudo || null;
+  }
+  if (!systemPromptBase) return vazio('Este agente não tem Prompt do Sistema configurado (aba Perfil) — não há o que testar ainda.');
+
+  const systemPrompt = systemPromptBase +
+    `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
+    `\n\n[MODO TESTE] Você está sendo testado por um operador do CRM através da tela de configuração ` +
+    `do agente — não é uma conversa real com cliente. Responda normalmente, seguindo suas instruções.`;
+
+  const mcpToolsHabilitadas = agente.mcp_tools == null
+    ? MCP_TOOLS
+    : MCP_TOOLS.filter(t => (agente.mcp_tools as string[]).includes(t.name));
+
+  const providerInfo = await criarProvider(pool, userId, agente.provider_id ?? null);
+  const envKey = process.env.OPENAI_API_KEY || '';
+  const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
+  const modelo = providerInfo?.modelo || agente.modelo || 'gpt-4o-mini';
+  const providerSlug = providerInfo?.providerSlug || 'openai';
+  modeloUsado = modelo;
+
+  const mensagens: AIMessage[] = historico.map(h => ({ role: h.role, content: h.content }));
+  const MAX_ITER = Math.min(Math.max(Number(agente.limite_passos) || 5, 1), 20);
+  let respostaFinal = '';
+  let pausaAtivada = false;
+
+  const registrarExecucaoTeste = (status: 'sucesso' | 'erro', extra: { saidaTexto?: string | null; erroMsg?: string } = {}) => {
+    pool.query(
+      `INSERT INTO agente_execucoes
+         (agente_id, user_id, trigger_origem, status, modelo, latencia_ms,
+          tokens_entrada, tokens_saida, custo_usd, entrada_texto, saida_texto, erro_msg, trace)
+       VALUES ($1,$2,'playground',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        agente.id, userId, status, modelo, Date.now() - inicio,
+        tokensEntrada, tokensSaida, estimarCustoUsd(modelo, tokensEntrada, tokensSaida),
+        (historico[historico.length - 1]?.content || '').slice(0, 4000), extra.saidaTexto?.slice(0, 4000) ?? null,
+        extra.erroMsg?.slice(0, 2000) ?? null, JSON.stringify(traceLoop),
+      ]
+    ).catch(err => log.error('ENGINE PLAYGROUND', 'Falha ao gravar agente_execucoes', { err: err?.message }));
+  };
+
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    let resp: Awaited<ReturnType<typeof provider.complete>> | null = null;
+    try {
+      resp = await provider.complete(mensagens, systemPrompt, mcpToolsHabilitadas, {
+        model: modelo,
+        temperature: Number(agente.temperatura) || 0.7,
+        maxTokens: agente.max_tokens || 1024,
+        serviceTier: agente.tier_servico || null,
+        reasoningEffort: agente.esforco_raciocinio || null,
+      });
+    } catch (err: any) {
+      log.error('ENGINE PLAYGROUND', 'Chamada à IA falhou no modo teste', { agenteId, providerSlug, modelo, err: err?.message });
+      registrarExecucaoTeste('erro', { erroMsg: err?.message || 'erro desconhecido na chamada à LLM' });
+      return { resposta: '', tokensEntrada, tokensSaida, custoUsd: estimarCustoUsd(modelo, tokensEntrada, tokensSaida), latenciaMs: Date.now() - inicio, modelo, trace: traceLoop, erro: err?.message || 'Erro na chamada à IA.' };
+    }
+
+    tokensEntrada += resp.inputTokens;
+    tokensSaida += resp.outputTokens;
+    if (resp.text) respostaFinal = resp.text;
+    traceLoop.push({
+      iter, texto: resp.text?.slice(0, 500) ?? null,
+      toolCalls: resp.toolCalls.map(tc => ({ nome: tc.name, input: tc.input })),
+      finishReason: resp.finishReason,
+    });
+
+    if (!resp.toolCalls.length) break;
+
+    const toolResults: AIMessage[] = [];
+    for (const tc of resp.toolCalls) {
+      if (!mcpToolsHabilitadas.some(t => t.name === tc.name)) {
+        toolResults.push({ role: 'user', content: `[Resultado de ${tc.name}]: ferramenta não disponível.` });
+        continue;
+      }
+      const resultado = await executarFerramenta(
+        pool, userId, tc.name, tc.input,
+        { contatoId: null, nomeContato: 'Operador (modo teste)' },
+        { dryRun: true },
+      );
+      if (resultado.startsWith('PAUSA_ATIVADA:')) {
+        pausaAtivada = true;
+        break;
+      }
+      toolResults.push({ role: 'user', content: `[Resultado de ${tc.name}]: ${resultado}` });
+    }
+    if (traceLoop.length) traceLoop[traceLoop.length - 1].toolResultados = toolResults.map(t => (typeof t.content === 'string' ? t.content.slice(0, 300) : null));
+
+    if (pausaAtivada) break;
+
+    mensagens.push({ role: 'assistant', content: respostaFinal || '[usando ferramentas]' });
+    mensagens.push(...toolResults);
+  }
+
+  const custoUsd = estimarCustoUsd(modelo, tokensEntrada, tokensSaida);
+  const latenciaMs = Date.now() - inicio;
+  const respostaExibida = respostaFinal || (pausaAtivada ? '(o agente sinalizou pausa/transferência para atendimento humano — nada mais seria enviado ao cliente)' : '');
+  registrarExecucaoTeste('sucesso', { saidaTexto: respostaExibida || null });
+
+  return { resposta: respostaExibida, tokensEntrada, tokensSaida, custoUsd, latenciaMs, modelo: modeloUsado, trace: traceLoop };
+}
+
 // ── Debounce — agrupa mensagens picotadas do mesmo contato ───────────────────
 export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada): Promise<void> {
   const chave = `${entrada.instancia}:${entrada.telefone}`;

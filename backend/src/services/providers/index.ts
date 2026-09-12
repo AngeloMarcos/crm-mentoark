@@ -31,12 +31,24 @@ export interface AIResponse {
   finishReason: string;
 }
 
+// [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas, 2026-09-04): `serviceTier`/
+// `reasoningEffort` opcionais aqui pra manter a mesma assinatura entre providers — só
+// `OpenAIProvider` usa os dois de verdade (ver comentário lá pra `reasoningEffort`, que só se
+// aplica a modelos da família "raciocínio"); Claude ignora ambos silenciosamente.
+export interface AICompleteOptions {
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  serviceTier?: string | null;
+  reasoningEffort?: string | null;
+}
+
 export interface AIProvider {
   complete(
     messages: AIMessage[],
     systemPrompt: string,
     tools: MCPTool[],
-    options: { model: string; temperature: number; maxTokens: number }
+    options: AICompleteOptions
   ): Promise<AIResponse>;
 }
 
@@ -52,7 +64,7 @@ export class ClaudeProvider implements AIProvider {
     messages: AIMessage[],
     systemPrompt: string,
     tools: MCPTool[],
-    opts: { model: string; temperature: number; maxTokens: number }
+    opts: AICompleteOptions
   ): Promise<AIResponse> {
     const anthropicTools = tools.map(t => ({
       name: t.name,
@@ -107,7 +119,7 @@ export class OpenAIProvider implements AIProvider {
     messages: AIMessage[],
     systemPrompt: string,
     tools: MCPTool[],
-    opts: { model: string; temperature: number; maxTokens: number }
+    opts: AICompleteOptions
   ): Promise<AIResponse> {
     const openaiTools = tools.map(t => ({
       type: 'function' as const,
@@ -129,12 +141,24 @@ export class OpenAIProvider implements AIProvider {
         })),
     ];
 
+    // [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas, 2026-09-04): `reasoning_effort`
+    // só é aceito pela API pra modelos da família "raciocínio" (o1/o3/o4/gpt-5 variantes
+    // "thinking") — mandar esse parâmetro pra gpt-4o/gpt-4o-mini (os únicos que o seletor de
+    // modelo hoje realmente oferece, `Agentes.tsx`) retorna erro 400 da OpenAI ("Unsupported
+    // parameter"), o que quebraria TODO agente ativo respondendo cliente de verdade — por isso
+    // só inclui o parâmetro quando `opts.model` bate com esse padrão; nos demais casos o campo
+    // fica gravado no banco (pronto pra quando o seletor ganhar um modelo reasoning) mas não é
+    // enviado — mesmo espírito de "não quebra call existente" que motivou o campo opcional na
+    // interface. `service_tier` já é aceito por qualquer modelo desta API, sem essa restrição.
+    const ehModeloRaciocinio = /^(o1|o3|o4)(-|$)/i.test(opts.model) || /gpt-5.*thinking/i.test(opts.model);
     const resp = await this.client.chat.completions.create({
       model: opts.model || 'gpt-4o-mini',
       temperature: opts.temperature ?? 0.7,
       max_tokens: opts.maxTokens || 1024,
       messages: allMessages,
       tools: openaiTools.length ? openaiTools : undefined,
+      ...(opts.serviceTier ? { service_tier: opts.serviceTier as any } : {}),
+      ...(opts.reasoningEffort && ehModeloRaciocinio ? { reasoning_effort: opts.reasoningEffort as any } : {}),
     });
 
     const choice = resp.choices[0];

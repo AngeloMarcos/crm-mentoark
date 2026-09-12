@@ -3,23 +3,25 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { AppHeader } from "@/components/AppHeader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HealthCheck } from "./HealthCheck";
+import { AssinaturaBanner } from "@/components/AssinaturaBanner";
+import { AssinaturaProvider } from "@/hooks/useAssinatura";
 
 export function CRMLayout({ children }: { children: React.ReactNode }) {
   return (
+    <AssinaturaProvider>
     <SidebarProvider>
       <div className="min-h-screen flex w-full relative overflow-hidden bg-background">
-        {/* Orbs de luz ambiente */}
+        {/* Luz ambiente — bem discreta, só um respiro de laranja nos cantos */}
         <div className="pointer-events-none absolute inset-0 overflow-hidden">
-          <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-primary/30 blur-[100px] opacity-40 animate-pulse-slow" />
-          <div className="absolute top-1/4 -right-32 w-[30rem] h-[30rem] rounded-full bg-accent/25 blur-[120px] opacity-30 animate-float" />
-          <div className="absolute -bottom-40 left-1/4 w-[35rem] h-[35rem] rounded-full bg-primary/20 blur-[140px] opacity-25 animate-float-delayed" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[40rem] h-[40rem] rounded-full bg-blue-500/10 blur-[150px] opacity-20 animate-pulse-slow" />
+          <div className="absolute -top-40 -left-40 w-[32rem] h-[32rem] rounded-full bg-primary/10 blur-[160px] opacity-40" />
+          <div className="absolute -bottom-48 -right-40 w-[36rem] h-[36rem] rounded-full bg-primary/[0.06] blur-[180px] opacity-40" />
         </div>
 
         <AppSidebar />
 
         <div className="flex-1 flex flex-col min-w-0 relative z-10">
           <AppHeader />
+          <AssinaturaBanner />
           {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — "sistema todo muito grande"): padding
               reduzido em telas menores — soma com o padding interno de cada página (ex: chat do
               WhatsApp), então cada rem a menos aqui libera espaço real de conteúdo em tablet/
@@ -31,5 +33,6 @@ export function CRMLayout({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     </SidebarProvider>
+    </AssinaturaProvider>
   );
 }

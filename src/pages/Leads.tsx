@@ -21,9 +21,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadTimeline } from "@/components/leads/LeadTimeline";
 import { LeadTarefas } from "@/components/leads/LeadTarefas";
 import {
-  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, MessageCircle, Download, ListTodo, ShieldCheck, SearchCheck,
+  Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, FileDown, MessageCircle, Download, ListTodo, ShieldCheck, SearchCheck,
 } from "lucide-react";
 import { normalizarTelefoneBR } from "@/lib/phone";
+import { baixarModeloContatosXLSX } from "@/lib/modeloImportacao";
 import { BuscarLeadsModal } from "@/components/campanhas/BuscarLeadsModal";
 
 function formatWhatsappNumber(raw: string | null | undefined): string | null {
@@ -56,6 +57,13 @@ interface Contato {
   email: string | null;
   empresa: string | null;
   cargo: string | null;
+  // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): 4 campos novos,
+  // mesmos de `CAMPOS_CONTATO` (src/lib/modeloImportacao.ts) e das variáveis {{cidade}}/{{estado}}/
+  // {{interesse}}/{{data_nascimento}} em motorTexto.ts.
+  cidade: string | null;
+  estado: string | null;
+  interesse: string | null;
+  data_nascimento: string | null;
   origem: string | null;
   status: string;
   tags: string[] | null;
@@ -390,6 +398,16 @@ export default function LeadsPage() {
 
         novos.push({
           nome, telefone, email, empresa, cargo,
+          // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): exportação
+          // Cnpj.biz costuma trazer cidade/estado do endereço da empresa como colunas próprias —
+          // capturadas aqui pra virarem {{cidade}}/{{estado}} de verdade, não só texto solto em
+          // `notas` como antes. `interesse`/`data_nascimento` não existem nesse formato (é
+          // planilha de empresa, não de pessoa física) — ficam vazios, mesmo padrão do resto do
+          // sistema pra campo opcional sem dado na origem.
+          cidade: get("municipio") || get("município") || get("cidade"),
+          estado: get("estado") || get("uf"),
+          interesse: "",
+          data_nascimento: "",
           origem: "Cnpj.biz",
           status: "novo",
           tags: tagsAuto,
@@ -418,6 +436,14 @@ export default function LeadsPage() {
           email: get("email") || get("e-mail") || get("mail"),
           empresa: get("empresa") || get("company") || get("nome da empresa") || get("nome_fantasia"),
           cargo: get("cargo") || get("função") || get("role"),
+          // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): mesmo nome
+          // de coluna do modelo baixável (`CAMPOS_CONTATO`, src/lib/modeloImportacao.ts) e da
+          // variável correspondente em motorTexto.ts — sinônimos aceitos igual ao resto do
+          // parser, mas a chave canônica bate exata com o header do modelo (nada a adivinhar).
+          cidade: get("cidade") || get("municipio") || get("município"),
+          estado: get("estado") || get("uf"),
+          interesse: get("interesse") || get("produto de interesse") || get("produto_interesse"),
+          data_nascimento: get("data_nascimento") || get("data de nascimento") || get("nascimento") || get("aniversario") || get("aniversário"),
           origem: get("origem") || get("source") || "Importado",
           status: get("status") || "novo",
           tags: tagsRaw ? tagsRaw.split(/[;,]/).map((t) => t.trim()).filter(Boolean) : [],
@@ -510,11 +536,18 @@ export default function LeadsPage() {
       toast({ title: "Nenhum contato para exportar" });
       return;
     }
-    const headers = ["nome", "telefone", "email", "empresa", "cargo", "origem", "status", "tags", "notas"];
+    // [AUDITORIA] LÓGICA (Sprint Padronizar Planilhas — Variáveis, 2026-09-11): cidade/estado/
+    // interesse/data_nascimento adicionados ao export — sem isso, esse dado (cada vez mais comum
+    // depois desta sprint) sumiria silenciosamente ao exportar contatos já importados.
+    const headers = ["nome", "telefone", "email", "cidade", "estado", "interesse", "data_nascimento", "empresa", "cargo", "origem", "status", "tags", "notas"];
     const rows = filtrados.map((c) => [
       c.nome ?? "",
       c.telefone ?? "",
       c.email ?? "",
+      c.cidade ?? "",
+      c.estado ?? "",
+      c.interesse ?? "",
+      c.data_nascimento ?? "",
       c.empresa ?? "",
       c.cargo ?? "",
       c.origem ?? "",
@@ -590,6 +623,15 @@ export default function LeadsPage() {
           <div className="flex items-center gap-2 flex-wrap">
             <Button variant="outline" size="sm" onClick={() => setModalLista(true)}>
               <FolderPlus className="h-4 w-4 mr-1" /> Nova Lista
+            </Button>
+            {/* [AUDITORIA] FIX APLICADO (2026-09-11 — usuário não achou o botão "Baixar modelo":
+                ele só existia dentro do modal "Importar CSV", precisava abrir o modal primeiro pra
+                ver. Botão direto na barra, sem precisar abrir nada — mesma função
+                (baixarModeloContatosXLSX), só um segundo ponto de acesso mais visível.
+                Posicionado ANTES de "Importar CSV" de propósito: é o passo que vem antes, quem
+                ainda não tem planilha pronta baixa o modelo primeiro. */}
+            <Button variant="outline" size="sm" onClick={baixarModeloContatosXLSX}>
+              <FileDown className="h-4 w-4 mr-1" /> Baixar modelo
             </Button>
             <Button variant="outline" size="sm" onClick={() => { setImportLista(""); setModalImport(true); }}>
               <Upload className="h-4 w-4 mr-1" /> Importar CSV
@@ -838,10 +880,20 @@ export default function LeadsPage() {
               </div>
 
               <div className="space-y-1">
-                <p className="font-medium text-primary">2. Exportação do próprio CRM (MentoArk)</p>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className="font-medium text-primary">2. Modelo padrão do CRM (MentoArk)</p>
+                  <Button type="button" variant="outline" size="sm" className="h-6 text-[11px] gap-1" onClick={baixarModeloContatosXLSX}>
+                    <Download className="h-3 w-3" /> Baixar modelo
+                  </Button>
+                </div>
                 <p className="text-muted-foreground">
-                  CSV com colunas: nome, telefone, email, empresa, cargo, origem, status, tags, notas.
-                  Tags separadas por ponto e vírgula (;).
+                  <strong className="text-foreground">nome</strong> e <strong className="text-foreground">telefone</strong> são obrigatórios — sem eles não dá pra disparar mensagem nenhuma.
+                  Opcionais: email, cidade, estado, interesse, data_nascimento, empresa, cargo.
+                  Cada coluna vira automaticamente uma variável <code className="bg-background px-1 rounded">{"{{coluna}}"}</code> disponível
+                  nos templates de Disparos (ex: coluna "cidade" → <code className="bg-background px-1 rounded">{"{{cidade}}"}</code>) — mesmo modelo aceito em Disparos → Importar contatos.
+                </p>
+                <p className="text-muted-foreground">
+                  Também aceita, se vierem na planilha (não geram variável, só preenchem o CRM): origem, status, tags (separadas por ;), notas.
                 </p>
               </div>
 

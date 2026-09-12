@@ -32,6 +32,8 @@ import {
   ChevronUp, Pin, Archive, BellOff, MessageCircle,
   Copy, Video, FileText, Trash2, Forward, Star,
   AlertCircle, Activity, ArrowLeft, Users,
+  Download, FileSpreadsheet, UserSearch, LogOut,
+  Link as LinkIcon,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -57,6 +59,14 @@ import { getFreshToken } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useStatusEnvio, chaveTelefone } from "@/hooks/useStatusEnvio";
 import { TagStatusEnvio } from "@/components/TagStatusEnvio";
+// [AUDITORIA] LÓGICA (Sprint Motor Nativo v2, 2026-08-08, item 4): motor nativo de texto
+// compartilhado (`src/lib/motorTexto.ts`, extraído de `Disparos.tsx` nesta mesma sprint) —
+// `aplicarRespostaRapida` (abaixo) usa `personalizarMensagem` pra resolver {{placeholder}}/
+// spintax manual/variação automática com o dado do contato da conversa aberta, em vez de inserir
+// o texto canônico cru no composer. Baixo risco: é só o texto que entra no campo de digitação, o
+// atendente ainda revisa/edita antes de enviar de verdade.
+import { personalizarMensagem } from "@/lib/motorTexto";
+import * as XLSX from "xlsx";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
 // [AUDITORIA] FIX APLICADO (2026-07-10): apiHeaders() lia o token cru do localStorage sem checar
@@ -177,6 +187,13 @@ interface Chat {
   is_muted?: boolean;
   is_archived?: boolean;
   source?: string;
+  // [AUDITORIA] LÓGICA (Sprint Grupos Somem com Instância Duplicada, 2026-09-04): identidade
+  // estável do número real por trás de `source` (que é só o instance_name cru da última
+  // mensagem, e não sobrevive a uma reconexão sob nome novo pro mesmo número — ver GET
+  // /conversas, backend). Usado pelo filtro de número da Inbox no lugar de `source`; `source`
+  // continua existindo separadamente porque ações ao vivo (enviar mensagem, buscar info de
+  // grupo) precisam do instance_name atual de verdade, não do número.
+  numero?: string;
   push_name?: string;
   messages: Message[];
   notes?: string;
@@ -289,13 +306,24 @@ function ChatAvatar({
   );
 }
 
-// ── Player de áudio com proxy autenticado ──────────────────────────────────────
+// ── Player de áudio ───────────────────────────────────────────────────────────
+// [AUDITORIA] BUG (achado 2026-09-10 — "meus áudios não dá pra ouvir"): este player SEMPRE
+// buscava via o proxy `/api/whatsapp/media`, mesmo quando `src` já era uma URL pública normal.
+// Áudio enviado pelo chat fica salvo como `${API_BASE}/uploads/...` — o proxy roda uma allowlist
+// de host (`isMediaHostAllowed`, whatsapp.ts) que só permitia `*.whatsapp.net`/host da Evolution,
+// então respondia 400 e o player mostrava "Áudio indisponível". Imagens/vídeos nunca tiveram
+// isso porque `useAuthedMediaUrl` carrega http(s) direto. [AUDITORIA] FIX APLICADO: mesma regra —
+// URL http(s)/data: carrega direto no <audio>; só `local://` (mídia recebida, salva em disco,
+// exige header de Authorization que a tag <audio> não manda) passa pelo proxy autenticado.
 function AudioPlayer({ src }: { src: string }) {
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const precisaProxy = src.startsWith('local://') || src.startsWith('local-pic://');
+  const [blobUrl, setBlobUrl] = useState<string | null>(precisaProxy ? null : src);
+  const [loading, setLoading] = useState(precisaProxy);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    if (!precisaProxy) { setBlobUrl(src); setLoading(false); setError(false); return; }
+
     let revoke: string | null = null;
     setLoading(true);
     setError(false);
@@ -318,20 +346,195 @@ function AudioPlayer({ src }: { src: string }) {
       .finally(() => setLoading(false));
 
     return () => { if (revoke) URL.revokeObjectURL(revoke); };
-  }, [src]);
+  }, [src, precisaProxy]);
 
   if (loading) return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
       <Loader2 className="h-4 w-4 animate-spin" /> carregando áudio...
     </div>
   );
-  if (error) return (
+  if (error || !blobUrl) return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
       <Mic className="h-4 w-4" /> Áudio indisponível
     </div>
   );
   return (
-    <audio controls src={blobUrl!} className="max-w-[260px] h-10 rounded-lg" preload="metadata" />
+    <audio controls src={blobUrl} className="max-w-[260px] h-10 rounded-lg" preload="metadata" />
+  );
+}
+
+// ── Preview de envio de mídia em tela cheia (padrão WhatsApp) ──────────────────
+// [AUDITORIA] LÓGICA (2026-09-10 — pedido do usuário: "faça uma parecida com a do WhatsApp
+// original"): substitui o chip inline minúsculo que existia antes. Tela cheia escura, mídia
+// grande centralizada, campo de legenda POR ARQUIVO, tira de miniaturas com o ativo destacado,
+// botão "+" pra anexar mais e botão de enviar próprio (círculo verde). Envio serializado no
+// pai (`enviarAnexosDoPreview`), um `enviarMidia` por arquivo com a sua legenda.
+function MediaSendPreview({
+  files, recipientName, sending, onClose, onAddMore, onRemove, onSend,
+}: {
+  files: File[];
+  recipientName: string;
+  sending: boolean;
+  onClose: () => void;
+  onAddMore: () => void;
+  onRemove: (index: number) => void;
+  onSend: (itens: { file: File; caption: string }[]) => void;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [captions, setCaptions] = useState<string[]>([]);
+
+  const urls = useMemo(() => files.map(f => URL.createObjectURL(f)), [files]);
+  useEffect(() => () => { urls.forEach(u => URL.revokeObjectURL(u)); }, [urls]);
+
+  useEffect(() => {
+    setCaptions(prev => files.map((_, i) => prev[i] ?? ''));
+    setActiveIndex(i => Math.min(i, Math.max(0, files.length - 1)));
+  }, [files]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !sending) onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, sending]);
+
+  if (!files.length) return null;
+  const active = files[activeIndex];
+  if (!active) return null;
+  const activeUrl = urls[activeIndex];
+  const kind = mimeToMediaType(active.type);
+
+  const setActiveCaption = (v: string) =>
+    setCaptions(prev => prev.map((c, i) => (i === activeIndex ? v : c)));
+
+  const handleSend = () => {
+    if (sending) return;
+    onSend(files.map((f, i) => ({ file: f, caption: (captions[i] || '').trim() })));
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] flex flex-col bg-[#0b141a] text-[#e9edef] animate-in fade-in duration-150">
+      {/* Cabeçalho */}
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-3 sm:px-5">
+        <button
+          onClick={() => !sending && onClose()}
+          className="rounded-full p-2 transition-colors hover:bg-white/10 disabled:opacity-30"
+          disabled={sending}
+          title="Cancelar (Esc)"
+        >
+          <X className="h-5 w-5" />
+        </button>
+        <span className="truncate px-2 text-sm text-[#8696a0]">
+          {files.length > 1
+            ? `${activeIndex + 1} de ${files.length}`
+            : kind === 'image' ? 'Foto' : kind === 'video' ? 'Vídeo' : 'Arquivo'}
+        </span>
+        <button
+          onClick={() => !sending && onRemove(activeIndex)}
+          className="rounded-full p-2 transition-colors hover:bg-white/10 disabled:opacity-30"
+          disabled={sending}
+          title="Remover este arquivo"
+        >
+          <Trash2 className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* Mídia */}
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 sm:p-8">
+        {kind === 'image' ? (
+          <img src={activeUrl} alt={active.name} className="max-h-full max-w-full rounded-lg object-contain" />
+        ) : kind === 'video' ? (
+          <video src={activeUrl} controls className="max-h-full max-w-full rounded-lg" />
+        ) : (
+          <div className="flex flex-col items-center gap-4 text-center">
+            <div className="flex h-28 w-24 items-center justify-center rounded-xl bg-[#202c33]">
+              <FileText className="h-12 w-12 text-[#8696a0]" />
+            </div>
+            <div>
+              <p className="max-w-xs break-all text-sm font-medium">{active.name}</p>
+              <p className="mt-0.5 text-xs text-[#8696a0]">
+                {(active.size / 1024).toFixed(0)} KB{active.type ? ` · ${active.type}` : ''}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Legenda do arquivo ativo */}
+      <div className="shrink-0 px-3 sm:px-6">
+        <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-lg bg-[#2a3942] px-4 py-2.5">
+          <input
+            value={captions[activeIndex] ?? ''}
+            onChange={e => setActiveCaption(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleSend(); } }}
+            placeholder="Adicione uma legenda..."
+            maxLength={1024}
+            autoFocus
+            className="flex-1 border-none bg-transparent text-sm text-[#e9edef] outline-none placeholder:text-[#8696a0]"
+          />
+        </div>
+      </div>
+
+      {/* Miniaturas + adicionar + enviar */}
+      <div className="flex shrink-0 items-center gap-3 px-3 py-4 sm:px-6">
+        <div className="flex flex-1 items-center gap-2 overflow-x-auto pb-1">
+          {files.map((f, i) => {
+            const u = urls[i];
+            const isImg = f.type.startsWith('image/');
+            const isVid = f.type.startsWith('video/');
+            return (
+              <button
+                key={i}
+                onClick={() => setActiveIndex(i)}
+                className={`relative h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 transition-all ${
+                  i === activeIndex
+                    ? 'border-[#00a884]'
+                    : 'border-transparent opacity-60 hover:opacity-100'
+                }`}
+                title={f.name}
+              >
+                {isImg ? (
+                  <img src={u} alt="" className="h-full w-full object-cover" />
+                ) : isVid ? (
+                  <video src={u} className="h-full w-full object-cover" muted />
+                ) : (
+                  <span className="flex h-full w-full items-center justify-center bg-[#202c33]">
+                    <FileText className="h-5 w-5 text-[#8696a0]" />
+                  </span>
+                )}
+                {files.length > 1 && !sending && (
+                  <span
+                    role="button"
+                    onClick={e => { e.stopPropagation(); onRemove(i); }}
+                    className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/75"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <button
+            onClick={() => !sending && onAddMore()}
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-[#8696a0]/40 text-[#8696a0] transition-colors hover:border-[#00a884] hover:text-[#00a884]"
+            title="Adicionar mais"
+          >
+            <Plus className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden max-w-[140px] truncate text-xs text-[#8696a0] sm:inline">{recipientName}</span>
+          <button
+            onClick={handleSend}
+            disabled={sending}
+            className="flex h-12 w-12 items-center justify-center rounded-full bg-[#00a884] text-[#0b141a] shadow-lg transition-colors hover:bg-[#06cf9c] disabled:opacity-60"
+            title={`Enviar para ${recipientName}`}
+          >
+            {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5 translate-x-0.5" />}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -362,6 +565,71 @@ function AuthedVideo({ src, mime, className }: { src: string; mime?: string; cla
     <video controls className={className} preload="metadata">
       <source src={resolved} type={mime || 'video/mp4'} />
     </video>
+  );
+}
+
+// [AUDITORIA] LÓGICA (Sprint Grupos — melhorias WhatsApp, 2026-09-06): cache módulo-level (não
+// dentro do componente) — sobrevive a troca de conversa/desmontagem da lista de mensagens, então
+// a mesma URL vista em qualquer chat só busca uma vez por sessão do navegador, mesmo com o poll
+// de mensagens rodando a cada 3s. Camada extra ao cache de 7 dias que o backend já mantém em
+// `link_previews_cache` (esse aqui evita até a IDA HTTP pro nosso próprio backend a cada poll).
+const linkPreviewCache = new Map<string, { titulo: string | null; descricao: string | null; imagemUrl: string | null; siteNome: string | null; erro: string | null }>();
+
+interface LinkPreviewData {
+  titulo: string | null;
+  descricao: string | null;
+  imagemUrl: string | null;
+  siteNome: string | null;
+  erro: string | null;
+}
+
+// Card de preview genérico (qualquer link http/https) — mesmo espírito visual do card de convite
+// de grupo (link clicável, ícone/imagem + texto), mas com dado real da página de terceiro
+// (Open Graph, buscado via GET /api/whatsapp/link-preview). Enquanto carrega ou se falhar
+// (`erro` ou sem título nenhum pra mostrar), não renderiza nada — a mensagem já mostra o texto
+// cru do link normalmente logo abaixo, então nunca fica "faltando" alguma coisa visualmente.
+function LinkPreviewCard({ url, isOut }: { url: string; isOut: boolean }) {
+  const cacheado = linkPreviewCache.get(url);
+  const [dados, setDados] = useState<LinkPreviewData | null>(cacheado ?? null);
+  const [carregando, setCarregando] = useState(!cacheado);
+
+  useEffect(() => {
+    if (linkPreviewCache.has(url)) return;
+    let cancelado = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/whatsapp/link-preview?url=${encodeURIComponent(url)}`, { headers: await apiHeaders() });
+        const data = await res.json().catch(() => ({ titulo: null, descricao: null, imagemUrl: null, siteNome: null, erro: 'falha_busca' }));
+        linkPreviewCache.set(url, data);
+        if (!cancelado) { setDados(data); setCarregando(false); }
+      } catch {
+        if (!cancelado) setCarregando(false);
+      }
+    })();
+    return () => { cancelado = true; };
+  }, [url]);
+
+  if (carregando || !dados || dados.erro || !dados.titulo) return null;
+
+  return (
+    <a
+      href={url}
+      target="_blank" rel="noreferrer"
+      className={`flex items-center gap-2.5 mb-1.5 p-2.5 rounded-xl border overflow-hidden ${isOut ? 'bg-primary-foreground/10 border-primary-foreground/20' : 'bg-muted/40 border-border/50'} hover:opacity-80 transition-opacity`}
+    >
+      {dados.imagemUrl ? (
+        <img src={dados.imagemUrl} alt="" className="h-14 w-14 rounded-lg object-cover shrink-0" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+      ) : (
+        <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-primary-foreground/15' : 'bg-primary/10'}`}>
+          <LinkIcon className={`h-4 w-4 ${isOut ? 'text-primary-foreground' : 'text-primary'}`} />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-bold truncate">{dados.titulo}</p>
+        {dados.descricao && <p className="text-[11px] opacity-70 line-clamp-2">{dados.descricao}</p>}
+        <p className="text-[10px] opacity-50 truncate uppercase tracking-wide">{dados.siteNome}</p>
+      </div>
+    </a>
   );
 }
 
@@ -401,8 +669,11 @@ export function WhatsAppInterface() {
   const [noteInput, setNoteInput] = useState("");
   // [AUDITORIA] LÓGICA (Achado A — envio de mídia): estado do anexo selecionado (preview antes
   // de enviar/cancelar) e da gravação de áudio via MediaRecorder.
-  const [attachedFile, setAttachedFile] = useState<File | null>(null);
-  const [attachedPreviewUrl, setAttachedPreviewUrl] = useState<string | null>(null);
+  // [AUDITORIA] LÓGICA (2026-09-10 — pedido do usuário: preview igual ao do WhatsApp original):
+  // virou uma LISTA de arquivos (o preview em tela cheia `MediaSendPreview` suporta múltiplos
+  // anexos + legenda por arquivo). O antigo `attachedPreviewUrl` (blob URL único) saiu — o modal
+  // gerencia os próprios object URLs, um por arquivo.
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [sendingMedia, setSendingMedia] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -421,6 +692,9 @@ export function WhatsAppInterface() {
   const [contatoSearch, setContatoSearch] = useState("");
   const [contatoResults, setContatoResults] = useState<{id: string; nome: string; telefone: string; push_name?: string}[]>([]);
   const [searchingContatos, setSearchingContatos] = useState(false);
+  // Número (instância) que vai enviar a primeira mensagem de uma conversa nova — "" deixa o
+  // backend decidir (instância padrão do tenant), só relevante quando há mais de um número.
+  const [novaConversaInstancia, setNovaConversaInstancia] = useState("");
   // Foto de perfil — ampliar
   const [photoModal, setPhotoModal] = useState<string | null>(null);
   // [AUDITORIA] LÓGICA: photoModal pode guardar um marcador `local-pic://...` (foto salva
@@ -440,7 +714,21 @@ export function WhatsAppInterface() {
   const [grupoInfoExtra, setGrupoInfoExtra] = useState<{ desc: string | null; size: number | null; creation: number | null } | null>(null);
   const [showImportarGrupoModal, setShowImportarGrupoModal] = useState(false);
   const [importandoGrupo, setImportandoGrupo] = useState(false);
-  const [resultadoImportacaoGrupo, setResultadoImportacaoGrupo] = useState<{ novos: number; jaExistiam: number; descartados: number; semNumeroResolvido: number } | null>(null);
+  const [resultadoImportacaoGrupo, setResultadoImportacaoGrupo] = useState<{ novos: number; jaExistiam: number; descartados: number; semNumeroResolvido: number; listaNome: string | null; nomesResolvidos: number } | null>(null);
+  // [AUDITORIA] LÓGICA (Sprint Exportar Leads de Grupo, 2026-08-23, pedido explícito do usuário:
+  // "quero que baixe em csv ou excel e dê pra importar pra fora do sistema"): 'csv'/'excel'
+  // enquanto aquele formato especificamente está sendo baixado (spinner só no botão certo, não
+  // trava os dois); `null` em repouso. Ação puramente de leitura (GET /participantes) — nunca
+  // grava nada no CRM, diferente de `importarContatosDoGrupo` acima.
+  const [exportandoGrupo, setExportandoGrupo] = useState<'csv' | 'excel' | null>(null);
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-26 — pedido explícito
+  // do usuário: "vamos ver a melhor forma de resolver isso [nome ainda aparecendo com número]"):
+  // ação separada e explícita da resolução via `fetchProfile` (~78-79% de cobertura real medida,
+  // ver comentário completo em `resolverNomesEmBackground`, whatsapp.ts) — deliberadamente NÃO
+  // automática no export/import por causa do delay anti-ban (pode levar minutos a dezenas de
+  // minutos num grupo grande). `progressoNomes = null` fora de uma resolução; enquanto
+  // `emAndamento`, um poll (ver `useEffect` abaixo) atualiza `resolvidos`/`total` periodicamente.
+  const [progressoNomes, setProgressoNomes] = useState<{ emAndamento: boolean; total: number; resolvidos: number } | null>(null);
   // Cache de sessão: phone → foto_perfil buscada (evita repetir chamadas)
   const prevConversasRef = useRef<Map<string, { ts: string; role: string }>>(new Map());
   const prevUltimaAtividadeRef = useRef<Map<string, string>>(new Map());
@@ -482,6 +770,39 @@ export function WhatsAppInterface() {
   const [isGlobalSearching, setIsGlobalSearching] = useState(false);
   const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
 
+  // [AUDITORIA] LÓGICA (multi-número — filtro de conversas + seleção de instância no envio,
+  // 2026-08-07): lista de instâncias conectadas do tenant (agentes com evolution_instancia
+  // preenchido), usada tanto para filtrar a lista de conversas por número quanto para escolher
+  // por qual número uma nova conversa/mensagem sai. Buscada uma vez ao montar — não muda com
+  // frequência o suficiente para justificar polling.
+  const [instanciasDisponiveis, setInstanciasDisponiveis] = useState<{ id: string; nome: string; evolution_instancia: string; numero: string }[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/agentes`, { headers: await apiHeaders() });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => []);
+        const lista: any[] = Array.isArray(data) ? data : data?.data || [];
+        // [AUDITORIA] LÓGICA (Sprint Grupos Somem com Instância Duplicada, 2026-09-04):
+        // `numero` (numero_conectado, populado pelo cron de reconciliação a cada 15min) é a
+        // identidade estável usada pro filtro — cai pro próprio evolution_instancia enquanto o
+        // cron ainda não rodou pra essa instância (linha nova, conectada há <15min). Dedup por
+        // `numero`: 2 agentes com `evolution_instancia` diferente mas mesmo número real (exatamente
+        // o cenário do bug original — reconexão criou uma instância nova sem apagar a antiga) não
+        // devem virar 2 itens no seletor pro mesmo número; mantém o último (agente mais recente).
+        const porNumero = new Map<string, { id: string; nome: string; evolution_instancia: string; numero: string }>();
+        for (const a of lista) {
+          if (!a.evolution_instancia) continue;
+          const numero = a.numero_conectado || a.evolution_instancia;
+          porNumero.set(numero, { id: a.id, nome: a.nome, evolution_instancia: a.evolution_instancia, numero });
+        }
+        setInstanciasDisponiveis(Array.from(porNumero.values()));
+      } catch { /* silencioso — filtro/seletor de instância só some da UI */ }
+    })();
+  }, []);
+  // Filtro ativo da lista de conversas (número real, ver Chat.numero) — "" = todos os números
+  const [instanciaFiltro, setInstanciaFiltro] = useState("");
+
 
   // Estados para seleção múltipla
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -519,8 +840,23 @@ export function WhatsAppInterface() {
     }
   };
 
+  // [AUDITORIA] FIX APLICADO (Sprint Motor Nativo v2, 2026-08-08, item 4): antes inseria
+  // `r.mensagem` cru no composer — mesma resposta rápida usada repetidamente pro mesmo tipo de
+  // pergunta gerava padrão repetitivo (mesmo risco de detecção de spam do Disparo, em escala
+  // menor, por ser 1 mensagem de cada vez em vez de campanha em massa). Agora resolve
+  // {{placeholder}}/spintax manual/variação automática (`personalizarMensagem`, motorTexto.ts)
+  // com o dado do CONTATO DA CONVERSA ABERTA (`activeChat`, declarado mais abaixo no componente —
+  // closure resolve `activeChat` no momento do clique, não da declaração desta função). Sem
+  // `activeChat` (nenhuma conversa aberta — não deveria acontecer, o composer só existe dentro de
+  // uma conversa) cai num objeto vazio, equivalente ao comportamento anterior pra placeholders,
+  // com variação automática ainda ativa. Variação automática sempre LIGADA aqui (sem toggle
+  // visível, ao contrário de Disparos) — risco baixo o suficiente (1 mensagem, atendente revisa
+  // antes de enviar) pra não justificar mais um controle na UI do chat.
   const aplicarRespostaRapida = (r: RespostaRapida) => {
-    setMessageInput(r.mensagem);
+    const contatoConversa = activeChat
+      ? { nome: activeChat.is_group ? undefined : activeChat.name, telefone: activeChat.phone }
+      : {};
+    setMessageInput(personalizarMensagem(r.mensagem, contatoConversa, true));
     setShowQR(false);
     setQrSearch('');
     textareaRef.current?.focus();
@@ -542,10 +878,17 @@ export function WhatsAppInterface() {
   // `fetchIaStatus` acima (uma vez por troca de chat, não fica em polling). `groupJid` já vem
   // com `@g.us` (é `activeChatId`/`chat.id` pra grupo). Nunca cacheada — sempre bate na
   // Evolution de novo (rota GET /grupos/:jid/info não persiste nada).
-  const fetchGrupoInfoExtra = useCallback(async (groupJid: string) => {
+  // [AUDITORIA] BUG (achado real, `SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`, aberta
+  // desde 2026-08-09): sem `instancia`, o backend resolvia credenciais de QUALQUER instância
+  // ativa do tenant (a mais recente), não necessariamente a que é membro deste grupo — conta com
+  // 2+ números reais conectados fazia a Evolution "não achar" um grupo que só existe na OUTRA
+  // instância. [AUDITORIA] FIX APLICADO: `instancia` (segundo parâmetro, `chat.source` — mesmo
+  // campo que `handleSendMessage` já manda em todo envio desta tela) agora vai explícita.
+  const fetchGrupoInfoExtra = useCallback(async (groupJid: string, instancia?: string) => {
     setGrupoInfoExtra(null);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(groupJid)}/info`, { headers: await apiHeaders() });
+      const qs = instancia ? `?instancia=${encodeURIComponent(instancia)}` : '';
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(groupJid)}/info${qs}`, { headers: await apiHeaders() });
       if (res.ok) {
         const d = await res.json();
         setGrupoInfoExtra({ desc: d.desc, size: d.size, creation: d.creation });
@@ -638,18 +981,30 @@ export function WhatsAppInterface() {
     if (!activeChatId) return;
     setImportandoGrupo(true);
     try {
+      // [AUDITORIA] FIX APLICADO (`SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`) — mesmo
+      // achado/fix de `fetchGrupoInfoExtra` acima: manda a instância certa explicitamente, não
+      // deixa o backend adivinhar "qualquer uma ativa".
       const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/importar-contatos`, {
         method: 'POST',
-        headers: await apiHeaders(),
+        headers: { ...(await apiHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instancia: activeChat?.source }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         toast.error(err.message || 'Erro ao importar contatos do grupo');
         return;
       }
-      const { novos, jaExistiam, descartados, semNumeroResolvido } = await res.json();
-      setResultadoImportacaoGrupo({ novos, jaExistiam, descartados, semNumeroResolvido });
-      toast.success(`${novos} contato(s) novo(s) — ${jaExistiam} já existiam`);
+      const { novos, jaExistiam, descartados, semNumeroResolvido, listaNome, nomesResolvidos } = await res.json();
+      setResultadoImportacaoGrupo({ novos, jaExistiam, descartados, semNumeroResolvido, listaNome, nomesResolvidos: nomesResolvidos ?? 0 });
+      // [AUDITORIA] FIX APLICADO (achado do usuário, 2026-08-06): antes o toast só dizia quantos
+      // contatos entraram, sem dizer ONDE — usuário não achava os contatos depois, porque a
+      // importação nunca tinha criado lista nenhuma (ver fix no backend, whatsapp.ts). Agora
+      // aponta o nome exato da lista nova (só existe se `novos > 0` — backend só cria a lista
+      // quando há pelo menos 1 contato genuinamente novo).
+      toast.success(
+        novos > 0 ? `${novos} contato(s) importado(s) para a lista "${listaNome}"` : `Nenhum contato novo — ${jaExistiam} já existiam no CRM`,
+        { description: jaExistiam > 0 && novos > 0 ? `${jaExistiam} já existiam e não foram alterados.` : undefined }
+      );
     } catch {
       toast.error('Sem conexão com o servidor');
     } finally {
@@ -657,6 +1012,213 @@ export function WhatsAppInterface() {
       setShowImportarGrupoModal(false);
     }
   };
+
+  // [AUDITORIA] LÓGICA (Sprint Exportar Leads de Grupo, 2026-08-23): busca a lista crua de
+  // participantes (GET /participantes, só leitura — ver comentário completo na rota, whatsapp.ts)
+  // pra gerar CSV/Excel no cliente. Compartilhada pelos 2 formatos abaixo, evita 2 fetches pra
+  // clicar em "Baixar CSV" e depois "Baixar Excel" na mesma sessão do modal.
+  // [AUDITORIA] ATUALIZADO (Sprint Nome Real de Leads de Grupo, 2026-08-26): a rota agora resolve
+  // `nome`/`nomeVerificado` (cadeia de fontes — contato já conhecido, push_name de conversa
+  // individual, ou `group/participants` da Evolution). Ver comentário completo em
+  // `resolverNomeParticipante()`, backend/src/routes/whatsapp.ts.
+  const buscarParticipantesParaExportar = async (): Promise<{ grupoNome: string; participantes: { telefone: string; admin: boolean; nome: string | null; nomeVerificado: boolean }[]; mensagemErro: string | null } | null> => {
+    if (!activeChatId) return null;
+    // [AUDITORIA] FIX APLICADO (`SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`) — mesmo
+    // achado/fix de `fetchGrupoInfoExtra`/`importarContatosDoGrupo` acima.
+    const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
+    const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/participantes${qsInstancia}`, {
+      headers: await apiHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.message || 'Erro ao buscar participantes do grupo');
+      return null;
+    }
+    return res.json();
+  };
+
+  // [AUDITORIA] LÓGICA: mesmo padrão de exportação já usado em `Leads.tsx` (`exportarCsv`) —
+  // BOM (`﻿`) pra abrir corretamente com acentuação no Excel, campos entre aspas com escape
+  // de aspas internas, ponto-e-vírgula reservado como separador de tags noutras exportações mas
+  // aqui não há tags, então vírgula normal. Colunas em português, prontas pra importar em
+  // qualquer outro CRM/planilha ("de forma organizada e bem feita", pedido literal do usuário).
+  // [AUDITORIA] FIX APLICADO (Sprint Nome Real de Leads de Grupo, 2026-08-26 — achado do próprio
+  // usuário: "o mais importante além do número é o nome, aí mora o erro"): coluna Nome duplicava
+  // o telefone pra 100% dos participantes (Evolution não devolvia nome nenhum) — enganoso num
+  // CSV que sai do CRM, parece nome real sem ser. Agora usa o nome resolvido quando existe (célula
+  // vazia se não resolveu, nunca mais o telefone disfarçado de nome) e adiciona a coluna "Nome
+  // Verificado" pra quem for importar esse arquivo noutro sistema saber em quais linhas confiar.
+  const baixarParticipantesCsv = async () => {
+    setExportandoGrupo('csv');
+    try {
+      const dado = await buscarParticipantesParaExportar();
+      if (!dado) return;
+      if (!dado.participantes.length) { toast.error(dado.mensagemErro || 'Nenhum participante com telefone resolvido para exportar'); return; }
+      const dataFormatada = new Date().toLocaleDateString('pt-BR');
+      const headers = ['Nome', 'Nome Verificado', 'Telefone', 'Admin do Grupo', 'Grupo', 'Data da Extração'];
+      const rows = dado.participantes.map(p => [
+        p.nome || '', p.nomeVerificado ? 'Sim' : 'Não', p.telefone, p.admin ? 'Sim' : 'Não', dado.grupoNome, dataFormatada,
+      ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+      const csv = [headers.join(','), ...rows].join('\n');
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `leads_grupo_${dado.grupoNome.replace(/[^a-z0-9]+/gi, '_').slice(0, 40)}_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`${dado.participantes.length} participante(s) exportado(s) em CSV`);
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setExportandoGrupo(null);
+    }
+  };
+
+  const baixarParticipantesExcel = async () => {
+    setExportandoGrupo('excel');
+    try {
+      const dado = await buscarParticipantesParaExportar();
+      if (!dado) return;
+      if (!dado.participantes.length) { toast.error(dado.mensagemErro || 'Nenhum participante com telefone resolvido para exportar'); return; }
+      const dataFormatada = new Date().toLocaleDateString('pt-BR');
+      const linhas = dado.participantes.map(p => ({
+        Nome: p.nome || '',
+        'Nome Verificado': p.nomeVerificado ? 'Sim' : 'Não',
+        Telefone: p.telefone,
+        'Admin do Grupo': p.admin ? 'Sim' : 'Não',
+        Grupo: dado.grupoNome,
+        'Data da Extração': dataFormatada,
+      }));
+      const planilha = XLSX.utils.json_to_sheet(linhas);
+      // Larguras de coluna generosas — evita abrir no Excel com tudo cortado ("###")
+      planilha['!cols'] = [{ wch: 20 }, { wch: 15 }, { wch: 16 }, { wch: 14 }, { wch: 30 }, { wch: 16 }];
+      const livro = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(livro, planilha, 'Leads do Grupo');
+      XLSX.writeFile(livro, `leads_grupo_${dado.grupoNome.replace(/[^a-z0-9]+/gi, '_').slice(0, 40)}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      toast.success(`${dado.participantes.length} participante(s) exportado(s) em Excel`);
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setExportandoGrupo(null);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-26): confirmação
+  // nativa extra (além do modal "Leads do grupo" que já exige clique consciente) — diferente de
+  // CSV/Excel/Importar, esta ação pode levar minutos a dezenas de minutos (delay anti-ban
+  // deliberado, ~5-15s por participante sem nome) e é importante o operador saber disso ANTES de
+  // clicar, não descobrir só vendo a barra de progresso travada.
+  const iniciarResolucaoNomes = async () => {
+    if (!activeChatId) return;
+    const estimativaMin = grupoInfoExtra?.size ? Math.ceil((grupoInfoExtra.size * 15) / 60) : null;
+    if (!confirm(
+      `Resolver nomes reais via perfil do WhatsApp?\n\n` +
+      `Isso consulta o perfil de cada participante sem nome ainda, um de cada vez, com pausa entre ` +
+      `cada consulta pra não sobrecarregar/arriscar a conta` +
+      (estimativaMin ? ` — pode levar até ~${estimativaMin} min neste grupo.` : '.') +
+      `\n\nRoda em segundo plano; você pode fechar este painel e voltar depois pra conferir.`
+    )) return;
+
+    try {
+      const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/resolver-nomes`, {
+        method: 'POST',
+        headers: { ...(await apiHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instancia: activeChat?.source }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.message || 'Erro ao iniciar resolução de nomes');
+        return;
+      }
+      setProgressoNomes({ emAndamento: true, total: data.totalParticipantes ?? 0, resolvidos: 0 });
+      toast.success(`Resolução iniciada para ${data.totalParticipantes ?? 0} participante(s) — acompanhe o progresso no painel.`);
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do usuário):
+  // igual iniciarResolucaoNomes acima — confirmação nativa antes de uma ação irreversível-na-hora
+  // (sair de um grupo real do WhatsApp; entrar de novo depende de alguém mandar outro convite).
+  const [saindoDoGrupo, setSaindoDoGrupo] = useState(false);
+  const sairDoGrupo = async () => {
+    if (!activeChatId || !activeChat?.is_group) return;
+    if (!confirm(`Sair de "${activeChat.name}"?\n\nVocê para de receber mensagens novas deste grupo. O histórico já trocado continua salvo aqui — só quem administra o grupo pode te adicionar de volta.`)) return;
+    setSaindoDoGrupo(true);
+    try {
+      const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(activeChatId)}/sair${qsInstancia}`, {
+        method: 'DELETE',
+        headers: await apiHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.message || 'Erro ao sair do grupo');
+        return;
+      }
+      toast.success('Você saiu do grupo.');
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setSaindoDoGrupo(false);
+    }
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06): modal simples (colar link, um
+  // botão) — mesmo padrão de estado local isolado já usado por outros modais desta tela (ex:
+  // `showImportarGrupoModal`), sem precisar de nenhum state global novo.
+  const [showEntrarGrupoModal, setShowEntrarGrupoModal] = useState(false);
+  const [linkConviteGrupo, setLinkConviteGrupo] = useState("");
+  const [entrandoNoGrupo, setEntrandoNoGrupo] = useState(false);
+  const entrarNoGrupo = async () => {
+    if (!linkConviteGrupo.trim()) return;
+    setEntrandoNoGrupo(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/grupos/entrar`, {
+        method: 'POST',
+        headers: { ...(await apiHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: linkConviteGrupo.trim(), instancia: instanciaFiltro || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.message || 'Erro ao entrar no grupo');
+        return;
+      }
+      toast.success(`Você entrou em "${data.nome || 'um novo grupo'}"! Ele aparece na lista assim que a primeira mensagem chegar.`);
+      setShowEntrarGrupoModal(false);
+      setLinkConviteGrupo("");
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setEntrandoNoGrupo(false);
+    }
+  };
+
+  // Poll de progresso enquanto uma resolução de nomes estiver em andamento neste grupo — para
+  // sozinho quando o job terminar (`emAndamento: false`) ou ao trocar de conversa.
+  useEffect(() => {
+    if (!progressoNomes?.emAndamento || !activeChatId) return;
+    const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
+    const grupoDoPoll = activeChatId;
+    const interval = setInterval(async () => {
+      try {
+        const headers = await apiHeaders();
+        const res = await fetch(`${API_BASE}/api/whatsapp/grupos/${encodeURIComponent(grupoDoPoll)}/resolver-nomes/status${qsInstancia}`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        setProgressoNomes((prev) => (prev ? { emAndamento: !!data.emAndamento, total: data.total ?? prev.total, resolvidos: data.resolvidos ?? prev.resolvidos } : prev));
+        if (!data.emAndamento) {
+          toast.success(`Resolução de nomes concluída: ${data.resolvidos} de ${data.total} participante(s) ganharam nome real.`);
+        }
+      } catch {
+        // falha de rede pontual no poll não é crítica — tenta de novo no próximo tick
+      }
+    }, 6000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progressoNomes?.emAndamento, activeChatId]);
 
   const salvarNomeContato = async () => {
     if (!activeChatId || !nameInput.trim()) return;
@@ -732,13 +1294,25 @@ export function WhatsAppInterface() {
       list = list.filter(c => c.is_archived);
     }
 
+    // [AUDITORIA] LÓGICA (multi-número — filtro por instância, 2026-08-07): filtro por número.
+    // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-04 — "não consigo ver os grupos
+    // do número X"): comparava contra `c.source`, o instance_name cru da última mensagem — uma
+    // reconexão sob um `instance_name` novo pro MESMO número (confirmado em produção:
+    // `crm_435ee4720fc3` → `crm_435ee4720fc3_2`) fazia toda conversa com última msg no nome
+    // antigo sumir do filtro, mesmo sendo o número certo. [AUDITORIA] FIX APLICADO: compara por
+    // `c.numero` (identidade estável resolvida no backend via ledger instância→número, GET
+    // /conversas) — sobrevive a qualquer quantidade de instâncias recriadas pro mesmo número.
+    if (instanciaFiltro) {
+      list = list.filter(c => c.numero === instanciaFiltro);
+    }
+
     // Ordenação: Fixados primeiro, depois por timestamp
     return list.sort((a, b) => {
       if (a.is_pinned && !b.is_pinned) return -1;
       if (!a.is_pinned && b.is_pinned) return 1;
       return (b.rawTimestamp || "").localeCompare(a.rawTimestamp || "");
     });
-  }, [chats, globalSearchTerm, activeTab]);
+  }, [chats, globalSearchTerm, activeTab, instanciaFiltro]);
 
 
   // [AUDITORIA] LÓGICA — Camada 3 (rastreio "mensagens não atualizam", 2026-07-08): esta função
@@ -787,6 +1361,7 @@ export function WhatsAppInterface() {
             phone: row.session_id,
             is_group: row.is_group || false,
             source: row.instancia || undefined,
+            numero: row.numero || row.instancia || undefined,
             lastMessage: row.ultima_mensagem || '',
             timestamp: formatTime(row.ultima_atividade),
             rawTimestamp: row.ultima_atividade,
@@ -1218,9 +1793,7 @@ export function WhatsAppInterface() {
     setReplyTo(null);
     setIsSelectMode(false);
     setSelectedMessageIds(new Set());
-    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
-    setAttachedFile(null);
-    setAttachedPreviewUrl(null);
+    setAttachedFiles([]);
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
@@ -1247,8 +1820,9 @@ export function WhatsAppInterface() {
     if (chat) fetchMensagens(activeChatId, chatName, true);
     fetchIaStatus(activeChatId);
     if (chat && !chat.profile_pic) fetchProfilePic(activeChatId);
-    if (chat?.is_group) fetchGrupoInfoExtra(activeChatId); else setGrupoInfoExtra(null);
+    if (chat?.is_group) fetchGrupoInfoExtra(activeChatId, chat.source); else setGrupoInfoExtra(null);
     setResultadoImportacaoGrupo(null); // limpa resumo da importação anterior ao trocar de conversa
+    setProgressoNomes(null); // idem pro progresso de resolução de nomes — pertence à conversa anterior
     // [AUDITORIA] LÓGICA — Camada 4, Interval C: usa activeChatIdRef.current (não activeChatId
     // diretamente) dentro do setInterval — corretamente evita o bug de closure obsoleto (o ref
     // sempre reflete o valor mais atual, atualizado pelo useEffect de activeChatIdRef.current logo
@@ -1401,7 +1975,7 @@ export function WhatsAppInterface() {
   // `POST /api/whatsapp/upload-media` (novo, mesmo padrão de catalogo.ts/galeria.ts) antes de
   // chamar `/send` — `dataUrl` continua sendo usado só para o preview otimista local (não muda,
   // `<img>`/`<video>` renderizam `data:` direto sem precisar do proxy autenticado).
-  const enviarMidia = async (file: Blob, mediaType: 'image' | 'video' | 'audio' | 'document', filename?: string) => {
+  const enviarMidia = async (file: Blob, mediaType: 'image' | 'video' | 'audio' | 'document', filename?: string, caption?: string) => {
     if (!activeChatId) return;
     if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
       toast.error(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)}MB excede o limite de ${(MAX_OUTBOUND_MEDIA_BYTES / 1024 / 1024).toFixed(0)}MB para envio via WhatsApp.`);
@@ -1414,7 +1988,8 @@ export function WhatsAppInterface() {
     try {
       const dataUrl = await fileToDataUrl(file);
       const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      const legenda = mediaType === 'image' ? '📷 Foto' : mediaType === 'video' ? '🎥 Vídeo' : mediaType === 'audio' ? '🎤 Áudio' : `📎 ${filename || 'Documento'}`;
+      const legendaFinal = (caption ?? '').trim();
+      const legenda = legendaFinal || (mediaType === 'image' ? '📷 Foto' : mediaType === 'video' ? '🎥 Vídeo' : mediaType === 'audio' ? '🎤 Áudio' : `📎 ${filename || 'Documento'}`);
 
       // Atualização otimista — mesmo padrão de handleSendMessage. data: URI funciona direto no
       // <img>/<video>/<audio> sem precisar do proxy autenticado (não é local://, não precisa).
@@ -1425,7 +2000,7 @@ export function WhatsAppInterface() {
               messages: [...c.messages, {
                 id: tempId,
                 role: "assistant" as const,
-                content: '',
+                content: legendaFinal,
                 timestamp: ts,
                 senderName: currentUserName,
                 status: "sent",
@@ -1465,6 +2040,7 @@ export function WhatsAppInterface() {
           mediaUrl: mediaUrlEstavel,
           mediaType,
           mediaFilename: filename,
+          mediaCaption: legendaFinal || undefined,
           instancia: chat?.source,
         }),
       });
@@ -1493,23 +2069,25 @@ export function WhatsAppInterface() {
   // [AUDITORIA] LÓGICA: extraído de handleFileSelected (achado 2026-07-28) pra ser reaproveitado
   // por handlePasteImage abaixo — mesma validação de tamanho e troca de preview blob URL,
   // independente de vir do input de arquivo ou de um Ctrl+V.
+  const MAX_ANEXOS = 30;
   const attachFile = (file: File) => {
     if (file.size > MAX_OUTBOUND_MEDIA_BYTES) {
       toast.error(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)}MB excede o limite de ${(MAX_OUTBOUND_MEDIA_BYTES / 1024 / 1024).toFixed(0)}MB para envio via WhatsApp.`);
       return;
     }
-    // [AUDITORIA] LÓGICA: revoga o blob URL do anexo anterior antes de criar um novo — sem isso,
-    // trocar de arquivo (selecionar A, depois B sem cancelar A) vazava o blob URL de A.
-    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
-    setAttachedFile(file);
-    setAttachedPreviewUrl(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
+    setAttachedFiles(prev => {
+      if (prev.length >= MAX_ANEXOS) {
+        toast.error(`Máximo de ${MAX_ANEXOS} arquivos por vez.`);
+        return prev;
+      }
+      return [...prev, file];
+    });
   };
 
   const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = ''; // permite selecionar o mesmo arquivo de novo depois
-    if (!file) return;
-    attachFile(file);
+    files.forEach(attachFile);
   };
 
   // [AUDITORIA] BUG (achado 2026-07-28 — "tentei colar um print e não consegui"): não existia
@@ -1535,16 +2113,21 @@ export function WhatsAppInterface() {
   };
 
   const cancelAttachment = () => {
-    if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl);
-    setAttachedFile(null);
-    setAttachedPreviewUrl(null);
+    setAttachedFiles([]);
   };
 
-  const confirmSendAttachment = async () => {
-    if (!attachedFile) return;
-    const file = attachedFile;
+  const removerAnexo = (index: number) => {
+    setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // [AUDITORIA] LÓGICA (2026-09-10): envia todos os anexos do preview em sequência, cada um com
+  // a sua própria legenda (igual ao WhatsApp original). `enviarMidia` já faz a atualização
+  // otimista + upload + /send por arquivo; aqui só serializa e limpa o preview no fim.
+  const enviarAnexosDoPreview = async (itens: { file: File; caption: string }[]) => {
     cancelAttachment();
-    await enviarMidia(file, mimeToMediaType(file.type), file.name);
+    for (const { file, caption } of itens) {
+      await enviarMidia(file, mimeToMediaType(file.type), file.name, caption);
+    }
   };
 
   // [AUDITORIA] LÓGICA: gravação via MediaRecorder — tenta opus (melhor compressão/qualidade,
@@ -1649,10 +2232,17 @@ export function WhatsAppInterface() {
     if (existing) {
       setActiveChatId(existing.id);
     } else {
+      // [AUDITORIA] LÓGICA (multi-número — seleção de instância no envio, 2026-08-07): antes,
+      // `source` nunca era setado numa conversa nova — handleSendMessage manda `instancia:
+      // chat?.source` pro backend, então toda primeira mensagem para um contato novo saía
+      // sempre pela instância padrão do tenant, sem chance de escolher outro número já
+      // conectado. `novaConversaInstancia` vem do seletor no modal "Nova Conversa" (só aparece
+      // quando há mais de uma instância conectada).
       const newChat: Chat = {
         id: cleanPhone,
         name: nomeOverride || rawPhone,
         phone: cleanPhone,
+        source: novaConversaInstancia || undefined,
         lastMessage: '',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         rawTimestamp: new Date().toISOString(),
@@ -1667,6 +2257,7 @@ export function WhatsAppInterface() {
     setNewMessagePhone("");
     setContatoSearch("");
     setContatoResults([]);
+    setNovaConversaInstancia("");
   };
 
   // [AUDITORIA] LÓGICA (achado 2026-07-27, relevante ao pedido do usuário de "navegar/pesquisar"):
@@ -1973,6 +2564,34 @@ export function WhatsAppInterface() {
   // nenhum comportamento de busca válido.
   const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+  // [AUDITORIA] LÓGICA (Sprint contínua, achado de `SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`,
+  // item 3, aberta desde 2026-08-09): link de convite de grupo (`chat.whatsapp.com/XXXX`)
+  // aparecia como texto cru no chat — o WhatsApp real mostra um card "Entrar no grupo". Regex
+  // simples client-side, sem nenhuma chamada de rede por mensagem renderizada (uma lista de
+  // mensagens de um grupo cheio de links geraria uma rajada de requests se buscássemos nome/foto
+  // reais — versão simples primeiro, mesmo escopo que a doc original definiu).
+  const LINK_CONVITE_GRUPO_REGEX = /https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+/;
+  const extrairLinkConviteGrupo = (texto: string): string | null => {
+    const m = texto.match(LINK_CONVITE_GRUPO_REGEX);
+    return m ? m[0] : null;
+  };
+
+  // [AUDITORIA] LÓGICA (Sprint Grupos — melhorias WhatsApp, 2026-09-06, pedido explícito do
+  // usuário: "links de outros grupos também virem preview/card, não só convite"): diferente do
+  // caso acima, QUALQUER link comum (YouTube, notícia, Instagram etc.) precisa de dado real da
+  // página de terceiro (título/imagem via Open Graph) — não dá pra saber isso só com regex, então
+  // aqui SIM existe uma chamada de rede por link único (nunca por mensagem — `LinkPreviewCard`
+  // abaixo cacheia por URL em `linkPreviewCache`, módulo-level, então a mesma URL repetida em
+  // várias mensagens/polls só busca uma vez por sessão do navegador; o backend também cacheia por
+  // 7 dias em `link_previews_cache`, compartilhado entre todas as contas). Só extrai o PRIMEIRO
+  // link genérico da mensagem — nunca o mesmo link já coberto pelo card de convite acima.
+  const URL_GENERICA_REGEX = /https?:\/\/[^\s<>"')]+/i;
+  const extrairLinkGenerico = (texto: string): string | null => {
+    if (extrairLinkConviteGrupo(texto)) return null; // já tem card de convite, não duplica
+    const m = texto.match(URL_GENERICA_REGEX);
+    return m ? m[0].replace(/[.,;:!?]+$/, '') : null; // tira pontuação de fim de frase colada no link
+  };
+
   const highlightText = (text: string, term: string) => {
     if (!term.trim()) return text;
     const parts = text.split(new RegExp(`(${escapeRegExp(term)})`, 'gi'));
@@ -2129,7 +2748,7 @@ export function WhatsAppInterface() {
   // Nenhuma das opções é "trocar uma classe" — todas mudam comportamento de navegação percebido
   // pelo usuário, por isso não implementadas sem confirmação.
   return (
-    <div className="flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border shadow-xl bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
+    <div className="wa-panel flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
 
       {/* ── LEFT: Conversation List ── */}
       {/* [AUDITORIA] FIX APLICADO (Achado 3 — responsividade, achado 2026-07-27, implementado
@@ -2179,6 +2798,12 @@ export function WhatsAppInterface() {
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setShowNewMessageModal(true)} title="Nova Mensagem">
                 <UserPlus className="h-4.5 w-4.5" />
               </Button>
+              {/* [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do
+                  usuário): mesmo padrão dos outros botões de ação desta barra (ícone + modal
+                  simples). */}
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setShowEntrarGrupoModal(true)} title="Entrar em grupo">
+                <Users className="h-4.5 w-4.5" />
+              </Button>
               <Button
                 variant="ghost" size="icon"
                 className="h-8 w-8 text-muted-foreground"
@@ -2190,14 +2815,45 @@ export function WhatsAppInterface() {
                   ? <Loader2 className="h-4 w-4 animate-spin" />
                   : <ImageIcon className="h-4 w-4" />}
               </Button>
-              {/* [AUDITORIA] BUG (achado 2026-07-27): botão sem onClick — não faz nada ao clicar.
-                  Não existe nenhum estado de filtro/ordenação da lista de conversas neste arquivo
-                  pra ligar aqui (diferente do ícone de sync de fotos ao lado, que já tem handler
-                  real). [AUDITORIA] FIX PENDENTE (motivo: precisa de decisão de produto — filtrar
-                  por quê? tag, instância, não-lidas? — e UI de opções nova, não é fix isolado). */}
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                <SlidersHorizontal className="h-4 w-4" />
-              </Button>
+              {/* [AUDITORIA] FIX APLICADO (2026-08-07): botão era só visual, sem onClick — ver nota
+                  antiga abaixo. Filtro por instância/número implementado (o outro filtro citado
+                  ali, "por tag/não-lidas", segue fora de escopo — pendência de produto à parte).
+                  [AUDITORIA] BUG (achado 2026-07-27, histórico): botão sem onClick — não fazia
+                  nada ao clicar. Não existia nenhum estado de filtro/ordenação da lista de
+                  conversas neste arquivo pra ligar aqui. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-8 w-8 relative ${instanciaFiltro ? "text-primary" : "text-muted-foreground"}`}
+                    title="Filtrar por número"
+                  >
+                    <SlidersHorizontal className="h-4 w-4" />
+                    {instanciaFiltro && <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-primary rounded-full" />}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onClick={() => setInstanciaFiltro("")} className="cursor-pointer">
+                    <span className={!instanciaFiltro ? "font-bold" : ""}>Todos os números</span>
+                    {!instanciaFiltro && <Check className="h-3.5 w-3.5 ml-auto" />}
+                  </DropdownMenuItem>
+                  {instanciasDisponiveis.length > 0 && <DropdownMenuSeparator />}
+                  {instanciasDisponiveis.map(inst => (
+                    <DropdownMenuItem
+                      key={inst.evolution_instancia}
+                      onClick={() => setInstanciaFiltro(inst.numero)}
+                      className="cursor-pointer"
+                    >
+                      <span className={`truncate ${instanciaFiltro === inst.numero ? "font-bold" : ""}`}>{inst.nome}</span>
+                      {instanciaFiltro === inst.numero && <Check className="h-3.5 w-3.5 ml-auto shrink-0" />}
+                    </DropdownMenuItem>
+                  ))}
+                  {instanciasDisponiveis.length === 0 && (
+                    <DropdownMenuItem disabled>Nenhuma instância conectada</DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
@@ -2230,7 +2886,18 @@ export function WhatsAppInterface() {
               precisa de decisão de produto sobre quais filtros existem de fato, mesma pendência do
               ícone de filtro). */}
           {/* Filter chip */}
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            {instanciaFiltro && (
+              <div
+                className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95"
+                onClick={() => setInstanciaFiltro("")}
+                title="Remover filtro de número"
+              >
+                <Phone className="h-3 w-3" />
+                {instanciasDisponiveis.find(i => i.numero === instanciaFiltro)?.nome || instanciaFiltro}
+                <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
+              </div>
+            )}
             <div className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95">
               Status Especial
               <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
@@ -2368,7 +3035,7 @@ export function WhatsAppInterface() {
             </div>
           )}
 
-          <div className="divide-y divide-border/50">
+          <div className="space-y-1 p-2">
             {filteredChats.map(chat => {
               const isActive = activeChatId === chat.id;
               return (
@@ -2379,12 +3046,12 @@ export function WhatsAppInterface() {
                         setActiveChatId(chat.id);
                         lastOpenedRef.current.set(chat.phone, new Date().toISOString());
                       }}
-                      className={`flex items-start gap-3 px-3.5 sm:px-4 py-2.5 sm:py-3 cursor-pointer transition-all relative group ${
+                      className={`flex items-start gap-3 rounded-xl px-3 py-2.5 cursor-pointer transition-all relative group border ${
                         isActive
-                          ? "bg-primary/[0.04] after:absolute after:left-0 after:top-0 after:bottom-0 after:w-1 after:bg-primary z-10"
+                          ? "bg-primary/10 border-primary/30 shadow-sm z-10 after:absolute after:left-0 after:top-2 after:bottom-2 after:w-1 after:rounded-full after:bg-primary"
                           : chat.unread
-                          ? "bg-green-50/30 dark:bg-green-950/20 border-l-2 border-green-500"
-                          : "hover:bg-muted/30"
+                          ? "bg-primary/[0.06] border-primary/15"
+                          : "border-transparent hover:bg-muted/40 hover:border-border/60 hover:-translate-y-px"
                       }`}
                     >
                       <div className="relative shrink-0">
@@ -2401,7 +3068,7 @@ export function WhatsAppInterface() {
                       <div className="flex-1 min-w-0 py-0.5">
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-green-700 dark:text-green-400" : "text-foreground"}`}>
+                            <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-primary" : "text-foreground"}`}>
                               {chat.name}
                             </span>
                             {chat.is_pinned && <Pin className="h-3 w-3 text-muted-foreground rotate-45 shrink-0" />}
@@ -2411,7 +3078,7 @@ export function WhatsAppInterface() {
                         </div>
                         <div className="flex items-center gap-1.5 mb-1.5">
                           {chat.is_group && (
-                            <span className="text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase">Grupo</span>
+                            <span className="text-[9px] px-1.5 py-0.5 bg-primary/12 text-primary border border-primary/20 font-bold rounded tracking-tight uppercase">Grupo</span>
                           )}
                           {chat.source && (
                             <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
@@ -2425,7 +3092,7 @@ export function WhatsAppInterface() {
                             {chat.lastMessage.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}
                           </p>
                           {chat.unread ? (
-                            <span className="min-w-[18px] h-[18px] px-1 bg-green-500 text-white text-[10px] font-black rounded-full flex items-center justify-center shadow-sm shrink-0">
+                            <span className="min-w-[18px] h-[18px] px-1 bg-primary text-primary-foreground text-[10px] font-black rounded-full flex items-center justify-center shadow-sm shrink-0">
                               {chat.unread}
                             </span>
                           ) : null}
@@ -2469,7 +3136,7 @@ export function WhatsAppInterface() {
         {/* Modal Nova Mensagem */}
         <Dialog open={showNewMessageModal} onOpenChange={(o) => {
           setShowNewMessageModal(o);
-          if (!o) { setContatoSearch(""); setContatoResults([]); setNewMessagePhone(""); }
+          if (!o) { setContatoSearch(""); setContatoResults([]); setNewMessagePhone(""); setNovaConversaInstancia(""); }
         }}>
           <DialogContent className="sm:max-w-[460px] p-0 rounded-2xl overflow-hidden">
             <DialogHeader className="px-6 pt-6 pb-4 border-b">
@@ -2548,6 +3215,42 @@ export function WhatsAppInterface() {
                   Código do Brasil (+55) adicionado automaticamente se necessário.
                 </p>
               </div>
+
+              {/* [AUDITORIA] LÓGICA (multi-número — seleção de instância no envio, 2026-08-07):
+                  só aparece com 2+ instâncias conectadas — com uma só, não há o que escolher. */}
+              {instanciasDisponiveis.length > 1 && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-muted-foreground">Enviar pelo número</label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button className="w-full h-10 rounded-xl border bg-background/50 px-3 flex items-center gap-2 text-sm hover:bg-muted/50 transition-colors">
+                        <Smartphone className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <span className="truncate flex-1 text-left">
+                          {instanciasDisponiveis.find(i => i.evolution_instancia === novaConversaInstancia)?.nome || "Número padrão"}
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-72">
+                      <DropdownMenuItem onClick={() => setNovaConversaInstancia("")} className="cursor-pointer">
+                        <span className={!novaConversaInstancia ? "font-bold" : ""}>Número padrão</span>
+                        {!novaConversaInstancia && <Check className="h-3.5 w-3.5 ml-auto" />}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {instanciasDisponiveis.map(inst => (
+                        <DropdownMenuItem
+                          key={inst.evolution_instancia}
+                          onClick={() => setNovaConversaInstancia(inst.evolution_instancia)}
+                          className="cursor-pointer"
+                        >
+                          <span className={`truncate ${novaConversaInstancia === inst.evolution_instancia ? "font-bold" : ""}`}>{inst.nome}</span>
+                          {novaConversaInstancia === inst.evolution_instancia && <Check className="h-3.5 w-3.5 ml-auto shrink-0" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
             </div>
 
             <DialogFooter className="px-5 pb-5 pt-0 gap-2">
@@ -2849,10 +3552,10 @@ export function WhatsAppInterface() {
                   onClick={toggleIA}
                   disabled={togglingIA}
                   title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-bold border transition-all active:scale-95 ${
                     iaPausada
-                      ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
-                      : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                      ? "bg-warning/15 border-warning/40 text-warning hover:bg-warning/25"
+                      : "bg-success/15 border-success/40 text-success hover:bg-success/25"
                   }`}
                 >
                   {togglingIA ? (
@@ -3184,12 +3887,12 @@ export function WhatsAppInterface() {
                             if (!isNote) toggleMessageSelection(m.id);
                           }}
                         >
-                          <div className={`max-w-[88%] sm:max-w-[85%] rounded-2xl px-3 sm:px-4 py-2 sm:py-2.5 shadow-sm relative animate-in slide-in-from-bottom-2 duration-300 group ${
+                          <div className={`max-w-[88%] sm:max-w-[85%] rounded-2xl px-3.5 sm:px-4 py-2.5 relative animate-in slide-in-from-bottom-2 duration-300 group ${
                             isOut
-                              ? "bg-primary text-primary-foreground rounded-tr-none shadow-primary/10"
+                              ? "bg-primary text-primary-foreground rounded-tr-md shadow-[0_6px_18px_-8px_hsl(var(--primary)/0.55)]"
                               : isNote
-                                ? "bg-amber-100/90 border border-amber-200 text-amber-900 w-full text-center rounded-xl shadow-none"
-                                : "bg-background rounded-tl-none border border-border/50 shadow-black/[0.02]"
+                                ? "bg-warning/15 border border-warning/30 text-warning-foreground dark:text-warning w-full text-center rounded-xl shadow-none"
+                                : "bg-card rounded-tl-md border border-border/60 shadow-[0_4px_14px_-8px_rgb(0_0_0/0.35)]"
                           } ${selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10 brightness-95 scale-[0.98] origin-center transition-all" : ""}`}>
                             
                             {/* Ícone de Favorito (Star) */}
@@ -3250,7 +3953,7 @@ export function WhatsAppInterface() {
                           ) : m.tipo === 'audio' ? (
                             m.midia_url
                               ? <AudioPlayer src={m.midia_url} />
-                              : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Mic className="h-4 w-4" /> Áudio</div>
+                              : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1" title="A mídia deste áudio ainda não foi baixada — o servidor tenta recuperar automaticamente."><Mic className="h-4 w-4" /> Áudio (mídia indisponível)</div>
                           ) : m.tipo === 'video' && m.midia_url ? (
                             <AuthedVideo src={m.midia_url} mime={m.midia_mime} className="rounded max-w-[260px] mb-1" />
                           ) : m.tipo === 'document' && m.midia_url ? (
@@ -3269,10 +3972,57 @@ export function WhatsAppInterface() {
                             <p className="text-sm italic text-muted-foreground/60 flex items-center gap-1.5 py-1">
                               <ShieldAlert className="h-3.5 w-3.5 opacity-50" /> Mensagem apagada
                             </p>
-                          ) : m.content && (
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">
-                              {highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}
-                            </p>
+                          ) : /* [AUDITORIA] BUG (achado real, `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md`,
+                                item 5 — "polish"): `m.content` pra mídia processada pela IA é o
+                                texto cru `[Mídia - Imagem: "..."]`/`[Áudio Transcrito: "..."]`
+                                gerado em `webhook.ts` só pra alimentar o prompt da IA — nunca foi
+                                pensado pra humano ler. Sem esta checagem aparecia como legenda
+                                duplicada embaixo da mídia real (que já renderiza acima, quando
+                                `media_url` existe). Ficou mais visível agora que o fix de
+                                persistência de mídia (mesma sprint) faz `media_url` preencher bem
+                                mais vezes — antes esse texto cru era, na prática, o ÚNICO conteúdo
+                                visível na maioria dos casos; agora duplicaria a mídia real quase
+                                sempre. [AUDITORIA] FIX APLICADO: nunca renderiza esse texto cru
+                                como legenda — a mídia (ou o placeholder "Áudio") já comunica o
+                                essencial visualmente. */
+                          m.content && !/^\[(Mídia - Imagem|Áudio Transcrito):/.test(m.content) && (
+                            <>
+                              {/* [AUDITORIA] FIX APLICADO (`SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`,
+                                  item 3): link de convite de grupo virava texto cru — agora
+                                  ganha um card clicável, mesmo espírito do preview real do
+                                  WhatsApp. Sem chamada de rede por mensagem (nome/foto reais do
+                                  grupo exigiriam bater na Evolution pra cada link renderizado —
+                                  fora de escopo da doc original, versão simples primeiro). Texto
+                                  original mantido embaixo, nada escondido. */}
+                              {extrairLinkConviteGrupo(m.content) && (
+                                <a
+                                  href={extrairLinkConviteGrupo(m.content)!}
+                                  target="_blank" rel="noreferrer"
+                                  className={`flex items-center gap-2.5 mb-1.5 p-2.5 rounded-xl border ${isOut ? 'bg-primary-foreground/10 border-primary-foreground/20' : 'bg-muted/40 border-border/50'} hover:opacity-80 transition-opacity`}
+                                >
+                                  <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-primary-foreground/15' : 'bg-primary/10'}`}>
+                                    <Users className={`h-4 w-4 ${isOut ? 'text-primary-foreground' : 'text-primary'}`} />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-bold">Convite para grupo do WhatsApp</p>
+                                    <p className="text-[11px] opacity-70 truncate">{extrairLinkConviteGrupo(m.content)}</p>
+                                  </div>
+                                  <ChevronRight className="h-4 w-4 opacity-50 shrink-0" />
+                                </a>
+                              )}
+                              {/* [AUDITORIA] LÓGICA (Sprint Grupos — melhorias WhatsApp,
+                                  2026-09-06, pedido explícito do usuário): mesmo espírito do card
+                                  de convite acima, mas pra QUALQUER link comum (YouTube, notícia,
+                                  Instagram etc.) — precisa de dado real da página de terceiro
+                                  (Open Graph), por isso vira componente próprio com busca/cache
+                                  (ver `LinkPreviewCard` no topo do arquivo), não regex puro. */}
+                              {extrairLinkGenerico(m.content) && (
+                                <LinkPreviewCard url={extrairLinkGenerico(m.content)!} isOut={isOut} />
+                              )}
+                              <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                                {highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}
+                              </p>
+                            </>
                           )}
 
                           <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
@@ -3385,32 +4135,10 @@ export function WhatsAppInterface() {
                       </div>
                     ) : (
                       <div className="relative">
-                        {/* [AUDITORIA] FIX APLICADO (Achado A): preview do anexo selecionado, com
-                            opção de cancelar antes de enviar, conforme pedido. */}
-                        {attachedFile && (
-                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 animate-in slide-in-from-bottom-2 duration-200 overflow-hidden">
-                            <div className="p-3 flex items-center gap-3">
-                              {attachedPreviewUrl ? (
-                                <img src={attachedPreviewUrl} alt="preview do anexo" className="w-12 h-12 rounded-lg object-cover shrink-0" />
-                              ) : (
-                                <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center shrink-0">
-                                  <Paperclip className="h-5 w-5 text-muted-foreground" />
-                                </div>
-                              )}
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs font-bold truncate">{attachedFile.name}</p>
-                                <p className="text-[10px] text-muted-foreground">{(attachedFile.size / 1024).toFixed(0)} KB</p>
-                              </div>
-                              <button
-                                onClick={cancelAttachment}
-                                disabled={sendingMedia}
-                                className="p-1 rounded-full hover:bg-muted text-muted-foreground transition-colors disabled:opacity-40"
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-                        )}
+                        {/* [AUDITORIA] LÓGICA (2026-09-10): o preview de anexo agora é a tela cheia
+                            `MediaSendPreview` (renderizada no fim do componente, fora do composer),
+                            igual ao WhatsApp original — legenda por arquivo, múltiplos anexos,
+                            miniaturas e botão de enviar próprio. O chip inline antigo saiu. */}
 
                         {/* Preview de Resposta */}
                         {replyTo && (
@@ -3488,15 +4216,27 @@ export function WhatsAppInterface() {
                     ref={fileInputRef}
                     onChange={handleFileSelected}
                     accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                    multiple
                     className="hidden"
                   />
+                  {attachedFiles.length > 0 && (
+                    <MediaSendPreview
+                      files={attachedFiles}
+                      recipientName={chats.find(c => c.id === activeChatId)?.name || 'contato'}
+                      sending={sendingMedia}
+                      onClose={cancelAttachment}
+                      onAddMore={() => fileInputRef.current?.click()}
+                      onRemove={removerAnexo}
+                      onSend={enviarAnexosDoPreview}
+                    />
+                  )}
                   <div className="grid grid-cols-2 gap-1 p-0.5">
                     <Button
                       variant="ghost" size="icon"
                       className="h-9 w-9 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-colors"
                       title="Respostas Rápidas (/)"
                       onClick={() => { setMessageInput('/'); setShowQR(true); setQrSearch(''); textareaRef.current?.focus(); }}
-                      disabled={inputMode === "nota" || isRecording || !!attachedFile}
+                      disabled={inputMode === "nota" || isRecording || attachedFiles.length > 0}
                     >
                       <Zap className="h-4.5 w-4.5" />
                     </Button>
@@ -3505,7 +4245,7 @@ export function WhatsAppInterface() {
                       className="h-9 w-9 rounded-xl hover:bg-blue-50 hover:text-blue-600 transition-colors"
                       title="Anexar arquivo"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={inputMode === "nota" || isRecording || !!attachedFile || sendingMedia}
+                      disabled={inputMode === "nota" || isRecording || attachedFiles.length > 0 || sendingMedia}
                     >
                       <Paperclip className="h-4.5 w-4.5" />
                     </Button>
@@ -3524,7 +4264,7 @@ export function WhatsAppInterface() {
                         className="h-9 w-9 rounded-xl hover:bg-red-50 hover:text-red-600 transition-colors"
                         title="Gravar áudio"
                         onClick={startRecording}
-                        disabled={inputMode === "nota" || !!attachedFile || sendingMedia}
+                        disabled={inputMode === "nota" || attachedFiles.length > 0 || sendingMedia}
                       >
                         <Mic className="h-4.5 w-4.5" />
                       </Button>
@@ -3533,7 +4273,7 @@ export function WhatsAppInterface() {
                       className={`h-9 w-9 rounded-xl shadow-lg transition-all active:scale-90 ${
                         isRecording
                           ? "bg-red-500 hover:bg-red-600 shadow-red-500/20"
-                          : (attachedFile || (inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
+                          : (inputMode === "nota" ? noteInput.trim() : messageInput.trim())
                             ? (inputMode === "nota" ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-primary hover:bg-primary/90 shadow-primary/20")
                             : "bg-muted text-muted-foreground opacity-50"
                       }`}
@@ -3542,12 +4282,10 @@ export function WhatsAppInterface() {
                           ? false
                           : sendingMedia
                             ? true
-                            : attachedFile
-                              ? false
-                              : (isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
+                            : (isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
                       }
-                      onClick={isRecording ? sendRecording : attachedFile ? confirmSendAttachment : handleSendMessage}
-                      title={isRecording ? 'Parar e enviar áudio' : attachedFile ? 'Enviar anexo' : 'Enviar'}
+                      onClick={isRecording ? sendRecording : handleSendMessage}
+                      title={isRecording ? 'Parar e enviar áudio' : 'Enviar'}
                     >
                       {sendingMedia ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Send className="h-4.5 w-4.5" />}
                     </Button>
@@ -3707,6 +4445,48 @@ export function WhatsAppInterface() {
                   campanhaNome={statusEnvioPorTelefone[chaveTelefone(activeChat.phone)]?.campanha_nome}
                   className="mt-1"
                 />
+                {/* [AUDITORIA] LÓGICA (multi-número — seleção de instância no envio, 2026-08-07):
+                    handleSendMessage manda `instancia: chat?.source` em todo envio desta
+                    conversa — antes não havia como trocar, ficava travado na instância da
+                    última mensagem recebida/enviada (ver fetchConversas). Só aparece com 2+
+                    instâncias conectadas. Muda só o estado local (`chats`); volta a refletir a
+                    instância real assim que a próxima mensagem for enviada e o polling
+                    releitura `row.instancia` do backend. */}
+                {instanciasDisponiveis.length > 1 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="flex items-center gap-1.5 bg-muted/50 hover:bg-muted rounded-full pl-3 pr-2 py-1 mt-1 transition-colors"
+                        title="Número que envia as mensagens desta conversa"
+                      >
+                        <Smartphone className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-[10px] font-bold text-foreground/70">
+                          {instanciasDisponiveis.find(i => i.evolution_instancia === activeChat.source)?.nome || "Selecionar número"}
+                        </span>
+                        <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center" className="w-56">
+                      <DropdownMenuItem disabled className="text-[10px] uppercase font-bold text-muted-foreground opacity-100">
+                        Enviar mensagens via
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {instanciasDisponiveis.map(inst => (
+                        <DropdownMenuItem
+                          key={inst.evolution_instancia}
+                          onClick={() => {
+                            const chatId = activeChat.id;
+                            setChats(prev => prev.map(c => c.id === chatId ? { ...c, source: inst.evolution_instancia } : c));
+                          }}
+                          className="cursor-pointer"
+                        >
+                          <span className={`truncate ${activeChat.source === inst.evolution_instancia ? "font-bold" : ""}`}>{inst.nome}</span>
+                          {activeChat.source === inst.evolution_instancia && <Check className="h-3.5 w-3.5 ml-auto shrink-0" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
             </div>
 
@@ -3757,23 +4537,47 @@ export function WhatsAppInterface() {
                 </DropdownMenu>
               </div>
 
-              {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): só aparece
-                  pra conversa de grupo — participante de grupo é dado de terceiro sem relação
-                  comercial direta, então a importação em massa exige confirmação explícita (ver
-                  modal abaixo), nunca acontece com um clique só. */}
+              {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04, rótulo
+                  atualizado na Sprint Exportar Leads de Grupo, 2026-08-23): só aparece pra
+                  conversa de grupo — participante de grupo é dado de terceiro sem relação
+                  comercial direta, então qualquer ação em massa (importar OU exportar) exige
+                  confirmação explícita no modal abaixo, nunca acontece com um clique só. */}
               {activeChat.is_group && (
                 <button
                   onClick={() => setShowImportarGrupoModal(true)}
                   className="w-full flex items-center justify-center gap-2 h-11 rounded-2xl border bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95"
                 >
                   <Users className="h-3.5 w-3.5" />
-                  Baixar contatos do grupo
+                  Leads do grupo
+                </button>
+              )}
+              {/* [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do
+                  usuário): mesma faixa de ações do grupo, cor de alerta pra diferenciar de uma
+                  ação neutra (mesma convenção de "Excluir agente"/outros botões destrutivos do
+                  app). */}
+              {activeChat.is_group && (
+                <button
+                  onClick={sairDoGrupo}
+                  disabled={saindoDoGrupo}
+                  className="w-full flex items-center justify-center gap-2 h-11 rounded-2xl border bg-red-50 border-red-200 text-red-700 hover:bg-red-100 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 disabled:opacity-60"
+                >
+                  {saindoDoGrupo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogOut className="h-3.5 w-3.5" />}
+                  Sair do grupo
                 </button>
               )}
               {resultadoImportacaoGrupo && (
                 <p className="text-[11px] text-center text-muted-foreground font-medium">
                   Última importação: {resultadoImportacaoGrupo.novos} novo(s), {resultadoImportacaoGrupo.jaExistiam} já existiam
                   {resultadoImportacaoGrupo.descartados > 0 ? `, ${resultadoImportacaoGrupo.descartados} descartado(s)` : ''}.
+                  {/* [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, 2026-08-26): cobertura
+                      real da cadeia de resolução de nome pra ESTE grupo, medida na hora — evita o
+                      operador achar que todo mundo ganhou nome real quando só uma fração ganhou. */}
+                  {resultadoImportacaoGrupo.novos > 0 && (
+                    <> {resultadoImportacaoGrupo.nomesResolvidos} de {resultadoImportacaoGrupo.novos} novo(s) com nome real identificado.</>
+                  )}
+                  {resultadoImportacaoGrupo.listaNome && (
+                    <> Lista: <span className="font-bold text-foreground">{resultadoImportacaoGrupo.listaNome}</span>.</>
+                  )}
                   {/* [AUDITORIA] LÓGICA: em grupos com privacidade "Linked ID" ativa, a Evolution
                       só resolve o telefone real de parte dos participantes (geralmente admins) —
                       o resto fica só como lid interno, que não é telefone de verdade e por isso
@@ -3981,34 +4785,137 @@ export function WhatsAppInterface() {
         </DialogContent>
       </Dialog>
 
-      {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): confirmação
-          explícita obrigatória antes de importar — participante de grupo é dado de terceiro sem
-          relação comercial direta, trazer centenas de contatos com um clique só (sem essa
-          barreira) seria fácil demais de disparar por engano. Mostra o total de participantes já
+      {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04, estendido na Sprint
+          Exportar Leads de Grupo, 2026-08-23 — pedido explícito do usuário: "atualmente ele só
+          baixa pra o CRM mas quero que baixe em CSV ou Excel e dê pra importar pra fora do
+          sistema"): confirmação explícita obrigatória antes de qualquer uma das 3 ações — mesmo a
+          exportação (só leitura, GET /participantes) usa este mesmo modal em vez de disparar
+          direto, pra manter uma única barreira de fricção consciente antes de lidar com dado de
+          terceiro (participante de grupo, não lead orgânico). Mostra o total de participantes já
           conhecido (`grupoInfoExtra`/`activeChat`, sem chamada nova à Evolution só pra exibir o
-          número — a importação em si sempre busca de novo, ver importarContatosDoGrupo). */}
+          número — cada ação abaixo sempre busca de novo na hora de agir). */}
       <Dialog open={showImportarGrupoModal} onOpenChange={setShowImportarGrupoModal}>
         <DialogContent className="sm:max-w-[440px] rounded-2xl">
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2">
               <Users className="h-4 w-4 text-violet-600" />
-              Baixar contatos do grupo?
+              Leads do grupo
             </DialogTitle>
             <DialogDescription className="text-sm pt-2 leading-relaxed">
-              Isso vai importar {grupoInfoExtra?.size ? `os ${grupoInfoExtra.size} participantes` : 'os participantes'} de{' '}
-              <span className="font-semibold text-foreground">{activeChat?.name}</span> como contatos novos.
-              Contatos que já existem não são alterados. Participantes de grupo entram marcados
-              com origem própria e ficam de fora de campanhas por padrão, a menos que você
-              inclua algum manualmente (tag, lista ou estágio).
+              {grupoInfoExtra?.size ? `${grupoInfoExtra.size} participantes` : 'Os participantes'} de{' '}
+              <span className="font-semibold text-foreground">{activeChat?.name}</span>. Escolha o
+              que fazer com eles: importar como contatos novos no CRM (numa lista nova, criada
+              automaticamente), ou baixar como CSV/Excel pra usar fora do sistema. Contatos que já
+              existem no CRM não são alterados pela importação; a exportação nunca grava nada, só
+              gera o arquivo.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="gap-2">
-            <Button variant="ghost" onClick={() => setShowImportarGrupoModal(false)} disabled={importandoGrupo} className="font-bold text-xs uppercase tracking-widest">
+          <DialogFooter className="flex-col sm:flex-col gap-2">
+            <div className="flex gap-2 w-full">
+              <Button
+                variant="outline"
+                onClick={baixarParticipantesCsv}
+                disabled={exportandoGrupo !== null || importandoGrupo}
+                className="flex-1 font-bold text-xs uppercase tracking-widest gap-2"
+              >
+                {exportandoGrupo === 'csv' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+                CSV
+              </Button>
+              <Button
+                variant="outline"
+                onClick={baixarParticipantesExcel}
+                disabled={exportandoGrupo !== null || importandoGrupo}
+                className="flex-1 font-bold text-xs uppercase tracking-widest gap-2"
+              >
+                {exportandoGrupo === 'excel' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
+                Excel
+              </Button>
+              <Button
+                onClick={importarContatosDoGrupo}
+                disabled={importandoGrupo || exportandoGrupo !== null}
+                className="flex-1 font-bold text-xs uppercase tracking-widest gap-2"
+              >
+                {importandoGrupo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                Importar
+              </Button>
+            </div>
+
+            {/* [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-26): ação
+                separada das 3 acima — não é sobre criar/exportar contato, é sobre MELHORAR o nome
+                de quem já existe/vai existir. Fica visualmente distinta (linha própria) porque o
+                custo de tempo é outra ordem de grandeza (minutos+, não segundos). Enquanto uma
+                resolução estiver rodando, mostra progresso real (poll a cada 6s); o botão só
+                aparece enquanto NÃO há job rodando neste grupo (evita iniciar um 2º concorrente —
+                o backend já recusaria com 409, mas nem precisa chegar a essa viagem de rede). */}
+            {progressoNomes ? (
+              <div className="w-full rounded-xl border border-border bg-muted/30 px-3 py-2.5 space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="flex items-center gap-1.5">
+                    {progressoNomes.emAndamento && <Loader2 className="h-3 w-3 animate-spin" />}
+                    Resolvendo nomes via perfil
+                  </span>
+                  <span className="text-muted-foreground">{progressoNomes.resolvidos} / {progressoNomes.total}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-border overflow-hidden">
+                  <div
+                    className="h-full bg-violet-600 transition-all"
+                    style={{ width: `${progressoNomes.total > 0 ? Math.min(100, (progressoNomes.resolvidos / progressoNomes.total) * 100) : 0}%` }}
+                  />
+                </div>
+                {!progressoNomes.emAndamento && (
+                  <p className="text-[11px] text-muted-foreground">Concluído — exporte/importe de novo para pegar os nomes novos.</p>
+                )}
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={iniciarResolucaoNomes}
+                disabled={importandoGrupo || exportandoGrupo !== null}
+                className="w-full font-bold text-xs uppercase tracking-widest gap-2 border-violet-200 text-violet-700 hover:bg-violet-50"
+              >
+                <UserSearch className="h-3.5 w-3.5" />
+                Resolver nomes via perfil (lento, mais completo)
+              </Button>
+            )}
+
+            <Button variant="ghost" onClick={() => setShowImportarGrupoModal(false)} disabled={importandoGrupo || exportandoGrupo !== null} className="w-full font-bold text-xs uppercase tracking-widest">
               Cancelar
             </Button>
-            <Button onClick={importarContatosDoGrupo} disabled={importandoGrupo} className="font-bold text-xs uppercase tracking-widest gap-2">
-              {importandoGrupo && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Importar
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do usuário):
+          modal simples — colar link de convite, um botão. Aceita tanto a URL completa
+          (https://chat.whatsapp.com/XXX) quanto só o código, o backend extrai o que precisar (ver
+          POST /api/whatsapp/grupos/entrar). */}
+      <Dialog open={showEntrarGrupoModal} onOpenChange={(o) => { setShowEntrarGrupoModal(o); if (!o) setLinkConviteGrupo(""); }}>
+        <DialogContent className="sm:max-w-[440px] rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" />
+              Entrar em grupo
+            </DialogTitle>
+            <DialogDescription className="text-sm pt-2 leading-relaxed">
+              Cole o link de convite do grupo (ex: https://chat.whatsapp.com/XXXXXXXX). O número
+              conectado agora entra nesse grupo do WhatsApp de verdade — o grupo aparece na lista
+              de conversas assim que a primeira mensagem chegar.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={linkConviteGrupo}
+            onChange={(e) => setLinkConviteGrupo(e.target.value)}
+            placeholder="https://chat.whatsapp.com/..."
+            onKeyDown={(e) => { if (e.key === 'Enter' && !entrandoNoGrupo) entrarNoGrupo(); }}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowEntrarGrupoModal(false)} disabled={entrandoNoGrupo} className="font-bold text-xs uppercase tracking-widest">
+              Cancelar
+            </Button>
+            <Button onClick={entrarNoGrupo} disabled={entrandoNoGrupo || !linkConviteGrupo.trim()} className="font-bold text-xs uppercase tracking-widest gap-2">
+              {entrandoNoGrupo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+              Entrar
             </Button>
           </DialogFooter>
         </DialogContent>

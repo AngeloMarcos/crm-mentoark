@@ -1,3 +1,14 @@
+/**
+ * [AUDITORIA] APOSENTADA (Sprint 1 unificação, 2026-08-07) — este componente não é mais
+ * renderizado em lugar nenhum (era a aba "Fluxo IA" de Cerebro.tsx, agora substituída por um
+ * aviso apontando pra /agentes). Configuração de agente foi unificada na tabela `agentes`/tela
+ * Agentes.tsx — ver diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md. Arquivo mantido
+ * (não apagado) só pelo histórico de fixes documentados nos comentários abaixo (incidente
+ * "Cris", bug de rota /api/agent_configs vs /api/agent-config, etc.) — não editar/reativar sem
+ * repetir essa mesma unificação primeiro. A rota backend que ele chama (GET/POST
+ * /api/agent-config, backend/src/routes/agent-config.ts) também segue intacta e funcional, só
+ * sem nenhum consumidor no frontend.
+ */
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -257,8 +268,13 @@ export function ConfigAgenteIA() {
                     <Select value={config.modelo_llm} onValueChange={(v) => update("modelo_llm", v)}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="gpt-4o">gpt-4o</SelectItem>
+                        {/* [AUDITORIA] LÓGICA (pedido explícito do usuário, 2026-09-02: "veja as
+                            mais baratas... economizar ao máximo token") — mesmas 2 opções novas
+                            adicionadas em Integracoes.tsx, ver comentário completo lá. */}
+                        <SelectItem value="gpt-5-nano">gpt-5-nano (mais barato)</SelectItem>
                         <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
+                        <SelectItem value="gpt-5-mini">gpt-5-mini</SelectItem>
+                        <SelectItem value="gpt-4o">gpt-4o</SelectItem>
                         <SelectItem value="gpt-4-turbo">gpt-4-turbo</SelectItem>
                         <SelectItem value="gpt-3.5-turbo">gpt-3.5-turbo</SelectItem>
                       </SelectContent>

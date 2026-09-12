@@ -66,7 +66,7 @@ const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: 'atualizar_url_integracao',
       description:
-        'Corrige a URL de uma integração na tabela integracoes_config, agentes e agent_configs. ' +
+        'Corrige a URL de uma integração na tabela integracoes_config e agentes. ' +
         'Use quando a URL estiver apontando para servidor antigo, offline ou bloqueado.',
       parameters: {
         type: 'object',
@@ -116,10 +116,14 @@ async function executar(
 
       // ── verificar_status_sistema ──────────────────────────────────────────
       case 'verificar_status_sistema': {
-        const [ag, prov, integ, msgs, agCfg] = await Promise.all([
+        // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): a query separada em
+        // `agent_configs` foi removida — `agentes` (primeira query abaixo) já traz
+        // prompt_sistema/evolution_*/modelo/ativo, config unificada numa fonte só.
+        const [ag, prov, integ, msgs] = await Promise.all([
           pool.query(
             `SELECT nome, ativo, evolution_instancia, evolution_server_url, modelo,
-                    (evolution_api_key IS NOT NULL AND evolution_api_key <> '') AS tem_key
+                    (evolution_api_key IS NOT NULL AND evolution_api_key <> '') AS tem_key,
+                    (prompt_sistema IS NOT NULL AND prompt_sistema <> '') AS tem_prompt
              FROM agentes WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 5`,
             [userId],
           ),
@@ -136,12 +140,6 @@ async function executar(
              ORDER BY created_at DESC LIMIT 5`,
             [userId],
           )),
-          pool.query(
-            `SELECT nome_agente, modelo_llm, ativo, evolution_instancia, evolution_server_url,
-                    (prompt_sistema IS NOT NULL AND prompt_sistema <> '') AS tem_prompt
-             FROM agent_configs WHERE user_id = $1 AND ativo = true LIMIT 1`,
-            [userId],
-          ),
         ]);
         return {
           ok: true,
@@ -150,7 +148,6 @@ async function executar(
             ai_providers:      prov.rows,
             integracoes:       integ.rows,
             ultimas_mensagens: msgs.rows,
-            agent_config:      agCfg.rows[0] ?? null,
           },
         };
       }
@@ -172,26 +169,24 @@ async function executar(
         );
 
         let rAg = { rowCount: 0 as number | null };
-        let rAcfg = { rowCount: 0 as number | null };
         if (tipo === 'evolution') {
-          rAg   = await pool.query(
-            'UPDATE agentes SET evolution_server_url = $1, updated_at = NOW() WHERE user_id = $2', [url, userId],
-          );
-          rAcfg = await pool.query(
-            'UPDATE agent_configs SET evolution_server_url = $1, updated_at = NOW() WHERE user_id = $2', [url, userId],
+          // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): UPDATE em `agent_configs`
+          // removido — `agentes` é a única fonte agora. Atualiza TODAS as linhas ativas do
+          // usuário (um tenant pode ter mais de uma instância) em vez de uma linha única.
+          rAg = await pool.query(
+            'UPDATE agentes SET evolution_server_url = $1, updated_at = NOW() WHERE user_id = $2 AND ativo = true', [url, userId],
           );
         }
 
-        if (!rIc.rowCount && !rAg.rowCount && !rAcfg.rowCount)
+        if (!rIc.rowCount && !rAg.rowCount)
           return { ok: false, data: { aviso: `Nenhuma integração "${tipo}" encontrada.` } };
 
         return {
           ok: true,
           data: {
             mensagem: `URL do tipo "${tipo}" atualizada.`,
-            integracoes_config:        rIc.rows[0] ?? null,
-            agentes_atualizados:       rAg.rowCount ?? 0,
-            agent_configs_atualizados: rAcfg.rowCount ?? 0,
+            integracoes_config:  rIc.rows[0] ?? null,
+            agentes_atualizados: rAg.rowCount ?? 0,
           },
         };
       }

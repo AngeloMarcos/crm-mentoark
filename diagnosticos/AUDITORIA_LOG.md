@@ -1,5 +1,962 @@
 # Auditoria de Código — Log
 
+### 🆕 Revisão de gastos de IA antes de reconectar OpenAI: 3 vazamentos + freio geral — 2026-09-02 — em PRODUÇÃO
+
+Pedido explícito do usuário antes de reconectar a chave da OpenAI. Levantamento real (produção): $0,11 gasto em 30 dias (sem tráfego, instância desconectada desde 24/08), gates de 14/08 (`grupos_ia_permitidos`, `documents` vazia) confirmados intactos, 0 contas com provider próprio (chave compartilhada). 3 vazamentos de custo invisível achados (mesmo padrão de 14/08 — pagava, nunca registrava em `ai_uso_diario`): `grupoTarefaEngine.ts` (classificador de grupo), `humanizationService.ts` (humanização de Disparos), `leads-buscar.ts` (scoring de leads) — todos corrigidos, agora chamam `registrarUsoIA`. Freio geral NOVO (nunca existiu): `orcamentoDiarioExcedido()` em `aiCusto.ts`, gate opcional via `AI_LIMITE_DIARIO_USD` (env, global) aplicado nos 3 pontos de entrada mais caros (`webhook.ts` Whisper/Vision/motor de conversa, `grupoTarefaEngine.ts`) — desligado por padrão, reseta sozinho à meia-noite, sem alerta ativo (limitação conhecida, documentada). **Continuação, mesma sessão**: usuário decidiu não configurar teto de valor agora — "chave vai ficar só na conta da mentoark, cada usuário novo deverá ter sua chave". Verificado: `agentEngine.ts`/`grupoTarefaEngine.ts` (`ai_providers`) e `leads-buscar.ts` (`integracoes_config`) já preferiam a chave própria do tenant antes da global — só `humanizationService.ts` (humanização de Disparos) sempre usava a global pra todo mundo, mesmo quem já tinha chave própria; corrigido pra resolver `ai_providers` primeiro, mesmo padrão dos demais. Build limpo, deployado em homolog e produção. Detalhe completo em `STATUS.md`.
+
+### 🆕 IA passa a perguntar o nome do lead quando ainda não sabe — 2026-08-28 — em PRODUÇÃO
+
+Continuação da investigação anterior (fontes automáticas de nome têm cobertura variável, dependente de privacidade do WhatsApp). Via nova, mais confiável: instrução injetada no prompt de todo agente (não depende de o operador editar o próprio prompt) pra perguntar o nome quando `nome_verificado !== true` e a ferramenta `criar_ou_atualizar_contato` estiver habilitada — com salvaguarda explícita contra repetir a pergunta a cada mensagem. Ferramenta agora marca `nome_verificado=true` ao salvar nome real. Testado ao vivo com webhook sintético em homolog (contato de teste já whitelistado, dados restaurados ao original depois): confirmado que o prompt real enviado à OpenAI já inclui a instrução — chamada da IA falhou por chave OpenAI de homolog inválida (401, achado lateral, ambiente, não desta mudança). Build limpo, deployado em homolog e produção. Detalhe completo em `STATUS.md`.
+
+### 🔍 "Resolver nomes deu 0%" + "importar grupo falhou" — investigado com log real, nenhum bug — 2026-08-27 — em PRODUÇÃO
+
+Usuário testou de verdade em homolog e reportou 2 falhas. Log do container (`crm-api-homolog`) mostrou: (1) import "falhou" num grupo (`forbidden` — instância não é mais membro), mas OUTRO grupo importou 149 contatos com sucesso na mesma sessão — confusão entre 2 tentativas, mensagem de erro genérica não ajudava a distinguir. (2) Resolver-nomes rodou 27min, 0/148 — testado ao vivo (mesma pessoa, 2 números diferentes perguntando): número de produção recebe nome, MESMO número perguntado por homolog não recebe (só confirma existência+foto); homolog SÓ recebe nome de quem já tem relação prévia (push_name conhecido). Causa raiz confirmada: privacidade do WhatsApp por relacionamento, não bug — cobertura real depende de qual número pergunta. Corrigido de verdade: mensagem de erro (`mensagemFalhaGrupo()`, novo) agora distingue "sem acesso a este grupo" de outras falhas nas 4 rotas de grupo. Build limpo, deployado em homolog e produção. Detalhe completo em `STATUS.md`.
+
+### 🆕 Resolução de nomes via fetchProfile (~78-79%) + export "Funil de Vendas" — 2026-08-26 — em PRODUÇÃO
+
+Continuação da sprint abaixo. Pesquisa web confirmou @username real da Meta (rollout abril/2026+), mas é da API oficial — nossa integração (Evolution/Baileys, não-oficial) ainda não expõe isso (testado ao vivo, confirmado; Baileys tem issue aberta sobre o tema). Achado que importou de verdade: `POST /chat/fetchProfile` (nunca usado pra nome neste projeto) mede ~78-79% de cobertura real (28 participantes testados), vs ~11-21% da cadeia já em produção — mas custa ~2,3s/chamada e rajada de chamadas é risco de automação pro WhatsApp. Implementado como ação separada e explícita (não automática): `POST /grupos/:groupJid/resolver-nomes` roda em background com delay anti-ban (mesma faixa do perfil "Rápido" de Disparos, 5-15s), grava cache (`whatsapp_nomes_resolvidos`, nova camada em `resolverNomeParticipante`) e atualiza `contatos` existentes. Botão + barra de progresso em `WhatsAppInterface.tsx`. Build limpo, deployado e validado (health/rota/tabela) em homolog e produção — fluxo completo pela UI autenticada não pôde ser exercitado (sem credenciais de login real). Também adicionado: modelo de export "Funil de Vendas" (Título/Pessoa/Usuário/Funil/Estágio/Status) em `/exportar-dados`, mapeamento sobre schema sem campo "Título"/"Funil" nomeado — usuário ainda não confirmou se bate com o modelo externo dele. Detalhe completo em `STATUS.md`.
+
+### 🆕 Nome real de leads de grupo + tela própria "Exportar Dados" — 2026-08-26 (não deployado ainda)
+
+Pedido explícito do usuário: coluna Nome do export/import de leads de grupo vinha sempre igual ao telefone (Evolution nunca devolveu nome de participante pelo `findGroupInfos` já usado). Testado ao vivo ANTES de codar (autorização explícita do usuário — leitura, produção, homolog sem instância conectada no momento): endpoint novo `GET /group/participants/{instance}` devolve `name` por participante — cobertura real medida 11%-21% sozinho, 26%-80% combinado com contato já existente no CRM, em 4 grupos reais (~38 participantes). Cadeia de resolução implementada em `resolverNomeParticipante()` (`backend/src/routes/whatsapp.ts`): contato já existente → `push_name` de conversa individual → `group/participants` → sem nome (nunca telefone disfarçado de nome). Nova coluna `contatos.nome_verificado` (migration idempotente, `NULL` em dado histórico, sem backfill). Aplicado em `GET /grupos/:groupJid/participantes` (export CSV/Excel) e `POST /grupos/:groupJid/importar-contatos`. Nova página `/exportar-dados` (`src/pages/ExportarDados.tsx`) — export de TODOS os contatos (paginado em lotes de 500, mesmo padrão de `fetchAllContatos()` em `Disparos.tsx`), com filtro por nome verificado. Build (`tsc --noEmit` frontend + `vite build` + `swc` backend) limpo; `tsc --noEmit` do backend estourou memória local de novo (issue pré-existente documentada, não regressão). **Deployado e validado em homolog e produção** (`/health` 200 nos 4 serviços, `/exportar-dados` 200, `nome_verificado` confirmado em `crm_hml` e `crm` via `information_schema`). Achado lateral no caminho: `/opt/crm-homolog` e `/opt/crm` estavam ambos sem `src/pages/CorridasPendentes.tsx` (drift pré-existente, não relacionado) — quebrava o build do frontend por importar essa página ausente; corrigido publicando `App.tsx` sem essa rota nos dois ambientes remotos (local não alterado). Detalhe completo em `STATUS.md`.
+
+### 🧹 `SPRINT_VOZ_TTS_AGENTE_NATIVO.md` — já implementado por completo — 2026-08-25
+
+Reconfirmado em `agentEngine.ts`: `sintetizarVoz()` (ElevenLabs) + envio via `sendWhatsAppAudio`, gatilho opt-in (`agentes.resposta_voz_habilitada` + `voice_id`) só quando a mensagem recebida foi áudio (espelha canal, exatamente o critério sugerido pela doc), fallback garantido pra texto em qualquer falha, comportamento idêntico pra quem não tem a flag. Doc removida.
+
+### 🧹 `SPRINT_ROLETA_TAREFAS_GRUPO_WHATSAPP.md` + `SPRINT_ROLETA_TAREFAS_GRUPO_IMPLEMENTACAO.md` — já implementado por completo, corretamente inativo — 2026-08-25
+
+Reconfirmado: `grupoTarefaEngine.ts` implementa exatamente o desenho aprovado (cooldown de 2min, `participantes_ids` como snapshot, `proximo_indice` round-robin persistente em `grupos_ia_permitidos`). Confirmado em produção: **0 linhas ativas** em `grupos_ia_permitidos` — a feature está pronta mas corretamente inativa, exatamente como as duas docs exigiam (não ativar sem confirmação explícita do JID pelo usuário). Nenhuma ação necessária. Docs removidas (2 arquivos).
+
+### 🧹 `SPRINT_CORRIDAS_WHATSAPP_IMPLEMENTACAO.md` — já implementado por completo — 2026-08-25
+
+Reconfirmado: tabela `corridas`, rota `/api/corridas`, serviço dedicado (`corridasService.ts`), página frontend (`CorridasPendentes.tsx`), entrada no menu lateral, integração com `agentEngine.ts`/MCP tools/`functionCallingSecurity.ts`/`cron.ts`. Escopo completo da doc já em produção. Doc removida.
+
+### 🧹 `SPRINT_CONFIGURAR_AGENTE_IA_STELLA_MENTOARK.md` — já configurada e ativa, com prompt final diferente do rascunho da doc — 2026-08-25
+
+Doc trazia um rascunho de prompt (baseado num texto do ChatGPT, com bugs técnicos já identificados — sintaxe n8n, protocolo inventado, preços fixos). Verificado em produção (`agent_configs`, `user_id` de `angelobispofilho@gmail.com`): a conta já tem Stella **ativa** (`ativo=true`) com `sinal_pausa='251213'` corretamente configurado — mas o `prompt_sistema` real e vivo é **diferente e mais refinado** que o texto da doc: cobre as 4 frentes da Mentoark (CRM, Disparos, IA de atendimento, Tráfego pago), sem nenhum dos bugs técnicos que a doc descrevia (sem sintaxe `{{ $now }}`, sem "protocolo de 5 dígitos" inventado, sem preço fixo). Ou seja: o rascunho da doc foi substituído por uma versão final diferente, decidida e já publicada por outro caminho — não sobrescrevi o prompt real com o texto antigo da doc. Doc removida.
+
+### ✅ `SPRINT_REVALIDAR_SPINTAX_HOMOLOG.md` — teste genuíno de homolog registrado — 2026-08-25
+
+Fecha o ciclo do incidente de 06/08 (teste anterior rodou em produção por engano). Desta vez: campanha criada de verdade pela UI (não SQL sintético direto — exercita o código real de `resolverSpintax`/`substituirPlaceholders`), sessão de navegador logada no tenant de homolog, 3 contatos exclusivos de homolog. Mensagem `{Oi|Olá|E aí}, {{primeiro_nome}}! {Temos uma novidade|Passando pra te contar algo novo} pra você.` — resultado real em `disparo_logs.mensagem_enviada` (confirmado por `SELECT` direto em `crm_hml`, não `crm`): 3 combinações diferentes, cada uma com o primeiro nome certo ("Olá, Mariana!...", "E aí, Bruno!...", "E aí, Carlos!..."). Envio real ao WhatsApp falhou nos 3 (instância de homolog `crm_5319f0ed61b3` não existe no servidor Evolution agora — mesmo achado operacional já registrado hoje, não é bug do spintax). Dados de teste removidos ao final. Doc removida.
+
+### 🧹 `SPRINT_RELATORIO_STATUS_COMPLETO.md` — propósito cumprido organicamente ao longo da sessão — 2026-08-25
+
+Meta-relatório pedindo verificação com evidência real (não confiar em relatório anterior) de tudo que foi implantado — exatamente a disciplina seguida em cada doc fechada hoje (testado contra VPS/banco real, nunca só lido o comentário). Dos 3 "achados soltos" sem sprint própria que a doc citava: instância errada de grupo — corrigido hoje (`resolverConfigGrupoAtivo`); contas sem `ai_providers` próprio — estado conhecido e documentado (memória do projeto), não é bug; `POST /agent-config` 500 sem `nome_agente` — reconfirmado corrigido (`COALESCE` no SQL, datado 06/08). Nenhum dos achados soltos ficou sem checar. Doc removida.
+
+### 🧹 `SPRINT_FRONTEND_CHAT_GRUPOS_RESPONSIVIDADE.md` — achados concretos (1-2) já corrigidos — 2026-08-25
+
+Reconfirmado: painel de detalhes não abre mais sozinho (`showContactPanel` default `false`, comentário `[AUDITORIA] FIX APLICADO` já no código) e cabeçalho de grupo mostra badge "Grupo" em vez do JID numérico cru. Achados 3-4 (auditoria geral de responsividade/bugs de frontend, pedido aberto sem reclamação concreta associada) não foram re-executados agora — sem evidência de problema ativo, escopo aberto demais pra essa passada. Doc removida (os 2 achados concretos, que motivaram a sprint, estão resolvidos).
+
+### 🧹 `SPRINT_MAPEAMENTO_COMPLETO_DISPAROS.md` — propósito já cumprido organicamente — 2026-08-25
+
+Doc pedia um mapeamento consolidado de status de todo o módulo Disparos. Todos os 10 itens que ela lista pra inventariar já foram individualmente investigados/fechados: os 4 docs referenciados que ainda tinham nome próprio (`INTERVALO_MINUTOS`, `VERIFICACAO_ANTIBAN_RAJADA`, `BLOQUEIO_REENVIO_DUPLICADO`, `DEPLOY_PRODUCAO`) já não existem em `diagnosticos/` (absorvidos em sessões anteriores), e os demais (importação, agendamento, colunas de status, variação de imagem) foram reconfirmados/corrigidos nesta mesma sessão, cada um com sua própria entrada em `STATUS.md`/`AUDITORIA_LOG.md`. Não há mais nada pra consolidar que não esteja já registrado. Doc removida.
+
+### 🧹 `SPRINT_GERENCIAR_LISTAS_DISPARO.md` — já em produção (confirmado via Playwright + grep) — 2026-08-25
+
+Reconfirmado: renomear/excluir lista individual (visto ao vivo no teste com navegador real desta mesma sessão) e "Limpar listas vazias" em lote (`listasVazias`, confirmação com contagem) já implementados. Doc removida.
+
+### 🧹 `SPRINT_COOLDOWN_DESCARTE_AUTOMATICO.md` — já em produção (comentário cita o próprio nome desta sprint) — 2026-08-25
+
+Reconfirmado: `bloqueadoPorCooldown`/checkbox `confirmarCooldown` já removidos, `contatosCooldown` vira só aviso informativo não-bloqueante. Doc removida.
+
+### 🧹 `SPRINT_INVESTIGAR_DIVERGENCIA_DISPARO_PROCESSOR.md` — divergência histórica, resolvida pelo tempo — 2026-08-25
+
+Doc de 06/08 relatava produção rodando uma versão antiga de `disparoProcessor.ts` (sem o fix de legenda de mídia). Reconfirmado hoje, direto no arquivo atual da VPS (`/opt/crm/backend/src/services/disparoProcessor.ts`): `legendaFinal = mensagem || legenda_midia` está presente e correto. Esta mesma sessão redeployou este arquivo múltiplas vezes hoje (sempre via `scripts/deploy.sh`, nunca scp manual) — qualquer divergência histórica de 06/08 já foi sobrescrita há muito por deploys legítimos subsequentes. Causa raiz da divergência original não determinada (não há como investigar retroativamente sem log de deploy antigo o suficiente) — mas o estado atual está correto e confirmado. Doc removida.
+
+### 🧹 `SPRINT_IMPORTACAO_INTELIGENTE_UPSERT.md` — já em produção (06/08) — 2026-08-25
+
+Reconfirmado: `POST /api/contatos/importar-lote` (upsert real, `ON CONFLICT DO NOTHING`) existe e é usado por `Disparos.tsx`, com detecção de duplicata interna do arquivo e resumo novos/já existentes. Doc removida.
+
+### 🧹 `SPRINT_FIX_CONTATO_SEM_TELEFONE_QUEBRA_CAMPANHA.md` — todos os 5 itens já em produção — 2026-08-25
+
+Reconfirmado no código atual: filtro `comTelefone` com toast de aviso (`Disparos.tsx`), rollback automático (`DELETE` da linha órfã em `disparos` se o `INSERT` de `disparo_logs` falhar, datado 06/08). Checado orfãos remanescentes em produção (`disparos` sem nenhum `disparo_logs`) — zero encontrados. Doc removida.
+
+### 🧹 `SPRINT_FECHAR_FIX_NOME_TELEFONE_SAUDACAO.md` — código já deployado (05/08), backfill sem impacto — 2026-08-25
+
+Reconfirmado no código atual (`Disparos.tsx` linha ~373, `motorTexto.ts` `substituirPlaceholders`/`removerPlaceholderVazio`) que os 2 fixes de 05/08 (fallback `nome || empresa || telefone` na importação; proteção de saudação quando `nome === telefone`) estão em produção — `removerPlaceholderVazio` só mudou de arquivo (moveu pra `motorTexto.ts` quando o motor nativo de texto foi criado), não foi removida. Backfill (item 3, `UPDATE contatos SET nome = empresa WHERE nome = telefone AND empresa <> ''`) rodado como `SELECT COUNT(*)` primeiro em produção E homolog — **0 linhas afetadas nos dois bancos**, `UPDATE` real não precisou rodar. Doc absorvida e removida (1 arquivo) — os 2 docs que ela mesma citava pra apagar (`SPRINT_FIX_NOME_TELEFONE_SAUDACAO.md`, `SPRINT_DIAGNOSTICO_IMPORTACAO_NOME_ERRADO.md`) já não existiam mais.
+
+### 🆕 Variação de imagem por envio (anti-fingerprint) + bug real de migration achado no processo — 2026-08-25
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-25 (cont. 9)") pro relato completo — inclui 2 bugs reais achados só por testar com dado real antes de deployar (perturbação v1 insuficiente pra imagem de cor sólida; `CREATE OR REPLACE FUNCTION` silenciosamente não aplicava mudança de coluna no Postgres).
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| Disparos/anti-ban | `backend/src/utils/whatsappMediaStorage.ts` | 🆕 novo | `gerarVariacaoImagem()` — perturbação com 2 eixos + retry com verificação de hash real + fallback determinístico; `sharp` como dependência nova |
+| Disparos/anti-ban | `backend/src/services/disparoProcessor.ts` | 🆕 novo | Chama a variação POR MENSAGEM quando `variar_imagem=true`, nunca cacheada por campanha |
+| Disparos/schema | `backend/src/migrations.ts` | 🔧 corrigido | Coluna `disparos.variar_imagem` nova; `DROP FUNCTION IF EXISTS` antes do `CREATE OR REPLACE` de `get_next_disparo_batch` (bug real: mudança de `RETURNS TABLE` era ignorada em silêncio sem o DROP) |
+| Disparos/UX | `src/pages/Disparos.tsx` | 🆕 novo | Toggle "Variar imagem a cada envio", opt-in, só visível pra `tipo_midia==='imagem'` |
+
+Doc absorvida e removida (1 arquivo).
+
+### 🔧 Visibilidade + edição inline pra contato de grupo sem nome real — 2026-08-25
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-25 (cont. 8)") pro relato completo, incluindo por que a fonte automática de nome (item 1/2 da doc) ficou bloqueada (todos os números reais, prod e homolog, desconectados no momento da investigação) e por que o fallback via `whatsapp_messages.push_name` não é viável (schema não guarda telefone individual do remetente em mensagem de grupo).
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| Disparos/UX | `src/pages/Disparos.tsx` (`StepContacts`) | 🔧 corrigido | Badge "sem nome", contador, toggle "Mostrar só sem nome", edição inline (`PATCH /api/contatos/:id`) — testado com navegador real (Playwright) em homolog, persistência confirmada no banco |
+
+Doc absorvida e removida (1 arquivo) — item de fonte automática de nome fica registrado aqui como pendência futura, não voltou pra `diagnosticos/` como sprint separada por não ser acionável até algum número real estar conectado.
+
+### 🔴 Grupo podia ser alvo de campanha de Disparo (achado novo) + fechamento de 5 docs de grupo — 2026-08-25
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-25 (cont. 7)") pro relato completo, incluindo o achado operacional live (número principal de produção desconectado desde 24/08) e a nota sobre possíveis LIDs do WhatsApp (não corrigido, fora de escopo).
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| Disparos/segurança | `backend/src/services/disparoProcessor.ts` | 🔧 corrigido | Bloqueia envio quando `telefone` normalizado tem mais de 15 dígitos (padrão de JID de grupo) — marca `disparo_logs` como `failed` com motivo claro |
+| Disparos/UX | `src/pages/Disparos.tsx` | 🔧 corrigido | Mesmo filtro aplicado na prévia de seleção (`targetContacts`), com toast avisando quantos grupos foram excluídos |
+
+Docs absorvidas e removidas (5 arquivos): `SPRINT_DIAGNOSTICO_GRUPOS_SEM_NOME_FOTO.md`, `SPRINT_GRUPOS_INFO_E_CONTATOS_NOME_ERRADO.md`, `SPRINT_BAIXAR_CONTATOS_GRUPO_WHATSAPP.md`, `SPRINT_LEVANTAMENTO_GRUPOS_WHATSAPP.md`, `SPRINT_GRUPOS_DIAGNOSTICO_COMPLETO.md` — os 4 primeiros já resolvidos por trabalho anterior (sem código novo), o último com o achado real acima.
+
+### 🧹 `SPRINT_BLINDAGEM_LOOP_RECONEXAO_BANIMENTO.md` — já implementado por completo em 10/08, só faltava fechar a doc
+
+Achado ao investigar (não sabia antes de olhar): circuit-breaker real contra o loop de reconexão/banimento (`backend/src/services/logoutCircuitBreaker.ts`) já existe, deployado em homolog E produção, tabela `whatsapp_logout_events` criada nos dois bancos, conectado de ponta a ponta (`webhook.ts` grava LOGOUT real; `whatsapp.ts` bloqueia `nova_conexao` E `force_reconnect`; `InstanceManagementPanel.tsx` tem fricção de UI com cooldown visível). Um bug real do próprio circuit-breaker já foi achado e corrigido em teste de homolog, documentado no próprio arquivo (`verificarLoopDeLogoutTenant`). Doc absorvida e removida (1 arquivo).
+
+### 🔧 Grupos: instância errada resolvida em contas com 2+ números — em produção, 2026-08-25
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-25 (cont. 6)") pro relato completo, incluindo o teste sintético em homolog que confirmou o fix.
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| WhatsApp/grupos | `backend/src/routes/whatsapp.ts` | 🔧 corrigido | `resolverConfigGrupoAtivo` aceita `instanciaSolicitada` opcional — tenta match exato antes do fallback "instância mais recente do tenant"; 3 rotas (`info`, `participantes`, `importar-contatos`) passam a repassar `instancia` |
+| WhatsApp/grupos | `backend/src/utils/whatsappMediaStorage.ts` | 🔧 corrigido | `buscarInfoGrupo()` não engole mais erro não-200 da Evolution em silêncio — loga status + corpo |
+| WhatsApp/grupos | `src/components/WhatsAppInterface.tsx` | 🔧 corrigido | 3 call sites passam `chat.source`/`activeChat.source` como `instancia`; link de convite de grupo agora renderiza como card clicável (texto original preservado embaixo) |
+
+Bug também afetava a exportação CSV/Excel de participantes de grupo construída nesta mesma sessão (23/08) — mesmo helper, mesmo bug, corrigido junto.
+
+Doc absorvida e removida (1 arquivo: `SPRINT_GRUPOS_IMPORTACAO_FALHANDO_E_LINK_PREVIEW.md`).
+
+### 🔴 Mídia recebida não persistia (6ª tentativa, achado real e confirmado no código) — em produção, 2026-08-25
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-25 (cont. 5)") pro relato completo, incluindo a ressalva honesta sobre a extensão histórica (13.342 mensagens, mas 97% grupo e parcialmente sobreposto com a limpeza de retenção de 23/08 — número real do bug sozinho não é precisamente quantificável agora).
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| WhatsApp/mídia | `backend/src/routes/webhook.ts` | 🔧 corrigido | Removida a exigência `&& midia.url` no gate de persistência de mídia — `salvarMidiaWhatsapp()` nunca usou esse campo, decripta pelo `messageId` direto |
+| WhatsApp/mídia | `src/components/WhatsAppInterface.tsx` | 🔧 corrigido | Legenda cru `[Mídia - Imagem: "..."]`/`[Áudio Transcrito: "..."]` não é mais exibida como texto pro humano (existe só pra alimentar o prompt da IA) |
+
+Docs absorvidas e removidas (3 arquivos: `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md`, `SPRINT_DIAGNOSTICO_VERIFICACAO_FIX_MIDIA.md`, `SPRINT_MIDIA_ENVIO_RECEBIMENTO_FRONTEND.md`) — os achados B/C desta última (proxy autenticado de imagem/vídeo) já estavam corrigidos por outro caminho (`AuthedImg`/`AuthedVideo`, confirmado em uso no código atual).
+
+### 🧹 Limpeza de 13 docs de sprint antigas (já resolvidas em sessões de 06/08 a 09/08) — 2026-08-25
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-25 (cont. 4)") pra lista completa dos 13 docs e a confirmação de cada uma. Sem mudança de código — só absorção/limpeza de `diagnosticos/`, uma reconfirmação real feita (chaves OpenAI homolog/produção ainda diferentes). `PLANO_MOTOR_MULTIAGENTE_ECONOMIA_TOKEN.md` mantido de propósito (backlog válido, não é bug).
+
+### 🔍 Superseded: "corrigir causa raiz do prompt vazio" (`SPRINT_FIX_PROMPT_VAZIO_CONTAS_SILENCIOSAS.md`, aberta desde 2026-08-04) — 2026-08-25
+
+Doc mirava a rota legada `ConfigAgenteIA.tsx` → `/api/agent-config` (`agent_configs`) como possível causa raiz do prompt nunca salvar pras mesmas 2 contas (`fmakonee03`/`stefanocatedral`, já tratadas hoje mais cedo nesta sessão). Esse código foi inteiramente substituído na unificação de 08/07 — `Agentes.tsx` agora salva direto em `agentes` via o CRUD genérico (`PUT /api/agentes/:id`), sem passar pela rota antiga. Confirmado hoje mesmo, na prática (não só leitura): testei salvar/persistir campos em `agentes` via essa exata rota (toggles de modalidade) e funcionou ponta a ponta, sem falha silenciosa. Causa raiz proposta pela doc não se aplica mais ao fluxo atual — hipótese superada pela reescrita, não confirmada nem descartada por investigação direta (não valeria a pena reconstruir um bug num código que não existe mais). Doc absorvida e removida.
+
+### 🔧 Gate de Vision/Whisper: falta checar prompt real, só `ativo=true` (`SPRINT_GATE_MIDIA_PROMPT_E_TOGGLE_MODALIDADE.md`, aberta desde 2026-08-08) — em produção, 2026-08-25
+
+Doc tinha 2 itens: item 2 (toggles `modalidade_audio`/`modalidade_imagem`) já foi implementado hoje mais cedo, de forma independente, na sprint "Modalidades de mídia opcionais" — mesma solução, sem saber que a doc já existia. **Item 1 era um gap distinto, ainda real**: o gate checava `EXISTS(agentes WHERE ativo=true)` mas nunca confirmava que o agente tinha `prompt_sistema` de verdade — uma conta `ativo=true` com prompt vazio pagava Vision/Whisper sabendo, pela própria regra de `agentEngine.ts` ("sem prompt, IA não responde"), que nunca geraria resposta nenhuma. Exatamente o padrão das 2 contas corrigidas horas antes nesta mesma sessão (`fmakonee03`/`stefanocatedral`) — mas aquele fix resolveu só os 2 casos pontuais; este fecha a CAUSA (qualquer conta futura no mesmo estado já cai protegida, sem precisar de intervenção manual de novo).
+
+**Fix aplicado**: nova checagem `conta_configurada` (`EXISTS(... AND prompt_sistema IS NOT NULL AND trim(prompt_sistema) <> '')`) nos 2 gates de `webhook.ts` (áudio e imagem), com log distinto ("agente ativo mas sem prompt configurado") pra diferenciar de "sem agente ativo" no diagnóstico.
+
+**Testado em homolog com cenário real** (tenant com 1 agente `ativo=true` e prompt genuinamente vazio, achado direto no banco, sem precisar criar dado sintético) — webhook de áudio sintético confirmou o skip: log correto, zero tentativa de decrypt/Whisper.
+
+**Quantificado em produção, como a doc pedia**: além das 2 contas já corrigidas, achada **mais 1 conta** (`crisacorretoradeimoveis@gmail.com`) no mesmo estado (`ativo=true`, 0 prompt real) — não fazia parte da autorização original de desativação, não mexido em `ativo` por conta própria, mas já protegida automaticamente pelo gate novo a partir de agora.
+
+Build limpo (`swc`). Deployado em homolog (testado) e produção. Doc absorvida e removida.
+
+### 🔧 2 contas com IA "ativa" e prompt vazio há semanas, desativadas (`SPRINT_URGENTE_PROMPT_VAZIO_E_NOME_AGENTE.md`, aberta desde 2026-08-06) — em produção, 2026-08-25
+
+Doc original mirava `agent_configs` (tabela legada) — desde a unificação de 08/07, o campo real é `agentes.prompt_sistema`. Reconfirmado direto no banco, agora: `fmakonee03@gmail.com` e `stefanocatedral@hotmail.com` continuavam `ativo=true` com `prompt_sistema` vazio, cada uma com exatamente 1 linha em `agentes` (nenhuma outra ativa que mascarasse o problema). Guard-rail de `agentEngine.ts` ("IA não responde sem prompt real") já impedia qualquer resposta — não era vazamento de prompt genérico pra cliente real, era só a IA ficando muda. Mas `ativo=true` também contava pro gate `EXISTS(agentes WHERE ativo=true)` que libera Vision/Whisper (ver sprint de 14/08) — ou seja, essas 2 contas pagavam mídia de clientes reais à toa, com garantia de nunca gerar resposta nenhuma.
+
+Confirmado de novo com o usuário antes de agir (doc original já tinha autorização, mas de 3 semanas atrás — não presumida como válida sem reconfirmar). **Ação**: `ativo=false` nas 2 contas — zero mudança de comportamento real (já não respondiam), fecha o desperdício de Vision/Whisper, deixa o estado do banco honesto. Não implica reativação automática — depende do dono de cada conta configurar um prompt real.
+
+Parte 2 da doc original (bug de 500 em `POST /api/agent-config` por `nome_agente` NULL) é sobre uma rota hoje inerte — `ConfigAgenteIA.tsx`, único chamador, foi aposentada na mesma unificação de 08/07 (confirmado, não é mais renderizada). Não corrigido — sem efeito prático, ninguém chama essa rota mais.
+
+Doc absorvida e removida.
+
+### 🔍 Confirmado já resolvido: "teste de spintax vazou pra produção" (`SPRINT_URGENTE_TESTE_VAZOU_PARA_PRODUCAO.md`, aberta desde 2026-08-06) — 2026-08-25
+
+Doc marcava "prioridade máxima, não seguir pra nenhuma outra tarefa" — nunca foi formalmente fechada (STATUS.md/AUDITORIA_LOG.md), mas a causa raiz **já foi corrigida há semanas**, só não documentada no lugar que a doc pedia.
+
+**Reconstrução do incidente original não é mais possível com dado real**: nenhuma das mensagens descritas ("Oi, Ana!"/"Ola, Bruno!"/"Ola, Carla!") existe hoje em `whatsapp_messages` de produção NEM de homolog (17+ dias depois, provavelmente removidas por limpeza de conversas já feita nesta mesma sessão pra essa conta, ou pelo expurgo semanal de 90 dias — não dá pra confirmar qual). A instância citada (`crm_435ee4720fc3_2`) também não existe mais em nenhum dos dois ambientes (renomeada/recriada desde então — `agentes` tem esse tipo de churn confirmado repetidas vezes nesta sessão).
+
+**Mas a causa raiz e a correção JÁ ESTÃO documentadas e em vigor** — `AUDITORIA_PROTOCOLO.md`, seção "Testes que mandam mensagem real via WhatsApp (regra desde 2026-08-06, incidente 'spintax em produção')", datada do mesmo incidente: causa raiz identificada como JWT assinado localmente + URL de API escrita à mão, sem verificação de ambiente. Duas regras permanentes resultantes: (1) todo teste de envio real roda de dentro do container do ambiente alvo, nunca com JWT/URL montados fora; (2) checagem obrigatória de `fetchInstances`/`ownerJid` cross-ambiente antes de qualquer envio real (WhatsApp multi-device pode ecoar a mesma mensagem em homolog E produção se o mesmo número tiver sessão linkada nos dois). **Confirmado por prática, não só por leitura**: todo teste de envio real feito ao longo desta sessão inteira (dezenas deles) seguiu as duas regras à risca.
+
+Doc absorvida (nada de novo a corrigir — já resolvido) e removida.
+
+### 🔧 disparo_logs travados em `sending` pra sempre (fix) + fila global serial (achado, sem alteração) — em produção, 2026-08-25
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-25 (cont.)") pro relato completo.
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| Disparo | `backend/src/routes/disparos.ts` | 🔧 corrigido | `PUT /:id` intercepta transição pra `pausado`/`cancelado` e reseta `disparo_logs.status='sending'` daquela campanha pra `pending` — antes ficava preso pra sempre |
+| Disparo | dado (produção) | 🔧 corrigido (dado) | 25 linhas históricas (2 campanhas já paradas, presas desde 07/08) corrigidas com a mesma UPDATE |
+| Disparo | (nenhum arquivo — achado registrado) | 📋 sinalizado | Fila de disparo é única/global/serial (`get_next_disparo_batch`) — uma campanha lenta bloqueia todas as outras de todos os usuários. Confirmado ainda presente no código; sem evidência de estar manifestando agora (0 campanhas ativas na checagem). Mudança de arquitetura maior, não implementada — fica para decisão futura do usuário. |
+
+### 🔍 Investigado, NÃO confirmado: "eco de disparo pausa IA por engano" (`SPRINT_URGENTE_IA_NAO_RESPONDE_CLIENTE.md`, aberta desde 2026-08-07) — 2026-08-25
+
+Doc nunca tinha sido tocada (zero menção em STATUS.md) — hipótese bem fundamentada (eco `fromMe:true` do próprio envio de campanha, se nenhuma das 4 camadas antiloop reconhecer, seria tratado como intervenção humana real e pausaria a IA silenciosamente pro contato). Código de `webhook.ts`/`disparoProcessor.ts` conferido linha a linha — as 4 camadas descritas na doc continuam implementadas exatamente como descrito, usando a MESMA variável (`realMsgId`/`respData.key.id`) tanto pro `botMessageIds` quanto pro INSERT em `whatsapp_messages`, sem divergência óbvia de formato.
+
+**Teste com dado real de produção (decisivo)**: cruzado todo `contatos.atendente_pausou_ia=true` (73 linhas) contra todo `disparo_logs.enviado_at` (83 linhas) pro mesmo telefone, ordenado por proximidade de horário — **a correlação mais próxima encontrada foi de 335 minutos (5h35)**, a segunda de ~17 dias. Nenhum caso na faixa de segundos/minutos que confirmaria o padrão de eco mal-interpretado. Hipótese principal da doc **refutada por dado real** — não é (ou não é mais) a causa de IA parar de responder clientes nesta base.
+
+Hipóteses alternativas da doc (`agent_configs` vazio/inativo, `n8n_webhook_url` quebrado, circuit breaker de loop) não verificadas individualmente — sem o caso concreto original ("rosemeire Arantes", print de semanas atrás) pra rastrear, não há contato específico pra confirmar qual delas (se alguma) se aplica. Doc absorvida (achado registrado aqui) e removida — se o sintoma "IA não responde" voltar a ser relatado por um usuário real, investigar essas 3 alternativas específicas pro contato relatado, não repetir a hipótese do eco (já descartada).
+
+### 🆕 Modalidades de mídia (áudio/imagem) finalmente opcionais de verdade — em produção, 2026-08-25
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-25") pro relato completo, incluindo o bug de `ORDER BY`/`NULL` achado testando o próprio fix.
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| IA/config | `backend/src/migrations.ts` | 🔧 novo | `agentes.modalidade_audio`/`modalidade_imagem`, `DEFAULT true` |
+| IA/config | `backend/src/index.ts` | 🔧 corrigido | `stripFields` do CRUD de `/api/agentes` liberou os 2 campos (`modalidade_video` continua bloqueado, sem processamento de IA implementado) |
+| IA/custo | `backend/src/routes/webhook.ts` | 🔧 corrigido | Gate principal de Whisper/Vision agora lê `modalidade_audio`/`modalidade_imagem` do agente que de fato atenderia a instância (`COALESCE(evolution_instancia,'')` no `ORDER BY` — fix de um bug real de sort com NULL achado no teste) |
+| IA/custo | `backend/src/services/agentEngine.ts` | 🔧 corrigido | Fallback local (quando webhook.ts não processou a mídia) respeita o mesmo toggle, lido direto do `agente` já carregado |
+| Frontend | `src/pages/Agentes.tsx` | 🔧 corrigido | Aviso "não bloqueia nada" trocado por explicação real + reforço escrito de que nunca vale pra grupo |
+
+### 🆕 Exportar leads de grupo em CSV/Excel — em produção, 2026-08-23
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-23 (cont.)") pro relato completo, incluindo o teste real contra o grupo "Poá negócios" (233/233 participantes).
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| WhatsApp/grupos | `backend/src/routes/whatsapp.ts` | 🔧 novo (`GET /grupos/:groupJid/participantes`) | Reaproveita `buscarInfoGrupo()` já existente; só leitura, nunca grava em `contatos`/`listas` |
+| WhatsApp/grupos | `src/components/WhatsAppInterface.tsx` | 🔧 corrigido | Modal "Importar para o CRM?" virou "Leads do grupo" com 3 ações (CSV/Excel/Importar); `xlsx` (já no projeto, só usado pra importar até agora) usado pela 1ª vez pra exportar |
+
+### 🔴 Limpeza de disco: mídia de WhatsApp acumulando sem limite (9GB/mês, zero retenção desde sempre) — em produção, 2026-08-23
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-23") pro relato completo, incluindo os números de disco antes/depois (95%→79%, 2,5GB→11GB livres, 8.378 arquivos/~8,3GB removidos).
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| WhatsApp/mídia | `backend/src/utils/whatsappMediaStorage.ts` | 🔧 novo (`limparMidiaExpirada`) | Apaga arquivo em disco + zera `media_url`/`media_mimetype` pra mensagens mais velhas que N dias (`whatsapp_messages.media_url LIKE 'local://%'`); lote de 5000/chamada; `profile-pics/` fora do escopo (não cresce sem limite) |
+| WhatsApp/mídia | `backend/src/cron.ts` | 🔧 corrigido | Novo passo (6) no job semanal de retenção LGPD já existente (domingo 02:00) chamando `limparMidiaExpirada`; janela configurável via env `DIAS_RETENCAO_MIDIA_WHATSAPP` (default 30, produção rodando em 7 por decisão do usuário) |
+| Infra/VPS | `/opt/_removed_hemoclinic_20260814` | 🗑️ removido | Leftover de outro projeto/cliente na mesma VPS, já marcado `_removed_` desde 14/08 mas nunca apagado — confirmado nenhum container rodando antes, aprovado explicitamente pelo usuário |
+
+### 🆕 Vistoria completa de gasto de IA: buscar_documentos em base vazia + custo_usd estendido + functionCallingSecurity.ts desatualizado — em produção, 2026-08-14/15
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-14/15 (cont.)") pro relato completo, incluindo o mapa arquivo-por-arquivo de todo lugar que chama OpenAI/Anthropic no backend.
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| IA/RAG | `backend/src/services/mcp/tools.ts` | 🔧 corrigido | `buscar_documentos`: checa `EXISTS(documents)` antes de gerar embedding (base 100% vazia em produção); registra `custo_usd` quando o embedding é de fato gerado |
+| IA/custo | `backend/src/utils/aiCusto.ts` | 🔧 novo | `PRECO_POR_1M_TOKENS`/`estimarCustoUsd`/`estimarCustoWhisperUsd`/`registrarUsoIA` — extraído de `agentEngine.ts`, ponto único de preço/registro pra todo call-site de IA |
+| IA/custo | `backend/src/services/agentEngine.ts` | 🔧 corrigido | Usa `aiCusto.ts` em vez de cópia local; 2 call-sites de fallback (Vision/Whisper locais) agora também registram custo |
+| IA/custo | `backend/src/utils/vision.ts` | 🔧 corrigido | `analisarImagem` retorna `{descricao, tokensEntrada, tokensSaida}` (antes descartava `usage` da resposta) |
+| IA/custo | `backend/src/utils/transcribe.ts` | 🔧 corrigido | `transcreverAudio` retorna `{texto, duracaoSegundos}` (`response_format: verbose_json` — Whisper cobra por minuto, não por token) |
+| IA/custo | `backend/src/utils/embeddings.ts` | 🔧 corrigido | `gerarEmbedding` retorna `{embedding, tokensEntrada}` (antes descartava `usage.total_tokens`) |
+| IA/custo | `backend/src/routes/webhook.ts` | 🔧 corrigido | Vision/Whisper (bloco principal) agora chamam `registrarUsoIA` |
+| IA/custo | `backend/src/routes/kanban.ts` | 🔧 corrigido | Chamada Anthropic ("criar tarefa da conversa") agora registra custo (`claude-3-haiku-20240307`, preço adicionado à tabela) |
+| IA/bug lateral | `backend/src/services/functionCallingSecurity.ts` | 🔧 corrigido (sync) | Arquivo em produção/homolog estava desatualizado — faltava `CriarCorridaArgsSchema` (prod) e também `BuscarDocumentosArgsSchema` (homolog); ambas ferramentas quebravam com `TypeError` ao serem chamadas pela IA. Achado testando o fix acima, não relacionado a custo — redeploy puro (conteúdo já existia local e já compilava). |
+
+### 🔴 Crédito OpenAI zerado — causa real: Vision/Whisper pagando mídia de grupo nunca autorizado — em produção, 2026-08-14
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-14") pro relato completo, incluindo os números levantados no banco (0 grupos autorizados / 4.239 imagens+áudios de grupo em 14 dias nas 3 contas ativas).
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| WhatsApp/IA | `backend/src/routes/webhook.ts` | 🔧 corrigido | Gate novo `grupoMidiaNaoAutorizada` antes dos blocos de Whisper (áudio) e Vision (imagem) — consulta `grupos_ia_permitidos` uma vez por mensagem de grupo; se não autorizado, pula a chamada OpenAI inteira (mídia continua sendo salva, só sem transcrição/descrição) |
+
+**Achado que faltava nos gates de 08-07** (`SPRINT_DIAGNOSTICO_TOKEN_AINDA_GASTANDO_NO_DISPARO.md`, já absorvido): aqueles gates cobriam conta sem agente ativo / contato com IA pausada, mas nunca checavam se a mensagem vinha de um GRUPO nem se aquele grupo estava em `grupos_ia_permitidos` — o portão de grupo existente só bloqueava a resposta de texto, não a transcrição/descrição de mídia, que já roda (e já é paga) antes disso. Também explica por que nunca apareceu no dashboard de custo: `custo_usd` só é gravado em `agentEngine.ts`, nunca no fluxo de Whisper/Vision de mídia recebida.
+
+Testado em homolog com webhook sintético real (payload `messages.upsert`, autenticado com `EVOLUTION_WEBHOOK_SECRET` do próprio container) nos 2 sentidos: grupo não autorizado → skip confirmado por log, zero chamada OpenAI; grupo autorizado (linha temporária) → segue fluxo normal, sem regressão. Deployado direto em produção dado o caráter urgente (saldo já zerado) e o risco mínimo (mudança só reduz chamadas que eram 100% desperdício).
+
+### 🆕 Estruturar Disparo: rastro de listas usadas + campanha como tela persistente — em produção, 2026-08-11
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-11 (cont.) — Estruturar Disparo") pro relato completo.
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| Disparo | `backend/src/migrations.ts` | 🔧 novo | Coluna `disparos.listas_ids UUID[]` + índice GIN |
+| Disparo | `src/pages/Disparos.tsx` | 🔧 corrigido | Grava `listas_ids`/`tags_selecionadas`/`estagios_selecionados` no INSERT (antes nunca eram escritas); badge "usada em N campanhas" e aviso de reenvio recente por lista; tela padrão passa a ser a lista de campanhas (`?campanha=<id>` persistente), wizard só sob "Nova Campanha" |
+| Disparo | `src/components/disparos/CampanhasList.tsx` | 🔧 novo | Lista de campanhas extraída como componente compartilhado |
+| WhatsApp | `src/pages/MonitorWhatsApp.tsx` | 🔧 corrigido | Card "Campanhas de Disparo" simplificado pra resumo compacto + link (lista completa duplicada removida, `Disparos.tsx` agora é o dono único) |
+
+### 🔴 Circuit-breaker de loop de LOGOUT (2ª rodada do incidente Serenovlogs067) + Monitor persistente de campanhas — em produção, 2026-08-10/11
+
+Ver `STATUS.md` (entrada "Sessão 2026-08-10/11") pro relato completo em prosa. Resumo técnico por arquivo:
+
+| Módulo | Arquivo | Status | Resumo |
+|---|---|---|---|
+| WhatsApp | `backend/src/services/logoutCircuitBreaker.ts` | 🔧 novo | `registrarLogoutEvent`, `verificarLoopDeLogout` (por instância), `verificarLoopDeLogoutTenant` (por tenant, só pro caminho de mintar nome novo — fix de uma lacuna achada no teste real) |
+| WhatsApp | `backend/src/routes/webhook.ts` | 🔧 corrigido | `connection.update`: campo real é `data.state`, não `data.connection` (bug pré-existente, nunca disparava o backfill automático); grava LOGOUT real + loga `WHATSAPP_LOGOUT_LOOP` quando o padrão bate o limite |
+| WhatsApp | `backend/src/routes/whatsapp.ts` | 🔧 corrigido | `POST /connect`: circuit-breaker aplicado num ponto único (cobre `nova_conexao`/reconexão explícita/`force_reconnect`) + guard extra específico pro caminho de mintar instância nova |
+| WhatsApp | `backend/src/migrations.ts` | 🔧 novo | Tabela `whatsapp_logout_events` |
+| WhatsApp | `src/components/whatsapp/InstanceManagementPanel.tsx` | 🔧 corrigido | Diálogo de confirmação antes de "Forçar Reinicialização" + cooldown visível (contagem regressiva) |
+| WhatsApp | `src/services/evolutionService.ts` | 🔧 corrigido | `LogoutLoopError` (erro tipado pro código `LOGOUT_LOOP` do backend) |
+| Disparo | `src/components/disparos/MonitoringDashboard.tsx` | 🔧 novo | Extraído de `Disparos.tsx` (`MonitoringDashboard` + `EditarConfiguracaoPausada`), reaproveitado por `MonitorWhatsApp.tsx` |
+| Disparo | `src/pages/Disparos.tsx` | 🔧 corrigido | Importa o componente compartilhado em vez de definir localmente (mesmo comportamento) |
+| Disparo | `src/pages/MonitorWhatsApp.tsx` | 🔧 novo | Seção "Campanhas de Disparo" persistente — lista real do banco, campanha aberta via `?campanha=<id>` (sobrevive a reload) |
+
+**Achado urgente durante a sessão** (não fazia parte do escopo original, ação imediata antes de qualquer código): conta `mentoark@gmail.com` com 3 campanhas `em_andamento` sem controle nenhum na UI, uma delas (`teste`, 32c55bab) disparando mensagem real pro número `5511991909106` havia horas. Pausadas direto no banco (`PATCH disparos.status='pausado'`) assim que identificado — é exatamente a causa raiz que motivou o item 2 da tabela acima.
+
+**Incidente de infra achado no meio do trabalho**: disco da VPS 100% cheio, Postgres compartilhado (produção+homolog) em crash-loop, produção momentaneamente 503. `docker builder prune -af` liberou espaço suficiente (repetido 3x ao longo da sessão). **Segue como pendência real** — disco voltou a ficar em ~93% de uso, precisa de correção estrutural (mais disco, ou prune automático via cron), não resolvida nesta sessão.
+
+### ✅ Duplicação real fechada: "Stella" (5511991909106) não está mais aberta em homolog E produção ao mesmo tempo — pendência de 2026-08-06 resolvida
+
+**Contexto:** causa raiz que impediu o teste supervisionado do Maturador (entrada anterior neste log) — número WhatsApp `5511991909106` conectado (`state='open'`) simultaneamente em `crm_435ee4720fc3_2` de homolog ("Stella", conta `mentoark`) e `crm_435ee4720fc3_2` de produção ("Pessoal", mesma conta). Mesmo caso já registrado como pendência aberta desde o incidente de 2026-08-06, nunca fechado até hoje.
+
+**Passo 1 — investigação de uso real antes de tocar em qualquer coisa** (pedido explícito da sprint): a linha `agentes` da "Stella" em homolog tinha aparência de configuração ativa (`ativo=true`, `operation_mode='agente_ia'`, `prompt_sistema` preenchido — é inclusive uma das 5 linhas `ativo=true` que bloquearam o guard-rail do Maturador na sprint anterior). Mas checando dado real de tráfego (`whatsapp_messages`): **`COUNT(*) = 0` pra `instance_name='crm_435ee4720fc3_2'` em homolog, desde sempre** — nunca passou uma mensagem real por essa sessão específica, apesar da config parecer "pronta pra uso". Em contraste, a mesma instância em produção (`crm_435ee4720fc3_2`, "Pessoal") tem **1775 mensagens históricas, 1524 nos últimos 7 dias, a mais recente registrada minutos antes desta sprint rodar** — uso real, ativo, agora. Essa assimetria (config ativa mas zero tráfego real de um lado, tráfego pesado e recente do outro) foi a evidência concreta usada pra confirmar que a decisão padrão do prompt (desconectar homolog, preservar produção) era de fato a de menor risco, não só a "opção mais óbvia" — decisão tomada com dado, não só por ser o default sugerido.
+
+**Confirmação explícita obtida antes da ação** (`AskUserQuestion`, apresentando o levantamento acima) — usuário aprovou desconectar o lado homolog, mantendo produção intocada.
+
+**Ação executada** (dentro do container `crm-api-homolog`, credenciais reais de homolog — nunca tocou em produção): `DELETE {base}/instance/logout/crm_435ee4720fc3_2` na Evolution de homolog (`fierceparrot-evolution.cloudfy.live`). **Deliberadamente só o endpoint de logout, sem `/instance/delete`** (diferente do que as rotas normais do app fazem — `POST /disconnect` e `DELETE /instances/:name` em `whatsapp.ts` sempre chamam os dois juntos) — pedido explícito da sprint era preservar a linha em `agentes` e a instância na Evolution, só derrubar a sessão do celular, pra permitir reconectar com QR novo depois. Resposta da Evolution: `{"status":"SUCCESS","response":{"message":"Instance logged out"}}`, HTTP 200.
+
+**Verificação pós-ação (mesmo `ownerJid`, reconsultado nos dois ambientes, mesmo método da sprint anterior):**
+
+| Ambiente | Instância | `connectionStatus` (antes → depois) | `ownerJid` |
+|---|---|---|---|
+| Homolog | `crm_435ee4720fc3_2` ("Stella") | `open` → **`close`** | `5511991909106` |
+| Produção | `crm_435ee4720fc3_2` ("Pessoal") | `open` → `open` (inalterado) | `5511991909106` |
+| Produção | `crm_435ee4720fc3` ("Comercial") | `open` → `open` (inalterado) | `5511946650482` |
+| Produção | `crm_a5d1255fce86` (stefanocatedral) | `open` → `open` (inalterado) | `559881352569` |
+| Produção | `crm_f4fe6a9614a3` (fmakonee03) | `close` → `close` (inalterado) | `5511960420639` |
+
+Confirmado: `5511991909106` agora só aparece `open` em produção. As 3 outras instâncias de produção seguem byte-a-byte iguais ao estado anterior (nenhuma delas foi lida com escrita nem alterada). Linha `agentes` da "Stella" em homolog confirmada intacta por `SELECT` (`id`/`nome`/`evolution_instancia` idênticos a antes) — só a sessão caiu, nada foi apagado.
+
+**Instância "Conexão WhatsApp" (`5511979579548`)**, já confirmada exclusiva de homolog na sprint anterior — reconfirmada `open`, segue exclusiva. É a única instância hoje genuinamente elegível pro teste do Maturador; falta uma 2ª (reconectar "Stella" com um número de teste dedicado, ou outra instância nova) — ação manual do usuário, fora do escopo desta sprint ("não reconectar nada nesta sprint").
+
+**Pendência de 2026-08-06 (número WhatsApp compartilhado entre homolog e produção): FECHADA.** Nenhuma das 4 instâncias de cada ambiente hoje compartilha `ownerJid` com o outro lado.
+
+**Nenhuma mudança de código nesta sprint** — ação pura de infraestrutura (1 chamada HTTP real à Evolution de homolog, confirmada e revertível via QR).
+
+| Módulo | Item | Status | Resumo |
+|--------|------|--------|--------|
+| Infra/WhatsApp | Instância "Stella" (homolog) | 🔧 corrigido | Logout real via Evolution API — duplicação com produção fechada, linha `agentes` preservada |
+
+### 🛑 Maturador de Números: teste supervisionado de envio real interrompido antes de ativar qualquer coisa — só 1 instância homolog elegível de 2 exigidas
+
+**Contexto:** continuação direta da sprint "Score Real + Maturador" (entrada anterior neste log) — único gap deixado pendente por segurança: confirmar que o motor (`maturadorProcessor.ts`) realmente envia mensagem via Evolution entre 2 instâncias, ponta a ponta, com usuário acompanhando. A sprint definia sua própria regra de parada: precisa de pelo menos 2 instâncias homolog reais com `state='open'`; sem isso, reportar e não prosseguir (e nunca usar instância de produção pro teste).
+
+**Levantamento feito (nenhuma ativação, nenhum desligamento de IA, nenhum envio — só leitura):**
+
+1. Consulta real à Evolution de homolog (`fierceparrot-evolution.cloudfy.live`, servidor próprio e isolado de homolog desde 2026-07-22) via `GET /instance/fetchInstances`, uma vez por instância, usando a `api_key` de cada linha `agentes` (não uma key genérica):
+
+| Conta | Instância | `connectionStatus` | `ownerJid` |
+|---|---|---|---|
+| mentoark@gmail.com | `crm_435ee4720fc3_3` ("Conexão WhatsApp") | `open` | `5511979579548` |
+| mentoark@gmail.com | `crm_435ee4720fc3_2` ("Stella") | `open` | `5511991909106` |
+| angelobispofilho@gmail.com | `crm_5319f0ed61b3` | sem info (instância não respondeu) | — |
+| teste-numero-novo@mentoark-test.local | `crm_b94c643dc9cd` | `close` | — |
+
+Só 2 das 4 instâncias homolog existentes estão genuinamente `open` com número real por trás.
+
+2. **Segunda camada de segurança obrigatória** (`AUDITORIA_PROTOCOLO.md`, regra criada após o incidente de 2026-08-06 documentado nesta mesma sessão — vazamento pra produção via número WhatsApp compartilhado entre os dois ambientes por multi-dispositivo): antes de aceitar qualquer uma das 2 instâncias `open` como elegível, consultada TAMBÉM a Evolution de PRODUÇÃO (`disparo.mentoark.com.br`) pra ver se o mesmo `ownerJid` aparece conectado nos dois lados ao mesmo tempo:
+
+| Conta (produção) | Instância | `connectionStatus` | `ownerJid` |
+|---|---|---|---|
+| mentoark@gmail.com | `crm_435ee4720fc3_2` ("Pessoal") | `open` | `5511991909106` |
+| mentoark@gmail.com | `crm_435ee4720fc3` ("Comercial") | `open` | `5511946650482` |
+| stefanocatedral@hotmail.com | `crm_a5d1255fce86` | `open` | `559881352569` |
+| fmakonee03@gmail.com | `crm_f4fe6a9614a3` | `close` | `5511960420639` |
+
+**Achado confirmado com dado fresco (não presumido a partir do registro antigo)**: `5511991909106` — o número por trás de "Stella" em homolog — está `open` **simultaneamente** em produção, na instância "Pessoal" (`crm_435ee4720fc3_2`, mesmo `ownerJid` exato, mesmo nome de instância curiosamente, mas servidor Evolution diferente). Este é exatamente o mesmo caso já registrado como pendência não resolvida na sessão de 2026-08-06 ("Pendente, requer decisão do usuário: qual número deve ficar exclusivo de homolog") — confirmado que **segue não resolvido até hoje**, quase 3 semanas depois. Usar "Stella" no teste arriscaria repetir o incidente original: mensagem enviada por um lado ecoando como "recebida" no outro via multi-dispositivo do próprio WhatsApp, potencialmente acionando a IA de produção de verdade (a conta `mentoark` tem 5 agentes com `ativo=true`, confirmado na sprint anterior) contra o número real, com custo de OpenAI e poluição de histórico de conversa reais.
+
+O outro candidato `open` (`5511979579548`, "Conexão WhatsApp") **não apareceu em nenhuma das 4 instâncias de produção verificadas agora** — não está mais compartilhado (situação mudou desde 2026-08-06, quando esse MESMO número também tinha sido flagado como compartilhado; dado fresco desta checagem sobrepõe o registro antigo). Sozinho, porém, não forma um par — o teste precisa de 2 instâncias.
+
+**Decisão: parado aqui, exatamente conforme a regra de segurança da própria sprint.** Não foi desligado nenhum `agentes.ativo`, não foi criado nenhum par em `maturador_pares`, o motor `processarMaturador()` não foi acionado manualmente nem observado em ação — o cron de 1min continua rodando normalmente em produção e homolog, mas sem nenhum par `ativo=true` pra agir (confirmado na sprint anterior, `SELECT COUNT(*) FROM maturador_pares` = 0 nos dois ambientes, situação inalterada).
+
+**Nenhum bug de código encontrado** — o teste não chegou a exercitar `maturadorProcessor.ts` de verdade, então não há achado de bug nesta entrada. **Nenhuma mudança de código feita nesta sprint.**
+
+**Pendência real que bloqueia o próximo passo, para o usuário decidir:**
+- Conectar uma 2ª instância genuinamente exclusiva de homolog (número real, nunca linkado à sessão de produção) — só assim existiriam as 2 instâncias `open` e seguras exigidas pelo teste. Isso requer ação humana (escanear QR com um número disponível) que não pode ser feita autonomamente nesta sessão.
+- Alternativa (não recomendada sem confirmação explícita): aceitar o risco documentado e usar "Stella" mesmo assim, sabendo do compartilhamento com produção — decisão que só o usuário deveria tomar, dado o histórico real do incidente de 2026-08-06.
+- Resolver de vez a causa raiz: desconectar "Stella" de um dos dois lados (produção ou homolog), fechando a pendência aberta há quase 3 semanas — provavelmente a solução mais correta a médio prazo, independente deste teste específico.
+
+### 🔴 Score de Saúde 100% mock corrigido (achado grave) + Maturador de Números (novo) — em PRODUÇÃO
+
+**Contexto:** usuário perdeu 2 números por banimento na mesma semana; "Score de Saúde" (aba Instâncias) mostrava 100/100 "Saudável" nos dois. Pedido explícito: confirmar a causa por leitura direta do código antes de implementar (não repetir cegamente uma hipótese).
+
+**Causa raiz confirmada** (`src/components/whatsapp/InstanceManagementPanel.tsx`, função `updateScore()`, ~linha 602-608 antes desta sprint): comentário do próprio código já dizia "Em um cenário real, isso seria uma chamada para `/api/agentes/:id/score`... Aqui simulamos o cálculo" — `Math.random()` pra `volume_diario`/`taxa_resposta`/`reclamacoes`/`tempo_dias`, só rodava com clique manual no botão de refresh do card (nunca automático). Pior: `const score = a.whatsapp_score ?? 100` — sem NENHUM cálculo ter rodado (caso mais comum, já que era manual), o fallback mostrava "Saudável" sempre. Reforço adicional achado durante a implementação: a própria coluna `agentes.whatsapp_score` tinha `DEFAULT 100` no schema — reforçando o mesmo problema numa segunda camada, mesmo se o fallback do frontend fosse corrigido sozinho.
+
+**Item 1 — Score real:**
+- `backend/src/services/instanceScore.ts` (novo, ~180 linhas documentadas) — `calcularScoreInstancia()` (função pura, calcula sem persistir), `recalcularScoreAgente()` (calcula + persiste 1 instância), `recalcularTodosScores()` (loop, usado pelo cron). 4 fatores, 0-25 cada, MESMAS faixas de pontuação do mock antigo (preservadas de propósito — batem com a cópia estática já existente em `ScoreInstancia.tsx`, ex: "manter volume abaixo de 150"):
+  1. **Volume diário**: `COUNT(*) FROM whatsapp_messages WHERE from_me=true AND instance_name=X AND created_at >= NOW()-24h`. Fonte ÚNICA (não soma com `disparo_logs`) — confirmado por leitura de `disparoProcessor.ts` (linha ~516) que toda campanha JÁ grava em `whatsapp_messages` depois do envio; somar as duas contaria a mesma mensagem 2x.
+  2. **Taxa de resposta**: % de contatos (`remote_jid`) que a instância mandou mensagem nos últimos 7 dias E que responderam (`from_me=false`, mesma janela). Heurística documentada como tal no código — não é correlação temporal fina, é "houve troca nos 2 sentidos na janela". `null` (0 envios na janela) mapeia pra fator NEUTRO (15 pts, "Atenção"), não "saudável" nem "crítico" por padrão — decisão consciente de não repetir o mesmo padrão do bug original (assumir bom sem dado).
+  3. **Reclamações**: `disparo_optouts` dos últimos 30 dias, atribuídos à instância que mandou a ÚLTIMA campanha antes do opt-out — subquery CORRELACIONADA (`ORDER BY enviado_at DESC LIMIT 1` por telefone, comparado à instância em avaliação), não um `EXISTS` simples (que atribuiria erroneamente o opt-out a qualquer instância que já tenha mandado algo pro contato algum dia, mesmo não sendo a campanha mais recente).
+  4. **Maturidade**: dias desde `agentes.evolution_conectado_em` (coluna nova). `created_at` como fallback pra instâncias conectadas antes desta sprint (documentado como aproximação — não há como saber a data real de conexão de algo que já existia antes da coluna).
+- **Override crítico** (o achado mais importante do pedido): implementado no FRONTEND (`ScoreInstancia.tsx`, prop `desconectado`), não no backend — decisão deliberada, porque o frontend já tem o estado de conexão mais fresco possível (`fetchConnectionStatus`, poll a cada 30s direto na Evolution), mais confiável que o cron de 15min tentar re-derivar o mesmo dado. `InstanceManagementPanel.tsx` calcula `desconectada = state !== "open"` (já tinha esse dado, só não usava pro score) e passa pro componente, que renderiza um estado "Desconectado" distinto ANTES de qualquer cálculo baseado no número — nunca mostra "Saudável" nesse caso, independente do score armazenado. Também tratado o estado "Ainda não calculado" (`score_updated_at IS NULL`) como um terceiro estado próprio, nem saudável nem crítico.
+- `POST /api/instancias/:id/score` (novo, `routes/instanceScore.ts`, prefixo próprio pra não colidir com o CRUD genérico de `/api/agentes`) — recálculo sob demanda (botão "Recalcular score"), mesma função usada pelo cron.
+- Cron novo, `*/15 * * * *` (`cron.ts`, mesma cadência da reconciliação Evolution já existente) — recalcula TODAS as instâncias conectadas automaticamente, erros isolados por instância.
+- `agentes.whatsapp_score` — `ALTER COLUMN ... DROP DEFAULT` (era `DEFAULT 100`) — linha nova nasce `NULL`, tratada como "não calculado" pelo frontend, nunca mais "saudável" por acidente de schema.
+- `agentes.evolution_conectado_em` (coluna nova) preenchida na conexão real (`routes/whatsapp.ts` `saveEvolutionConfig()`, `routes/integracoes.ts` `syncEvolution()`) — `COALESCE` nos updates (nunca sobrescreve uma data já gravada; reconectar não deve resetar a "idade" da conta pro cálculo).
+
+**Testado em homolog** (dado real, 4 instâncias reais da conta `mentoark@gmail.com`, via cron real — não simulado, confirmado nos logs `"Score de Saúde recalculado", atualizados:4, falhas:0`): as 4 instâncias saíram de "100/Saudável" (mock, nunca calculado) pra **70/100 "Atenção"**, calculado de verdade (`{volume_diario:25, taxa_resposta:15, reclamacoes:25, tempo_conta:5}` — as 4 conexões têm menos de 30 dias, batendo com a maturidade real). Confirmado por consulta DIRETA à Evolution (`fetchInstances`) que a instância `crm_b94c643dc9cd` está genuinamente `connectionStatus: "close"` agora — exatamente o cenário que, antes desta sprint, mostraria "100/100 Saudável" (o sintoma relatado pelo usuário) e que agora, pelo mecanismo de override confirmado por leitura de código, cairia no estado "Desconectado" no frontend (sem ferramenta de browser disponível nesta sessão pra confirmar por screenshot — limitação registrada explicitamente, não inferida como testada).
+
+**Item 2 — Maturador de Números (feature nova, MVP funcional completo, não só desenho):**
+- Decisão de escopo (autorizada pelo próprio prompt — "se o Claude Code avaliar que é mais seguro dividir"): implementar o item 1 (bug urgente, ativo agora) com prioridade total; para o item 2, entregar um MVP real e funcional (schema + banco de diálogo + motor de agendamento + UI), mas sem testar o envio real de mensagem ao vivo nesta sessão (ver justificativa no fim desta seção).
+- Schema `maturador_pares` (`migrations.ts`) — par de 2 `agentes`, `ativo` sempre nasce `false` (nunca liga sozinho), `contador_dia`/`contador_resetado_em` (reset à meia-noite, mesmo padrão citado no print de referência do usuário), `linha_atual` (posição no banco de diálogo, avança e cicla), `banido_em`/`banido_agente_id` (marcação manual).
+- `backend/src/services/maturadorDialogos.ts` (novo) — 20 linhas de diálogo curto natural em PT-BR (tom casual, sem menção a produto/empresa — só "parecer 2 pessoas conversando"), a maioria com spintax manual `{a|b|c}` embutido, mais um dicionário de 15 sinônimos (`aplicarVariacaoDicionario`). **Cópia mínima e adaptada** das funções equivalentes em `src/lib/motorTexto.ts` — documentado explicitamente por quê não foi importado direto (frontend Vite vs backend swc, dois projetos TS sem workspace compartilhado configurado neste repo; mesma decisão pragmática já tomada nesta sessão em casos parecidos). Zero IA, zero chamada de rede pra gerar texto.
+- `backend/src/services/maturadorProcessor.ts` (novo) — motor real, chamado a cada 1min pelo cron. Ritmo de aquecimento gradual: limite diário calculado por idade do par (`limiteDiarioPorIdade()`: <7 dias→20/dia, <14 dias→50/dia, 14+→100/dia — mesma progressão já documentada na cópia estática de `ScoreInstancia.tsx` e citada no print de referência do usuário), intervalo mínimo de 5-15min entre mensagens do MESMO par (nunca rajada), envia via Evolution `/message/sendText/:instancia` de verdade (mesmo endpoint/formato de `disparoProcessor.ts`).
+- **Achado de segurança confirmado por leitura de código ANTES de implementar, não assumido**: `agentEngine.ts.processarMensagem()` resolve o agente pela instância que recebeu a mensagem, MAS tem um fallback (`WHERE user_id=$1 AND ativo=true ORDER BY updated_at DESC LIMIT 1`) que pega QUALQUER agente ativo DA MESMA CONTA quando a instância específica não tem seu próprio agente `ativo=true`. Isso significa que checar só as 2 instâncias do par (`ativo=false` nas duas) NÃO é suficiente pra garantir que a mensagem do maturador nunca seja processada pela IA real — se a conta tiver QUALQUER OUTRA instância ativa, o fallback pode pegar a mensagem mesmo assim, gerando custo real de token e quebrando a promessa "zero IA" desta feature. [AUDITORIA] FIX APLICADO (guard-rail): `routes/maturador.ts`, ativar um par exige que a CONTA INTEIRA (user_id) não tenha nenhum `agentes.ativo=true` — checagem roda tanto na ativação quanto (implicitamente, checada de novo a cada tentativa) se a conta ligar IA depois de já ter ativado um par.
+- `POST /:id/banido` (marcar manualmente "caiu/baniu") — ponte explícita com o item 1: força `agentes.whatsapp_score=0` na hora (não espera o cron de 15min) e desativa o par automaticamente.
+- UI: `src/components/whatsapp/MaturadorNumeros.tsx` (novo) — aba "Maturador" em `/whatsapp` (`WhatsApp.tsx`, agora 4 abas). Criar par (select das 2 instâncias), Switch ativar/desativar (mensagem de erro do backend repassada via toast quando o guard-rail recusa), contagem "X/limite mensagens hoje", botão de marcar banido por lado, excluir par.
+
+**Testado em homolog** (dentro do container, dado real da conta `mentoark`):
+- **Guard-rail confirmado via rota HTTP real** (não simulação): JWT assinado dentro do container (payload `sub`, formato exigido por `middleware.ts` — confirmado por leitura antes de montar o teste), `PATCH /api/maturador/:id/ativo {ativo:true}` contra um par de teste real → **HTTP 409**, mensagem de erro explicando o motivo, e confirmado por `SELECT` direto que o par continua `ativo=false` no banco (a rota recusou de verdade, não só devolveu erro sem persistir nada). A conta `mentoark` tem **5 agentes com `ativo=true`** neste exato momento — ou seja, o guard-rail não é uma checagem teórica, é o que impede esta feature de gerar custo real de IA para esta conta específica AGORA, se alguém tentasse ligar sem desativar a IA primeiro.
+- Ramp de limite diário (`limiteDiarioPorIdade`), banco de diálogo (variação real confirmada: 4 de 5 amostras únicas da mesma linha-base, spintax + dicionário funcionando juntos), transição de estado (alternância de remetente `a`→`b`, avanço de `linha_atual`, incremento de `contador_dia`) e "marcar banido → score forçado a 0" testados via simulação direta no banco (mesmas queries que as rotas reais executam).
+- **Envio real de mensagem (Evolution `sendText`) NÃO testado ao vivo nesta sessão** — decisão deliberada, não esquecimento: testar de verdade exigiria ativar um par de fato (`ativo=true`), o que — dado o guard-rail confirmado acima — exigiria primeiro desligar `ativo=false` em TODOS os 5 agentes reais da conta `mentoark` (mudança de comportamento real, fora do escopo pedido, afetaria atendimento de verdade) ou usar uma conta de teste sem histórico real pra validar. Dado que o tema "número banido" é a origem desta sprint e já é sensível para o usuário esta semana, o julgamento foi não mandar mensagem real entre 2 números reais sem supervisão/confirmação extra dele especificamente para ESTA feature nova. O mecanismo de envio em si (`evolutionFetch` + `/message/sendText`, mesmo formato de corpo `{number, text}`) já é comprovadamente funcional — é o mesmo já usado e testado em produção por `disparoProcessor.ts`.
+- Todos os dados de teste (pares, scores forçados) removidos ao final; confirmado por `SELECT COUNT(*) = 0`.
+
+**Achado lateral, fora do escopo pedido, não corrigido:** o texto "Score crítico — disparos pausados automaticamente" (`InstanceManagementPanel.tsx`, banner do card) não corresponde a nenhuma imposição real no backend — `whatsapp_score` nunca foi lido em lugar nenhum de `backend/src/` antes desta sprint (confirmado por grep) além do próprio `ALTER TABLE`. Nada no `disparoProcessor.ts` verifica o score antes de enviar. O texto do banner foi ajustado nesta sprint pra não ficar ainda mais enganoso com a mudança (differenciado "desconectada" de "score crítico", ver código), mas a AUSÊNCIA de enforcement real no backend não foi corrigida — é uma mudança de escopo maior (gatear `disparoProcessor.ts` por score), fora do pedido desta sprint. Sinalizado como candidato a sprint futura.
+
+**Deploy:** `npm run build` (frontend) e `npm run build` (backend, `swc`) limpos. Deployado em homolog via `scripts/deploy.sh homolog` (14 arquivos). **Com confirmação explícita do usuário, deployado também em produção** (`scripts/deploy.sh prod --confirm`, 15 arquivos — junto com o Monitor de Disparo da sprint anterior, mesmo commit) — `/health`→200 nos dois ambientes, sem `ERROR` nos logs, migrations confirmadas nos dois (`Score de Saúde real (evolution_conectado_em) OK`, `Maturador de Números (schema) OK`, timestamps de boot distintos por ambiente). Confirmado por `SELECT COUNT(*) FROM maturador_pares` em produção logo após o deploy: 0 linhas — a feature nova ficou genuinamente inerte, nada foi ativado pelo deploy em si.
+
+| Módulo | Arquivo | Status | Resumo |
+|--------|---------|--------|--------|
+| WhatsApp/Score | backend/src/services/instanceScore.ts | 🆕 criado | Cálculo real dos 4 fatores do Score de Saúde, substitui mock |
+| WhatsApp/Score | backend/src/routes/instanceScore.ts | 🆕 criado | `POST /api/instancias/:id/score` — recálculo sob demanda |
+| WhatsApp/Score | backend/src/cron.ts | 🔧 corrigido | Cron novo de 15min recalculando score de todas as instâncias |
+| WhatsApp/Score | backend/src/migrations.ts | 🔧 corrigido | `evolution_conectado_em`, `whatsapp_score` sem DEFAULT 100, schema `maturador_pares` |
+| WhatsApp/Score | backend/src/routes/whatsapp.ts, integracoes.ts | 🔧 corrigido | `evolution_conectado_em` preenchido na conexão real |
+| WhatsApp/Score | src/components/whatsapp/InstanceManagementPanel.tsx | 🔧 corrigido | Score real (não mais mock), override de desconectada/não calculado |
+| WhatsApp/Score | src/components/whatsapp/ScoreInstancia.tsx | 🔧 corrigido | Estados "Desconectado"/"Ainda não calculado" próprios |
+| WhatsApp/Maturador | backend/src/services/maturadorDialogos.ts | 🆕 criado | Banco de diálogo + variação determinística (zero IA) |
+| WhatsApp/Maturador | backend/src/services/maturadorProcessor.ts | 🆕 criado | Motor de agendamento (cron 1min), ritmo de aquecimento gradual |
+| WhatsApp/Maturador | backend/src/routes/maturador.ts | 🆕 criado | CRUD de pares + guard-rail anti-IA + marcar banido → score |
+| WhatsApp/Maturador | src/components/whatsapp/MaturadorNumeros.tsx | 🆕 criado | UI da aba Maturador |
+| WhatsApp/Maturador | src/pages/WhatsApp.tsx | 🔧 corrigido | 4ª aba "Maturador" |
+
+### 🔧 Monitor de Disparo: fix de layout + controle real (editar config pausada, remover pending) — em PRODUÇÃO
+
+**Contexto:** achado real do usuário ("o monitor toma a tela inteira e não deixa ver os módulos") — confirmado por leitura direta de `Disparos.tsx`: `DisparosPage` (~linha 636, antes desta sprint) tinha `if (activeCampaign) return <MonitoringDashboard .../>` ANTES de qualquer `<CRMLayout>`; só o wizard normal (linha ~640 em diante) ficava dentro do layout. Pedido também incluía ir além do Pausar/Retomar já existente: editar configuração e remover números específicos enquanto a campanha roda.
+
+**Feito** (`src/pages/Disparos.tsx`):
+1. **Fix de layout**: `return <MonitoringDashboard .../>` envolvido em `<CRMLayout>`, mesmo padrão do resto do arquivo.
+2. **`handleStatusChange`**: passou a atualizar `currentCampaign` local na hora (`setCurrentCampaign`) em vez de esperar o próximo poll de 3s — badge de status e o formulário condicional de edição (item 3) reagem imediatamente ao clique.
+3. **Componente novo `EditarConfiguracaoPausada`** (só renderizado com `currentCampaign.status === 'pausado'`): perfil de velocidade (Select), intervalo customizado min/max em minutos (reaproveitando `DELAY_MIN_ABSOLUTO_MINUTOS`, mesmo piso de segurança do wizard `StepAntiBan`), janela de horário (início/fim), limite diário, pausa de fim de semana. Estado inicializado com `useState(() => ...)` (lazy initializer) — só roda no primeiro mount, então os polls de 3s do componente pai nunca sobrescrevem uma edição não salva do operador. `salvar()` faz um único `PATCH disparos` com os 7 campos (`perfil_velocidade`, `delay_min_segundos`, `delay_max_segundos`, `horario_inicio`, `horario_fim`, `limite_diario_mensagens`, `pausa_fins_semana`) — confirmado por leitura de `backend/src/services/disparoProcessor.ts` que TODOS esses campos são lidos direto de `disparos` (sem cache de vida longa — o único cache module-level relevante, `instanciasDisponiveisHojeCache`, guarda só a lista de instâncias elegíveis pro teto diário, não estes campos), então o `PATCH` já tem efeito real no próximo ciclo do motor.
+4. **Remover contato pending**: coluna nova no "Log de Envios", botão (ícone lixeira) só quando `log.status === 'pending'`. `removerContatoPendente()` faz 2 PATCHes em paralelo: `disparo_logs.status='cancelado'` (com `erro` descritivo — decisão de usar status em vez de `DELETE`, mesmo espírito de cooldown/opt-out já existentes no sistema, mantém histórico auditável) + `disparos.total_leads` decrementado (pra o card "Enviados X/Y" continuar realista depois da remoção). Badge da tabela ganhou um case explícito pra `'cancelado'` ("Removido", cinza) — sem isso cairia no fallback `'outline'`/"Pendente", ativamente enganoso (o operador acabou de remover o contato de propósito).
+
+**Confirmação de segurança antes de codar** (leitura de `backend/src/migrations.ts`, função `get_next_disparo_batch`): `WHERE l.status = 'pending' AND d.status = 'em_andamento'` — prova estrutural de que tanto pausar a campanha (`d.status != 'em_andamento'`) quanto remover o log (`l.status != 'pending'`) tornam aquele contato definitivamente inelegível pro motor, não é uma checagem best-effort.
+
+**Testado em homolog** (dentro do container `crm-api-homolog`, dado real da conta `mentoark`, **desenho deliberado com ZERO risco de envio real via WhatsApp** — regra do incidente 2026-08-06 documentada em `AUDITORIA_PROTOCOLO.md`: a campanha de teste NUNCA ficou `em_andamento` com log `pending` de verdade; ficou `pausado` o tempo todo (testes A/C/D) ou só virou `em_andamento` depois de todos os logs já estarem `sent`/`cancelado` — teste B, nada pra desenfileirar mesmo com o motor real do container rodando durante a observação):
+- **Teste A (pausa bloqueia o motor real)**: 3 logs `pending`, campanha `pausado`, observados por 8s (4 ciclos reais do `setInterval` de 2s de `processarDisparos`) — os 3 permaneceram `pending`, motor real nunca tocou (não simulado — é o próprio loop de produção do container, só observado passivamente).
+- **Teste C (editar config pausada)**: `PATCH` com config nova (`perfil_velocidade='fast'`, `delay_min/max_segundos=7/9`, `horario_inicio/fim='10:00'/'11:00'`, `limite_diario_mensagens=13`, `pausa_fins_semana=false`), seguido das 3 queries EXATAS que `disparoProcessor.ts` roda (texto copiado literalmente do arquivo) — todas as 3 leram os valores recém-editados, zero cache confirmado com dado real.
+- **Teste D (remover pending)**: 1 de 3 logs removido — `SELECT ... WHERE disparo_id=X AND status='pending'` passou a trazer só os outros 2; `total_leads` confirmado decrementado pra 2 via `SELECT` direto.
+- **Teste B (retomar não duplica)**: logs marcados `sent`/`cancelado` (simulando "já recebeu", zero pending real), campanha promovida `em_andamento` (mesmo PATCH que "Retomar" manda), observada por 8s com o motor real — nenhum log mudou de estado (nenhum reenvio, nenhuma duplicata).
+- Limpeza em bloco `finally` (roda mesmo se algum teste falhar) — `disparo_logs`+`disparos` de teste removidos, confirmado por `SELECT COUNT(*) = 0` numa chamada separada depois.
+- **Fix de layout**: confirmado por revisão de código (mesmo `<CRMLayout>` já usado e funcionando no resto do arquivo e em toda outra página do CRM), NÃO por screenshot — nenhuma ferramenta de navegador disponível nesta sessão (Playwright MCP não conectado). Risco residual considerado baixo dado o padrão já comprovado, mas fica registrado como limitação real do teste, não inferido como "confirmado visualmente".
+
+**Avaliado e decidido NÃO combinar com `SPRINT_MONITOR_CAMPANHAS_DISPARO.md`** (sprint anterior, mesmo módulo — confirmado por grep que segue não executada: zero menção a "Campanhas de Disparo" em `src/pages/MonitorWhatsApp.tsx`). Motivo: aquela sprint tem decisões de design em aberto (Sheet vs. rota própria `/monitor-whatsapp/campanhas/:id`, extrair `MonitoringDashboard` pra componente compartilhado) que merecem foco próprio, em vez de virar adição apressada aqui. Recomendado como próximo sprint do módulo.
+
+**Achado lateral, fora do escopo pedido, não corrigido:** `disparos.status` nunca transiciona pra `'concluido'` automaticamente — confirmado por grep em `disparoProcessor.ts` (zero ocorrências). Uma campanha com todos os logs já `sent`/`failed` fica `em_andamento` indefinidamente (inofensivo em termos de envio — motor só faz um no-op nela a cada ciclo — mas os botões Pausar/Retomar continuam aparecendo pra uma campanha que já terminou na prática). Sugestão: tratar junto de uma futura sprint de persistência de campanhas (`SPRINT_MONITOR_CAMPANHAS_DISPARO.md`), já que uma lista de campanhas precisaria distinguir "ativa" de "terminada" de qualquer jeito.
+
+**Deploy:** `npm run build` (frontend) limpo. Deployado em homolog via `scripts/deploy.sh homolog src/pages/Disparos.tsx`. **Com confirmação explícita do usuário, deployado também em produção** (junto com a sprint seguinte, Score Real + Maturador, mesmo commit) — `/health`→200 nos dois ambientes.
+
+| Módulo | Arquivo | Status | Resumo |
+|--------|---------|--------|--------|
+| Disparos/Monitor | src/pages/Disparos.tsx | 🔧 corrigido | `MonitoringDashboard` envolvido em `CRMLayout`; `EditarConfiguracaoPausada` novo (edição de config só quando pausado); remover log pending + decrementar `total_leads`; badge `cancelado` explícito |
+
+### 🆕 Motor nativo de texto v2: módulo compartilhado + variação automática por sinônimo — em PRODUÇÃO
+
+**Contexto:** print real do usuário mostrando que os templates reais salvos em produção (`SDR CRM 2`, `SDR CRM`, `CRM`, `Mentoark Prospeção`, `Teste 1`) não usam `{{nome}}` nem spintax `{a|b}` — saem 100% idênticos pra todo mundo. Achado confirmado nesta mesma sessão: variar só o nome não resolve, porque muitos leads vindos de grupo de WhatsApp não têm nome real cadastrado (`nome === telefone`). O motor nativo v1 (sprints 2026-08-06 e 2026-08-07) já resolvia isso de forma manual/opt-in — spintax e biblioteca de variações exigiam o operador saber que existiam e clicar nos botões — mas ficava inline em `Disparos.tsx`, inacessível a `RespostasRapidas.tsx`/`WhatsAppInterface.tsx`.
+
+**Feito:**
+1. `src/lib/motorTexto.ts` (novo arquivo) — `substituirPlaceholders`, `resolverSpintax`, `textoTemSpintax`, `mensagemSemPersonalizacao`, `BIBLIOTECA_VARIACOES`, `escolherVariante` extraídas de `Disparos.tsx` linha a linha, comportamento idêntico (nenhum bug corrigido nem introduzido nessa extração — só movidas e documentadas com JSDoc). `Disparos.tsx` agora importa tudo dali; as ~140 linhas de definição inline + os comentários `[AUDITORIA]` históricos que as acompanhavam foram substituídos por um comentário de referência apontando pro módulo (histórico preservado nos comentários do próprio `motorTexto.ts`).
+2. **Nova função `aplicarVariacaoAutomatica`** (item 2) — dicionário fixo `DICIONARIO_VARIACAO`, 36 entradas em PT-BR cobrindo 6 categorias (saudações, confirmações/concordância, conectivos/pessoa, fechamento/CTA, agradecimento/despedida — incluindo o par `você`↔`vc` pedido explicitamente). Implementação: uma ÚNICA regex combinada (alternação de todas as chaves, ordenada da mais longa pra mais curta, `(?<![\p{L}\p{N}])(...)(?![\p{L}\p{N}])` com flag `u`) em vez de iterar o dicionário entrada por entrada — evita cascata de substituição (uma palavra trocada virando alvo de outra entrada no mesmo `.replace()`) e lida corretamente com fronteira de palavra acentuada (`\w`/`\b` do JS não reconhecem `á`/`é`/etc como caractere de palavra, seriam necessários workarounds a mais sem os `\p{L}`/`\p{N}` com flag Unicode). Capitalização da 1ª letra do termo original preservada na substituição. Chamada uma vez por contato, mesmo padrão de `Math.random()` independente por chamada já usado em `resolverSpintax`.
+3. `personalizarMensagem(mensagem, contato, variacaoAutomaticaAtiva)` — função de composição única (placeholder → spintax manual → variação automática, a automática só roda quando o texto ORIGINAL não tinha spintax manual) — ponto de entrada recomendado pra quem só quer o resultado final por contato; usada em `Disparos.tsx` (`StepReview.handleStart`, substituindo `resolverSpintax(substituirPlaceholders(...))` direto) e em `WhatsAppInterface.tsx` (`aplicarRespostaRapida`).
+4. `form.variacao_automatica` (novo campo, default `true`) em `Disparos.tsx` — LIGADO por padrão em toda campanha nova, fecha o gap do print sem exigir nenhuma ação do operador. Round-trip completo em `disparo_templates` (carregar/salvar template preserva o valor, `?? true` cobre templates salvos antes desta sprint). Colunas novas `disparos.variacao_automatica`/`disparo_templates.variacao_automatica` (`BOOLEAN DEFAULT true`, `backend/src/migrations.ts`) — só informativas/auditoria, mesmo padrão de `mensagens_variantes`/`distribuicao_variantes` já existentes; `disparoProcessor.ts` não foi tocado (nem precisava — a personalização inteira roda no frontend, no momento de criar a campanha, como já documentado nas sprints anteriores).
+5. UI (`StepMessage`, `Disparos.tsx`): indicador + `Switch` "Variação automática ativa/desligada" com contagem do dicionário, visível só quando a mensagem NÃO tem spintax manual (quando tem, mostra uma frase explicando por que o controle sumiu, em vez de escondê-lo sem contexto). Preview do 1º contato trocado de `resolverSpintax(substituirPlaceholders(...))` pra `personalizarMensagem(...)`, com nota "🔀 Variação automática por sinônimo ativa" quando aplicável (mesmo padrão da nota já existente pro spintax manual).
+6. `mensagemSemPersonalizacao` ganhou o parâmetro `variacaoAutomaticaAtiva` (default `true`) — item 3 do pedido. Antes: disparava sempre que a mensagem não tinha `{{nome}}`/spintax manual, mesmo que a variação automática (ligada por padrão) já fosse variar o texto de verdade por trás dos panos — o que faria o aviso aparecer à toa pro caso exato do print (contato de grupo sem nome real, mas com a camada nova cobrindo a variação por outra via). Agora só dispara quando NENHUMA das 3 camadas produz variação real (checado via `temTermoVariavel`, nova função — regex do item 2 sem a flag `g`, só teste booleano).
+7. `WhatsAppInterface.tsx` (`aplicarRespostaRapida`, item 4) — antes inseria `r.mensagem` cru no composer; agora chama `personalizarMensagem(r.mensagem, contatoConversa, true)` com o contato da conversa aberta (`activeChat.name`/`activeChat.phone`, resolvido por closure no momento do clique — a declaração de `aplicarRespostaRapida` vem antes de `activeChat` no arquivo, mas como só é invocada depois do render completo isso não é um problema em JS). Sem toggle próprio no chat (sempre ligada) — decisão de manter a UI simples, risco considerado baixo (1 mensagem por vez, atendente revisa antes de enviar, ao contrário de uma campanha em massa).
+
+**Testado em homolog** (dentro do container `crm-api-homolog`, mirror manual 1:1 da lógica de `motorTexto.ts` em JS puro — backend não importa módulo frontend —, dado real da conta `mentoark@gmail.com`, SEM nenhum envio real de WhatsApp):
+- Campanha de teste sempre com `status='rascunho'` e `agendado_para=NULL` — `promover_disparos_agendados()` (chamado a cada tick do motor de disparo real) só promove `rascunho` com `agendado_para` no passado, então nunca foi pega por `get_next_disparo_batch`/`disparoProcessor.ts`. Confirmado antes de rodar (leitura de `disparoProcessor.ts`), não só assumido.
+- Template real sem `{{nome}}`/spintax, 5 contatos reais da conta (4 deles com `nome === telefone`, exatamente o caso "contato de grupo sem nome real" que motivou a sprint) → **5 de 5 mensagens de saída diferentes** entre si. Exemplos reais capturados no log do teste: mesma base `"Olá! Tudo bem? Vi que você tem interesse no nosso produto. Fico à disposição para qualquer dúvida, é só me chamar. Abraço!"` saiu, entre outras, como `"Olá! Tudo tranquilo? Vi que você tem interesse no nosso produto. Tô por aqui para qualquer dúvida, é só me chamar. Abs!"` e `"E aí! Tudo bem? Vi que vc tem interesse no nosso produto. Tô por aqui para qualquer coisa, é só me chamar. Um abraço!"`.
+- Controle (mesmo template, mesmos 5 contatos, `variacaoAutomaticaAtiva=false`) → 1 única mensagem entre os 5 (confirma que desligar o toggle volta ao comportamento anterior à sprint, sem regressão).
+- Mensagem com spintax manual (`"{Oi|Olá|E aí}, tudo bem? Confirmando nosso horário de amanhã."`, "tudo bem" está no dicionário) → resolvida 5x, `"tudo bem"` preservado intacto em **100%** das saídas — confirma que a camada automática não dobra variação em cima do que o operador já configurou à mão.
+- `mensagemSemPersonalizacao`: `false` pro template sem spintax com a camada ligada (correto, variação real acontece); `true` com a camada desligada (correto, mensagem realmente sai idêntica); `true` pra mensagem sem placeholder/spintax/termo do dicionário mesmo com a camada ligada (correto, não promete variação que não existe pra esse texto específico).
+- Respostas Rápidas: 1 resposta rápida real criada em `respostas_rapidas` (mesma tabela de `RespostasRapidas.tsx`), simulada a chamada exata de `aplicarRespostaRapida` pra 2 contatos reais diferentes → 2 textos diferentes que entrariam no composer pra clique na MESMA resposta rápida, em 2 conversas diferentes.
+- Todos os dados de teste (`disparos`, `disparo_logs`, `respostas_rapidas` de teste) removidos ao final; confirmado por `SELECT COUNT(*)` que zero linhas de teste sobraram nos dois casos. Scripts de teste removidos do container e da VPS.
+
+**Deploy:** `npm run build` (frontend) e `npm run build` (backend, `swc`) limpos. `npx tsc --noEmit` isolado no backend estourou heap neste ambiente local (`FATAL ERROR: Reached heap limit`) — não interpretado como erro do código: é o `swc` (usado de verdade por `scripts/deploy.sh`/produção) que compilou sem erro, e o container de homolog buildou e subiu normalmente a partir do mesmo código. Deployado em homolog via `scripts/deploy.sh homolog` (`src/lib/motorTexto.ts`, `src/pages/Disparos.tsx`, `src/components/WhatsAppInterface.tsx`, `backend/src/migrations.ts`) — `/health`→200, sem `ERROR` nos logs, frontend homolog→200. **Com confirmação explícita do usuário, deployado também em produção** (`scripts/deploy.sh prod --confirm`, mesmos 4 arquivos) — `/health`→200 (`api.mentoark.com.br`), sem `ERROR` nas últimas 30 linhas de log de `crm-api`, frontend→200 (`crm.mentoark.com.br`).
+
+| Módulo | Arquivo | Status | Resumo |
+|--------|---------|--------|--------|
+| Disparos/Motor de Texto | src/lib/motorTexto.ts | 🆕 criado | Módulo compartilhado — placeholders/spintax/variantes extraídos de Disparos.tsx + variação automática por sinônimo (nova) |
+| Disparos | src/pages/Disparos.tsx | 🔧 corrigido | Importa de motorTexto.ts (zero duplicação); `variacao_automatica` no form/payload/template; UI de toggle+indicador em StepMessage |
+| Disparos | backend/src/migrations.ts | 🔧 corrigido | Colunas `variacao_automatica` (disparos, disparo_templates), informativas, DEFAULT true |
+| WhatsApp/Respostas Rápidas | src/components/WhatsAppInterface.tsx | 🔧 corrigido | `aplicarRespostaRapida` resolve placeholder/spintax/variação automática com dado do contato da conversa aberta |
+
+### 🔧 Fix: número de telefone ausente na aba Instâncias + renomear inline + filtro de conversas por número — em PRODUÇÃO
+
+**Contexto:** código já existia no working directory (implementado numa parte anterior desta sessão, com comentários `[AUDITORIA]` confirmando teste real contra a Evolution API), mas nunca tinha sido commitado nem deployado — achado ao rodar `git status` antes de commitar o diagnóstico de gasto de token, verificado como trabalho legítimo e completo antes de incluir.
+
+**Causa raiz confirmada**: `GET /instance/connectionState/:instance` (usada por `GET /evo/status`, `POST /status`, `POST /connect`) devolve só `{ instance: { instanceName, state } }` — nenhum campo de perfil/número. As 3 rotas tentavam ler `profileName`/`number`/`owner` dali, sempre vazio. Fix: `buscarPhoneNumberInstancia()`, helper único usado pelas 3, chama `GET /instance/fetchInstances?instanceName=` (que devolve `ownerJid`, a fonte mais confiável) — best-effort, falha aqui nunca derruba status/connect/send. Efeito colateral corrigido de graça: `POST /connect` numa instância já aberta sempre caía no branch de erro por causa da mesma extração quebrada (`hasPhone` sempre `false`).
+
+**Frontend**: renomear instância inline em `InstanceManagementPanel.tsx` (sem abrir a modal inteira); em `WhatsAppInterface.tsx`, filtro de lista de conversas por número (`instanciaFiltro`) e seletor de instância ao iniciar conversa nova (`novaConversaInstancia` — antes toda mensagem nova saía pela instância padrão do tenant, sem opção de escolher outro número já conectado).
+
+**Deploy:** build limpo. Homolog e produção — `/health`→200 nos dois, `buscarPhoneNumberInstancia` confirmado presente no `dist` de ambos via grep. Durante o deploy em homolog, o Postgres compartilhado (prod+homolog) reiniciou de forma independente bem no mesmo minuto — ~4s de erros de conexão nos logs (`Connection terminated unexpectedly`, `the database system is in recovery mode`), confirmado não relacionado a este deploy (parou sozinho, containers já saudáveis logo depois).
+
+### 🔴 Diagnóstico: por que ainda gastava token no Disparo — causa real diferente das 2 hipóteses do ticket — em PRODUÇÃO
+### 🔴 Diagnóstico: por que ainda gastava token no Disparo — causa real diferente das 2 hipóteses do ticket — em PRODUÇÃO
+
+**Contexto:** usuário relatou que, mesmo com o motor nativo de Disparo (sprint anterior) em produção, o sistema ainda gastava token na hora de disparar. Ticket levantava 2 hipóteses (`humanizar_ia` ligado numa campanha real; Vision/Whisper sem checar pausa, achado pendente de `SPRINT_VISTORIA_COMPLETA_GASTO_IA.md`) e pedia investigação com dado real antes de qualquer correção.
+
+**Investigação (dado real, não presumido):**
+- Campanhas dos últimos 14 dias: só 3 de 6 com `humanizar_ia=true`, todas antigas/canceladas (`~20` envios humanizados no total). Contribuição real, mas pequena — não explica o padrão relatado sozinha.
+- Reconfirmado por leitura direta que `webhook.ts` (linhas do bloco de áudio/imagem) segue **sem nenhuma checagem de pausa** antes de chamar Whisper/Vision — item 0 de `SPRINT_VISTORIA_COMPLETA_GASTO_IA.md` nunca foi aplicado. Quantificado: `fmakonee03` (pausada, sem prompt real) recebeu **2.000 imagens + 37 áudios** em 14 dias; `stefanocatedral` (mesma situação) recebeu **1.160 áudios + 164 imagens** — cada mídia pagando IA incondicionalmente, sem nenhum atendimento acontecendo depois (as duas contas não têm nenhum `agentes.ativo=true`).
+- **Achado NOVO, não previsto no ticket original**: investigando uma campanha de teste real (`mentoark`, disparada durante a sessão), um contato específico com `atendente_pausou_ia=true` ("Rafael") enviou 3 áudios reais que apareceram **6 vezes** em `whatsapp_messages` — cada áudio com o MESMO `message_id`, mas `instance_name` diferente (`crm_435ee4720fc3` e `crm_435ee4720fc3_2`, as 2 instâncias Evolution simultaneamente `conectado` da conta). Confirmado com o usuário: são 2 números reais distintos (não uma duplicata acidental) — mas a mesma mensagem física do contato está sendo entregue às duas, e cada entrega paga Whisper/Vision independentemente, porque o dedup existente (`webhook_mensagens_processadas`, chave `(message_id, instancia)`) não pega esse caso — ele é por instância, não por mensagem. Cruzando os últimos 14 dias: **294 `message_id` duplicados entre instâncias da mesma conta, 15 deles áudio/imagem** — 15 chamadas de IA puramente redundantes, mensuráveis e reais.
+- Reconfirmado também: item 1 do mesmo documento (`custo_usd` nunca calculado em `ai_uso_diario`) segue pendente — mesmo grep de antes, sem mudança desde então.
+
+**Fixes aplicados** (`backend/src/routes/webhook.ts`, `backend/src/services/agentEngine.ts`):
+1. **Gate de pausa antes de Whisper/Vision**: nova query (`EXISTS agentes ativo` + `contatos.atendente_pausou_ia`) antes de cada uma das 2 chamadas — se a conta não tem nenhum agente ativo OU o contato específico está pausado, pula a transcrição/descrição (mídia continua salva normalmente via o fluxo já existente, só sem `content` preenchido). `agentEngine.ts` já checava pausa depois — a mudança é só não pagar ANTES de saber que não vai ser usado.
+2. **Dedup por `message_id` entre instâncias**: antes de cada chamada de Whisper/Vision, verifica se já existe uma linha em `whatsapp_messages` com o mesmo `message_id` (independente de `instancia`) já processada (`content LIKE '[Áudio Transcrito:%'`/`'[Mídia - Imagem:%'`) — se achar, reaproveita o texto em vez de pagar de novo. **Achado ao testar**: a query inicial usava `pool.query()` direto; `whatsapp_messages` tem um piloto de RLS só em homolog (ver entrada 2026-07-21) que esconderia a linha sem `withTenantContext` — corrigido antes do deploy, mesmo padrão já usado em todo outro acesso a essa tabela no arquivo.
+3. **`custo_usd` calculado** (`agentEngine.ts`): tabela de preço por 1M tokens, hardcoded, cobrindo `gpt-4.1`/`gpt-4o`/`gpt-4o-mini`/Claude (referência de preço: 2026-08-07 — documentado no comentário do código pra próxima sessão saber se precisa atualizar). Modelo não reconhecido cai no preço do `gpt-4o-mini` (subestima em vez de superestimar) e loga aviso. Calculado e somado no `INSERT ... ON CONFLICT DO UPDATE` de `ai_uso_diario`, junto com `tokens_entrada`/`tokens_saida`.
+
+**Testes reais antes do deploy:**
+- Gate de pausa: query rodada contra um contato sintético pausado (`conta_ativa=true, contato_pausado=true` → resultado esperado, Whisper pularia) e um contato normal (`contato_pausado=false` → resultado esperado, Whisper rodaria).
+- Dedup: linha sintética inserida numa instância, query da OUTRA instância encontrou e reaproveitou o `content` corretamente (só depois de corrigir o `withTenantContext`, ver achado acima).
+- `custo_usd`: chamada real via `processarMensagem` (homolog, `IA_TEST_MODE=true`) — `tokensIn=1724, tokensOut=124, modelo=gpt-4o` gerou `custo_usd=0.00555`, batendo exato com `1724×$2,50/1M + 124×$10,00/1M`.
+- Backfill retroativo (script separado, roda uma vez, não é migração automática): homolog 16 linhas/$0,10; **produção 22 linhas/$0,44** — dashboard de custo (`GET /api/ai/uso/resumo`) agora mostra gasto histórico real pela primeira vez, em vez de sempre $0.
+
+**Deploy:** build limpo. Homolog e produção — `/health`→200 nos dois, sem `ERROR` nos logs.
+
+**Raio-x pra próxima sessão:** o achado da duplicação entre instâncias (item novo desta sprint) foi corrigido só no ponto de custo (Whisper/Vision) — vale conferir se `agentEngine.ts`/`n8n_chat_histories` também duplicam entrada de histórico quando a mesma mensagem chega 2x (2 linhas de histórico em vez de 1, poluindo o contexto mandado pra IA na conversa, não só o custo de mídia). Não investigado nesta sprint, escopo era especificamente "gasto no Disparo".
+
+### 🆕 Motor nativo de Disparo, bloco 2: "Gerar variações com IA" (item 4) — em PRODUÇÃO, sprint encerrada
+### 🆕 Motor nativo de Disparo, bloco 2: "Gerar variações com IA" (item 4) — em PRODUÇÃO, sprint encerrada
+
+**Contexto:** fecha a sprint do motor nativo de mensagens do Disparo (bloco 1, entrada abaixo). Único item com risco real de chamar IA por engano — ticket exigia confirmar "exatamente 1 chamada por clique, nunca por contato" com evidência de log antes de considerar pronto.
+
+**Implementado:**
+- `POST /api/disparos/gerar-variacoes` (novo, `backend/src/routes/disparos.ts`): recebe `{mensagem, quantidade}` (2-5, default 3), reaproveita `criarProvider()` (mesmo helper de `agentEngine.ts` — provider/modelo configurado pra conta, fallback pro `OPENAI_API_KEY` do `.env` quando a conta não tem `ai_providers` próprio, igual `agentEngine.ts` faz). Uma única chamada `provider.complete()` (sem loop, sem tool, `tools: []`), prompt instrui a IA a devolver JSON array de variantes completas preservando `{{placeholder}}` intacto. Parse defensivo (remove cercas de markdown que o modelo às vezes adiciona mesmo pedindo JSON puro; valida que é array de strings antes de aceitar).
+- `VariantesMensagem` (`Disparos.tsx`): botão "✨ Gerar variações com IA" + seletor de quantidade, chama o endpoint 1 vez ao clicar, resultado é APPEND em `mensagens_variantes` (não substitui o que o operador já escreveu à mão). Texto de ajuda explícito "roda 1 vez só, agora... depois disso, zero chamada de IA no envio" — cuidado deliberado pra não passar a impressão de custo por mensagem enviada.
+
+**Teste real em homolog** (JWT assinado dentro do próprio container com `JWT_SECRET` real — nunca copiado à mão, mesma regra desde o incidente spintax; sem envio de WhatsApp nenhum, então a segunda camada de checagem de `ownerJid` não se aplica aqui): chamada real contra a conta `mentoark`, 3 variantes coerentes geradas, `{{primeiro_nome}}` preservado intacto nas 3. **Garantia central do item 4 confirmada com evidência, não só assumida pelo código**: `docker logs` filtrado pela tag `DISPARO/GERAR_VARIACOES` mostrou **exatamente 1 linha de log pra 1 chamada de teste** — nenhum loop, nenhuma duplicação.
+
+**Deploy:** build limpo (frontend+backend). Homolog e produção — `/health`→200 nos dois, sem `ERROR` nos logs. Script de teste removido do container ao final.
+
+**Fechamento da sprint (5/5 itens):** biblioteca de variações curadas, mensagens-base completas com round-robin, regra por tag, autoria assistida por IA (1x/campanha), copy reforçada — todos em produção. `humanizar_ia`/`humanizationService.ts` mantidos intactos como opção avançada (não removidos, conforme pedido).
+
+### 🆕 Motor nativo de mensagens do Disparo (itens 1+2+3+5, sem IA) — em PRODUÇÃO
+
+**Contexto:** pedido direto do usuário, não numerado no plano multi-agente — reduzir a dependência de `humanizar_ia`/`humanizationService.ts` (única chamada de IA por contato que sobrava no módulo de Disparo) com um motor 100% determinístico, guiado por config. Escopo de 5 itens, dividido em 2 blocos com confirmação do usuário (item 4, autoria assistida por IA, fica separado por ser o único com risco real de chamar IA por engano).
+
+**Investigação prévia (antes de codar):** confirmado por leitura que TODA a personalização de mensagem de Disparo (placeholders `{{nome}}` etc. + spintax `{a|b|c}`) já roda inteiramente no FRONTEND (`Disparos.tsx`, `StepReview.handleStart`), no momento de criar a campanha — cada `disparo_logs` já nasce com `mensagem_enviada` pronta. `disparoProcessor.ts` (backend) nunca leu nem precisou ler essa lógica, só consome o resultado já gravado. Isso significa que os itens 1-3 desta sprint não exigem tocar `disparoProcessor.ts` — só estender o mesmo `.map()` que já existe em `handleStart`, mantendo a mesma ordem de composição (variante completa → placeholders → spintax).
+
+**Implementado:**
+- **Item 1 — biblioteca curada de variações:** `BIBLIOTECA_VARIACOES` (Saudação/Transição/Fechamento-CTA/Despedida, PT-BR, spintax pronto), botão de inserção com 1 clique em `StepMessage` — mesmo padrão de `append` já usado pelos botões `{{nome}}`/etc.
+- **Item 2 — mensagens-base completas:** `form.mensagens_variantes: string[]` + componente `VariantesMensagem` (editor colapsável, add/remove). Nova função `escolherVariante()` (top-level, mirror do padrão de `resolverSpintax`) chamada dentro do `.map()` de `handleStart` ANTES de `substituirPlaceholders`/`resolverSpintax` — com 0 ou 1 variante preenchida, `textoBase` cai exatamente no `form.mensagem`/`legenda_midia` de sempre (guard explícito: `variantesValidas.length >= 2`).
+- **Item 3 — regra por tag:** `form.regra_variante_por_tag: Record<string, number>` + `form.distribuicao_variantes: 'round_robin' | 'regra'`. `escolherVariante()` percorre as tags do contato na ordem gravada e usa a primeira que bater no mapa; sem match, cai pro round-robin (`indice % variantes.length`) — nunca deixa um contato sem mensagem por falta de regra. **Achado de dados corrigido no caminho:** 2 das 3 queries que populam `targetContacts` (busca por Estágio e por Lista) não selecionavam `contatos.tags` — corrigido (adicionado ao `.select()`), senão a regra por tag silenciosamente não funcionaria pra campanhas criadas a partir desses 2 modos de seleção (só funcionaria pro modo "Por Tag").
+- **Item 5 — copy:** card "Humanizar com IA" reforçado como opção avançada/paga; motor nativo (Passo 2) explicitamente citado como caminho recomendado/default.
+- **Schema:** `disparos`/`disparo_templates` ganham `mensagens_variantes TEXT[]`, `distribuicao_variantes TEXT DEFAULT 'round_robin'`, `regra_variante_por_tag JSONB` — só informativas/auditoria (mesmo espírito de `mensagem_template`, comentário original confirmado: "não lido por disparoProcessor.ts nem por get_next_disparo_batch"). `disparo_templates`: `carregarTemplate`/`confirmarSalvarTemplate` estendidos pra round-trip das 3 colunas novas, com fallback `|| []`/`|| {}` pra templates salvos antes desta sprint.
+
+**Teste real (homolog, sem depender de browser):** funções `escolherVariante`/`substituirPlaceholders`/`resolverSpintax` espelhadas (cópia exata) num script Node, rodadas contra 6 contatos sintéticos (2 com tag mapeada, 4 sem) nos 2 modos:
+- `round_robin`: alternou 0,1,2,0,1,2 corretamente, independente de tag.
+- `regra`: contatos com tag "cliente antigo"/"lead novo" pegaram exatamente a variante mapeada (0 e 2 respectivamente) nas 2 ocorrências de cada; contatos sem tag mapeada caíram no round-robin pelo próprio índice, sem erro.
+- Simulação real: `INSERT` de uma campanha de teste (`disparos`+`disparo_logs`) com as mesmas regras, `mensagem_enviada` conferida linha a linha batendo com o esperado, campanha removida ao final via `ON DELETE CASCADE` (sem lixo).
+
+**Deploy:** build limpo (frontend Vite + backend swc). Homolog e produção — `/health`→200 nos dois, sem `ERROR` nos logs, 3/3 colunas novas confirmadas em `disparos` nas 2 bases via `information_schema`.
+
+**Pendente (bloco 2 desta mesma sprint):** item 4 — botão "Gerar variações com IA" (chamada única por campanha, reaproveitando `criarProvider()` como `agentEngine.ts` já faz, nunca por contato) — a ser implementado e testado separadamente, com evidência de log/contagem confirmando exatamente 1 chamada por clique antes de considerar pronto.
+
+### 📋 Sprint 3 do plano multi-agente: `lead_context` estruturado — avaliado, decisão de NÃO implementar por economia
+
+**Contexto:** ticket explicitamente condicionava a Opção B (extração via LLM pequeno a cada mensagem) a uma estimativa de custo líquido ANTES de implementar ("uma extração cara demais anularia o ganho"). Feito antes de escrever qualquer schema/código, seguindo o próprio gate do ticket.
+
+**Passo 0 — reconfirmação de premissa:** checado `agentes.modelo` para as 2 contas reais ativas — ambas (`mentoark` id `3ee29572...`, `angelobispofilho` id `4cc9044f...`) configuradas pra `gpt-4o-mini` hoje. O mix `gpt-4o-mini`/`gpt-4.1` (81 vs 77 chamadas) visto na amostra de 2 semanas do Loki usada na Sprint 2 reflete tráfego de **antes** da migração da Sprint 1 (deploy em produção ~2026-08-07 18:15 UTC, dentro da janela de 2 semanas amostrada) — nenhuma das 2 contas usa `ai_providers` próprio (tabela vazia pra ambas), então o modelo real hoje é só o `agentes.modelo` = `gpt-4o-mini` em ambas.
+
+**Estimativa de custo líquido (item 2 do ticket):** como a chamada de extração usaria o MESMO modelo (`gpt-4o-mini`) da chamada principal de conversa, a comparação de custo se reduz a contagem de tokens pura (não depende de tabela de preço, elimina a incerteza de "qual é o preço exato hoje"):
+- Extração a cada mensagem (Opção B): input ~400-550 tokens (lead_context atual + troca recente), output ~150-200 tokens (JSON estruturado) → **~550-750 tokens "gastos" por mensagem**.
+- Economia de cortar o histórico cru de ~15,9 mensagens (média real ponderada por chamada, Sprint 2) pra uma janela de 5-8 → **~350-450 tokens "economizados" por mensagem** (mesma faixa de tamanho médio de mensagem medida na Sprint 2, ~40-65 tokens/msg).
+- **Resultado: Opção B custa ~1,3-1,7x mais tokens do que economiza**, do jeito especificado no ticket (extração por mensagem, mesmo modelo da chamada principal).
+
+Opção A (determinística/regex) tem custo marginal zero, mas não consegue capturar de forma confiável os campos que realmente importariam pra preservar nuance perdida ao cortar a janela (interesse, objeção, etapa do funil) — só campos triviais (nome/telefone) já disponíveis por outra via (`contatos`). Implementá-la não cumpriria o propósito real da sprint (preservar contexto qualitativo que sairia da janela curta).
+
+**Decisão confirmada com o usuário:** não implementar nesta sprint — nem Opção A (baixo valor real) nem Opção B (custo líquido negativo pelos números atuais). Nenhum schema criado (`lead_context` não existe em nenhuma tabela), nenhuma mudança em `agentEngine.ts`, nenhum deploy. `LIMIT 20` do histórico cru permanece como está (decisão já tomada na Sprint 2, reconfirmada aqui — não haveria sentido cortar sem o complemento estruturado que este item avaliou e descartou).
+
+**Raio-x pra próxima sprint:** com a Sprint 3 avaliada e fechada (sem implementação), o plano segue pra Sprint 4 (pseudo multi-agente por modo/regra) ou Sprint 5 (motor de decisão sem IA) — ambas não dependem de `lead_context` existir. Se no futuro alguma conta migrar pra um modelo mais caro (`gpt-4o`/`gpt-4.1`) pra chamada principal enquanto a extração continuar num modelo barato, a economia líquida da Opção B muda de sinal — vale re-executar esta mesma conta antes de descartar a ideia permanentemente.
+
+### 🆕 Sprint 2 do plano multi-agente: medição real de tokens + tools MCP desabilitadas nas 2 contas reais ativas — em PRODUÇÃO
+
+**Contexto:** ticket instruía medir antes de cortar, já desconfiando (corretamente) que os 2 diagnósticos de custo citados pelo plano (`SPRINT_DIAGNOSTICO_APROFUNDADO_CUSTO_IA.md`, `SPRINT_DIAGNOSTICO_CONSUMO_TOKEN_IA.md`) nunca foram executados — confirmado (zero menção em `STATUS.md`). Medição feita do zero.
+
+**Achado colateral, não regressão:** o plano cita "5 contas ativas" (`mentoark`, `fmakonee03`, `stefanocatedral`, `angelobispofilho`, `crisacorretoradeimoveis`). Checagem direta em `agentes` mostrou só 2 com prompt real e `ativo=true`: `mentoark` e `angelobispofilho` (as 2 migradas na Sprint 1). As outras 3 já estavam com `agent_configs.ativo=false` e sem prompt real **antes** da Sprint 1 existir — `fmakonee03`/`stefanocatedral` são as mesmas 2 contas "Cris" já conhecidas de sprints anteriores, `crisacorretoradeimoveis` é literalmente a conta do incidente histórico, pausada de propósito. Premissa desatualizada no documento do plano, não algo quebrado por código.
+
+**Medição real (item 1 do ticket):**
+- Loki, `container=crm-api`, produção, janela de 2 semanas (24/07–07/08): 148 chamadas reais com `tokensIn`/`tokensOut`/`toolCalls` — média `tokensIn=2108,5`, `tokensOut=90,9`, min 590/max 3069. **`toolCalls=0` em 100% das 148 amostras** — nenhuma das 9 tools MCP foi chamada de verdade em 2 semanas de tráfego real, apesar de todas serem enviadas em toda chamada.
+- Mesma fonte, 153 chamadas com `iter`/`histLen`: **`iter=0` em 100% dos casos** — o loop agêntico (`MAX_ITER=5`) nunca passou da primeira iteração, nunca chegou perto do teto. `histLen` bimodal: **64% (98/153) já usam a janela cheia de 20 mensagens**, média geral 15,9.
+- `agentes.prompt_sistema` das 2 contas reais: 2557 e 3066 caracteres (~640 e ~767 tokens, estimativa chars/4 — sem tokenizer exato instalado no backend).
+- Histórico real (mesma query de `agentEngine.ts`, amostra de 7 conversas reais): entre 21 e 1301 tokens dependendo do tamanho da conversa, média por sessão ~8,6 mensagens — mas essa média não é ponderada por volume de chamadas real (o dado do Loki, com `histLen` médio 15,9 ponderado por chamada, é mais representativo do custo real agregado).
+- Definições das 9 tools MCP (`mcp/tools.ts`): ~5550 caracteres de origem, estimativa ~1388 tokens como teto — provavelmente o maior bloco individual do custo de entrada, já que é fixo e sempre mandado inteiro quando `agentes.mcp_tools` é `null` (padrão, todas habilitadas).
+
+**Decisão item 2 (reduzir histórico) — não implementado, dado não sustenta:** com 64% das chamadas reais já na janela cheia de 20, reduzir o `LIMIT` cortaria contexto de conversa em andamento pra maioria dos casos reais, não só desperdício — exatamente o risco que o próprio ticket pedia pra evitar ("cortar demais também tem risco real"). Economia de uma redução modesta (ex: 20→15) seria pequena; uma redução agressiva (a aspiração original do plano, "3") teria alto risco de perda de contexto real. Confirmado com o usuário: não mexer no `LIMIT 20`.
+
+**Decisão item 3 (resumo estruturado) — confirmado com o usuário: fica pra Sprint 3**, não implementado nesta sprint (mesmo escopo que `lead_context` da Sprint 3 do plano).
+
+**Decisão item 4 (prompt menor) — não há nada estrutural a cortar no código** (campo de texto livre por agente, sem blocos fixos além do sufixo de data/hora, confirmado por leitura). Reportado como achado, nenhuma mudança de conteúdo de `prompt_sistema` de conta real.
+
+**Ação aplicada, confirmada com o usuário:** `agentes.mcp_tools = '{}'` pras 2 contas reais ativas (`mentoark` id `3ee29572...`, `angelobispofilho` id `4cc9044f...`) — zero tools chamadas de verdade em 2 semanas, risco baixo (reversível por conta a qualquer momento via `/agentes`), mecanismo já testado na Sprint 1. Só mudança de dado de configuração, nenhum código alterado.
+
+**Resultado real, medido antes/depois** (mesma conta `mentoark`, mesma pergunta de teste "quero saber sobre os planos", `processarMensagem` direto, `IA_TEST_MODE=true`, sem envio real): 2108 tokens (média histórica da amostra) → **1015 tokens** na chamada de teste pós-mudança — **~52% de redução**, resposta gerada corretamente, mesma qualidade percebida (listou os 3 pacotes normalmente). Limpeza de histórico de teste feita ao final, scripts temporários removidos do container.
+
+**Raio-x pra próxima sprint:** Sprint 3 do plano (memória estruturada / `lead_context`) é o próximo passo natural — item 3 desta sprint já foi deliberadamente adiado pra lá. Vale também, fora do plano original, avaliar se as definições de tools MCP em si (não só o toggle por conta) podem ficar mais compactas — 1388 tokens estimados pra 9 ferramentas é um teto alto pra algo que sequer é chamado na maioria dos casos de uso reais hoje.
+
+### 🔴 Sprint 1 do plano multi-agente: unificar `agent_configs` → `agentes` — em PRODUÇÃO
+
+**Contexto:** ticket marcava "risco alto" e mandava reconfirmar o levantamento antes de codar. Reconfirmação achou o raio de impacto **maior** que a premissa original (que só citava `agentEngine.ts`): `agent_configs` tinha 13 arquivos/121 ocorrências no backend, incluindo dois papéis estruturais não mencionados no ticket — `webhook.ts` (nível 1 de 4 na cadeia de resolução de userId de toda mensagem recebida do WhatsApp) e `integracoes.ts`/`evolutionReconciliation.ts` (escrevem credenciais Evolution ali a cada conexão/reconciliação, de propósito, porque webhook.ts lia dali primeiro). Escopo expandido com confirmação explícita do usuário antes de escrever qualquer migração, pra não deixar essas duas peças lendo/escrevendo uma tabela cada vez mais desatualizada depois do corte.
+
+**Schema (`migrations.ts`):** `agentes` ganhou `saudacao_inicial`, `bloco_qualificacao`, `mensagem_encaminhamento`, `mensagem_encerramento`, `palavra_reativar`, `sinal_pausa`, `tempo_espera_mensagem/resposta`, `modelo_parser`, `grupo_notificacao`, `resposta_voz_habilitada`, `mcp_tools` (TEXT[]). `prompt_sistema`/`evolution_*`/`operation_mode`/`distribution_mode`/`health_score` já existiam — descobertos como scaffolding de uma sessão anterior, nunca lidos por nenhum código até esta sprint.
+
+**Backend — 9 arquivos repontados de `agent_configs` → `agentes`:**
+- `agentEngine.ts`: a segunda query em `agent_configs` foi eliminada por completo — `agente` (já carregado via `SELECT * FROM agentes` mais acima, pra resolver a instância) já tem todos os campos precisados. Guard-rail do incidente Cris preservado (prompt vazio = IA não responde). `mcp_tools` (TEXT[] | null) agora filtra a lista de tools oferecida ao provider — `null`/ausente = todas habilitadas (sem regressão), array explícito = filtro real; defesa em profundidade extra no loop de execução de tool (ignora silenciosamente se o modelo tentar chamar algo fora da lista oferecida).
+- `webhook.ts`: cadeia de resolução de userId caiu de 4 pra 3 níveis (`agentes → prefixo UUID → integracoes_config`), numa única query em vez de duas (antes: `agent_configs` primeiro, `agentes` de fallback + query extra só pra `n8n_webhook_url`). 5 queries avulsas de credencial Evolution (decrypt de áudio, decrypt de imagem, persistência de mídia, foto de perfil, info de grupo) repontadas pra `agentes`, preferindo a linha mais recente com credenciais preenchidas.
+- `integracoes.ts` (`syncEvolution()`) e `evolutionReconciliation.ts`: `agent_configs` tinha `UNIQUE(user_id)` — um UPSERT simples bastava. `agentes` permite várias linhas por usuário (uma por instância), então virou find-or-update por `(user_id, evolution_instancia)`, mesmo padrão já usado em `saveEvolutionConfig()` (`whatsapp.ts`). A lógica de "redirecionar pra outra instância aberta" da reconciliação foi removida (só fazia sentido com a linha única de `agent_configs`) — o que resta é: pra cada instância aberta na Evolution, atualizar as credenciais da linha `agentes` correspondente se estiverem desatualizadas.
+- `whatsapp.ts`, `mediaRetry.ts`, `grupoTarefaEngine.ts`, `suporte_copiloto.ts`: repontados, mesma lógica de fallback preservada onde já existia.
+- `agent_configs` **não foi apagada fisicamente** (por instrução do ticket) — só parou de ser lida/escrita pelo código de produção. `agent-config.ts` (rota que só `ConfigAgenteIA.tsx` chamava) ficou intacta e inerte, de propósito. `routes/suporte.ts`/`services/suporte.ts` também citam `agent_configs` mas são código morto — nunca montados em `index.ts` (só `suporte_copiloto.ts` é) — deixados como estão, não fazem parte do raio de impacto real.
+
+**Bug achado no caminho (não fazia parte do escopo original, mas bloqueava o próprio objetivo da sprint):** `mcp_tools` estava dentro do `stripFields` do CRUD genérico de `/api/agentes` (`index.ts`) — todo POST/PATCH que o frontend mandasse com esse campo era descartado silenciosamente antes de chegar no banco. O toggle de ferramentas MCP na aba Motor de `Agentes.tsx` nunca gravou nada, mesmo antes desta sprint existir. Corrigido (campo removido do `stripFields`). Achado colateral: a lista de ids de tools do frontend não batia com os nomes reais de `backend/src/services/mcp/tools.ts` — vários ids inventados (`criar_contato`, `buscar_leads`, `criar_lead`, `atualizar_lead`, `buscar_agendamentos`, `registrar_pausa_ia`) que não correspondem a nenhuma tool real, e 3 tools reais (`consultar_faq`, `buscar_documentos`, `criar_corrida`) sem toggle nenhum na UI. Lista corrigida pra espelhar exatamente o backend.
+
+**Frontend (`Agentes.tsx`):** campo `prompt_sistema` (textarea principal na aba Identidade, obrigatório pra ativar — mesmo guard-rail client-side que existia em `ConfigAgenteIA.tsx`) + campos reais de Comportamento. `persona`/`tom`/`objetivo`/`mensagem_boas_vindas`/`regras` mantidos (dado do usuário preservado, sem perda) mas relabelados como "anotação interna, não enviada pra IA" — confirmado por grep que `agentEngine.ts` nunca leu nenhum desses campos, em nenhum momento do histórico do arquivo. **Decisão sobre os 3 toggles `modalidade_audio/imagem/video`:** deixados inertes nesta sprint — nunca estiveram funcionais (mesmo bug de `stripFields`), `resposta_voz_habilitada` (que É funcional e testada) já cobre o único caso de modalidade realmente em uso (voz/TTS de saída), e adicionar gating novo de entrada de mídia expandiria ainda mais uma sprint já grande. Aviso visível na própria tela avisando que os toggles não bloqueiam nada ainda, pra não passar falsa confiança.
+
+**`ConfigAgenteIA.tsx` aposentada:** não apagada — só não é mais renderizada. A aba "Fluxo IA" de `Cerebro.tsx` virou um aviso curto apontando pra `/agentes`.
+
+**Migração de dados — regra confirmada com o usuário:** match por `evolution_instancia` (match único = migra pra aquela linha; zero match = cria linha nova; múltiplos matches = lista e para, sem adivinhar). Contas com `agent_configs.ativo=false` ficam de fora desta sprint (decisão confirmada — nenhuma serve tráfego real hoje, reduz o raio de mudança). Rodada em homolog: 1 conta elegível ("Stella", `435ee472`), 3 "Cris" inativas corretamente ignoradas, zero casos ambíguos. Prompt conferido **byte-a-byte idêntico** entre as duas tabelas pós-migração (3066 caracteres). Produção tem 2 contas elegíveis (`435ee472` com match único pra uma linha hoje chamada "Agente Teste 2"; `5319f0ed` sem nenhuma linha em `agentes` — vai criar uma nova) e as mesmas 3 "Cris" inativas de fora.
+
+**Testes reais em homolog** (via `processarMensagem` direto, `IA_TEST_MODE=true`, sem envio real): conta "Stella" migrada respondeu normalmente, prompt confirmado vindo só de `agentes.prompt_sistema` (log `systemPrompt` bate com o texto real); conta sem prompt configurado corretamente **não respondeu nada**, guard-rail do incidente Cris intacto; com `mcp_tools='{}'`, pergunta que pediria a tool `buscar_historico` resultou em **zero tool calls** — confirma que ferramenta desabilitada fica genuinamente indisponível pra IA (não só escondida da UI), não apenas ignorada silenciosamente se chamada.
+
+**🔴 Incidente durante o deploy em homolog (contido, não afetou produção):** primeiro deploy incluiu `index.ts`, que já importava `./routes/corridas` de trabalho anterior não commitado, sem incluir `corridas.ts`/`corridasService.ts` no mesmo deploy — `crm-api-homolog` em crash-loop por ~3-8min (`/health`→404, log `Cannot find module './routes/corridas'`) até identificado e corrigido com o deploy dos 2 arquivos faltantes. Suspeita inicial de perda de dados em `whatsapp_messages` (reportada pelo usuário) foi **investigada e descartada** — falso alarme causado pelos próprios scripts de diagnóstico: a tabela tem RLS (piloto só-homolog, policy `whatsapp_messages_tenant`) que esconde todas as linhas sem `app.user_id` setado na sessão; os diagnósticos rodaram com uma conexão crua, sem esse contexto. Com o contexto certo (mesmo mecanismo que `withTenantContext()` usa na aplicação real), os dados sempre estiveram lá (3387 linhas, confirmado via Loki que INSERTs nunca pararam de verdade, inclusive minutos antes do relato do usuário). Impacto real, contido: só a janela de crash-loop, onde webhooks recebidos podem ter falhado sem reentrega (Evolution normalmente reentrega em falha).
+
+**Builds:** frontend (Vite) e backend (swc) limpos, sem erro novo.
+
+**Produção — aplicado com confirmação explícita do usuário (2026-08-07, ~18:15 UTC).** Deploy de 16 arquivos: os 9 backend originais + `Agentes.tsx`/`ConfigAgenteIA.tsx`/`Cerebro.tsx` + `corridas.ts`/`corridasService.ts` (dependência que `index.ts` já tinha de um trabalho anterior não commitado, incluída desta vez pra não repetir o incidente de homolog). `/health`→200, zero `ERROR` nos logs pós-deploy, `sha256sum` do JS compilado idêntico entre homolog e produção pros 3 arquivos centrais do motor. Schema: 12/12 colunas novas confirmadas em `agentes` via `information_schema`. Migração de dados rodada em produção: 2 contas elegíveis (confirma exatamente o levantamento prévio) — `435ee472`/Stella (UPDATE, match único por `evolution_instancia` numa linha até então chamada "Agente Teste 2") e `5319f0ed`/Stella (INSERT, sem nenhuma linha em `agentes` pra essa instância). Prompt de ambas conferido **byte-a-byte idêntico** entre `agent_configs` e a linha `agentes` migrada (3066 e 2557 caracteres respectivamente). Teste real pós-migração em produção (`processarMensagem` direto, `IA_TEST_MODE=true`, sem nenhum envio real de WhatsApp): resposta gerada normalmente pra Stella (`435ee472`), prompt confirmado vindo de `agentes.prompt_sistema`. Scripts de teste/migração removidos de ambos os containers ao final — nenhum artefato deixado no `/app`.
+
+### 🆕 Sprint 0 do plano multi-agente: flag de segurança `users.multi_agent_enabled` — em PRODUÇÃO
+
+**Contexto:** primeira sprint do plano em `diagnosticos/PLANO_MOTOR_MULTIAGENTE_ECONOMIA_TOKEN.md` — rede de segurança antes de qualquer mudança real no motor de IA (as próximas sprints do plano, especialmente a Sprint 1/`SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md`, já classificada como risco alto, vão mexer direto no que a IA fala com clientes reais).
+
+**Implementado:**
+- `ALTER TABLE users ADD COLUMN IF NOT EXISTS multi_agent_enabled BOOLEAN NOT NULL DEFAULT false` (`migrations.ts`) — escopo de conta (não de agente individual), colocado em `users` (não em `agent_configs`/`agentes`) de propósito: sobrevive à unificação de config que a Sprint 1 vai fazer, sem precisar mover a flag depois.
+- `agentEngine.ts`: leitura da flag logo após `userIdFinal` ser resolvido — **só loga, não branquea comportamento nenhum ainda** (`multi_agent_enabled=true pra esta conta, mas o motor novo ainda não existe — seguindo pelo caminho único atual`). Não existe hoje nenhum motor alternativo pra rotear quando `true` (Sprints 1+ do plano ainda não implementadas) — é scaffolding puro, mesmo espírito de "nascer inofensivo" já usado em `grupos_ia_permitidos` (Sprint Tarefa por Grupo).
+
+**Testado em homolog com dado real** (dentro do container, `processarMensagem` chamado direto — sem debounce, pra eliminar ruído de timing/reagendamento por concorrência — `IA_TEST_MODE=true` suprimindo o envio real): com a flag `false` (default), mensagem de teste processada normalmente, sem o log novo. Com a flag `true`, o log novo apareceu exatamente no ponto certo (logo após "ENGINE START", antes de qualquer chamada à LLM), e **a resposta gerada foi idêntica em estrutura ao caminho de sempre** — confirma que a flag hoje não muda nenhum comportamento real, só o log. Histórico de teste limpo ao final.
+
+**Confirmado por leitura direta do banco (não assumido):** 15 usuários em homolog e 17 em produção — **100% com `multi_agent_enabled=false`** via o `DEFAULT` da coluna, nenhum `UPDATE` retroativo necessário, nenhuma conta precisou de intervenção manual.
+
+Build (`swc`) limpo. **Deployado em homolog e, após confirmação explícita do usuário, em produção** — `/health`→200 nos dois, sem `ERROR` nos logs pós-deploy, `sha256sum` idêntico nos 3 lugares pros 2 arquivos.
+
+**Próximo passo do plano:** Sprint 1 (unificar `agentes`/`agent_configs`) — ler `SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md` inteiro antes de começar (já tem o levantamento e a decisão de arquitetura prontos), não é pra reabrir a investigação.
+
+### 🆕 Excluir contato direto na tabela "Contatos selecionados" (prévia de Disparos) + 🔴 correção de premissa errada sobre FK — em PRODUÇÃO
+
+**Contexto:** usuário reportou (print, "Todos os Leads", 571 contatos) registros claramente corrompidos (telefone com 18 dígitos, sem nome) na tabela de prévia de Disparos, sem forma de remover ali mesmo. **Localização real reconfirmada**: a tabela fica em `StepContacts` (Passo 1 "Lista de Contatos"), não em `StepReview` como o pedido original presumiu — só a descrição das colunas batia, a sprint tinha o step errado.
+
+**Implementado:** ícone de lixeira por linha (mesmo padrão de `removerLista()`/`Leads.tsx`: `confirm()` nativo + `api.from("contatos").delete().eq("id", id)`). `setTargetContacts` passado como prop nova de `DisparosPage` pra `StepContacts` — ao excluir, filtra o contato do estado do componente pai direto (`prev.filter(c => c.id !== id)`), sem refetch completo (a seleção pode ter centenas/milhares de linhas). `filteredPreview` é um `.filter()` puro recalculado a cada render (não memoizado com dependência estática), então tabela e contador ("X de Y totais") refletem a remoção imediatamente, confirmado por leitura do código.
+
+**🔴 Achado que corrige a premissa do pedido original**: o pedido afirmava, "confirmado por leitura de `migrations.ts`: não existe nenhuma `FOREIGN KEY ... REFERENCES contatos(id)`" — **checado direto no banco via `information_schema` (não só o arquivo de migração) e é falso**. Existem FKs reais de `contatos(id)`:
+
+| Tabela | `ON DELETE` |
+|---|---|
+| `chamadas` | CASCADE |
+| `tarefas` | CASCADE |
+| `timeline_eventos` | CASCADE |
+| `disparo_logs` | SET NULL |
+| `deals` (só homolog) | SET NULL |
+| `conversations` (só homolog) | CASCADE |
+
+Ou seja: excluir um contato pela prévia de Disparos **apaga de verdade** chamadas, tarefas de Kanban e eventos de timeline associados a ele — não é uma operação isolada só da seleção de campanha. A única parte da premissa original que se confirmou correta foi sobre `disparo_logs` especificamente (`SET NULL`, não `CASCADE`) — testado com dado real: criei um `disparo_logs` de uma campanha "já enviada" referenciando um contato de teste, excluí o contato, e o log sobreviveu **intacto** (nome/telefone/mensagem/status preservados via cópia denormalizada, só `contato_id` virou `null`).
+
+**Este não é um risco novo introduzido aqui** — `Leads.tsx` (`removerContato()`) já tem exatamente o mesmo botão, mesmo comportamento, em produção, há tempo. A sprint só adiciona mais um ponto de entrada pro mesmo comportamento já existente. Ainda assim, corrigido o texto do `confirm()` pra refletir o alcance real (antes dizia "não afeta campanhas já enviadas", o que é verdade mas omitia o resto): agora avisa explicitamente que tarefas/chamadas/timeline também são apagadas, e que só o histórico de campanha (`disparo_logs`) é preservado.
+
+**Testado em homolog com dado real** (dentro do container, JWT do próprio container): 3 contatos de teste criados (2 válidos, 1 "sujo" — sem nome, telefone com 21 dígitos). `DELETE` real via API confirmado (204), contato realmente sumiu de `contatos` (`GET` → 404 depois). Simulada uma campanha "já enviada" referenciando o contato sujo — confirmado que o `disparo_logs` sobrevive intacto ao excluir o contato. Dados de teste limpos ao final.
+
+Build (`vite build`) limpo. **Deployado em homolog e, após confirmação explícita do usuário (já ciente do achado sobre CASCADE), em produção** — `/health`→200 nos dois, `sha256sum` idêntico nos 3 lugares.
+
+### 🔴 Fix: contato sem telefone derrubava a criação inteira da campanha (`disparo_logs.telefone NOT NULL`) — em PRODUÇÃO
+
+**Achado real do usuário** (print, erro em produção ao clicar "Disparar Agora" numa campanha de 247 contatos): `"null value in column \"telefone\" of relation \"disparo_logs\" violates not-null constraint"`.
+
+**Causa raiz confirmada com dado real:** exatamente **1** contato em produção com `telefone` nulo/vazio — `"zxc"` (nome claramente de teste), `origem='Manual'`, criado em 2026-07-03. Rastreado até `Leads.tsx`, `salvarContato()`: só valida `contatoForm.nome.trim()` antes de salvar — `telefone` nunca foi obrigatório no formulário manual de contato. `StepReview.handleStart()` (`Disparos.tsx`) monta `logs = targetContacts.map(...)` e insere tudo num único `INSERT` multi-linha via `makeCrud` genérico (sem `ON CONFLICT`/tratamento por linha) — 1 contato ruim nos 247 derrubava o lote inteiro, mesma classe de bug já corrigida na importação (`SPRINT_IMPORTACAO_INTELIGENTE_UPSERT.md`), agora achada num ponto diferente do sistema.
+
+**Efeito colateral confirmado em produção:** como `disparos` é um `INSERT` separado ANTES de `disparo_logs`, cada tentativa falha deixava uma campanha órfã (status `em_andamento`, zero `disparo_logs`). **5 campanhas órfãs encontradas** (todas `"teste"`, 247 leads, criadas entre 16:37 e 16:52 de hoje — o usuário tentando repetidamente antes do fix) — removidas com confirmação explícita do usuário.
+
+**Decisão sobre `Leads.tsx`:** o formulário manual de contato **não** foi alterado para exigir telefone — um contato só com e-mail (sem WhatsApp) é um caso de uso legítimo de CRM (ex: lead de formulário web). Ficou só o filtro defensivo do lado de Disparos, que é o ponto real do sistema onde telefone é estritamente necessário (campanha de WhatsApp). Decisão de produto, não revisitada sem pedido explícito.
+
+**Fix aplicado (`Disparos.tsx`), duas camadas + rollback:**
+1. **Origem** — logo após montar `list` a partir das 4 fontes de alvo (tag/estágio/lista/"Todos os Leads"), filtra `c.telefone && String(c.telefone).trim()` antes de virar `targetContacts`, com `toast.warning` não-bloqueante avisando quantos foram excluídos.
+2. **Defesa em profundidade** — filtra de novo em `handleStart()`, imediatamente antes de montar `logs`, independente de a camada 1 já ter filtrado.
+3. **Rollback** — se mesmo assim o `INSERT` de `disparo_logs` falhar, `handleStart()` agora desfaz a linha de `disparos` recém-criada (`DELETE ... WHERE id = campaignData.id`) antes de propagar o erro — nunca mais deixa campanha órfã pra trás, qualquer que seja o motivo da falha.
+
+**Testado em homolog com dado real** (dentro do container, JWT do próprio container, sem WhatsApp envolvido): criados 2 contatos válidos + 1 com `telefone: null` numa lista de teste. Aplicando a lógica nova do fix contra a API real: contato sem telefone excluído corretamente (aviso "1 contato(s) sem telefone válido foram excluídos da seleção"), `disparo_logs` criado com sucesso só para os 2 válidos (sem erro de `NOT NULL`). **Reproduzido também o crash original** (mesmo payload, sem aplicar o filtro) — erro idêntico ao do print do usuário, confirmando a causa raiz com certeza, não suposição. Dados de teste limpos ao final.
+
+Build (`vite build`) limpo. **Deployado em homolog e, após confirmação explícita, em produção** — `/health`→200 nos dois, `sha256sum` idêntico nos 3 lugares.
+
+### 🔴 Auditoria cética: fix de mídia do chat (6º ciclo) NUNCA foi aplicado ao código (2026-08-06)
+
+**Contexto:** `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md` documentou um achado real (condição `&& midia.url` desnecessária impedindo `salvarMidiaWhatsapp()` de rodar) e pediu pra aplicar o fix. Usuário, já cansado de 5 ciclos anteriores "resolvidos" que voltaram, pediu esta sprint só pra confirmar com evidência direta — sem aceitar a palavra do relatório anterior (nem desta mesma sprint de fix).
+
+**Item 1 — código:** `webhook.ts` linha 1227 (local, homolog E produção — os 3 lugares checados) segue **exatamente**:
+```ts
+if (MIDIA_TIPOS.has(tipo) && midia.url) {
+```
+Não foi alterado de forma nenhuma. `git log --all -i --grep="midia|media" -- backend/src/routes/webhook.ts` não mostra nenhum commit tocando essa condição — os únicos commits recentes no arquivo são sobre grupo (nome/foto, ON CONFLICT, tarefa por grupo), nada sobre este bug. **O documento da sprint é um plano nunca executado, não um achado aplicado.**
+
+**Item 2 — deploy:** irrelevante confirmar deploy de um fix que não existe — mas por completude, `sha256sum` confirma homolog=local (`f078e3e...`), produção diverge (`ab49e1a...`, por causa da feature "Tarefa por Grupo" ainda não promovida a produção, já documentado — a linha 1227 em si é idêntica nos 2 ambientes, confirmado via `grep` direto nos arquivos remotos).
+
+**Item 3 — teste real com variantes:** **não executado nesta sprint.** Reproduzir imagem encaminhada/citada/sticker/documento/áudio exige originar mensagens reais de um celular de verdade — esta sessão não tem como enviar WhatsApp de um telefone físico. Testar contra o código atual seria redundante de qualquer forma: como o fix nunca foi aplicado, o comportamento é idêntico ao já documentado (funciona quando `midia.url` vem preenchido no payload, falha quando não vem — ver item 4 pra frequência real).
+
+**Item 4 — extensão real do problema (produção, hoje):**
+| Tipo | URL nula | URL crua nunca trocada | URL local OK | Total |
+|---|---|---|---|---|
+| audio | 86 | 12 | 1.216 | 1.314 |
+| document | 5 | 0 | 1 | 6 |
+| image | 23 | 4 | 2.186 | 2.213 |
+| sticker | 3 | 2 | 1.875 | 1.880 |
+| video | 10 | 3 | 496 | 509 |
+
+**148 de 5.922 mensagens de mídia (~2,5%) quebradas** — a grande maioria (97,5%) já funciona normalmente hoje (explica por que o bug parece "não acontecer sempre"/"parece corrigido às vezes"). Quebras recentes confirmadas: 06/08 (1 sticker, hoje), 05/08 (1 documento), 04/08 (4 imagens, mesmo segundo — provável rajada de teste). Só **6 mensagens quebradas nos últimos 3 dias** — universo pequeno pra um eventual backfill.
+
+**Item 5 — padrão causador de `midia.url` vazio:** **não identificado, mesmo estado da sprint anterior.** `whatsapp_messages.metadata` (JSONB) está vazio (`{}`) em todas as linhas quebradas verificadas — o payload bruto da Evolution nunca é persistido em lugar nenhum, então não dá pra inspecionar retroativamente qual campo/variante causou cada quebra específica. Confirmar isso exige teste ao vivo (celular real mandando forward/reply/sticker enquanto se observa o payload chegando) ou instrumentar um log temporário capturando o payload bruto sempre que `tipo` for mídia e `midia.url` vier falsy — nenhum dos dois foi feito aqui (fora do escopo desta sprint, que era só verificação, não correção/instrumentação).
+
+**Item 6 — polish (esconder texto cru duplicado):** **não aplicado.** `WhatsAppInterface.tsx` ~linha 3256-3284: bloco de mídia (`<img>`/`<audio>`/etc, condicional a `m.midia_url`) e bloco de texto (`m.content`, condicional só a não ser mensagem apagada) são dois `if`s independentes — quando os dois existem (imagem real presente E a descrição de Vision salva como `content`), os dois renderizam, um embaixo do outro, exatamente o problema descrito no plano original.
+
+**Conclusão, sem suavizar:** nenhum dos 5 itens do plano de fix original foi executado. O único trabalho real feito foi a INVESTIGAÇÃO (identificar a causa), documentada no próprio `SPRINT_FIX_DEFINITIVO_MIDIA_CHAT.md` — mas ela nunca virou código. **Esta é a explicação mais provável pra por que a "6ª tentativa" (na visão do usuário) na real nunca aconteceu de verdade — a sprint de fix rodou até a fase de diagnóstico e parou antes da fase de implementação, e algum relatório anterior aparentemente registrou isso como concluído sem essa distinção ficar clara.**
+
+**Nada corrigido nesta sprint** (propositalmente — era só auditoria). Recomendo uma sprint de continuação dedicada, cobrindo, nesta ordem: (1) aplicar de fato os itens 2-3 do plano original (remover `&& midia.url`, cobrir o bloco `fromMe=true`); (2) aplicar o item 6 (esconder texto duplicado); (3) rodar o backfill das 6 mensagens recentes quebradas; (4) só depois, com o fix em produção há alguns dias, tentar de novo identificar o padrão do item 5 — dessa vez com dado real acontecendo organicamente (ou pedindo ao usuário pra mandar um forward/reply/sticker de teste enquanto alguém observa o log).
+
+### 🆕 Cooldown vira filtro automático (descarta silenciosamente), não bloqueio com checkbox obrigatório (2026-08-06)
+
+**Contexto:** aviso de cooldown (`StepReview`, `Disparos.tsx`) exigia marcar um checkbox pra habilitar os botões de disparo — mas o checkbox nunca teve efeito real no envio: o bloqueio de verdade sempre foi (e continua sendo) o backend (`disparoProcessor.ts` + `get_next_disparo_batch()`), que descarta silenciosamente qualquer contato em cooldown (`status='cooldown'` no log) independente do que estivesse marcado na tela. Marcar o checkbox não forçava envio pros contatos em cooldown — só liberava os botões pros demais, sem problema nenhum, poderem receber a campanha. Trava de UI sem efeito prático, só atrapalhando o operador.
+
+**Corrigido:** removidos `confirmarCooldown` (state do checkbox) e `bloqueadoPorCooldown` (condição de `disabled` dos botões "Disparar Agora"/"Agendar Disparo") — cooldown deixa de impedir o início da campanha. Aviso vira informativo puro (sem checkbox): "X de Y contatos selecionados já receberam campanha nas últimas Zh e serão pulados automaticamente — os demais recebem normalmente." Backend não tocado (não precisava — já fazia o trabalho real sozinho).
+
+**Item 4 (opcional) aplicado:** contador de "Destinatários" no resumo agora mostra, quando há contato em cooldown, "N serão enviados agora — M pulados por cooldown" logo abaixo do total, sem precisar rolar até o aviso.
+
+**Testado em homolog com envio real** (dentro do container, pool real, reproduzindo exatamente o payload que o frontend corrigido produz — sem nenhum campo de confirmação): campanha com 2 contatos, um forçado em cooldown (`ultimo_disparo_em = NOW()`) e outro fora (número de teste de sempre, `5511979579548`). Resultado real do cron: contato em cooldown → `status='cooldown'`, erro "Bloqueado por cooldown: contato já recebeu mensagem de campanha dentro da janela configurada"; contato fresco → `status='sent'`, mensagem realmente entregue via WhatsApp (confirmado em `whatsapp_messages`, depois removida). **Proteção de backend confirmada intacta — sem regressão.** Dados de teste (disparo/logs/contato sintético/mensagem real) limpos ao final.
+
+Build (`vite build`) limpo. **Deployado em homolog e produção** — `sha256sum` idêntico nos 3 lugares.
+
+### 🔴 Segurança: pausadas 2 contas com IA ativa + prompt vazio + 🔧 fix do 500 em POST /api/agent-config (2026-08-06)
+
+**Parte 1 — pausar `fmakonee03@gmail.com` e `stefanocatedral@hotmail.com`:** reconfirmado por leitura direta em produção, imediatamente antes de agir, que o estado reportado no relatório de status ainda procedia — `ativo=true`, `prompt_sistema` com 0 caracteres, nas duas contas, sem mudança desde o relatório. `UPDATE agent_configs SET ativo=false WHERE user_id IN (...) AND (prompt_sistema IS NULL OR prompt_sistema='')` — só o campo `ativo`, nada mais tocado. Confirmado por uma segunda leitura independente (não a mesma query da atualização) que as duas contas estão `ativo=false` agora. **Recomendação de processo (fora do escopo de código):** avisar os dois donos de conta que a IA foi pausada por segurança (estava respondendo cliente real com prompt vazio/genérico) e que a reativação depende de configurar um `prompt_sistema` real primeiro — não é algo pra reativar sozinho sem esse preenchimento.
+
+**Parte 2 — fix do 500 em `POST /api/agent-config`:** causa confirmada — `nome_agente`/`prompt_sistema` são colunas `NOT NULL DEFAULT` (`'Cris'`/`''`, `information_schema.columns` conferido direto no banco, não estão em `migrations.ts` — mesmo padrão de coluna-fora-de-banda já visto nesta sessão). O `DEFAULT` do Postgres só entra em ação quando a coluna é OMITIDA do INSERT — o código sempre mandava `campo ?? null`, virando `NULL` explícito quando o campo não vinha no body, violando a constraint `NOT NULL` (o `DEFAULT` nunca chegava a ser usado).
+
+**Fix aplicado com cuidado extra pro efeito colateral óbvio de "só usar `?? 'Cris'` no lado do JS":** isso faria `EXCLUDED.nome_agente` valer sempre `'Cris'` mesmo num UPDATE, e o `COALESCE(EXCLUDED.x, agent_configs.x)` do `ON CONFLICT` (desenhado pra POST parcial preservar campos não reenviados) passaria a sobrescrever silenciosamente um `nome_agente`/`prompt_sistema` real já configurado toda vez que uma aba diferente da tela fosse salva sem tocar nesses 2 campos — regressão de perda de dado real, pior que o 500 original. Resolvido só no SQL: `VALUES` usa `COALESCE($2,''),COALESCE($3,'Cris')` (aplica o default só quando não há linha nenhuma ainda — INSERT), mas o `SET` do `ON CONFLICT` usa o parâmetro cru (`$2`/`$3`, ainda `NULL` quando omitido) em vez de `EXCLUDED.x` — preserva a semântica "campo não enviado = mantém valor atual" que os outros ~15 campos da mesma query já têm.
+
+**Testado em homolog com API real** (dentro do container, JWT do próprio container, conta `angelobispofilho@icloud.com` — secundária do próprio dono do projeto, sem config prévia, não é cliente real):
+1. `POST` sem `nome_agente`/`prompt_sistema`, primeira gravação da conta → `200` (antes seria `500`), valores gravados `"Cris"`/`""` (o `DEFAULT` da coluna).
+2. `POST` com `nome_agente`/`prompt_sistema` customizados → gravado corretamente.
+3. `POST` parcial (só `sinal_pausa`), sem tocar nos 2 campos → **valores customizados do passo 2 preservados**, não resetados — confirma que a regressão óbvia foi evitada de verdade, não só em teoria.
+Config de teste removida ao final.
+
+Build (`swc`) limpo. **Deployado em homolog e, após confirmação explícita, em produção** — `/health`→200 nos dois, `sha256sum` idêntico nos 3 lugares.
+
+### 🔧 Fix: contatos importados de grupo não caíam em nenhuma lista + botão "Baixar contatos do grupo" renomeado pra "Importar para CRM" (2026-08-06)
+
+**Achado do usuário:** depois de importar contatos de um grupo (feature corrigida na sprint anterior, mesmo dia), não conseguia encontrá-los em nenhuma lista do CRM.
+
+**Causa:** `POST /grupos/:groupJid/importar-contatos` (`whatsapp.ts`) sempre inseriu os contatos SEM `lista_id` — apareciam em Leads/contatos soltos, mas invisíveis na aba "Por Lista" de Disparos (que filtra por `lista_id`).
+
+**Corrigido:** a rota agora cria (lazy — só se houver ao menos 1 contato genuinamente novo, pra não sobrar lista vazia à toa, mesmo espírito da sprint de "limpar listas vazias" já feita hoje) uma lista nova por importação, nome no mesmo padrão já usado pela importação CSV/XLSX de `Disparos.tsx` (`Importação ${arquivo} ${data}`): **`Importação Grupo ${nomeDoGrupo} ${data}`**. Contatos genuinamente novos recebem esse `lista_id`; contatos que já existiam NUNCA são realocados (se já pertenciam a outra lista, continuam lá — mesma filosofia de "nunca sobrescrever contato existente" já documentada nesta rota). Data formatada manualmente (dd/mm/aaaa), sem `toLocaleDateString`/ICU (não usado em nenhum outro lugar do backend, evita depender de dados de locale que uma imagem Node enxuta pode não ter).
+
+**Frontend** (`WhatsAppInterface.tsx`): botão "Baixar contatos do grupo" → **"Importar para CRM"** (a pedido do usuário — "baixar" soa como download de arquivo, não o que a ação faz). Modal e legenda pós-importação atualizados pra mencionar a lista nova (nome exibido no toast de sucesso e na legenda "Última importação").
+
+**Testado em homolog com dado real** (dentro do container, sem WhatsApp envolvido): grupo real "Poá negócios" → `POST /importar-contatos` retornou `listaId`/`listaNome` (`"Importação Grupo Poá negócios 06/08/2026"`), confirmado via `GET /api/listas` que a lista existe e via `GET /api/contatos?lista_id=...` que os 229 contatos novos têm o `lista_id` correto. Dados de teste (229 contatos + a lista) removidos ao final.
+
+Build (`swc` + `vite build`) limpo. **Deployado em homolog e, após confirmação explícita, em produção** (`backend/src/routes/whatsapp.ts`, `src/components/WhatsAppInterface.tsx`) — `/health`→200 nos dois, `sha256sum` idêntico nos 3 lugares pros 2 arquivos.
+
+### 🔧 Fix: "groupJid inválido — precisa terminar em @g.us" quebrava painel de info e importação de contatos de grupo pra 100% dos grupos, sempre (2026-08-06)
+
+**Achado a partir de print do usuário** (toast de erro ao abrir um grupo em Conversas). Investigação: `GET /api/whatsapp/conversas` monta `session_id` de cada linha com `split_part(m.remote_jid,'@',1)` (`whatsapp.ts` ~linha 579) — remove o sufixo `@g.us`/`@s.whatsapp.net` de TODA linha, inclusive grupo (`is_group` é computado à parte, do `remote_jid` completo, mas o sufixo nunca sobrevive no `session_id` resultante). O frontend (`WhatsAppInterface.tsx`) usa esse `session_id` como `activeChatId` e manda ele direto pras rotas `GET /grupos/:groupJid/info` (dispara sozinho ao abrir qualquer grupo, `fetchGrupoInfoExtra`) e `POST /grupos/:groupJid/importar-contatos` — as duas exigiam `groupJid.endsWith('@g.us')`, rejeitando com 400 toda vez. **Não era um caso raro/intermitente — as duas rotas nunca funcionaram de verdade desde que a feature foi ao ar (2026-08-04), pra nenhum grupo, porque o `session_id` que o frontend usa jamais carrega o sufixo.**
+
+**Fix aplicado** (`backend/src/routes/whatsapp.ts`, as 2 rotas): trocado o `if (!groupJid.endsWith('@g.us')) return 400` por uma normalização (`groupJid.endsWith('@g.us') ? groupJid : \`${groupJid}@g.us\``) — as duas rotas só são chamadas pelo frontend quando `chat.is_group` já é `true`, então não há ambiguidade real sobre a intenção; pior caso de um id não-grupo chegar aqui por engano é a Evolution devolver "grupo não encontrado", não um risco de segurança. Decidido não mexer no `session_id`/`split_part` de `GET /conversas` (a causa mais profunda) — esse campo é usado em dezenas de outros lugares do arquivo (envio de mensagem, mute, pin, arquivar, etc.) pra chats normais e de grupo por igual, e `contatos.telefone` de grupo também guarda só o ID sem sufixo (achado já documentado em sprints anteriores) — mudar o formato ali é uma alteração bem maior e mais arriscada pro problema que só afeta essas 2 rotas específicas.
+
+**Testado em homolog com dado real** (dentro do container, JWT do próprio container, sem WhatsApp envolvido — só leitura via Evolution + escrita em `contatos`): reproduzido o bug primeiro (`GET /conversas` → grupo real "Poá negócios", `session_id` confirmado sem `@g.us`), depois confirmado que as duas rotas passaram a responder `200` com o mesmo `session_id` cru que o frontend sempre mandou — `GET /info` trouxe descrição/foto reais do grupo, `POST /importar-contatos` importou 229 participantes novos + 5 já existentes. Dados de teste (229 contatos com `origem='Grupo WhatsApp'` criados pelo teste, escopados por timestamp exato pra não tocar em nada anterior) removidos ao final.
+
+Build (`swc`) limpo. **Deployado em homolog e, após confirmação explícita do usuário, em produção** — `/health`→200 nos dois, sem `ERROR` nos logs pós-deploy, `sha256sum` idêntico nos 3 lugares.
+
+### 🆕 Gerenciar listas (excluir/renomear/limpar vazias) direto no passo "Por Lista" de Disparos — testado em homolog com API real (2026-08-06)
+
+**Contexto:** `StepContacts` (`Disparos.tsx`) listava as `listas` do usuário só pra seleção de alvo de campanha — sem excluir/renomear, mesmo o backend (`listas` usa `makeCrud` genérico) e um precedente em produção (`Leads.tsx`, `removerLista()`) já suportando isso. Achado real do usuário (print): tela acumulando listas de importação com 0 contatos, sem forma de limpar.
+
+**Implementado** (`StepContacts`, `Disparos.tsx`):
+1. **Excluir lista individual** — ícone de lixeira em cada linha (`stopPropagation`+`preventDefault`, já que a linha inteira é um `<label>` que dispara o checkbox), mesmo padrão de `Leads.tsx` (`confirm()` nativo + `api.from("listas").delete().eq("id", id)`), com o cuidado adicional de remover o id de `form.listas_selecionadas` se a lista excluída estava selecionada como alvo da campanha em edição (Leads.tsx não precisa disso, não tem esse conceito).
+2. **Renomear lista** — ícone de lápis abre modal (reaproveita `Dialog`/`DialogContent`/etc. já importados na página) chamando `PUT /api/listas/:id` (`api.from("listas").update({nome}).eq("id", id)`) — rota já existia via `makeCrud`, nunca usada nesta tela antes.
+3. **"Limpar N vazias" em lote** — botão só aparece quando há pelo menos 1 lista vazia (`listasCounts[l.id] === 0`, mesma contagem já usada no badge de cada linha, sem query nova); confirma quantidade antes, deleta sequencialmente (não existe endpoint de bulk-delete por lista de ids — `makeCrud` só faz um registro por vez; sequencial é aceitável dado o volume real, ver contagem abaixo).
+
+**Confirmado por leitura direta do schema, antes de assumir o comportamento do backend** (o achado da sprint anterior — divergências entre `migrations.ts` e o banco real — motivou checar em vez de confiar): `contatos_lista_id_fkey` com `ON DELETE SET NULL` existe de fato em produção E homolog (não está em `migrations.ts` — foi adicionado fora de banda em algum ponto, mesmo padrão já visto com outras colunas desta sessão, ex: `listas.cor`/`descricao`/`updated_at`, também ausentes de `migrations.ts` mas presentes no banco real).
+
+**Testado em homolog com API real** (HTTP real via `localhost:3000` de dentro do próprio container `crm-api-homolog`, JWT assinado com o `JWT_SECRET` real do container — não é um teste de envio de WhatsApp, então a regra nova da seção anterior não se aplica, mas o padrão "rodar de dentro do container" foi mantido por consistência):
+- Criadas 4 listas de teste + 2 contatos reais vinculados a uma delas.
+- **`DELETE` da lista com contato → confirmado via `GET /api/contatos/:id` que o contato sobreviveu, com `lista_id: null`, nome intacto** — exatamente o comportamento esperado, provado com dado real (não só inferido da FK).
+- **`PUT` de renomeio → confirmado via `GET /api/listas/:id` que o novo nome persistiu.**
+- Lógica de "limpar vazias" validada via `DELETE` sequencial das 3 listas vazias restantes — todas removidas, nenhuma com contato foi tocada (a única com contato já tinha sido removida no passo anterior, de propósito).
+- Um `POST /api/contatos` do teste bateu num telefone de teste pré-existente e desconexo (`SmokeTest`, 2026-06-03, `idx_contatos_user_tel_unique`) — confirmado nos logs que é conflito de dado antigo alheio a este teste, não um bug da feature nova; o segundo contato de teste (telefone diferente) funcionou normalmente e já prova o comportamento.
+- Dados de teste limpos ao final (4 listas + 2 contatos de teste removidos).
+
+**Listas vazias hoje:** produção — **2 de 4** (conta `mentoark@gmail.com`, ambas de importações de teste em 30/07). Homolog — **8 de 13** (mesma conta), incluindo 3 datadas de hoje (06/08/2026) — bate com o padrão descrito no print do usuário na sprint ("Importação... 06/08/2026 — 0" repetidas), o que sugere que o print era da tela de **homolog**, não produção (produção tem só 2 listas vazias, datadas de uma semana atrás).
+
+Build (`vite build`) limpo. **Deployado em homolog e, após confirmação explícita do usuário, em produção** (`src/pages/Disparos.tsx`) — `/health`→200 nos dois, sem `ERROR` nos logs pós-deploy.
+
+### 🔴 Revalidação da sprint spintax em homolog expôs um SEGUNDO incidente, mecanismo diferente do primeiro: número de WhatsApp compartilhado entre homolog e produção (2026-08-06)
+
+**Objetivo desta sprint:** fechar o ciclo do incidente anterior (teste "de homolog" que rodou em produção por JWT/URL errados) com uma validação genuína, seguindo a regra nova de `AUDITORIA_PROTOCOLO.md` (rodar de dentro do container do ambiente alvo). **Resultado: a regra nova funcionou perfeitamente pro problema que ela foi desenhada pra resolver — mas revelou um segundo problema, de natureza completamente diferente, que também precisa de correção antes que testes de envio real em homolog sejam seguros.**
+
+**Passo 1 — isolamento de aplicação, confirmado 100% correto desta vez:**
+- Script rodado via `docker exec crm-api-homolog node script.js`, reaproveitando `dist/db.js` (pool real do container, nunca JWT/URL manual).
+- `current_database()` explicitamente checado no script: `crm_hml`, confirmado antes E depois do teste.
+- `evolution_server_url` de `agent_configs` reconfirmado ANTES de inserir qualquer coisa: `https://fierceparrot-evolution.cloudfy.live` (Evolution de homolog, não a de produção).
+- Campanha de teste (`disparos`/`disparo_logs`) criada e processada pelo `disparoProcessor.ts` REAL (já rodando no container, cron de 2s) — nenhuma chamada HTTP externa, nenhum JWT.
+- **Achado lateral, corrigido em tempo real:** `get_next_disparo_batch` ficou preso em "Campanha suspensa: fora da janela de horário comercial permitida" (`horario_inicio`/`horario_fim`, default 08:00-20:00) — 4h da manhã em São Paulo no momento do teste. Ajustado `horario_inicio='00:00', horario_fim='23:59'` só na campanha de teste (não é um bug, é o comportamento correto da campanha barrando envio fora de horário — só não é o que se quer num teste automatizado de madrugada).
+- Resultado: as 3 mensagens (`Oi, Duda!...`/`E aí, Theo!...`/`Olá, Bia!...`, spintax real, 3 combinações diferentes) foram enviadas com sucesso, confirmado por `SELECT` direto em `crm_hml.disparo_logs` (status=`sent`) e `crm_hml.whatsapp_messages` (`from_me=true`, `instance_name=crm_435ee4720fc3_2`) — **tudo dentro de homolog, nada em produção pelo mecanismo do incidente anterior.**
+
+**Passo 2 — o vazamento aconteceu de qualquer forma, por um mecanismo diferente:** ao checar produção por segurança (mesmo com o isolamento de app confirmado), as mesmas 3 mensagens apareceram lá também — mas desta vez endereçadas a um número DIFERENTE (`5511991909106`, contato real pré-existente da conta desde 2026-05-30, nome "Angelo"), não ao número de teste (`5511979579548`). Investigação com `GET /instance/fetchInstances` nos dois servidores Evolution revelou a causa: **a instância de homolog `crm_435ee4720fc3_2` está de fato conectada (`ownerJid`) ao número `5511991909106`** — um número de WhatsApp real, diferente do que o nome da instância sugeria. Como esse número tem uma sessão WhatsApp ativa, o protocolo de multi-dispositivo do próprio WhatsApp entrega/sincroniza a mensagem enviada por homolog também pro outro lado — e por coincidência (ou não: mesma pessoa, mesmo aparelho/linha testando ambos os ambientes ao longo do projeto) esse mesmo número já era um CONTATO real da conta de produção, cuja IA (Stella) está ativa e respondeu de verdade 6 vezes, com custo real de OpenAI (`ai_uso_diario`: 6 mensagens, 10.824 tokens entrada, 268 saída, ~US$0,00 — gpt-4o-mini, custo desprezível mas não-zero).
+
+**Diferença crucial em relação ao incidente anterior:** daquela vez, o bug estava inteiramente do NOSSO lado (JWT/URL errados, escrita direta no banco errado) — isolamento de aplicação corrigível com processo. Desta vez, o isolamento de aplicação estava perfeito (confirmado passo a passo) — o vazamento aconteceu no nível do PRÓPRIO PROTOCOLO WHATSAPP, fora do controle do nosso código: números de telefone compartilhados/linkados como dispositivo em mais de um Evolution/ambiente ao mesmo tempo. Isso **não tem correção de código** — precisa de decisão operacional (desconectar/repar os números de WhatsApp usados em homolog dos que estão ativos em produção).
+
+**Achado lateral, fora do escopo, não investigado a fundo:** ao ler `n8n_chat_histories` do contato afetado (`5511991909106`) pra confirmar o dano, encontrado um histórico extenso PRÉ-EXISTENTE (140+ mensagens, nada a ver com este incidente) de uma conversa em loop entre duas personas de IA ("Stella" e uma referência recorrente a "Cris"), no mesmo padrão do incidente de loop bot-a-bot já documentado (28/07). Não investigado agora (fora do escopo desta sprint) — **sinalizado para uma sprint dedicada**, já que não é claro se esse loop específico já foi neutralizado pelo circuit breaker (`LOOP_BREAKER`) existente ou se é anterior a ele.
+
+**Corrigido nesta sprint:**
+- Dados de teste removidos dos dois ambientes: `disparos`/`disparo_logs`/`whatsapp_messages` em homolog (`crm_hml`); `whatsapp_messages`/`n8n_chat_histories` (12 linhas, ids 431-442) do vazamento em produção (`crm`).
+- `AUDITORIA_PROTOCOLO.md`: nova camada de regra — antes de qualquer envio real de teste, checar `GET {evolution_server_url}/instance/fetchInstances` e comparar `ownerJid` entre os dois ambientes; não prosseguir se o mesmo número aparecer `open` nos dois.
+
+**Pendente — requer decisão do usuário, não código:** confirmar/desconectar quais números de WhatsApp devem pertencer exclusivamente a homolog vs. produção. Hoje `5511979579548` aparece conectado (`ownerJid`) em AMBOS os servidores Evolution simultaneamente (`crm_435ee4720fc3` em homolog E em produção, ambos `status=open`) — mesmo risco se qualquer teste de homolog mandar mensagem PARA esse número usando a instância errada. Recomendo: parear um número de teste exclusivo de homolog (nunca usado em produção) antes do próximo teste de envio real.
+
+### 🔴 INCIDENTE: teste "de homolog" da sprint spintax rodou de verdade em produção — mensagens reais enviadas, causa raiz confirmada e corrigida no processo (2026-08-06)
+
+**Mesma categoria de gravidade dos incidentes históricos já documentados neste log** ("IA respondia com prompt de outro cliente — Cris"; fallback de `users.owner_id` misturando 10 contas) — desvio real entre o que um relatório de sprint anterior afirmou ("testado em homolog") e o que de fato aconteceu (produção), confirmado por print de tela do usuário mostrando as 3 mensagens de teste na tela de Conversas de `crm.mentoark.com.br`.
+
+**Investigação, com evidência direta (nunca suposição):**
+1. Busquei o texto exato das mensagens de teste (`"Oi, Ana! Temos uma novidade pra voce."` etc., literalmente o exemplo de spintax escrito na sprint) em `whatsapp_messages` nos dois bancos. **Resultado: 0 ocorrências em `crm_hml` (homolog), 10 ocorrências em `crm` (produção)** — confirma sem ambiguidade que o teste rodou contra produção, não homolog.
+2. Confirmei o `evolution_server_url` de produção pro `user_id` afetado (`435ee472-...`, conta `mentoark@gmail.com`): `https://disparo.mentoark.com.br` — o Evolution **real e compartilhado de produção**, totalmente diferente do Evolution isolado de homolog (`fierceparrot-evolution.cloudfy.live`, já documentado desde 2026-07-22). Ou seja, não foi uma "instância com nome parecido compartilhada por engano" — foi a API/JWT do teste batendo direto no backend de produção (`api.mentoark.com.br`), que then usou a config real daquela conta pra mandar via WhatsApp de verdade.
+3. Comparei `JWT_SECRET` dos dois containers (hash SHA256) — **diferentes entre si**. Isso descarta a hipótese de segredo compartilhado entre ambientes (que teria sido um achado ainda mais grave, tipo o do "Cris"); confirma que o JWT usado no teste tinha que ter sido assinado com o `JWT_SECRET` de PRODUÇÃO especificamente — ou seja, o processo de teste extraiu/usou credencial errada (de produção, achando que era homolog) e/ou apontou a URL base errada, não um bug de isolamento do sistema em si.
+4. **Envio em dobro explicado:** a conta afetada tem **2 "agentes" (conexões WhatsApp) ativos simultaneamente em produção** — `crm_435ee4720fc3_2` ("Conexão WhatsApp") e `crm_435ee4720fc3` ("Agente Teste 2", nome já sugestivo de uso de teste anterior) — ambos apontando pro mesmo Evolution real. `disparos.instancias_ids` (array) permite uma campanha mandar por múltiplas instâncias ao mesmo tempo; 4 das 6 mensagens de teste distintas saíram pelas DUAS instâncias (duplicando), 2 saíram só por uma — consistente com o(s) disparo(s) de teste tendo mais de uma instância selecionada em `instancias_ids`, não um bug de reprocessamento/retry no `disparoProcessor.ts` (o dequeue é atômico, `FOR UPDATE SKIP LOCKED`, não reprocessaria a mesma linha 2x). A linha de campanha (`disparos`)/logs (`disparo_logs`) já tinha sido apagada pelo cleanup do teste anterior (consistente com "revertidos ao final" já relatado) — só o efeito colateral real (as mensagens em `whatsapp_messages`) tinha ficado pra trás, sem checagem.
+5. **Dano real avaliado:** varredura completa de TODAS as mensagens enviadas (`from_me=true`) em produção, de todos os usuários, no dia de hoje — **as 10 mensagens de teste foram parar única e exclusivamente no número de teste conhecido (5511979579548, "Angelo"/"Mentoark", já usado em múltiplas sessões anteriores)**. Nenhum outro contato, de nenhuma conta, recebeu qualquer mensagem de teste hoje. Nenhum cliente real afetado.
+
+**Veredito: Hipótese 1 confirmada** (URL/credencial do teste apontava pra produção por engano) — **não** confirmada a Hipótese 2 como causa direta (não é colisão de nome de instância entre ambientes — as duas instâncias envolvidas são as duas conexões REAIS da própria conta de produção), **não** confirmada a Hipótese 4 (não foi alguém testando manualmente pela tela — texto bate exato com o exemplo da sprint, e passou pelo pipeline real de `disparos`/`disparoProcessor.ts`).
+
+**Corrigido:**
+- **Dados:** as 10 linhas de teste em `whatsapp_messages` (produção) apagadas — confirmado antes de apagar que todas batiam exatamente com os textos de teste conhecidos E o único destinatário era o número de teste (nunca um contato real).
+- **Processo** (`AUDITORIA_PROTOCOLO.md`, nova seção): daqui pra frente, qualquer teste que manda mensagem real via WhatsApp **tem que rodar de dentro do container do ambiente alvo** (`docker exec <container> node script.js`, reaproveitando `DATABASE_URL`/`JWT_SECRET`/pool reais do próprio container) — nunca mais JWT assinado localmente + URL escrita à mão, que foi exatamente o padrão que causou este incidente. Confirmação pós-teste também exigida: `SELECT` direto no banco do ambiente esperado antes de reportar sucesso.
+
+**Re-validação da sprint do motor de variação (spintax):** o código do spintax em si **foi validado de verdade** (ainda que por acidente, em produção) — as mensagens realmente chegaram diferentes umas das outras (Ana/Bruno/Carla, saudação e frase variando), e o bloco sem pipe (`{promocional}`) chegou literal, sem quebrar — mesmo resultado que o relatório original alegou, só que no ambiente errado. Já estava em produção desde então (deploy da sprint anterior), então não há exposição adicional de código a corrigir — o problema era só o relatório (ambiente errado) e o efeito colateral (mensagens de teste em produção), ambos tratados acima. Não rodei um novo teste em homolog nesta sprint (instrução explícita do usuário: não mandar mensagem de teste nova até a causa estar 100% esclarecida) — próxima sessão pode re-testar em homolog usando o novo processo (`docker exec` dentro do container), se quiser reconfirmar isoladamente.
+
+### 🔴 Duplicação Whisper/Vision entre `webhook.ts` e `agentEngine.ts` — CONFIRMADA como bug funcional real (IA nunca respondia áudio), corrigida e testada em homolog (2026-08-06)
+
+**Achado já registrado como pendente desde 2026-07-24** ("Vision/Whisper duplicado por mensagem... dobra custo"), reconfirmado em código em 2026-08-04 sem nova evidência de execução real. Esta sprint troca a suposição por evidência direta e muda o diagnóstico: não era só custo duplicado.
+
+**Contexto do bug:** toda mensagem de áudio/imagem passava por dois pontos que chamavam OpenAI de forma independente — `webhook.ts` (~linha 1080-1160, correto: decripta via `baixarMidiaDecriptografada()`/Evolution antes de mandar pro Whisper/Vision, grava o resultado em `entrada.texto` como `[Áudio Transcrito: "..."]`/`[Mídia - Imagem: "..."]`) e `agentEngine.ts` (funções locais `transcreverAudio()`/`analisarImagem()`, ~linha 154-227, que mandavam `entrada.midiaUrl` — a URL crua do CDN do WhatsApp, sempre CRIPTOGRAFADA — direto pro Whisper/Vision, sem decriptar).
+
+**Teste real que confirmou o achado (antes de mexer em qualquer código):** replicada a lógica exata da função local `transcreverAudio()` do agentEngine.ts contra uma URL de áudio genuína e recém-recebida (`whatsapp_messages`, homolog) — `fetch` direto na URL retorna HTTP 200 com 56.346 bytes que **não batem a assinatura "OggS"** de nenhum OGG válido (bytes cifrados), e o Whisper rejeita com **HTTP 400 "Invalid file format"**. Mesmo teste replicado pra `analisarImagem()` contra uma imagem real: Vision rejeita a URL crua com **HTTP 400 "invalid_image_url"**.
+
+Consequência no código como estava: `transcreverAudio()` retorna `null` → call site tinha `if (!transcrito) { log.warn(...); return; }` → **a IA nunca respondia a NENHUMA mensagem de áudio recebida com IA ativa**, de forma determinística (não intermitente — toda mensagem de áudio real passa por essa mesma rejeição). Pra imagem o efeito era mais brando: `analisarImagem()` engolia o erro no catch e caía em `caption || '[imagem]'`, então a IA ainda respondia, só que baseada numa legenda genérica/vazia em vez da descrição real já gerada por `webhook.ts` segundos antes.
+
+**Impacto real quantificado (produção, `whatsapp_messages`, desde 2026-07-24 — data em que Whisper/Vision foi ao ar em produção):**
+
+| Conta | Áudios recebidos | Com resposta do bot em até 3min | Sem resposta |
+|---|---|---|---|
+| stefanocatedral@hotmail.com | 873 | 2 | **871 (99,8%)** |
+| mentoark@gmail.com | 65 | 20 | 45 (69%) |
+| fmakonee03@gmail.com | 37 | 7 | 30 (81%) |
+
+Números consistentes com uma falha determinística (não 100% cravado como só esta causa — parte da janela de `fmakonee03` coincide com o incidente de loop bot-a-bot de 28/07, e há períodos de esgotamento de crédito OpenAI documentados que também bloqueiam qualquer resposta, de qualquer tipo, no mesmo intervalo — ver `project_openai_credit_exhaustion_2026-08.md`). Ainda assim, a taxa de ~100% de não-resposta pra `stefanocatedral` ao longo de 12 dias é exatamente o padrão esperado por este bug (falha determinística, não esporádica) e não tem outra explicação isolada conhecida que cubra esse volume. **Cliente real recebendo silêncio da IA toda vez que manda um áudio, por ~2 semanas, na maior conta ativa.**
+
+**Fix aplicado** (`backend/src/services/agentEngine.ts`):
+1. Passo 5 (resolução de mídia) agora detecta se `entrada.texto` já contém o prefixo gerado por `webhook.ts` (`[Áudio Transcrito: "` / `[Mídia - Imagem: "`) — o debounce (`bufferMensagens`) preserva esse texto mesmo numa rajada mista com mensagem de texto puro no meio (`.join(' ')`). Se já processado, usa `entrada.texto` direto — **zero chamada nova** a Whisper/Vision no caso normal.
+2. Só cai no fallback (mídia não processada por `webhook.ts` — ex: `OPENAI_API_KEY` global vazio no momento do webhook mas o tenant tem provider próprio, decrypt transitoriamente falho) quando o prefixo não está presente. Fallback decripta via `baixarMidiaDecriptografada()` (mesma função de `webhook.ts`) e chama as MESMAS funções compartilhadas `utils/transcribe.ts`/`utils/vision.ts` que `webhook.ts` já usa e já tem validação prática registrada (sessão 2026-07-24) — nunca mais um fetch cru na URL cifrada.
+3. **Decisão do item 3 do pedido (unificar vs. manter fallback local separado):** unificado. Removidas as cópias locais de `transcreverAudio()`/`analisarImagem()`/`criarClienteOpenAI()` (e o cliente `OpenAI` global, agora sem uso) de `agentEngine.ts` — o fallback usa as mesmas implementações de `utils/transcribe.ts`/`utils/vision.ts` que `webhook.ts`, via um novo helper local `buscarConfigEvolutionFallback()` (busca `evolution_server_url`/`evolution_api_key` de `agent_configs`, replicado minimamente em vez de reordenar a query maior do passo 6). Razão: manter uma segunda cópia local só pro caminho de fallback (raro) tem custo de manutenção real (foi exatamente essa segunda cópia divergente que causou o bug original) sem ganho de isolamento que compense.
+
+**Testado em homolog** (`crm-api-homolog`, script Node rodado dentro do container, reaproveitando o pool real via `dist/db.js` e `processarComDebounce` real de `dist/services/agentEngine.js`; `IA_TEST_MODE=true` pra suprimir o envio real ao WhatsApp — a resolução de mídia, alvo do teste, roda 100% real, só o envio final é sandboxed):
+- **Áudio já processado por webhook.ts** (`entrada.texto` com prefixo): mensagem enviada pro LLM foi exatamente o texto transcrito, **nenhuma chamada a Whisper** (sem log `WA_MEDIA`/erro), IA respondeu corretamente ("Claro! O plano Premium... custa R$ 1.200/mês").
+- **Imagem já processada:** mesmo padrão — mensagem pro LLM foi a descrição já gerada, nenhuma chamada a Vision, IA respondeu coerente com a legenda ("Parece que você enviou um comprovante de pagamento...").
+- **Áudio fallback** (`entrada.texto=null`, mensagem real mas antiga — 2026-07-23): `baixarMidiaDecriptografada()` tentou decriptar de verdade, Evolution recusou (`HTTP 400` — mensagem já expirada no armazenamento da Evolution, esperado pra dado de 2 semanas) → `transcrito=null` → abortou sem responder, exatamente o comportamento de segurança esperado (fail-closed) pro caso em que nem o fallback consegue decriptar. Não foi possível provar o caminho feliz do fallback (decrypt bem-sucedido) por falta de uma mensagem de áudio recente o bastante ainda não processada por `webhook.ts` — mas o mecanismo (mesma função `baixarMidiaDecriptografada()` + mesmas `utils/transcribe.ts`/`utils/vision.ts`) é idêntico ao que `webhook.ts` já usa com sucesso em produção hoje, então uma execução real do fallback se comportaria da mesma forma.
+- **Imagem fallback:** mesmo padrão de decrypt recusado (mensagem de 2026-07-30, expirada), mas aqui o comportamento é fail-open por design: `descricao=null` → cai em `entrada.texto || '[imagem]'` → IA ainda respondeu, só com uma resposta genérica ("não consigo visualizar imagens diretamente"), preservando o comportamento anterior pra imagem (nunca trava a conversa).
+
+Dado de teste sintético limpo ao final: 6 linhas de `n8n_chat_histories` (ids 149-154) e o estado de `atendente_pausou_ia` do contato de teste (`5511979579548`) restaurados pro valor original (`true`).
+
+Build backend limpo: `npm run build` (swc, comando real de build do projeto) sem erros; `tsc --noEmit` completo (heap ampliado, projeto grande) sem nenhum erro reportado em `agentEngine.ts`.
+
+**Deployado em homolog** (`crm-api-homolog`) — `/health`→200, sem `ERROR` nos logs pós-deploy. **Deployado em produção** (`crm-api`) após confirmação explícita do usuário, dado o volume real de mensagens de áudio sem resposta (tabela acima) — `/health`→200, sem `ERROR` nos logs pós-deploy.
+
+### 🆕 Motor de variação de mensagem sem IA (spintax) + aviso de mensagem sem personalização + `humanizar_ia` nasce desligado (2026-08-06)
+
+**Contexto:** toda campanha nascia com `humanizar_ia: true` — cada envio chamava OpenAI (gpt-4o-mini, chave global compartilhada) pra reescrever a mensagem; o cache em memória só reaproveita ~70% das vezes depois de já ter 5 variações reais acumuladas, então uma campanha de 1000 contatos gerava algo como ~300 chamadas reais, não 1 — comportamento padrão, não exceção. Pesquisa registrada nesta sessão (política de spam WhatsApp Business Platform 2026; guias de anti-ban pra API não-oficial, Evolution/Baileys) aponta texto byte-idêntico pra lista grande, sem personalização nenhuma, como o sinal de risco mais citado — mais forte que "ausência de reescrita por IA". `substituirPlaceholders()` já resolve isso de graça quando a mensagem usa `{{primeiro_nome}}`/etc.
+
+**1. Motor de spintax** (`Disparos.tsx`, função pura `resolverSpintax()`, perto de `substituirPlaceholders`): sintaxe `{opção 1|opção 2|opção 3}` — chave SIMPLES + pelo menos um `|` dentro. Regex `\{([^{}]+)\}` casa qualquer bloco de chave única sem chaves aninhadas — inclusive, por construção, o miolo de um `{{placeholder}}` (ex: bateria em `{primeiro_nome}` dentro de `{{primeiro_nome}}`) — mas isso é inofensivo por design: a regra "sem pipe dentro = texto literal, devolve o próprio trecho sem mudar" reconstrói o placeholder duplo exatamente como estava, já que as chaves externas nunca entram em nenhum match. Testado e confirmado (ver testes abaixo) que `{{placeholder}}` nunca é afetado, mesmo lado a lado com spintax real na mesma mensagem.
+
+Extraído `textoTemSpintax()` (mesma regex, reaproveitada pro aviso na prévia e por `mensagemSemPersonalizacao()`, item 2). Encadeamento `resolverSpintax(substituirPlaceholders(...))` (placeholders primeiro, spintax depois) nos 2 pontos de uso existentes: prévia (`StepMessage`, com aviso "cada contato recebe uma combinação sorteada de verdade; esta prévia mostra só um exemplo" quando `textoTemSpintax` é true) e envio real (`StepReview.handleStart`, dentro do `.map()` por contato — `Math.random()` roda independente por contato, sem precisar tocar `disparoProcessor.ts`, que só lê `mensagem_enviada` já pronta). Dica de sintaxe adicionada perto dos atalhos `{{nome}}`/etc em `StepMessage` (`Disparos.tsx`) e `DisparoTemplates.tsx` (template salvo com spintax funciona normalmente quando carregado numa campanha, resolvido no wizard na hora do envio).
+
+**2. Aviso de "mensagem sem personalização"** (`mensagemSemPersonalizacao()`, `Disparos.tsx`): quando o texto ativo não tem NENHUM `{{placeholder}}` reconhecido nem bloco spintax, mostra aviso não-bloqueante em `StepMessage` (mesmo espírito já usado na sprint de importação — avisa, não trava): "Esta mensagem vai sair idêntica para todos os destinatários — considere usar {{primeiro_nome}} ou variações {a|b} para reduzir risco de bloqueio."
+
+**3. `humanizar_ia` — default trocado de `true` pra `false`** (`form` inicial, `DisparosPage`) — campanhas já criadas/agendadas não são afetadas (`disparos.humanizar_ia` já gravado por campanha, só o valor inicial do formulário de campanha NOVA muda). Texto do toggle (`StepAntiBan`) atualizado: "Reescreve cada mensagem via IA (OpenAI) para variação adicional — tem custo por envio. O sistema já varia mensagens com placeholders/spintax sem custo (Passo 2); use isto só se quiser um nível extra de variação." Toggle continua 100% funcional (liga/desliga normalmente, chamada à OpenAI ainda acontece se ligado manualmente — nenhuma mudança de comportamento nessa parte, só o texto e o default).
+
+**Testado isolado em Node (antes de homolog):**
+- Mensagem do exemplo do próprio pedido (`{Oi|Olá|E aí}, {{primeiro_nome}}! {...}`) com 5 contatos sintéticos → **5 combinações distintas de 5** (nome + saudação + frase variando independentemente).
+- Bloco `{promocional}` sem pipe → devolvido idêntico, sem quebrar.
+- `{{primeiro_nome}} {Oi|Olá}` resolvido 3x → `{{primeiro_nome}}` sempre intacto, só o spintax variou.
+- `mensagemSemPersonalizacao()`: sem nada → `true`; com placeholder → `false`; com spintax → `false`; vazia → `false` (vazia não é "sem personalização", é só vazia — validado separado).
+
+**Testado em homolog com envio real** (API real, JWT assinado localmente — mesma limitação de sessões anteriores, sem navegador): campanha de teste com a mensagem do exemplo, 3 logs (contatos sintéticos "Ana"/"Bruno"/"Carla", texto já resolvido calculado via Node antes de enviar, simulando exatamente o que `handleStart` produziria) — confirmado em `whatsapp_messages` que as 3 mensagens REALMENTE ENVIADAS pro WhatsApp de teste vieram todas diferentes: "Oi, Ana! Temos uma novidade..."/"Olá, Bruno! Temos uma novidade..."/"Olá, Carla! Passando pra te contar algo novo...". 4º log com "Preço: {promocional} hoje!" (sem pipe) → chegou literal, com as chaves preservadas, sem erro. Dados de teste (1 campanha, 4 logs, 4 mensagens) revertidos ao final.
+
+Build (`vite build`) limpo. **Deployado em homolog e, após confirmação explícita do usuário, em produção** (`src/pages/Disparos.tsx`, `src/pages/DisparoTemplates.tsx`) — `/health`→200, sem `ERROR` nos logs.
+
+**Não implementado, linkado como pendência:** `diagnosticos/SPRINT_DISPAROS_VARIACAO_IMAGEM.md` (mesma motivação anti-fingerprint, lado imagem — perturbação leve via `sharp`, sem custo de IA) — usuário optou por deixar pra depois, não rodar em seguida.
+
+### ✅ Fechamento: sprint nome/telefone na saudação — reconfirmado commit/deploy/backfill/documentação + 🔴 achado colateral em `disparoProcessor.ts` (2026-08-06)
+
+**Contexto:** sprint de fechamento, não investigação nova — `SPRINT_FIX_NOME_TELEFONE_SAUDACAO.md` presumia incerteza sobre commit/deploy/documentação/backfill do fix implementado numa sessão anterior do mesmo dia. Reconfirmado tudo por evidência direta antes de mexer em qualquer coisa, conforme pedido.
+
+**Passo 1 — estado real (evidência, não suposição):**
+1. `git log`/`git status`: `src/pages/Disparos.tsx`, `backend/src/routes/contatos.ts` e `backend/src/services/disparoProcessor.ts` **não estão commitados** — só working tree local (consistente com o resto da sessão: várias sprints seguidas sem commit, aguardando decisão do usuário sobre quando commitar tudo de uma vez).
+2. `sha256sum` local vs. `/opt/crm` vs. `/opt/crm-homolog`: `Disparos.tsx` e `contatos.ts` **idênticos nos 3 lugares** — já deployados de verdade em homolog e produção, apesar de não commitados no git.
+3. `STATUS.md`/`AUDITORIA_LOG.md` **já tinham a entrada completa** sobre este fix, registrada na sessão anterior (mesmo dia) — a premissa da sprint de "nada encontrado buscando 'cnpj_biz'/'5511984849872'" estava desatualizada (a sprint foi escrita, aparentemente, sem visibilidade dessa mesma sessão já ter documentado).
+4. Backfill: `SELECT user_id, COUNT(*) FROM contatos WHERE nome=telefone AND empresa IS NOT NULL AND empresa<>''` → **0 linhas em produção e homolog** (nenhuma conta) — já rodou antes (60 contatos corrigidos, `mentoark@gmail.com`, já registrado na entrada anterior). Restam só os contatos "sem empresa" (19 em produção pra `mentoark@gmail.com`, 1 pra `angelobispofilho@gmail.com`, 8 pra `stefanocatedral@hotmail.com`) — esses NUNCA foram alvo do backfill por design (não há nome nenhum pra usar), cobertos só pela camada 2 em runtime (`substituirPlaceholders`). Nenhum `UPDATE` novo foi necessário.
+
+Conclusão do passo 1: já estava tudo commitável-mas-deployado e documentado — esta sprint não precisou repetir deploy nem backfill, só confirmar e fechar.
+
+**🔴 Achado colateral (fora do escopo direto, encontrado durante a verificação de hash pedida no passo 1):** `backend/src/services/disparoProcessor.ts` diverge entre ambientes — homolog bate com o local (tem o fix da "Sprint Fix Legenda de Mídia", 2026-08-02), **produção não bate** — está rodando a versão anterior a esse fix. `diff` confirmou: prioridade de `legendaFinal` voltou a ser `legenda_midia || mensagem` (texto cru da campanha primeiro) em vez de `mensagem || legenda_midia` (personalizado por contato primeiro) — reabre o bug de `{{placeholders}}` literais na legenda de campanhas de mídia baseadas em template, em produção, mesmo esse fix já tendo sido testado e deployado nesta mesma sessão anteriormente. Causa não investigada (rollback de outra sessão concorrente na mesma VPS? deploy que não persistiu?) — **não corrigido agora**, fora do escopo explícito desta sprint e arriscado mexer sem entender a causa raiz (poderia sobrescrever trabalho de outra sessão em andamento). Recomendo sprint dedicada.
+
+**Passo 4 — documentos absorvidos e apagados:** `diagnosticos/SPRINT_FIX_NOME_TELEFONE_SAUDACAO.md` e `diagnosticos/SPRINT_DIAGNOSTICO_IMPORTACAO_NOME_ERRADO.md`. Confirmado antes de apagar (grep no código atual): os 4 itens do primeiro (fallback `nome||empresa||telefone`; proteção `semNomeReal`/`removerPlaceholderVazio` em `substituirPlaceholders`; backfill; registro da campanha já enviada) estão genuinamente implementados/documentados. O segundo (investigação genérica) já era supersedido pelo primeiro desde sua própria primeira linha.
+
+**Nenhum código novo alterado nesta sprint** — só leitura/verificação, e a exclusão dos 2 documentos absorvidos.
+
+### 🆕 Importação de contatos: upsert real + resumo novos/existentes + validação determinística de linha suspeita — testado em homolog e produção (2026-08-06)
+
+**Contexto:** importação de contatos em Disparos usava o bulk-insert genérico (`makeCrud`, `POST /` de `crud.ts`), sem `ON CONFLICT` — um único telefone colidindo (já existente na conta, ou duplicado dentro do próprio arquivo) rejeitava o `INSERT` inteiro (`23505`), e nenhuma linha do lote era gravada, sem o operador saber quantos eram novos de verdade nem quais telefones colidiram.
+
+**1. Backend — endpoints novos e dedicados** (`backend/src/routes/contatos.ts`, `makeCrud`/`crud.ts` genérico não tocado, de propósito — um `ON CONFLICT` fixo lá quebraria outras tabelas):
+- `POST /contatos/checar-telefones` — recebe array de telefones, devolve quais já existem na conta (match exato, mesmo critério do índice único).
+- `POST /contatos/importar-lote` — `INSERT ... ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING RETURNING id, telefone`, em lotes de até 500 linhas. `WHERE telefone IS NOT NULL` repetido na cláusula de conflito é obrigatório (índice de destino é parcial, `idx_contatos_user_tel_unique`) — confirmado funcionando de fato, não só compilando. `user_id` sempre de `req.userId`, nunca do body. Resposta: `{ inseridos, jaExistiam, telefonesJaExistiam }`, calculado por diferença entre telefones enviados (deduplicados) e telefones que de fato constam no `RETURNING`.
+
+**2. Frontend — pré-validação de novos/existentes** (`Disparos.tsx`): abordagem escolhida foi a (a) sugerida no pedido — endpoint leve dedicado (`checar-telefones`) chamado assim que o arquivo é lido, ANTES do clique em "Confirmar Importação" — cumpre literalmente o pedido ("no resumo de pré-importação"), custo baixo (1 query indexada). `confirmarImportacao` trocado pra chamar `/contatos/importar-lote` (`api.post`, que lança em erro HTTP — diferente de `.from()`) em vez do bulk-insert genérico; toast final usa os números REAIS devolvidos pelo backend (`inseridos`/`jaExistiam`), não mais uma suposição de que tudo que passou na validação de telefone foi de fato inserido.
+
+**3. Validação determinística de linha suspeita — sem IA** (custo zero por importação, decisão explícita motivada pelo incidente de esgotamento de crédito OpenAI já documentado nesta sessão): 3 regras implementadas, todas sinalizam sem bloquear —
+- Nome parece ser telefone (só dígitos, 8+ caracteres depois de tirar pontuação).
+- Telefone com padrão de placeholder/teste: dígitos todos iguais, OU sequência ascendente/descendente de 6+ dígitos consecutivos em qualquer trecho do número (não precisa ser o número inteiro — mais robusto que checar o número completo).
+- DDD fora da lista fechada de DDDs brasileiros válidos (lista explícita, não faixa contínua — a numeração real tem buracos).
+- Telefone duplicado dentro do próprio arquivo (checado numa segunda passada, depois do loop principal — só dá pra saber depois de ver todas as linhas).
+
+Resumo de pré-importação mostra contagem de linhas suspeitas + motivo mais comum, sem travar "Confirmar Importação".
+
+**Testado (isolado em Node, antes de ir pra homolog):** função `analisarLinhasImportacao` completa com CSV sintético de 7 linhas (normal, nome=telefone, DDD inválido, placeholder, duplicata mútua, descartada) — todos os 6 casos válidos sinalizados corretamente (5 suspeitos + 1 normal) e TODOS entraram em `novos` (sinalização não bloqueia). CSV limpo (3 contatos, telefones genuinamente aleatórios) → 0 suspeitos, sem regressão. **Achado honesto durante o teste:** a 1ª tentativa de CSV "limpo" usou telefones de teste com dígitos decrescentes por acidente (ex: "...976543210") e 2 deles foram sinalizados como "placeholder" — não é bug da regra (confirma que ela pega sequências de 6+ dígitos em qualquer trecho, como projetado), foi escolha ruim de dado de teste; refeito com telefones genuinamente aleatórios, 0 falsos positivos.
+
+**Testado em homolog com API real** (JWT assinado localmente, mesma limitação de sessões anteriores — sem navegador):
+- **(a) 3 existentes + 2 novos:** `checar-telefones` retornou exatamente os 3 existentes. `importar-lote` (payload dos 3 existentes com nome/empresa/notas/tags PROPOSITALMENTE diferentes, tipo "HACKED", pra provar não-sobrescrita) devolveu `{inseridos:2, jaExistiam:3}`. **Confirmado no banco:** os 3 contatos existentes mantiveram nome/empresa/notas/tags/`updated_at` ORIGINAIS, sem nenhum traço de "HACKED" — não sobrescritos. Os 2 novos entraram com `updated_at` recente.
+- **(b) Telefone duplicado dentro do arquivo:** payload com 2 linhas do mesmo telefone (novo) + 1 outro novo → `{inseridos:2, jaExistiam:0}`, sem erro `23505`. Confirmado no banco: só 1 linha para o telefone duplicado (a primeira do array).
+- **(c)** coberto pelo teste isolado em Node acima (mesma função, mesma lógica — não depende do backend).
+- **(d) CSV limpo via API real:** 3 contatos novos, telefones aleatórios → `{inseridos:3, jaExistiam:0}`, sem regressão.
+
+Dados de teste (10 contatos) revertidos ao final em homolog.
+
+Build (`vite build` + `swc`) limpo nos dois. **Deployado em homolog e, após confirmação explícita do usuário, em produção** (`backend/src/routes/contatos.ts`, `src/pages/Disparos.tsx`) — `/health`→200 nos dois ambientes, sem `ERROR` nos logs.
+
+### 🔴 CRÍTICO: telefone virando saudação em campanha real ("Oi 5511984849872, tudo tranquilo?") — corrigido, testado com envio real, deployado em produção (2026-08-06)
+
+**Contexto:** campanha real já enviada (lista "Importação 2026_04_18_cnpj_biz_107915_603608_35.xlsx", conta `mentoark@gmail.com`, produção) gerou mensagens tipo "Oi 5511984849872, tudo tranquilo?" — o telefone do próprio destinatário virou a saudação. Causa raiz: arquivo de CNPJ/empresa não tem coluna de nome de pessoa (só razão social/nome fantasia, que só ia pro campo `empresa`) — `nome` ficava vazio e caía direto no fallback antigo `nome || telefone` (`analisarLinhasImportacao`, `Disparos.tsx`), sem nenhuma segunda checagem antes de `{{nome}}`/`{{primeiro_nome}}` virarem o telefone cru na mensagem real.
+
+**Corrigido, duas camadas:**
+1. **Importação** (`analisarLinhasImportacao`): `empresa` extraída antes do `push()`, fallback de `nome` agora é `nome || empresa || telefone` — planilha de CNPJ sem nome de pessoa passa a usar a razão social/nome fantasia como nome do contato, só caindo pro telefone cru quando NEM ISSO existir.
+2. **`substituirPlaceholders()` (a correção mais importante, protege independente da origem do dado):** `contato.nome === contato.telefone` é tratado como "sem nome real" — `{{nome}}`/`{{primeiro_nome}}` não usam o telefone como saudação (diferente do fallback `nome || 'cliente'` já existente pra nome genuinamente vazio, que continua igual). Nova função `removerPlaceholderVazio()` remove o placeholder com limpeza de pontuação ao redor — conferido contra os templates reais em produção (`disparo_templates`): "Oi {{primeiro_nome}}, tudo bem?" → "Oi, tudo bem?" (vírgula preservada, colada na saudação); "Oi {{primeiro_nome}}! Vi que a {{empresa}}..." → "Oi! Vi que a ACME LTDA..." (sem espaço duplo). Mesma função usada na prévia (`StepMessage`) e no envio real (`StepReview.handleStart`), já compartilhada.
+
+**Testado (Node, isolado, antes de ir pra homolog):** 5 casos — bug real com template de produção, bug com `{{empresa}}` e exclamação, nome real (sem regressão), nome genuinamente vazio (mantém fallback "cliente"), `{{nome}}` completo no meio da frase — todos produziram o texto esperado. Lógica de importação testada isoladamente também (CNPJ sem coluna de pessoa → nome da empresa; nem nome nem empresa → telefone, comportamento inevitável coberto pela camada 2; nome de pessoa normal → sem regressão).
+
+**Testado em homolog com envio real** (API real, JWT assinado localmente — mesma limitação de sessões anteriores, sem navegador): campanha de teste com `nome===telefone` sintético → mensagem real recebida "Oi, tudo bem? Sou da Mentoark." (sem telefone). Segunda mensagem com nome real "Mentoark" → "Oi Mentoark, tudo bem? Sou da Mentoark." (sem regressão). Dados de teste revertidos ao final.
+
+**Backfill dos contatos já afetados** (`UPDATE contatos SET nome = empresa WHERE nome = telefone AND empresa preenchida`), rodado só pra `mentoark@gmail.com` (a conta da campanha problemática, não as outras contas onde o mesmo padrão apareceu incidentalmente): **60 contatos corrigidos em produção** (mais 60 em homolog, mesma lista re-importada lá). 19 contatos em produção continuam com `nome = telefone` (sem `empresa` preenchida — nenhum dado pra usar, cobertos só pela camada 2 em runtime, não pelo backfill).
+
+**🔴 Achado lateral, NÃO corrigido (fora do escopo pedido, decisão do usuário):** os 60 contatos corrigidos pelo backfill receberam `nome` = "ME"/"MICRO EMPRESA"/"EMPRESA DE PEQUENO PORTE"/"EPP"/"DEMAIS" — não um nome de empresa real. Causa: a coluna `empresa` já estava corrompida desde a importação ORIGINAL (bug diferente e anterior a esta sprint) — a planilha real não tem nenhuma coluna com nome exato "empresa"/"razão social"/"nome_fantasia", só "porte_empresa", e `getPorSubstring()` (mesmo fix de 2026-07-29 que resolveu o caso de `cargo`) ainda cai no match por substring quando NENHUMA coluna bate exato, pegando "porte_empresa" pela palavra "empresa" contida nela. É estritamente melhor que vazar o telefone (não expõe dado sensível), mas não é um nome natural. Não corrigido agora — exigiria acesso ao arquivo original da planilha pra extrair um nome melhor, e mexer no parser de `empresa` é mudança de escopo maior que o pedido desta sprint.
+
+**Campanha já enviada:** sem nada a desfazer (mensagens já entregues) — registrado aqui pra não repetir.
+
+Build (`vite build`) limpo. **Deployado em homolog e produção** (`src/pages/Disparos.tsx`) — `/health`→200 nos dois, sem `ERROR` nos logs. Backfill rodado direto no banco (produção e homolog), não é uma migração versionada em `migrations.ts` (é correção pontual de dado já existente, não schema).
+
 ### 🆕 Reestruturação do Quadro Kanban estilo Jira — touch/iPad, drag-drop, cores, seleção múltipla (2026-08-04)
 
 **`src/pages/Kanban.tsx` — 🔧 dedup real (achado antes de implementar qualquer coisa):** este arquivo tinha ~450 linhas de lógica (state, handlers de CRUD/drag, JSX) idênticas a `KanbanBoard.tsx`. Checado por grep: `KanbanBoard` tinha ZERO imports em todo o `src/` — o comentário no topo do arquivo ("reutilizável, usado em /kanban e na aba Tarefas de Equipe") era falso/aspiracional, nunca foi de fato conectado a nada. `Kanban.tsx` refeito pra só renderizar `<CRMLayout><KanbanBoard className="p-4" /></CRMLayout>` — daqui em diante, uma mudança no quadro vive só em `KanbanBoard.tsx`.

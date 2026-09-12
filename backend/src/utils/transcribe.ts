@@ -12,11 +12,16 @@ import { log } from '../logger';
 const WHISPER_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const TRANSCRIBE_TIMEOUT_MS = 8_000;
 
+export interface ResultadoTranscricao {
+  texto: string;
+  duracaoSegundos: number;
+}
+
 export async function transcreverAudio(
   audioBuffer: Buffer,
   mimeType: string,
   openAiApiKey: string,
-): Promise<string | null> {
+): Promise<ResultadoTranscricao | null> {
   if (!audioBuffer?.length || !openAiApiKey) return null;
 
   const controller = new AbortController();
@@ -28,6 +33,12 @@ export async function transcreverAudio(
     formData.append('file', file, 'audio.ogg');
     formData.append('model', 'whisper-1');
     formData.append('language', 'pt');
+    // [AUDITORIA] FIX APLICADO (Sprint Vistoria de Gasto de IA, 2026-08-14): `verbose_json` em
+    // vez do `json` default — superset compatível (`text` continua presente), só ganha o campo
+    // `duration` (segundos), necessário pra calcular custo real (Whisper cobra por minuto, não
+    // por token — não dava pra estimar custo nenhum antes disso, `custo_usd` nunca era gravado
+    // pra essas chamadas).
+    formData.append('response_format', 'verbose_json');
 
     const response = await fetch(WHISPER_URL, {
       method: 'POST',
@@ -55,7 +66,8 @@ export async function transcreverAudio(
     const texto = (data as any)?.text;
     if (typeof texto !== 'string' || !texto.trim()) return null;
 
-    return texto.trim();
+    const duracaoSegundos = Number((data as any)?.duration) || 0;
+    return { texto: texto.trim(), duracaoSegundos };
   } catch (err: any) {
     if (err?.name === 'AbortError') {
       log.warn('TRANSCRIBE', `Timeout (${TRANSCRIBE_TIMEOUT_MS}ms) ao chamar Whisper API`);

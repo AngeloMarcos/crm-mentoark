@@ -1,15 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getAuthToken } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, UserPlus, Pencil, Trash2, Search, Eye, EyeOff, LayoutGrid } from "lucide-react";
+import { Loader2, UserPlus, Pencil, Trash2, Search, Eye, EyeOff, LayoutGrid, IdCard, ShieldCheck, KeyRound, Building2, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter
 } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
@@ -19,6 +20,7 @@ import { useNavigate } from "react-router-dom";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => getAuthToken();
+const authHeaders = () => ({ Authorization: `Bearer ${token()}`, "Content-Type": "application/json" });
 
 interface UserRow {
   user_id: string;
@@ -26,26 +28,81 @@ interface UserRow {
   display_name: string | null;
   cargo_id: string | null;
   cargo_nome: string | null;
+  departamento_id: string | null;
+  filial_id: string | null;
+  squad_id: string | null;
+  role: string;
   active: boolean;
   created_at: string;
   modulos: string[];
 }
 
-interface Cargo {
-  id: string;
-  nome: string;
-  permissoes: string[];
+interface Cargo { id: string; nome: string; permissoes: string[]; }
+interface ModuloCatalogo { key: string; label: string; padrao: boolean; adminOnly: boolean; }
+interface OrgItem { id: string; nome: string; ativo: boolean; }
+
+/** Select de um cadastro (departamento/filial/squad) com criação inline. */
+function CadastroSelect({
+  label, endpoint, value, onChange, items, onCreated,
+}: {
+  label: string;
+  endpoint: string;
+  value: string;
+  onChange: (v: string) => void;
+  items: OrgItem[];
+  onCreated: () => void;
+}) {
+  const [criando, setCriando] = useState(false);
+  const criar = async () => {
+    const nome = window.prompt(`Novo ${label.toLowerCase()}:`)?.trim();
+    if (!nome) return;
+    setCriando(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/${endpoint}`, {
+        method: "POST", headers: authHeaders(), body: JSON.stringify({ nome }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.message || "Falha ao criar");
+      onChange(data.id);
+      onCreated();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setCriando(false);
+    }
+  };
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <div className="flex gap-2">
+        <Select value={value || "__none__"} onValueChange={(v) => onChange(v === "__none__" ? "" : v)}>
+          <SelectTrigger className="flex-1"><SelectValue placeholder={`Selecione…`} /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">— nenhum —</SelectItem>
+            {items.map(i => <SelectItem key={i.id} value={i.id}>{i.nome}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Button type="button" variant="outline" size="icon" onClick={criar} disabled={criando} title={`Novo ${label.toLowerCase()}`}>
+          {criando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export default function UsuariosPage() {
   const navigate = useNavigate();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [cargos, setCargos] = useState<Cargo[]>([]);
+  const [catalogo, setCatalogo] = useState<ModuloCatalogo[]>([]);
+  const [deptos, setDeptos] = useState<OrgItem[]>([]);
+  const [filiais, setFiliais] = useState<OrgItem[]>([]);
+  const [squads, setSquads] = useState<OrgItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
 
-  // Modal State
+  // ── Modal ──────────────────────────────────────────────────────────────────
   const [modal, setModal] = useState(false);
   const [userEdit, setUserEdit] = useState<UserRow | null>(null);
   const [nome, setNome] = useState("");
@@ -53,6 +110,11 @@ export default function UsuariosPage() {
   const [senha, setSenha] = useState("");
   const [confirmSenha, setConfirmSenha] = useState("");
   const [cargoId, setCargoId] = useState("");
+  const [deptoId, setDeptoId] = useState("");
+  const [filialId, setFilialId] = useState("");
+  const [squadId, setSquadId] = useState("");
+  const [modSel, setModSel] = useState<Set<string>>(new Set());
+  const [ativo, setAtivo] = useState(true);
   const [showSenha, setShowSenha] = useState(false);
   const [salvando, setSalvando] = useState(false);
 
@@ -62,115 +124,132 @@ export default function UsuariosPage() {
     const r = await fetch(`${API_BASE}/api/profiles?search=${encodeURIComponent(search)}&limit=15&offset=${offset}`, {
       headers: { Authorization: `Bearer ${token()}` },
     });
-    if (r.ok) {
-      const data = await r.json();
-      setUsers(data);
-    }
+    if (r.ok) setUsers(await r.json());
     setLoading(false);
   };
 
-  const loadCargos = async () => {
-    const r = await fetch(`${API_BASE}/api/cargos`, {
-      headers: { Authorization: `Bearer ${token()}` },
-    });
-    if (r.ok) {
-      const data = await r.json();
-      setCargos(data);
-    }
+  const H = { headers: { Authorization: `Bearer ${token()}` } };
+  const loadAux = async () => {
+    const [rc, rm, rd, rf, rs] = await Promise.all([
+      fetch(`${API_BASE}/api/cargos`, H),
+      fetch(`${API_BASE}/api/modulos/lista`, H),
+      fetch(`${API_BASE}/api/departamentos`, H),
+      fetch(`${API_BASE}/api/filiais`, H),
+      fetch(`${API_BASE}/api/squads`, H),
+    ]);
+    if (rc.ok) setCargos(await rc.json());
+    if (rm.ok) setCatalogo(await rm.json());
+    if (rd.ok) setDeptos(await rd.json());
+    if (rf.ok) setFiliais(await rf.json());
+    if (rs.ok) setSquads(await rs.json());
+  };
+  const reloadOrg = (which: "dep" | "fil" | "sq") => async () => {
+    const map = { dep: ["departamentos", setDeptos], fil: ["filiais", setFiliais], sq: ["squads", setSquads] } as const;
+    const [ep, setter] = map[which];
+    const r = await fetch(`${API_BASE}/api/${ep}`, H);
+    if (r.ok) (setter as (v: OrgItem[]) => void)(await r.json());
   };
 
   useEffect(() => { load(); }, [search, page]);
-  useEffect(() => { loadCargos(); }, []);
+  useEffect(() => { loadAux(); }, []);
 
   const resetForm = () => {
     setUserEdit(null);
-    setNome("");
-    setEmail("");
-    setSenha("");
-    setConfirmSenha("");
-    setCargoId("");
-    setShowSenha(false);
+    setNome(""); setEmail(""); setSenha(""); setConfirmSenha("");
+    setCargoId(""); setDeptoId(""); setFilialId(""); setSquadId("");
+    setModSel(new Set()); setAtivo(true); setShowSenha(false);
   };
 
   const handleEdit = (u: UserRow) => {
     setUserEdit(u);
     setNome(u.display_name || "");
     setEmail(u.email);
-    setSenha("");
-    setConfirmSenha("");
+    setSenha(""); setConfirmSenha("");
     setCargoId(u.cargo_id || "");
+    setDeptoId(u.departamento_id || "");
+    setFilialId(u.filial_id || "");
+    setSquadId(u.squad_id || "");
+    setModSel(new Set(u.modulos || []));
+    setAtivo(u.active);
+    setShowSenha(false);
     setModal(true);
   };
 
-  const syncModulesWithRole = async (userId: string, cId: string): Promise<boolean> => {
-    const selectedCargo = cargos.find(c => c.id === cId);
-    if (!selectedCargo) return true;
+  const toggleMod = (key: string) =>
+    setModSel(prev => {
+      const n = new Set(prev);
+      n.has(key) ? n.delete(key) : n.add(key);
+      return n;
+    });
 
+  const aplicarPermissoesDoCargo = (cId: string) => {
+    const c = cargos.find(x => x.id === cId);
+    if (c && Array.isArray(c.permissoes)) setModSel(new Set(c.permissoes));
+  };
+
+  const salvarModulos = async (userId: string): Promise<boolean> => {
     const r = await fetch(`${API_BASE}/api/modulos/usuario/${userId}`, {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token()}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ modulos: selectedCargo.permissoes })
+      headers: authHeaders(),
+      body: JSON.stringify({ modulos: [...modSel] }),
     });
     if (!r.ok) {
-      const err = await r.json().catch(() => null);
-      toast.error(err?.message || "Erro ao sincronizar módulos do cargo");
+      const e = await r.json().catch(() => null);
+      toast.error(e?.message || "Erro ao salvar permissões de módulo");
       return false;
     }
     return true;
   };
 
   const save = async () => {
-    if (!nome || !email || (!userEdit && !senha)) {
-      return toast.error("Preencha todos os campos obrigatórios");
-    }
-    if (!userEdit && senha !== confirmSenha) {
-      return toast.error("As senhas não coincidem");
-    }
+    if (!nome.trim() || !email.trim()) return toast.error("Nome e e-mail são obrigatórios");
+    const trocaSenha = !!senha || !!confirmSenha;
+    if (!userEdit && !senha) return toast.error("Defina uma senha para o novo usuário");
+    if ((trocaSenha || !userEdit) && senha !== confirmSenha) return toast.error("As senhas não coincidem");
+    if ((trocaSenha || !userEdit) && senha.length < 6) return toast.error("A senha precisa de pelo menos 6 caracteres");
 
     setSalvando(true);
     try {
       if (userEdit) {
-        // Edit Profile
-        const r = await fetch(`${API_BASE}/api/profiles/${userEdit.user_id}`, {
+        const rp = await fetch(`${API_BASE}/api/profiles/${userEdit.user_id}`, {
           method: "PATCH",
-          headers: { 
-            Authorization: `Bearer ${token()}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ display_name: nome, cargo_id: cargoId || null })
+          headers: authHeaders(),
+          body: JSON.stringify({
+            display_name: nome.trim(), cargo_id: cargoId || null, active: ativo,
+            departamento_id: deptoId || null, filial_id: filialId || null, squad_id: squadId || null,
+          }),
         });
-        if (r.ok) {
-          const modulosOk = cargoId ? await syncModulesWithRole(userEdit.user_id, cargoId) : true;
-          if (modulosOk) toast.success("Usuário atualizado");
-          setModal(false);
-          load();
+        if (!rp.ok) { const e = await rp.json().catch(() => ({})); throw new Error(e.message || "Erro ao atualizar usuário"); }
+
+        if (!(await salvarModulos(userEdit.user_id))) { setSalvando(false); return; }
+
+        if (trocaSenha) {
+          const rs = await fetch(`${API_BASE}/api/profiles/${userEdit.user_id}/reset-password`, {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ new_password: senha }),
+          });
+          if (!rs.ok) { const e = await rs.json().catch(() => ({})); throw new Error(e.message || "Erro ao redefinir a senha"); }
         }
+        toast.success("Usuário atualizado");
       } else {
-        // Create Profile
-        const r = await fetch(`${API_BASE}/api/profiles`, {
+        const rc = await fetch(`${API_BASE}/api/profiles`, {
           method: "POST",
-          headers: { 
-            Authorization: `Bearer ${token()}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ email, password: senha, display_name: nome, cargo_id: cargoId || null })
+          headers: authHeaders(),
+          body: JSON.stringify({
+            email: email.trim(), password: senha, display_name: nome.trim(), cargo_id: cargoId || null,
+            departamento_id: deptoId || null, filial_id: filialId || null, squad_id: squadId || null,
+          }),
         });
-        if (r.ok) {
-          const newUser = await r.json();
-          const modulosOk = cargoId ? await syncModulesWithRole(newUser.user_id, cargoId) : true;
-          if (modulosOk) toast.success("Usuário criado");
-          setModal(false);
-          load();
-        } else {
-          const err = await r.json();
-          toast.error(err.message || "Erro ao criar usuário");
-        }
+        if (!rc.ok) { const e = await rc.json().catch(() => ({})); throw new Error(e.message || "Erro ao criar usuário"); }
+        const novo = await rc.json();
+        if (modSel.size) await salvarModulos(novo.user_id);
+        toast.success("Usuário criado");
       }
-    } catch (e) {
-      toast.error("Erro na comunicação com o servidor");
+      setModal(false);
+      load();
+    } catch (e: any) {
+      toast.error(e.message || "Erro na comunicação com o servidor");
     } finally {
       setSalvando(false);
     }
@@ -182,11 +261,13 @@ export default function UsuariosPage() {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token()}` },
     });
-    if (r.ok) {
-      toast.success("Usuário excluído");
-      load();
-    }
+    if (r.ok) { toast.success("Usuário excluído"); load(); }
+    else toast.error("Não foi possível excluir");
   };
+
+  const modsNormais = useMemo(() => catalogo.filter(m => !m.adminOnly), [catalogo]);
+  const modsAdmin = useMemo(() => catalogo.filter(m => m.adminOnly), [catalogo]);
+  const senhaMismatch = (senha || confirmSenha) && senha !== confirmSenha;
 
   return (
     <CRMLayout>
@@ -211,8 +292,8 @@ export default function UsuariosPage() {
             <CardTitle className="text-lg">Equipe</CardTitle>
             <div className="relative w-64">
               <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input 
-                placeholder="Buscar por nome ou e-mail..." 
+              <Input
+                placeholder="Buscar por nome ou e-mail..."
                 className="pl-8"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(0); }}
@@ -249,21 +330,15 @@ export default function UsuariosPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="font-normal">
-                            {u.cargo_nome || "Sem Cargo"}
-                          </Badge>
+                          <Badge variant="outline" className="font-normal">{u.cargo_nome || "Sem Cargo"}</Badge>
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1 max-w-[300px]">
                             {u.modulos?.slice(0, 3).map(m => (
-                              <Badge key={m} variant="secondary" className="text-[10px] px-1.5 py-0">
-                                {m}
-                              </Badge>
+                              <Badge key={m} variant="secondary" className="text-[10px] px-1.5 py-0">{m}</Badge>
                             ))}
                             {(u.modulos?.length || 0) > 3 && (
-                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                                +{u.modulos.length - 3}
-                              </Badge>
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">+{u.modulos.length - 3}</Badge>
                             )}
                           </div>
                         </TableCell>
@@ -280,7 +355,7 @@ export default function UsuariosPage() {
                     ))}
                   </TableBody>
                 </Table>
-                
+
                 <div className="flex items-center justify-end space-x-2 pt-4">
                   <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>Anterior</Button>
                   <span className="text-sm text-muted-foreground">Página {page + 1}</span>
@@ -293,56 +368,141 @@ export default function UsuariosPage() {
       </div>
 
       <Dialog open={modal} onOpenChange={setModal}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{userEdit ? "Editar Usuário" : "Adicionar Novo Usuário"}</DialogTitle>
+            <DialogTitle>{userEdit ? "Editar perfil do usuário" : "Adicionar novo usuário"}</DialogTitle>
+            <DialogDescription>Dados de acesso, cargo e permissões de módulo.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="nome">Nome Completo*</Label>
-              <Input id="nome" value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: João Silva" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">E-mail (Login)*</Label>
-              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={!!userEdit} placeholder="exemplo@email.com" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="cargo">Cargo*</Label>
-              <Select value={cargoId} onValueChange={setCargoId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecione um cargo" />
-                </SelectTrigger>
-                <SelectContent>
-                  {cargos.map(c => (
-                    <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>
+
+          <div className="space-y-6 py-2">
+            {/* Identificação */}
+            <section className="space-y-3">
+              <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary">
+                <IdCard className="h-4 w-4" /> Identificação
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="nome">Nome completo *</Label>
+                  <Input id="nome" value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: João Silva" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="email">E-mail (login) *</Label>
+                  <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={!!userEdit} placeholder="exemplo@email.com" />
+                </div>
+              </div>
+            </section>
+
+            {/* Alocação corporativa */}
+            <section className="space-y-3">
+              <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary">
+                <Building2 className="h-4 w-4" /> Alocação corporativa
+              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <CadastroSelect label="Departamento" endpoint="departamentos" value={deptoId} onChange={setDeptoId} items={deptos} onCreated={reloadOrg("dep")} />
+                <CadastroSelect label="Filial / Loja" endpoint="filiais" value={filialId} onChange={setFilialId} items={filiais} onCreated={reloadOrg("fil")} />
+                <CadastroSelect label="Equipe / Squad" endpoint="squads" value={squadId} onChange={setSquadId} items={squads} onCreated={reloadOrg("sq")} />
+              </div>
+            </section>
+
+            {/* Cargo & permissões */}
+            <section className="space-y-3">
+              <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary">
+                <ShieldCheck className="h-4 w-4" /> Cargo & permissões
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2 sm:items-end">
+                <div className="space-y-1.5">
+                  <Label htmlFor="cargo">Cargo</Label>
+                  <Select value={cargoId} onValueChange={(v) => setCargoId(v)}>
+                    <SelectTrigger id="cargo"><SelectValue placeholder="Selecione um cargo" /></SelectTrigger>
+                    <SelectContent>
+                      {cargos.map(c => <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {cargoId && (
+                  <Button type="button" variant="outline" size="sm" className="w-fit"
+                    onClick={() => aplicarPermissoesDoCargo(cargoId)}>
+                    Aplicar permissões do cargo
+                  </Button>
+                )}
+              </div>
+
+              <div className="rounded-lg border p-3 space-y-3">
+                <p className="text-[11px] text-muted-foreground">
+                  Módulos que este usuário pode acessar. O cargo é só um atalho — o que vale é o que está marcado aqui.
+                </p>
+                <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+                  {modsNormais.map(m => (
+                    <label key={m.key} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <Checkbox checked={modSel.has(m.key)} onCheckedChange={() => toggleMod(m.key)} />
+                      <span>{m.label}</span>
+                      {m.padrao && <span className="text-[10px] text-muted-foreground">(padrão)</span>}
+                    </label>
                   ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            {!userEdit && (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="senha">Senha Nova*</Label>
+                </div>
+                {modsAdmin.length > 0 && (
+                  <div className="border-t pt-2">
+                    <p className="mb-1.5 text-[10px] font-bold uppercase text-muted-foreground">Requer perfil admin</p>
+                    <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+                      {modsAdmin.map(m => (
+                        <label key={m.key} className="flex items-center gap-2 text-sm cursor-pointer">
+                          <Checkbox checked={modSel.has(m.key)} onCheckedChange={() => toggleMod(m.key)} />
+                          <span>{m.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* Segurança & acesso */}
+            <section className="space-y-3">
+              <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-primary">
+                <KeyRound className="h-4 w-4" /> Segurança & acesso
+              </p>
+
+              {userEdit && (
+                <div className="space-y-1.5">
+                  <Label>Status da conta</Label>
+                  <Select value={ativo ? "ativo" : "inativo"} onValueChange={(v) => setAtivo(v === "ativo")}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ativo">Ativo — pode acessar o sistema</SelectItem>
+                      <SelectItem value="inativo">Inativo — acesso bloqueado</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="senha">{userEdit ? "Nova senha" : "Senha *"}</Label>
                   <div className="relative">
-                    <Input id="senha" type={showSenha ? "text" : "password"} value={senha} onChange={(e) => setSenha(e.target.value)} />
-                    <Button variant="ghost" size="icon" className="absolute right-0 top-0 h-full" onClick={() => setShowSenha(!showSenha)}>
+                    <Input id="senha" type={showSenha ? "text" : "password"} value={senha}
+                      onChange={(e) => setSenha(e.target.value)}
+                      placeholder={userEdit ? "deixe em branco para não alterar" : ""} />
+                    <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0 h-full"
+                      onClick={() => setShowSenha(!showSenha)}>
                       {showSenha ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="confirmSenha">Confirmar Senha*</Label>
-                  <Input id="confirmSenha" type={showSenha ? "text" : "password"} value={confirmSenha} onChange={(e) => setConfirmSenha(e.target.value)} />
+                <div className="space-y-1.5">
+                  <Label htmlFor="confirmSenha">Confirmar senha{userEdit ? "" : " *"}</Label>
+                  <Input id="confirmSenha" type={showSenha ? "text" : "password"} value={confirmSenha}
+                    onChange={(e) => setConfirmSenha(e.target.value)} />
                 </div>
-              </>
-            )}
+              </div>
+              {senhaMismatch && <p className="text-xs text-destructive">As senhas não coincidem.</p>}
+            </section>
           </div>
+
           <DialogFooter>
             <Button variant="ghost" onClick={() => setModal(false)}>Cancelar</Button>
-            <Button onClick={save} disabled={salvando}>
+            <Button onClick={save} disabled={salvando || !!senhaMismatch}>
               {salvando && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {userEdit ? "Salvar Alterações" : "Criar Usuário"}
+              {userEdit ? "Salvar alterações" : "Criar usuário"}
             </Button>
           </DialogFooter>
         </DialogContent>

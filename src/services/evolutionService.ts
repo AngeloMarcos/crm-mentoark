@@ -83,6 +83,24 @@ export interface CreateInstanceOpts {
   instancia?: string;
 }
 
+// [AUDITORIA] LÓGICA (Sprint Circuit-Breaker LOGOUT, 2026-08-10 — continuação Serenovlogs067):
+// erro tipado específico pro bloqueio do circuit-breaker (`code: 'LOGOUT_LOOP'`, backend
+// `whatsapp.ts` /connect) — permite quem chama `createInstance()` distinguir "instância em loop
+// de desconexão, aguarde X min" de qualquer outro erro genérico de conexão, sem re-parsear a
+// mensagem de texto. `minutosRestantes`/`totalRecente` vêm direto do backend (mesma janela
+// deslizante usada pra decidir o bloqueio) — o frontend só EXIBE esse dado, não recalcula a
+// regra por conta própria (ver `services/logoutCircuitBreaker.ts`, fonte única da regra real).
+export class LogoutLoopError extends Error {
+  minutosRestantes: number;
+  totalRecente: number;
+  constructor(message: string, minutosRestantes: number, totalRecente: number) {
+    super(message);
+    this.name = 'LogoutLoopError';
+    this.minutosRestantes = minutosRestantes;
+    this.totalRecente = totalRecente;
+  }
+}
+
 export async function createInstance(opts: CreateInstanceOpts = {}): Promise<CreateInstanceResult> {
   const { instanceName, phoneNumber, forceReconnect, novaConexao, instancia } = opts;
   const res = await fetch(`${API_BASE}/api/whatsapp/connect`, {
@@ -97,6 +115,9 @@ export async function createInstance(opts: CreateInstanceOpts = {}): Promise<Cre
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
+    if (err.code === 'LOGOUT_LOOP') {
+      throw new LogoutLoopError(err.message || 'Muitas tentativas de conexão seguidas — aguarde.', err.minutosRestantes ?? 60, err.totalRecente ?? 0);
+    }
     throw new Error(err.message || 'Erro ao conectar instância');
   }
   return res.json();

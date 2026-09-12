@@ -22,6 +22,8 @@ import { api } from "@/integrations/database/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { authHeader } from "@/lib/api-token";
+import { useStatusEnvio, chaveTelefone } from "@/hooks/useStatusEnvio";
+import { TagStatusEnvio } from "@/components/TagStatusEnvio";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
@@ -78,6 +80,11 @@ export default function ContatoDetalhePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingIa, setUpdatingIa] = useState(false);
+  // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): mesma tag "Já enviado
+  // (campanha, data)"/"Nunca enviado" já usada em StepContacts (Disparos.tsx) e
+  // WhatsAppInterface.tsx — hook compartilhado, chave é telefone (esta tela busca de
+  // `dados_cliente`, id BIGINT, espaço de identidade diferente de `contatos.id` UUID).
+  const statusEnvioPorTelefone = useStatusEnvio(contato?.telefone ? [contato.telefone] : []);
   const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
   const [duracaoSelecionada, setDuracaoSelecionada] = useState(30);
   const [pausaStatus, setPausaStatus] = useState<{
@@ -377,6 +384,17 @@ export default function ContatoDetalhePage() {
                       {iaAtiva ? "Ativa" : "Pausada"}
                     </Badge>
                   </div>
+                </div>
+
+                {/* [AUDITORIA] FIX APLICADO (Sprint Colunas de Status de Envio, 2026-07-31): mesma
+                    tag já usada em StepContacts (Disparos.tsx) e WhatsAppInterface.tsx — visibilidade
+                    de disparo, não bloqueio (o bloqueio de reenvio é escopo de outra sprint). */}
+                <div>
+                  <label className="text-xs text-muted-foreground uppercase font-semibold block mb-1">Status de Envio (Disparos)</label>
+                  <TagStatusEnvio
+                    ultimoDisparoEm={statusEnvioPorTelefone[chaveTelefone(contato.telefone)]?.ultimo_disparo_em}
+                    campanhaNome={statusEnvioPorTelefone[chaveTelefone(contato.telefone)]?.campanha_nome}
+                  />
                 </div>
 
                 {/* Bloco de Qualificação */}

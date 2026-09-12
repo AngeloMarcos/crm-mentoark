@@ -34,6 +34,7 @@ import {
   Bot, Workflow, Zap, Sparkles,
   Eye, EyeOff, Plus, Pencil, Trash2, Loader2,
   CheckCircle2, XCircle, Power, AlertTriangle, Plug,
+  MessageCircle, Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -67,6 +68,25 @@ interface AiProvider {
   ativo: boolean;
 }
 
+// [AUDITORIA] LÓGICA (Sprint Estruturar API Oficial, 2026-09-06, pedido explícito do usuário):
+// canal NOVO e paralelo à Evolution (não substitui) — cobre só conversa 1:1 com cliente; a
+// Groups API oficial da Meta não serve pra gerenciar grupo comunitário grande já existente (só
+// grupo criado pela própria empresa via API, máx. 8 participantes), então grupo continua 100%
+// Evolution. Ver backend/src/services/metaCloudApi.ts pro resto do raciocínio.
+interface MetaOficialConfig {
+  id: string;
+  numero_exibicao: string | null;
+  phone_number_id: string | null;
+  waba_id: string | null;
+  verify_token: string;
+  graph_api_version: string;
+  ativo: boolean;
+  ultima_conexao_em: string | null;
+  ultimo_erro: string | null;
+  temAccessToken: boolean;
+  temAppSecret: boolean;
+}
+
 // [AUDITORIA] FIX APLICADO: tipo 'evolution' removido das opções — URL/API Key da
 // Evolution agora são fixas no .env do servidor (ver getEvolutionConfig em
 // backend/src/routes/whatsapp.ts), não editáveis por aqui. Evita a mesma instância
@@ -82,6 +102,7 @@ const TIPO_LABELS: Record<string, string> = {
   gemini: "Google Gemini",
   telegram: "Telegram Bot",
   instagram: "Instagram",
+  corridas_cliente: "Corridas — Sistema do Cliente",
 };
 
 const TIPO_OPTIONS = Object.entries(TIPO_LABELS).map(([value, label]) => ({ value, label }));
@@ -95,7 +116,13 @@ const STATUS_CONFIG: Record<Status, { label: string; className: string; icon: an
 };
 
 const AI_PROVIDERS = [
-  { slug: "openai",  label: "OpenAI",          icon: Bot,      modelos: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-3.5-turbo"] },
+  // [AUDITORIA] LÓGICA (pedido explícito do usuário, 2026-09-02: "veja as mais baratas... precisamos
+  // economizar ao máximo token"): gpt-5-nano ($0,05/$0,40 por 1M tokens) e gpt-5-mini ($0,25/$2,00)
+  // adicionados na frente — confirmados em 2+ fontes independentes de pricing (ver STATUS.md), mais
+  // baratos E mais novos que gpt-3.5-turbo (mantido no fim só por compatibilidade com quem já
+  // selecionou antes, sem motivo real pra escolher hoje). Preço de referência espelhado em
+  // `PRECO_POR_1M_TOKENS`, backend/src/utils/aiCusto.ts — mantenha os dois em sincronia se mexer aqui.
+  { slug: "openai",  label: "OpenAI",          icon: Bot,      modelos: ["gpt-5-nano", "gpt-4o-mini", "gpt-5-mini", "gpt-4o", "gpt-4.1", "gpt-3.5-turbo"] },
   { slug: "claude",  label: "Claude (Anthropic)", icon: Sparkles, modelos: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
   { slug: "gemini",  label: "Google Gemini",   icon: Zap,      modelos: ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"] },
 ] as const;
@@ -187,7 +214,68 @@ export default function IntegracoesPage() {
     } catch {}
   };
 
-  useEffect(() => { fetchRows(); fetchAiProviders(); }, [user?.id]);
+  // ── WhatsApp API Oficial (Meta Cloud API) ───────────────────────────────────
+  const [metaConfig, setMetaConfig] = useState<MetaOficialConfig | null>(null);
+  const [metaForm, setMetaForm] = useState({
+    numero_exibicao: "", phone_number_id: "", waba_id: "",
+    access_token: "", app_secret: "",
+  });
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [testingMeta, setTestingMeta] = useState(false);
+
+  const fetchMetaConfig = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/meta-oficial/config`, { headers: authHeader() });
+      if (!res.ok) return;
+      const data: MetaOficialConfig | null = await res.json();
+      setMetaConfig(data);
+      if (data) {
+        setMetaForm(f => ({ ...f, numero_exibicao: data.numero_exibicao ?? "", phone_number_id: data.phone_number_id ?? "", waba_id: data.waba_id ?? "" }));
+      }
+    } catch {}
+  };
+
+  useEffect(() => { fetchRows(); fetchAiProviders(); fetchMetaConfig(); }, [user?.id]);
+
+  const salvarMeta = async () => {
+    setSavingMeta(true);
+    try {
+      const res = await fetch(`${API_URL}/api/meta-oficial/config`, {
+        method: "PUT", headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify(metaForm),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Erro ao salvar");
+      toast.success("Configuração da API Oficial salva!");
+      setMetaForm(f => ({ ...f, access_token: "", app_secret: "" })); // nunca reexibe segredo já salvo
+      fetchMetaConfig();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setSavingMeta(false);
+    }
+  };
+
+  const testarMeta = async () => {
+    setTestingMeta(true);
+    try {
+      const res = await fetch(`${API_URL}/api/meta-oficial/testar`, { method: "POST", headers: authHeader() });
+      const data = await res.json();
+      toast[data.ok ? "success" : "error"](data.ok ? `Conectado — ${data.nomeVerificado || data.numeroExibicao}` : (data.erro || "Falha ao conectar"));
+      fetchMetaConfig();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setTestingMeta(false);
+    }
+  };
+
+  const copiarUrlWebhook = () => {
+    if (!metaConfig) return;
+    navigator.clipboard.writeText(`${API_URL}/webhook/meta/${metaConfig.id}`).then(
+      () => toast.success("URL do webhook copiada"),
+      () => toast.error("Não foi possível copiar"),
+    );
+  };
 
   // ── CRUD Integrações ─────────────────────────────────────────────────────────
   const openAdd = () => {
@@ -422,6 +510,106 @@ export default function IntegracoesPage() {
           </CardContent>
         </Card>
 
+        {/* ── WhatsApp API Oficial (Meta Cloud API) ─────────────────────────── */}
+        {/* [AUDITORIA] LÓGICA (Sprint Estruturar API Oficial, 2026-09-06): canal PARALELO à
+            Evolution, não substitui — grupo continua 100% Evolution (a Groups API oficial da
+            Meta só serve pra grupo criado pela própria empresa, máx. 8 participantes). Esta
+            tela é só a camada de conexão (credenciais + teste); resposta automática via
+            agentEngine.ts ainda não está plugada aqui — ver comentário em metaWebhook.ts. */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <MessageCircle className="h-4 w-4 text-primary" />
+              WhatsApp API Oficial (Meta)
+              <Badge variant="outline" className="text-[10px] font-normal">Beta — só conversa 1:1</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              Canal separado da Evolution — grupos continuam sendo atendidos só pela Evolution
+              (a API oficial da Meta não gerencia grupo comunitário já existente). Precisa de um
+              WABA (WhatsApp Business Account) já verificado no Meta Business Manager.
+            </p>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Número (exibição)</Label>
+                <Input
+                  value={metaForm.numero_exibicao}
+                  onChange={e => setMetaForm(f => ({ ...f, numero_exibicao: e.target.value }))}
+                  placeholder="+55 11 90000-0000"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Phone Number ID</Label>
+                <Input
+                  value={metaForm.phone_number_id}
+                  onChange={e => setMetaForm(f => ({ ...f, phone_number_id: e.target.value }))}
+                  placeholder="ID numérico do painel da Meta"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">WABA ID</Label>
+                <Input
+                  value={metaForm.waba_id}
+                  onChange={e => setMetaForm(f => ({ ...f, waba_id: e.target.value }))}
+                  placeholder="ID da conta WhatsApp Business"
+                />
+              </div>
+              <div />
+              <div className="space-y-1.5">
+                <Label className="text-xs">Access Token (System User)</Label>
+                <SecretInput
+                  value={metaForm.access_token}
+                  onChange={v => setMetaForm(f => ({ ...f, access_token: v }))}
+                  placeholder={metaConfig?.temAccessToken ? "••••• (salvo — cole para atualizar)" : "EAAxxxxx..."}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">App Secret</Label>
+                <SecretInput
+                  value={metaForm.app_secret}
+                  onChange={v => setMetaForm(f => ({ ...f, app_secret: v }))}
+                  placeholder={metaConfig?.temAppSecret ? "••••• (salvo — cole para atualizar)" : "usado pra validar o webhook"}
+                />
+              </div>
+            </div>
+
+            {metaConfig && (
+              <div className="rounded-lg border bg-muted/30 p-3 space-y-2 text-xs">
+                <p className="font-semibold text-foreground/80">Configuração do Webhook (cole no painel da Meta)</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 truncate bg-background rounded px-2 py-1 border">{API_URL}/webhook/meta/{metaConfig.id}</code>
+                  <Button variant="outline" size="icon" className="h-7 w-7 shrink-0" onClick={copiarUrlWebhook} title="Copiar URL">
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground shrink-0">Verify Token:</span>
+                  <code className="flex-1 truncate bg-background rounded px-2 py-1 border">{metaConfig.verify_token}</code>
+                </div>
+                {metaConfig.ultima_conexao_em && (
+                  <p className="text-muted-foreground">Última conexão OK: {new Date(metaConfig.ultima_conexao_em).toLocaleString("pt-BR")}</p>
+                )}
+                {metaConfig.ultimo_erro && (
+                  <p className="text-destructive">Último erro: {metaConfig.ultimo_erro}</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={testarMeta} disabled={testingMeta || !metaConfig} className="flex-1">
+                {testingMeta ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plug className="h-4 w-4 mr-2" />}
+                Testar conexão
+              </Button>
+              <Button onClick={salvarMeta} disabled={savingMeta} className="flex-1">
+                {savingMeta && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                Salvar
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* ── Outras integrações ───────────────────────────────────────────── */}
         {otherRows.length > 0 && (
           <Card>
@@ -505,7 +693,7 @@ export default function IntegracoesPage() {
               />
             </div>
 
-            {["n8n", "webhook_in", "webhook_out", "database_vector"].includes(form.tipo) && (
+            {["n8n", "webhook_in", "webhook_out", "database_vector", "corridas_cliente"].includes(form.tipo) && (
               <div className="space-y-1.5">
                 <Label>URL</Label>
                 <Input
@@ -516,9 +704,9 @@ export default function IntegracoesPage() {
               </div>
             )}
 
-            {["openai", "gemini", "elevenlabs", "meta_ads", "telegram", "instagram", "database_vector", "google_places"].includes(form.tipo) && (
+            {["openai", "gemini", "elevenlabs", "meta_ads", "telegram", "instagram", "database_vector", "google_places", "corridas_cliente"].includes(form.tipo) && (
               <div className="space-y-1.5">
-                <Label>API Key</Label>
+                <Label>{form.tipo === "corridas_cliente" ? "Token (Authorization: Bearer)" : "API Key"}</Label>
                 <SecretInput
                   value={form.api_key}
                   onChange={v => setForm(f => ({ ...f, api_key: v }))}
