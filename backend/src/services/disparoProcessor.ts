@@ -34,6 +34,20 @@ import { log } from '../logger';
 const proximoEnvioPermitidoPorCampanha = new Map<string, number>(); // disparo_id -> epoch ms
 const errosConsecutivosPorCampanha = new Map<string, number>(); // disparo_id -> contagem
 
+// [AUDITORIA] BUG (achado em revisão do motor concorrente por-campanha, 2026-09-13): o
+// espaçamento antiban acima é POR CAMPANHA (`disparo_id`), não por instância/número de WhatsApp.
+// Duas campanhas diferentes da MESMA conta podem apontar pra mesma instância (comum quando a
+// conta só tem 1-2 chips) — se ambas ficarem liberadas no mesmo tick, `Promise.allSettled` as
+// dispara em paralelo, mandando 2 mensagens pelo MESMO número físico ao mesmo tempo. Isso anula
+// o propósito do delay antiban (rajada pelo mesmo chip é justamente o padrão mais punido pela
+// Meta/WhatsApp) mesmo com o resto do motor funcionando perfeitamente por campanha.
+// [AUDITORIA] FIX APLICADO: trava em memória por instância (chave `baseUrl::instancia`, única o
+// bastante mesmo entre contas diferentes usando servidores Evolution distintos) — campanha que
+// tentar usar uma instância já "em uso" neste exato instante reenfileira e tenta de novo no
+// próximo tick (2s depois), em vez de mandar concorrente. Liberada sempre no `finally` de
+// `processarUmaMensagem`, cobrindo sucesso, falha e qualquer `return` antecipado.
+const instanciasEmUso = new Set<string>(); // `${baseUrl}::${instancia}`
+
 // Cache flag humanizar_ia por disparo_id (evita query por mensagem)
 const humanizarCache = new Map<string, boolean>();
 
@@ -327,6 +341,9 @@ export async function processarDisparos(pool: Pool) {
  */
 async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
   const { log_id, disparo_id, user_id, telefone, mensagem, tipo_midia, url_midia, legenda_midia, variar_imagem } = msg;
+  // Preenchida quando esta chamada efetivamente reserva uma instância (ver `instanciasEmUso`
+  // acima) — liberada no `finally` no fim da função, cobrindo todo caminho de saída.
+  let instanciaLockKey: string | null = null;
   try {
     // [AUDITORIA] FIX APLICADO (Sprint 5, 2026-07-23 — teto diário; revisado 2026-07-29 pra
     // ser POR INSTÂNCIA): antes de processar a mensagem desta campanha, resolve as
@@ -524,6 +541,17 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         
         const baseUrl = sanitizeEvolutionUrl(url);
 
+        // [AUDITORIA] FIX APLICADO: ver nota grande na declaração de `instanciasEmUso` acima —
+        // instância já em uso por OUTRA campanha neste exato tick reenfileira e tenta de novo
+        // daqui a 2s, em vez de mandar concorrente pelo mesmo número físico.
+        const lockKey = `${baseUrl}::${instancia}`;
+        if (instanciasEmUso.has(lockKey)) {
+          log.info('DISPARO', 'Instância já em uso por outra campanha neste tick — reenfileirando', { disparo_id, instancia });
+          await requeuePendentes(pool, [{ log_id }]);
+          return;
+        }
+        instanciasEmUso.add(lockKey);
+        instanciaLockKey = lockKey;
 
         // 3. Normalizar telefone
         const digits = telefone.replace(/\D/g, '');
@@ -882,5 +910,10 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
     log.info('DISPARO', 'Próxima mensagem desta campanha liberada após o delay antiban', { disparo_id, delayMs });
   } catch (err: any) {
     log.error('DISPARO', 'Erro crítico ao processar mensagem', { disparo_id, logId: log_id, err: err?.message, stack: err?.stack });
+  } finally {
+    // Libera a instância pra próxima campanha que precisar dela — cobre sucesso, falha, e
+    // qualquer `return` antecipado (teto diário, janela de horário, opt-out, grupo detectado,
+    // pausa por erros consecutivos) que aconteça depois da reserva.
+    if (instanciaLockKey) instanciasEmUso.delete(instanciaLockKey);
   }
 }

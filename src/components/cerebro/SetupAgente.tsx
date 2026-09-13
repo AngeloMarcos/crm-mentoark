@@ -273,11 +273,11 @@ export function SetupAgente({ open, onClose, onConcluir, initialStep }: Props) {
     );
   };
 
+  // [AUDITORIA] LÓGICA: Sheet lateral em vez de Dialog centralizado — mesmo padrão de
+  // kanban/ModalTarefa, InstanceManagementPanel e Agentes.tsx. Wizard de 6 passos com muito
+  // campo preenchido; Sheet não fecha em clique fora (onInteractOutside) e mantém a
+  // navegação Anterior/Próximo sempre visível no rodapé.
   return (
-    {/* [AUDITORIA] LÓGICA: Sheet lateral em vez de Dialog centralizado — mesmo padrão de
-        kanban/ModalTarefa, InstanceManagementPanel e Agentes.tsx. Wizard de 6 passos com muito
-        campo preenchido; Sheet não fecha em clique fora (onInteractOutside) e mantém a
-        navegação Anterior/Próximo sempre visível no rodapé. */}
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
       <SheetContent side="right" onInteractOutside={(e) => e.preventDefault()} className="w-full sm:max-w-3xl flex flex-col p-0 gap-0">
         <div className="p-6 border-b bg-muted/30">
