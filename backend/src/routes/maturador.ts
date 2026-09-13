@@ -43,8 +43,32 @@ export default function maturadorRouter(pool: Pool): Router {
   // [AUDITORIA] LÓGICA: checagem compartilhada por criação E ativação — a conta pode ligar um
   // agente de IA DEPOIS de já ter criado/ativado um par, então a validação tem que rodar de novo
   // em toda ativação, não só na criação.
+  // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-13 — "não é verdade" que a conta
+  // tem IA ativa): `ativo=true` sozinho é falso positivo — `agentEngine.ts` (linha ~752, "Agente
+  // sem prompt configurado — IA não vai responder") já se recusa a responder sem
+  // `prompt_sistema`/`agent_prompts` reais, nem cai num prompt genérico (guard-rail deliberado,
+  // documentado lá). Confirmado no banco: as 4 linhas `agentes` desta conta (incluindo as 2
+  // instâncias reais do par preso) tinham `ativo=true` mas `prompt_sistema` vazio — zero risco
+  // real de custo de token, mesmo que o fallback de `agentEngine.ts` selecionasse uma delas.
+  // [AUDITORIA] FIX APLICADO: só conta como "IA genuinamente ativa" quando o agente TAMBÉM tem
+  // prompt real (mesma fonte principal + fallback legado que `agentEngine.ts` usa) — alinha o
+  // guard-rail com o risco de verdade em vez de um proxy (`ativo`) que pode ficar `true` sem
+  // nenhum prompt (agente criado e nunca configurado, ou desativado só pela metade).
   async function contaTemAgenteAtivo(userId: string): Promise<boolean> {
-    const r = await pool.query(`SELECT 1 FROM agentes WHERE user_id = $1 AND ativo = true LIMIT 1`, [userId]);
+    const r = await pool.query(
+      `SELECT 1 FROM agentes a
+       WHERE a.user_id = $1 AND a.ativo = true
+         AND (
+           (a.prompt_sistema IS NOT NULL AND trim(a.prompt_sistema) <> '')
+           OR EXISTS (
+             SELECT 1 FROM agent_prompts ap
+             WHERE ap.user_id = a.user_id AND ap.ativo = true
+               AND ap.conteudo IS NOT NULL AND trim(ap.conteudo) <> ''
+           )
+         )
+       LIMIT 1`,
+      [userId]
+    );
     return r.rows.length > 0;
   }
 
