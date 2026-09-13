@@ -45,7 +45,7 @@ import {
   temTermoVariavel,
   TAMANHO_DICIONARIO_VARIACAO,
 } from "@/lib/motorTexto";
-import { baixarModeloContatosXLSX, VARIAVEIS_MENSAGEM_CONTATO } from "@/lib/modeloImportacao";
+import { baixarModeloContatosXLSX, VARIAVEIS_MENSAGEM_CONTATO, CONTATO_EXEMPLO } from "@/lib/modeloImportacao";
 import {
   Dialog,
   DialogContent,
@@ -2431,10 +2431,7 @@ function StepMessage({ form, setForm }: any) {
                 ordem usada no envio real (StepReview.handleStart), incluindo a camada nova (item 2)
                 respeitando `form.variacao_automatica`. */}
             <p className="text-sm whitespace-pre-wrap">
-              {personalizarMensagem(textoAtivo, {
-                nome: "João Silva", telefone: "5511999998888", empresa: "Empresa Exemplo",
-                cidade: "São Paulo", estado: "SP", interesse: "Consórcio de imóvel", data_nascimento: "12/05/1990",
-              }, form.variacao_automatica)}
+              {personalizarMensagem(textoAtivo, CONTATO_EXEMPLO, form.variacao_automatica)}
             </p>
             {textoTemSpintax(textoAtivo) ? (
               <p className="text-[10px] text-muted-foreground italic mt-1">

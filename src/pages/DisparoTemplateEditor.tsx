@@ -19,8 +19,8 @@ import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { getAuthToken } from "@/lib/api-token";
-import { BIBLIOTECA_VARIACOES, textoTemSpintax } from "@/lib/motorTexto";
-import { VARIAVEIS_MENSAGEM_CONTATO } from "@/lib/modeloImportacao";
+import { BIBLIOTECA_VARIACOES, textoTemSpintax, personalizarMensagem } from "@/lib/motorTexto";
+import { VARIAVEIS_MENSAGEM_CONTATO, CONTATO_EXEMPLO } from "@/lib/modeloImportacao";
 
 // [AUDITORIA] LÓGICA (Sprint Editor Template WhatsApp, 2026-09-04 — mockup de referência trazido
 // pelo usuário): esta tela substitui o antigo modal simples de `DisparoTemplates.tsx` por um
@@ -671,9 +671,21 @@ export default function DisparoTemplateEditorPage() {
               clicável, via Evolution). */}
           <div className="lg:sticky lg:top-6 space-y-3">
             <p className="text-xs font-medium text-muted-foreground px-1">Como a mensagem chega no WhatsApp</p>
+            {/* [AUDITORIA] FIX APLICADO (melhoria Preview de Template, 2026-09-13): Header/Corpo/
+                Footer passam por `personalizarMensagem` com um contato de exemplo
+                (`CONTATO_EXEMPLO`, modeloImportacao.ts) antes de chegar na bolha — antes desta
+                revisão a prévia mostrava `{{primeiro_nome}}`/`{{empresa}}` literais, sem nenhum
+                jeito de conferir como a mensagem realmente fica (incluindo a limpeza de pontuação
+                quando falta um dado). `variacaoAutomaticaAtiva=false`: este editor não tem esse
+                toggle (é config de campanha, não de template) — resolve só placeholder + spintax
+                manual, sem sortear sinônimo, pra prévia bater com o texto que de fato é salvo. */}
             <PreviewBubble
-              headerTipo={headerTipo} headerTexto={headerTexto} headerMidiaUrl={headerMidiaUrl}
-              corpo={corpo} footer={footer} botoes={botoes} nativo={false}
+              headerTipo={headerTipo}
+              headerTexto={personalizarMensagem(headerTexto, CONTATO_EXEMPLO, false)}
+              headerMidiaUrl={headerMidiaUrl}
+              corpo={personalizarMensagem(corpo, CONTATO_EXEMPLO, false)}
+              footer={personalizarMensagem(footer, CONTATO_EXEMPLO, false)}
+              botoes={botoes} nativo={false}
             />
             <p className="text-[11px] text-muted-foreground px-1">
               Texto que realmente sai numa campanha via Disparos: <span className="italic">"{textoPreview.slice(0, 80)}{textoPreview.length > 80 ? "…" : ""}"</span>

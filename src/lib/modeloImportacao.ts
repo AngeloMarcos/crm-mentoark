@@ -73,6 +73,17 @@ export const VARIAVEIS_MENSAGEM_CONTATO: string[] = [
   ...CAMPOS_CONTATO.filter(c => c.coluna !== "nome" && c.coluna !== "telefone").map(variavelDoCampo),
 ];
 
+// [AUDITORIA] LÓGICA (melhoria Preview de Template, 2026-09-13 — achado numa revisão pedida pelo
+// usuário): contato fictício pra prévia de mensagem resolver `{{variável}}` de verdade em vez de
+// mostrar a sintaxe crua — usa os MESMOS valores de `exemplo` já definidos acima (linha "tudo
+// preenchido" do modelo baixável), então o exemplo do preview e o exemplo da planilha nunca
+// divergem sozinhos. Antes desta revisão, `Disparos.tsx` tinha uma cópia solta desse objeto
+// (faltando `cargo`) e `DisparoTemplateEditor.tsx` não resolvia variável nenhuma no preview —
+// mostrava `{{primeiro_nome}}`/`{{empresa}}` literais na bolha de WhatsApp simulada.
+export const CONTATO_EXEMPLO: Record<string, string> = Object.fromEntries(
+  CAMPOS_CONTATO.map(c => [c.coluna, c.exemplo]),
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Paleta — mesmo laranja de marca usado nos botões primários do CRM (ver index.css / gradient-brand)
 // ─────────────────────────────────────────────────────────────────────────────
