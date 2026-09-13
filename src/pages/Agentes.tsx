@@ -17,8 +17,15 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -727,7 +734,12 @@ export default function AgentesPage() {
         )}
       </div>
 
-      <Dialog
+      {/* [AUDITORIA] LÓGICA: Sheet lateral em vez de Dialog centralizado — mesmo padrão já
+          aplicado em kanban/ModalTarefa e InstanceManagementPanel ("Configurar Instância").
+          Com 10 abas e ~100 campos, um Dialog centralizado arrisca perder preenchimento com um
+          clique fora sem querer; o Sheet não fecha em onInteractOutside e mantém o rodapé
+          (Cancelar/Salvar) sempre visível, sem depender de rolar até o fim. */}
+      <Sheet
         open={modal}
         onOpenChange={(o) => {
           setModal(o);
@@ -737,16 +749,21 @@ export default function AgentesPage() {
           }
         }}
       >
-        <DialogContent className="w-[95vw] max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
+        <SheetContent
+          side="right"
+          onInteractOutside={(e) => e.preventDefault()}
+          className="w-full sm:max-w-3xl flex flex-col p-0 gap-0"
+        >
+          <SheetHeader className="p-6 pb-4 border-b text-left">
+            <SheetTitle>
               {editing ? "Editar agente" : "Novo agente"}
-            </DialogTitle>
-            <DialogDescription>
+            </SheetTitle>
+            <SheetDescription>
               Configure perfil, parâmetros de execução, comportamento, integração e status.
-            </DialogDescription>
-          </DialogHeader>
+            </SheetDescription>
+          </SheetHeader>
 
+          <div className="flex-1 overflow-y-auto p-6">
           <Tabs
             defaultValue="perfil"
             onValueChange={(v) => { if (v === "execucoes" && !execucoes.length) carregarExecucoes(); }}
@@ -1650,8 +1667,9 @@ export default function AgentesPage() {
               )}
             </TabsContent>
           </Tabs>
+          </div>
 
-          <DialogFooter>
+          <SheetFooter className="p-6 pt-4 border-t bg-muted/30 sm:justify-between">
             <Button variant="outline" onClick={() => setModal(false)}>
               Cancelar
             </Button>
@@ -1659,9 +1677,9 @@ export default function AgentesPage() {
               {salvando && <Loader2 className="h-4 w-4 animate-spin" />}
               {editing ? "Salvar alterações" : "Criar agente"}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       {/* [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): "Ver
           trace" da aba Execuções — resumo por iteração do loop agêntico (texto parcial + tool

@@ -17,6 +17,9 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
+} from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadTimeline } from "@/components/leads/LeadTimeline";
 import { LeadTarefas } from "@/components/leads/LeadTarefas";
@@ -967,12 +970,18 @@ export default function LeadsPage() {
         </Dialog>
 
         {/* ============ MODAL: Novo / Editar Contato ============ */}
-        <Dialog open={modalContato} onOpenChange={setModalContato}>
-          <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>{editing ? "Editar contato" : "Novo contato"}</DialogTitle>
-            </DialogHeader>
+        {/* [AUDITORIA] LÓGICA: Sheet lateral em vez de Dialog centralizado — mesmo padrão de
+            kanban/ModalTarefa, InstanceManagementPanel, Agentes.tsx e SetupAgente.tsx. Rodapé
+            (Cancelar/Salvar) sai de dentro de cada aba e passa a ficar fixo fora da área de
+            rolagem, visível em Dados/Timeline/Tarefas — antes só existia dentro da aba "Dados",
+            além de rolar junto com o conteúdo em telas menores por causa do max-h-[90vh]. */}
+        <Sheet open={modalContato} onOpenChange={setModalContato}>
+          <SheetContent side="right" onInteractOutside={(e) => e.preventDefault()} className="w-full sm:max-w-2xl flex flex-col p-0 gap-0">
+            <SheetHeader className="p-6 pb-4 border-b text-left">
+              <SheetTitle>{editing ? "Editar contato" : "Novo contato"}</SheetTitle>
+            </SheetHeader>
 
+            <div className="flex-1 overflow-y-auto p-6">
             {editing ? (
               <Tabs defaultValue="dados" className="w-full">
                 <TabsList className="grid w-full grid-cols-3">
@@ -1045,12 +1054,6 @@ export default function LeadsPage() {
                     <Label>Notas</Label>
                     <Textarea value={contatoForm.notas} onChange={(e) => setContatoForm({ ...contatoForm, notas: e.target.value })} rows={4} />
                   </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setModalContato(false)}>Cancelar</Button>
-                    <Button onClick={salvarContato} disabled={!contatoForm.nome.trim()}>
-                      Salvar alterações
-                    </Button>
-                  </DialogFooter>
                 </TabsContent>
 
                 <TabsContent value="timeline" className="py-2">
@@ -1121,16 +1124,18 @@ export default function LeadsPage() {
                     <Textarea value={contatoForm.notas} onChange={(e) => setContatoForm({ ...contatoForm, notas: e.target.value })} rows={4} />
                   </div>
                 </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setModalContato(false)}>Cancelar</Button>
-                  <Button onClick={salvarContato} disabled={!contatoForm.nome.trim()}>
-                    Criar contato
-                  </Button>
-                </DialogFooter>
               </>
             )}
-          </DialogContent>
-        </Dialog>
+            </div>
+
+            <SheetFooter className="p-6 pt-4 border-t bg-muted/30 sm:justify-between">
+              <Button variant="outline" onClick={() => setModalContato(false)}>Cancelar</Button>
+              <Button onClick={salvarContato} disabled={!contatoForm.nome.trim()}>
+                {editing ? "Salvar alterações" : "Criar contato"}
+              </Button>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
       </div>
 
       <BuscarLeadsModal

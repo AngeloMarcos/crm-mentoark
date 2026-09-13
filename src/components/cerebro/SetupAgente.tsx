@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -274,10 +274,14 @@ export function SetupAgente({ open, onClose, onConcluir, initialStep }: Props) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={v => !v && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0">
+    {/* [AUDITORIA] LÓGICA: Sheet lateral em vez de Dialog centralizado — mesmo padrão de
+        kanban/ModalTarefa, InstanceManagementPanel e Agentes.tsx. Wizard de 6 passos com muito
+        campo preenchido; Sheet não fecha em clique fora (onInteractOutside) e mantém a
+        navegação Anterior/Próximo sempre visível no rodapé. */}
+    <Sheet open={open} onOpenChange={v => !v && onClose()}>
+      <SheetContent side="right" onInteractOutside={(e) => e.preventDefault()} className="w-full sm:max-w-3xl flex flex-col p-0 gap-0">
         <div className="p-6 border-b bg-muted/30">
-          <DialogHeader><DialogTitle className="flex items-center gap-2"><Wand2 className="h-5 w-5 text-primary" /> Setup do Agente</DialogTitle></DialogHeader>
+          <SheetHeader><SheetTitle className="flex items-center gap-2"><Wand2 className="h-5 w-5 text-primary" /> Setup do Agente</SheetTitle></SheetHeader>
           <div className="flex justify-between mt-6 relative">
             <div className="absolute top-4 left-0 right-0 h-0.5 bg-muted -z-10" />
             {STEPS.map(s => <StepIcon key={s.id} id={s.id} active={step === s.id} done={step > s.id} />)}
@@ -754,7 +758,7 @@ export function SetupAgente({ open, onClose, onConcluir, initialStep }: Props) {
             </Button>
           )}
         </div>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }
