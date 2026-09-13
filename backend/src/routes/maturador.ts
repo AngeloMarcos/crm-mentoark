@@ -4,16 +4,34 @@
  *
  * [AUDITORIA] BUG EVITADO (achado por leitura de `agentEngine.ts` ANTES de implementar, não
  * assumido): `processarMensagem()` resolve o agente pela instância que recebeu a mensagem
- * (`WHERE evolution_instancia=X AND ativo=true`) mas, se essa instância especificamente não tiver
- * um agente `ativo=true`, cai num FALLBACK que pega QUALQUER agente `ativo=true` DA MESMA CONTA
- * (`WHERE user_id=$1 AND ativo=true ORDER BY updated_at DESC LIMIT 1`). Ou seja: checar só se as
- * DUAS instâncias do par têm `ativo=false` não é suficiente — se a conta tiver QUALQUER OUTRA
- * instância com IA ativa, o fallback pode pegar a mensagem do maturador mesmo assim, gerando uma
- * chamada real de IA (custo de token real, quebrando a promessa de "zero IA" desta feature).
- * [AUDITORIA] FIX APLICADO (guard-rail): ativar um par exige que a CONTA inteira (user_id) não
- * tenha NENHUM `agentes.ativo=true` — mais restritivo que só os 2 agentes do par, mas é o que o
- * código real exige pra ser genuinamente seguro. Documentado explicitamente na mensagem de erro
- * devolvida (o usuário precisa entender o motivo, não só ver "operação recusada").
+ * (`WHERE evolution_instancia=X AND user_id=Y AND ativo=true`) mas, se essa busca não achar NADA
+ * (instância sem `agentes.ativo=true` PRÓPRIO — ativo=false, ou linha inexistente), cai num
+ * FALLBACK que pega QUALQUER agente `ativo=true` DA MESMA CONTA (`WHERE user_id=$1 AND ativo=true
+ * ORDER BY updated_at DESC LIMIT 1`). Ou seja: checar só se as DUAS instâncias do par têm
+ * `ativo=false` não é suficiente — se NENHUMA das duas tiver sua PRÓPRIA linha `ativo=true`, o
+ * fallback pode pegar a mensagem do maturador e entregar pra QUALQUER OUTRA instância com IA
+ * ativa da conta, gerando uma chamada real de IA (custo de token real, quebrando a promessa de
+ * "zero IA" desta feature).
+ *
+ * [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-13 — "não é verdade" que a conta tem
+ * IA ativa): a 1ª versão deste guard-rail (visão de conta inteira) tinha 2 imprecisões, achadas ao
+ * ler `agentEngine.ts` de novo em detalhe: (1) `ativo=true` sozinho não basta nem quando o agente
+ * É o resolvido diretamente — `agentEngine.ts` (linha ~752) se recusa a responder sem
+ * `prompt_sistema` PRÓPRIO ou `agent_prompts` (legado, por CONTA) reais, nem cai numa persona
+ * genérica. (2) o fallback pra "qualquer outro agente ativo da conta" só é alcançado quando a
+ * busca pela instância específica (`evolution_instancia=X AND ativo=true`) não encontra NADA —
+ * se a própria instância JÁ tem uma linha `ativo=true` (mesmo sem prompt), `agentEngine.ts` para
+ * ali, nunca chega no fallback de conta. Confirmado no banco: a conta do usuário tinha as 2
+ * instâncias do par (Comercial/Pessoal) com `ativo=true` mas SEM prompt — cada uma resolve
+ * direto pra si mesma e desiste por falta de prompt, nunca alcançando um 3º agente ("Stella") que
+ * tinha prompt real mas nenhuma relação com este par. A versão anterior deste guard-rail
+ * (checagem de conta inteira) via "Stella" e recusava ativar um par que, na prática, corria risco
+ * ZERO — falso positivo puro.
+ * [AUDITORIA] FIX APLICADO: `parTemRiscoDeIaResponder` reproduz a mesma árvore de decisão de
+ * `agentEngine.ts` pras 2 instâncias do par especificamente — só bloqueia quando (a) uma das 2
+ * tem `ativo=true` E prompt efetivo (próprio ou legado da conta) real, ou (b) NENHUMA das 2 tem
+ * sua própria linha `ativo=true` (o que abre o fallback de conta) E existe outro agente
+ * `ativo=true`+prompt efetivo em algum lugar da conta.
  */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
@@ -42,34 +60,46 @@ export default function maturadorRouter(pool: Pool): Router {
 
   // [AUDITORIA] LÓGICA: checagem compartilhada por criação E ativação — a conta pode ligar um
   // agente de IA DEPOIS de já ter criado/ativado um par, então a validação tem que rodar de novo
-  // em toda ativação, não só na criação.
-  // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-13 — "não é verdade" que a conta
-  // tem IA ativa): `ativo=true` sozinho é falso positivo — `agentEngine.ts` (linha ~752, "Agente
-  // sem prompt configurado — IA não vai responder") já se recusa a responder sem
-  // `prompt_sistema`/`agent_prompts` reais, nem cai num prompt genérico (guard-rail deliberado,
-  // documentado lá). Confirmado no banco: as 4 linhas `agentes` desta conta (incluindo as 2
-  // instâncias reais do par preso) tinham `ativo=true` mas `prompt_sistema` vazio — zero risco
-  // real de custo de token, mesmo que o fallback de `agentEngine.ts` selecionasse uma delas.
-  // [AUDITORIA] FIX APLICADO: só conta como "IA genuinamente ativa" quando o agente TAMBÉM tem
-  // prompt real (mesma fonte principal + fallback legado que `agentEngine.ts` usa) — alinha o
-  // guard-rail com o risco de verdade em vez de um proxy (`ativo`) que pode ficar `true` sem
-  // nenhum prompt (agente criado e nunca configurado, ou desativado só pela metade).
-  async function contaTemAgenteAtivo(userId: string): Promise<boolean> {
-    const r = await pool.query(
-      `SELECT 1 FROM agentes a
-       WHERE a.user_id = $1 AND a.ativo = true
-         AND (
-           (a.prompt_sistema IS NOT NULL AND trim(a.prompt_sistema) <> '')
-           OR EXISTS (
-             SELECT 1 FROM agent_prompts ap
-             WHERE ap.user_id = a.user_id AND ap.ativo = true
-               AND ap.conteudo IS NOT NULL AND trim(ap.conteudo) <> ''
-           )
-         )
-       LIMIT 1`,
+  // em toda ativação, não só na criação. Ver nota grande no topo do arquivo pra árvore de decisão
+  // completa (mesma de `agentEngine.ts`) e o achado real que motivou reescrever isto 2x.
+  async function parTemRiscoDeIaResponder(userId: string, agenteAId: string, agenteBId: string): Promise<boolean> {
+    // "Prompt efetivo da conta" — mesmo fallback legado que agentEngine.ts consulta quando
+    // `agente.prompt_sistema` do agente resolvido vier vazio (linha ~746, `agent_prompts`).
+    const legadoRes = await pool.query(
+      `SELECT 1 FROM agent_prompts WHERE user_id = $1 AND ativo = true
+         AND conteudo IS NOT NULL AND trim(conteudo) <> '' LIMIT 1`,
       [userId]
     );
-    return r.rows.length > 0;
+    const temPromptLegado = legadoRes.rows.length > 0;
+
+    const parRes = await pool.query(
+      `SELECT id, ativo, (prompt_sistema IS NOT NULL AND trim(prompt_sistema) <> '') AS tem_prompt_proprio
+       FROM agentes WHERE id = ANY($1::uuid[]) AND user_id = $2`,
+      [[agenteAId, agenteBId], userId]
+    );
+
+    // (a) Risco direto: uma das 2 instâncias do par tem `ativo=true` E vai encontrar um prompt de
+    // verdade quando `agentEngine.ts` resolvê-la (própria, ou o legado da conta como fallback) —
+    // ela mesma responde, sem precisar de fallback de conta nenhum.
+    const riscoDireto = parRes.rows.some(r => r.ativo && (r.tem_prompt_proprio || temPromptLegado));
+    if (riscoDireto) return true;
+
+    // (b) Risco por fallback de conta: só existe se NENHUMA das 2 instâncias tiver sua própria
+    // linha `ativo=true` — só nesse caso a busca por instância de `agentEngine.ts` vem vazia e
+    // cai no fallback "qualquer agente ativo=true da conta". Se QUALQUER uma das 2 já tem
+    // `ativo=true` (mesmo sem prompt), `agentEngine.ts` para nela e desiste ali — nunca alcança
+    // um 3º agente não relacionado a este par, então o fallback de conta é irrelevante aqui.
+    const nenhumaTemAtivoProprio = parRes.rows.length < 2 || parRes.rows.every(r => !r.ativo);
+    if (!nenhumaTemAtivoProprio) return false;
+
+    const outroRes = await pool.query(
+      `SELECT 1 FROM agentes
+       WHERE user_id = $1 AND ativo = true
+         AND (prompt_sistema IS NOT NULL AND trim(prompt_sistema) <> '' OR $2)
+       LIMIT 1`,
+      [userId, temPromptLegado]
+    );
+    return outroRes.rows.length > 0;
   }
 
   // POST / — cria par novo (sempre nasce ativo=false, ver migrations.ts)
@@ -113,10 +143,17 @@ export default function maturadorRouter(pool: Pool): Router {
     const { ativo } = req.body;
     if (typeof ativo !== 'boolean') return res.status(400).json({ message: '"ativo" precisa ser true/false' });
 
-    if (ativo && await contaTemAgenteAtivo(userId)) {
-      return res.status(409).json({
-        message: 'Esta conta tem pelo menos 1 instância com IA ativa. Ativar o Maturador arrisca a mensagem cair no fallback de IA da conta (custo real de token) — desative a IA em todas as instâncias antes de ligar o Maturador.',
-      });
+    if (ativo) {
+      const par = await pool.query(
+        `SELECT agente_a_id, agente_b_id FROM maturador_pares WHERE id = $1 AND user_id = $2`,
+        [req.params.id, userId]
+      );
+      if (!par.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
+      if (await parTemRiscoDeIaResponder(userId, par.rows[0].agente_a_id, par.rows[0].agente_b_id)) {
+        return res.status(409).json({
+          message: 'Uma das instâncias deste par (ou o fallback de IA da conta) tem um agente com prompt configurado. Ativar o Maturador arrisca a mensagem cair na IA de verdade (custo real de token) — desative esse agente antes de ligar o Maturador.',
+        });
+      }
     }
 
     const r = await pool.query(
