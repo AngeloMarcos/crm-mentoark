@@ -139,6 +139,33 @@ export default function maturadorRouter(pool: Pool): Router {
     return res.json({ ok: true });
   });
 
+  // POST /:id/reativar — limpa a marca de banido/caído e devolve o par pro estado normal
+  // (ativo=false, mesma regra de "nasce sempre desligado" — o usuário liga de novo quando quiser).
+  // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-13: "não consigo usar o maturador"
+  // — marcou uma instância como caída/banida pra testar, ou por engano, e ficou preso: a única
+  // ação disponível pra um par banido era excluir e recriar, perdendo `data_inicio` (reseta a
+  // progressão de dias 20→50→100/dia) e o histórico. Reativar é o caminho reverso simétrico do
+  // POST /:id/banido — não mexe em `data_inicio`/`contador_dia`/`linha_atual` de propósito
+  // (a maturação estava rodando normalmente até a instância "cair"; não faz sentido perder esse
+  // progresso só porque foi marcada e depois desmarcada). Não reverte o score forçado a 0 do
+  // agente (POST /:id/banido) — se a instância realmente ficou saudável de novo, o cron de score
+  // (ver ScoreInstancia.tsx/backend) recalcula sozinho no próximo ciclo a partir de dado real.
+  router.post('/:id/reativar', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId;
+    if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+
+    const r = await pool.query(
+      `UPDATE maturador_pares
+       SET banido_em = NULL, banido_agente_id = NULL, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2
+       RETURNING *`,
+      [req.params.id, userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
+    log.info('MATURADOR', 'Par reativado pelo operador — marca de banido/caído removida', { parId: req.params.id });
+    return res.json(r.rows[0]);
+  });
+
   // DELETE /:id — remove o par (não afeta as instâncias em si, só o pareamento)
   router.delete('/:id', async (req: AuthRequest, res: Response) => {
     const userId = req.userId;

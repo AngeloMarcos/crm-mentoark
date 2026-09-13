@@ -137,6 +137,24 @@ export function MaturadorNumeros() {
     }
   };
 
+  // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-13: "não consigo usar o
+  // maturador" — par marcado como banido/caído ficava preso pra sempre, sem nenhuma ação além de
+  // excluir e recriar o par do zero, perdendo a progressão de dias 20→50→100/dia). Reativa via
+  // POST /:id/reativar (routes/maturador.ts) — só limpa a marca, o par volta desligado (mesma
+  // regra de "nasce sempre desligado"), usuário liga de novo quando quiser.
+  const reativarPar = async (par: ParMaturador) => {
+    setProcessandoId(par.id);
+    try {
+      await apiFetch(`/api/maturador/${par.id}/reativar`, { method: "POST" });
+      toast.success("Par reativado — ligue o switch quando quiser voltar a mandar mensagem.");
+      carregar();
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setProcessandoId(null);
+    }
+  };
+
   const excluirPar = async (par: ParMaturador) => {
     if (!confirm(`Excluir o par "${par.agente_a_nome}" ↔ "${par.agente_b_nome}"? Isso só remove o pareamento, as instâncias continuam existindo.`)) return;
     try {
@@ -219,9 +237,19 @@ export function MaturadorNumeros() {
               </div>
 
               {par.banido_em ? (
-                <div className="flex items-center gap-2 p-2 bg-red-500 text-white rounded-md text-[11px] font-bold">
-                  <AlertOctagon className="h-3 w-3" />
-                  Par desligado — uma das instâncias foi marcada como caída/banida
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 p-2 bg-red-500 text-white rounded-md text-[11px] font-bold">
+                    <AlertOctagon className="h-3 w-3" />
+                    Par desligado — uma das instâncias foi marcada como caída/banida
+                  </div>
+                  <Button
+                    size="sm" variant="outline" className="w-full h-7 text-[11px]"
+                    disabled={processandoId === par.id}
+                    onClick={() => reativarPar(par)}
+                  >
+                    {processandoId === par.id ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
+                    Já reconectei / foi engano — reativar par
+                  </Button>
                 </div>
               ) : (
                 <div className="flex items-center justify-between">
