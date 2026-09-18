@@ -18,6 +18,18 @@
 #   - só reconstrói o(s) serviço(s) Docker realmente afetado(s) pelos arquivos passados.
 #   - depois do rebuild, valida automaticamente: curl no /health e nas últimas linhas de log
 #     procurando por ERROR — deploy "silenciosamente quebrado" vira erro visível na hora.
+#
+# [AUDITORIA] FIX APLICADO (2026-09-17 — incidente real em produção): os arquivos passados na
+# linha de comando servem só pra decidir QUAIS serviços rebuildar e como gate de build local —
+# a cópia em si sincroniza a árvore INTEIRA (`backend/src/` e/ou `src/`), não mais arquivo por
+# arquivo. Motivo: copiar só o que é passado permite um arquivo nunca ter sido deployado a
+# produção NENHUMA VEZ, silenciosamente, por sprints inteiras — só estoura quando algo novo
+# passa a importá-lo e um `--no-cache` recompila do zero. Foi exatamente o que aconteceu: 6
+# arquivos de backend (incluindo os do próprio módulo de assinaturas) nunca tinham ido pra
+# produção; o container só não crashava porque a imagem Docker antiga, buildada em algum
+# momento anterior com um `src` mais completo, continuava servindo — até o próximo `--no-cache`
+# expor o buraco com "Cannot find module", produção fora do ar até o achado manual. Sincronizar
+# a pasta inteira a cada deploy fecha essa classe de bug de uma vez.
 set -euo pipefail
 
 VPS_HOST="147.93.9.172"
@@ -89,14 +101,26 @@ if [[ "$TOCA_FRONTEND" == "true" ]]; then
 fi
 echo "✅ Build local OK"
 
-echo "── Passo 2/4 — copiando ${#FILES[@]} arquivo(s) para $TARGET ($REMOTE_BASE) ──"
-for f in "${FILES[@]}"; do
-  remote_path="$REMOTE_BASE/$f"
-  remote_dir="$(dirname "$remote_path")"
+echo "── Passo 2/4 — sincronizando árvore(s) de código-fonte completa(s) para $TARGET ($REMOTE_BASE) ──"
+echo "   (arquivo(s) que motivaram este deploy: ${FILES[*]})"
+sync_dir() {
+  local local_dir="$1" remote_dir="$2"
   ssh "${VPS_USER}@${VPS_HOST}" "mkdir -p '$remote_dir'"
-  scp "$REPO_ROOT/$f" "${VPS_USER}@${VPS_HOST}:$remote_path"
-  echo "  📤 $f → $remote_path"
-done
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -az --delete -e ssh "$local_dir/" "${VPS_USER}@${VPS_HOST}:$remote_dir/"
+  else
+    echo "  ⚠️  rsync não encontrado localmente — usando scp -r (não remove arquivos órfãos que sobrarem no servidor)"
+    scp -r "$local_dir/." "${VPS_USER}@${VPS_HOST}:$remote_dir/"
+  fi
+}
+if [[ "$TOCA_BACKEND" == "true" ]]; then
+  echo "  🔄 backend/src/ → $REMOTE_BASE/backend/src/"
+  sync_dir "$REPO_ROOT/backend/src" "$REMOTE_BASE/backend/src"
+fi
+if [[ "$TOCA_FRONTEND" == "true" ]]; then
+  echo "  🔄 src/ → $REMOTE_BASE/src/"
+  sync_dir "$REPO_ROOT/src" "$REMOTE_BASE/src"
+fi
 
 echo "── Passo 3/4 — rebuild dos serviços afetados ──"
 if [[ "$TOCA_BACKEND" == "true" ]]; then
