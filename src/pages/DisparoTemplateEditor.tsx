@@ -13,7 +13,7 @@ import {
 import {
   ArrowLeft, Bold, List, Loader2, Upload, Link as LinkIcon, Check, Phone,
   MessageSquare, Image as ImageIcon, FileText, Plus, X, Headphones,
-  ChevronsUpDown,
+  ChevronsUpDown, Video,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
@@ -45,15 +45,18 @@ import { VARIAVEIS_MENSAGEM_CONTATO, CONTATO_EXEMPLO } from "@/lib/modeloImporta
 // texto puro); "Resposta Rápida" não tem como virar algo clicável de verdade sem botão nativo,
 // então vira só uma chamada em negrito.
 //
-// Header "Vídeo" ficou de fora de propósito: a Galeria de Mídias (`galeria.ts`) não aceita nenhum
-// mimetype de vídeo hoje, e `disparoProcessor.ts` não tem branch de envio de vídeo — declarar a
-// opção sem esse suporte por trás vazaria como "configurei o header mas a campanha nunca manda o
-// vídeo", a mesma classe de bug silencioso já documentada várias vezes em AUDITORIA_LOG.md.
+// [AUDITORIA] FIX APLICADO (Sprint Suporte a Vídeo, 2026-09-18 — pedido do usuário: "consigamos
+// enviar imagem, vídeo e o que precisar através do template"): header "Vídeo" reativado — a nota
+// original (galeria não aceitava mimetype de vídeo, disparoProcessor.ts sem branch de envio)
+// deixou de ser verdade: `galeria.ts` (MIME_LIMITS) e `disparoProcessor.ts` (novo branch
+// `mediatype: 'video'`, mesmo formato de `sendMedia` já usado por imagem) ganharam suporte real
+// na mesma sprint. Sem os dois lados, isso teria virado a mesma classe de bug silencioso já
+// documentada em AUDITORIA_LOG.md — "configurei o header mas a campanha nunca manda o vídeo".
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => getAuthToken();
 
-type HeaderTipo = "nenhum" | "texto" | "imagem" | "documento" | "audio";
+type HeaderTipo = "nenhum" | "texto" | "imagem" | "video" | "documento" | "audio";
 type BotaoTipo = "resposta_rapida" | "url" | "telefone";
 
 interface TemplateBotao {
@@ -81,18 +84,19 @@ const HEADER_TIPOS: { id: HeaderTipo; label: string; icon: typeof MessageSquare 
   { id: "nenhum", label: "Nenhum", icon: X },
   { id: "texto", label: "Texto", icon: MessageSquare },
   { id: "imagem", label: "Imagem", icon: ImageIcon },
+  { id: "video", label: "Vídeo", icon: Video },
   { id: "documento", label: "Documento", icon: FileText },
   { id: "audio", label: "Áudio", icon: Headphones },
 ];
 
 // [AUDITORIA] LÓGICA: header com mídia de verdade (tem endpoint de envio funcionando em
-// disparoProcessor.ts E é aceito pela Galeria, `galeria.ts`) — "vídeo" fica de fora dos dois de
-// propósito (ver nota grande no topo do arquivo); "áudio" faz parte desde sempre (Galeria já
-// aceita mp3/ogg/wav/m4a, processor já manda via sendWhatsAppAudio).
-const HEADER_TIPOS_COM_MIDIA: HeaderTipo[] = ["imagem", "documento", "audio"];
+// disparoProcessor.ts E é aceito pela Galeria, `galeria.ts`) — "vídeo" entrou nesta sprint (ver
+// nota grande no topo do arquivo); "áudio" faz parte desde sempre (Galeria já aceita
+// mp3/ogg/wav/m4a, processor já manda via sendWhatsAppAudio).
+const HEADER_TIPOS_COM_MIDIA: HeaderTipo[] = ["imagem", "video", "documento", "audio"];
 
 // Mesmo mapeamento tipo_midia→media_type da Galeria já usado em DisparoTemplates.tsx.
-const HEADER_TIPO_PARA_GALERIA: Record<string, string | null> = { imagem: "image", documento: "pdf", audio: "audio" };
+const HEADER_TIPO_PARA_GALERIA: Record<string, string | null> = { imagem: "image", video: "video", documento: "pdf", audio: "audio" };
 
 const BOTAO_TIPOS: { id: BotaoTipo; label: string; icon: typeof MessageSquare }[] = [
   { id: "resposta_rapida", label: "Resposta Rápida", icon: MessageSquare },
@@ -175,6 +179,10 @@ export default function DisparoTemplateEditorPage() {
   const [headerTipo, setHeaderTipo] = useState<HeaderTipo>("nenhum");
   const [headerTexto, setHeaderTexto] = useState("");
   const [headerMidiaUrl, setHeaderMidiaUrl] = useState("");
+  // [AUDITORIA] LÓGICA (Sprint Estrutura Coerente de Mídia, 2026-09-18): vínculo com a linha real
+  // em `galeria_midias` (tipo/tamanho/nome já existem lá, não precisa duplicar) — `null` quando a
+  // mídia veio de um link colado manualmente (sem registro de galeria por trás).
+  const [headerMediaId, setHeaderMediaId] = useState<string | null>(null);
   const [corpo, setCorpo] = useState("");
   const [footer, setFooter] = useState("");
   const [botoes, setBotoes] = useState<TemplateBotao[]>([]);
@@ -223,6 +231,7 @@ export default function DisparoTemplateEditorPage() {
       const item: MidiaGaleria = Array.isArray(novo) ? novo[0] : novo;
       setGaleriaItens(prev => [item, ...prev]);
       setHeaderMidiaUrl(item.url);
+      setHeaderMediaId(item.id);
       toast.success("Arquivo enviado e selecionado");
     } catch (err: any) {
       toast.error(err.message || "Erro ao enviar arquivo");
@@ -264,6 +273,7 @@ export default function DisparoTemplateEditorPage() {
         setHeaderMidiaUrl(data.url_midia || "");
         setCorpo(data.tipo_midia === "texto" ? (data.mensagem || "") : (data.legenda_midia || data.mensagem || ""));
       }
+      setHeaderMediaId(data.header_media_id || null);
       setFooter(data.footer || "");
       setMostrarUrlManual(!!data.url_midia);
       try {
@@ -385,6 +395,7 @@ export default function DisparoTemplateEditorPage() {
       tipo_midia: temMidia ? headerTipo : "texto",
       mensagem: temMidia ? "" : textoComposto,
       url_midia: temMidia ? headerMidiaUrl.trim() : null,
+      header_media_id: temMidia ? headerMediaId : null,
       legenda_midia: temMidia ? textoComposto : null,
       updated_at: new Date().toISOString(),
     };
@@ -450,7 +461,7 @@ export default function DisparoTemplateEditorPage() {
               <CardContent className="p-4 space-y-4">
                 <div className="space-y-1.5">
                   <Label>Header</Label>
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                     {HEADER_TIPOS.map(h => (
                       <Button
                         key={h.id}
@@ -487,7 +498,7 @@ export default function DisparoTemplateEditorPage() {
                         Fazer upload
                         <input
                           type="file"
-                          accept={headerTipo === "imagem" ? "image/*" : headerTipo === "audio" ? "audio/*" : "application/pdf"}
+                          accept={headerTipo === "imagem" ? "image/*" : headerTipo === "video" ? "video/*" : headerTipo === "audio" ? "audio/*" : "application/pdf"}
                           className="hidden"
                           disabled={uploadingGaleria}
                           onChange={handleUploadGaleria}
@@ -505,13 +516,15 @@ export default function DisparoTemplateEditorPage() {
                               key={item.id}
                               type="button"
                               title={item.titulo || item.filename}
-                              onClick={() => setHeaderMidiaUrl(item.url)}
+                              onClick={() => { setHeaderMidiaUrl(item.url); setHeaderMediaId(item.id); }}
                               className={`relative aspect-square rounded-md overflow-hidden border-2 transition-all ${
                                 selecionado ? "border-primary ring-2 ring-primary/30" : "border-transparent hover:border-muted-foreground/30"
                               }`}
                             >
                               {item.media_type === "image" ? (
                                 <img src={item.url} alt="" className="w-full h-full object-cover" />
+                              ) : item.media_type === "video" ? (
+                                <video src={item.url} className="w-full h-full object-cover" muted />
                               ) : (
                                 <div className="w-full h-full flex items-center justify-center bg-muted">
                                   {item.media_type === "audio" ? <Headphones className="h-4 w-4 text-muted-foreground" /> : <FileText className="h-4 w-4 text-muted-foreground" />}
@@ -533,7 +546,7 @@ export default function DisparoTemplateEditorPage() {
                       <LinkIcon className="h-3 w-3" /> {mostrarUrlManual ? "Ocultar link manual" : "Ou colar um link externo"}
                     </button>
                     {mostrarUrlManual && (
-                      <Input value={headerMidiaUrl} onChange={e => setHeaderMidiaUrl(e.target.value)} placeholder="https://..." />
+                      <Input value={headerMidiaUrl} onChange={e => { setHeaderMidiaUrl(e.target.value); setHeaderMediaId(null); }} placeholder="https://..." />
                     )}
                   </div>
                 )}
@@ -720,6 +733,11 @@ function PreviewBubble({ headerTipo, headerTexto, headerMidiaUrl, corpo, footer,
             headerMidiaUrl
               ? <img src={headerMidiaUrl} alt="" className="w-full h-32 object-cover rounded-md mb-2" />
               : <div className="w-full h-24 rounded-md bg-muted flex items-center justify-center mb-2"><ImageIcon className="h-6 w-6 text-muted-foreground" /></div>
+          )}
+          {headerTipo === "video" && (
+            headerMidiaUrl
+              ? <video src={headerMidiaUrl} controls className="w-full h-32 object-cover rounded-md mb-2" />
+              : <div className="w-full h-24 rounded-md bg-muted flex items-center justify-center mb-2"><Video className="h-6 w-6 text-muted-foreground" /></div>
           )}
           {headerTipo === "documento" && (
             <div className="flex items-center gap-2 rounded-md bg-muted p-2 mb-2">

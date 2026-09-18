@@ -18,6 +18,11 @@ const MIME_LIMITS: Record<string, number> = {
   'application/pdf': 25,
   'audio/mpeg': 50, 'audio/ogg': 50, 'audio/wav': 50,
   'audio/mp4': 50,  'audio/m4a': 50, 'audio/webm': 50,
+  // [AUDITORIA] LÓGICA (Sprint Suporte a Vídeo, 2026-09-18 — pedido do usuário: "consigamos
+  // enviar imagem, vídeo e o que precisar através do template"): vídeo nunca existiu como tipo
+  // de mídia em lugar nenhum do sistema. 16MB é o teto real de vídeo do WhatsApp (não-oficial via
+  // Evolution segue a mesma prática) — ajustável aqui se precisar.
+  'video/mp4': 16, 'video/quicktime': 16, 'video/webm': 16,
 };
 
 const ALLOWED_MIMES = Object.keys(MIME_LIMITS);
@@ -35,13 +40,14 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // limite global — validação por tipo feita na rota
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_MIMES.includes(file.mimetype)) cb(null, true);
-    else cb(new Error('Formato não suportado. Use JPG, PNG, WEBP, GIF, AVIF, PDF ou áudio (MP3, OGG, WAV, M4A).'));
+    else cb(new Error('Formato não suportado. Use JPG, PNG, WEBP, GIF, AVIF, PDF, vídeo (MP4, MOV, WEBM) ou áudio (MP3, OGG, WAV, M4A).'));
   },
 });
 
-function detectMediaType(mime: string): 'image' | 'pdf' | 'audio' {
+function detectMediaType(mime: string): 'image' | 'pdf' | 'audio' | 'video' {
   if (mime.startsWith('image/'))      return 'image';
   if (mime === 'application/pdf')     return 'pdf';
+  if (mime.startsWith('video/'))      return 'video';
   return 'audio';
 }
 

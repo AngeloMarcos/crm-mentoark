@@ -12,7 +12,7 @@
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
-import { encriptarSegredoMetaOficial, testarConexaoMetaOficial, buscarConfigMetaOficial } from '../services/metaCloudApi';
+import { encriptarSegredoMetaOficial, testarConexaoMetaOficial, buscarConfigMetaOficial, parseLimiteMensagens } from '../services/metaCloudApi';
 import { log } from '../logger';
 
 export default function metaOficialRouter(pool: Pool): Router {
@@ -23,13 +23,19 @@ export default function metaOficialRouter(pool: Pool): Router {
     try {
       const r = await pool.query(
         `SELECT id, numero_exibicao, phone_number_id, waba_id, verify_token, graph_api_version,
-                ativo, ultima_conexao_em, ultimo_erro,
+                ativo, ultima_conexao_em, ultimo_erro, quality_rating, messaging_limit_tier,
                 (access_token_enc IS NOT NULL) AS "temAccessToken",
                 (app_secret_enc IS NOT NULL) AS "temAppSecret"
          FROM whatsapp_oficial_config WHERE user_id = $1 LIMIT 1`,
         [req.userId]
       );
-      return res.json(r.rows[0] || null);
+      const row = r.rows[0] || null;
+      if (row) {
+        const { valor, label } = parseLimiteMensagens(row.messaging_limit_tier);
+        row.limite_mensagens_valor = valor;
+        row.limite_mensagens_label = label;
+      }
+      return res.json(row);
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -88,8 +94,13 @@ export default function metaOficialRouter(pool: Pool): Router {
 
       const resultado = await testarConexaoMetaOficial(cfg);
       await pool.query(
-        `UPDATE whatsapp_oficial_config SET ultima_conexao_em = CASE WHEN $2 THEN NOW() ELSE ultima_conexao_em END, ultimo_erro = $3 WHERE id = $1`,
-        [cfg.id, resultado.ok, resultado.erro || null]
+        `UPDATE whatsapp_oficial_config
+         SET ultima_conexao_em = CASE WHEN $2 THEN NOW() ELSE ultima_conexao_em END,
+             ultimo_erro = $3,
+             quality_rating = COALESCE($4, quality_rating),
+             messaging_limit_tier = COALESCE($5, messaging_limit_tier)
+         WHERE id = $1`,
+        [cfg.id, resultado.ok, resultado.erro || null, resultado.qualidade || null, resultado.limiteTier || null]
       ).catch(() => {});
 
       return res.json(resultado);

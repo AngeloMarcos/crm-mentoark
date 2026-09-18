@@ -34,7 +34,7 @@ import {
   Bot, Workflow, Zap, Sparkles,
   Eye, EyeOff, Plus, Pencil, Trash2, Loader2,
   CheckCircle2, XCircle, Power, AlertTriangle, Plug,
-  MessageCircle, Copy,
+  MessageCircle, Copy, Gauge,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -83,9 +83,19 @@ interface MetaOficialConfig {
   ativo: boolean;
   ultima_conexao_em: string | null;
   ultimo_erro: string | null;
+  quality_rating: string | null;
+  messaging_limit_tier: string | null;
+  limite_mensagens_valor: number | null;
+  limite_mensagens_label: string | null;
   temAccessToken: boolean;
   temAppSecret: boolean;
 }
+
+const QUALIDADE_META: Record<string, { label: string; cls: string }> = {
+  GREEN: { label: "Alta", cls: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" },
+  YELLOW: { label: "Média", cls: "bg-amber-500/10 text-amber-600 border-amber-500/20" },
+  RED: { label: "Baixa", cls: "bg-red-500/10 text-red-600 border-red-500/20" },
+};
 
 // [AUDITORIA] FIX APLICADO: tipo 'evolution' removido das opções — URL/API Key da
 // Evolution agora são fixas no .env do servidor (ver getEvolutionConfig em
@@ -593,6 +603,26 @@ export default function IntegracoesPage() {
                 )}
                 {metaConfig.ultimo_erro && (
                   <p className="text-destructive">Último erro: {metaConfig.ultimo_erro}</p>
+                )}
+
+                {(metaConfig.messaging_limit_tier || metaConfig.quality_rating) && (
+                  <div className="flex flex-wrap items-center gap-3 pt-1 border-t mt-1">
+                    {metaConfig.messaging_limit_tier && (
+                      <span className="flex items-center gap-1.5">
+                        <Gauge className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="text-muted-foreground">Limite de mensagens/24h:</span>
+                        <span className="font-semibold text-foreground/90">{metaConfig.limite_mensagens_label ?? metaConfig.messaging_limit_tier}</span>
+                      </span>
+                    )}
+                    {metaConfig.quality_rating && (
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] ${QUALIDADE_META[metaConfig.quality_rating]?.cls ?? ""}`}
+                      >
+                        Qualidade: {QUALIDADE_META[metaConfig.quality_rating]?.label ?? metaConfig.quality_rating}
+                      </Badge>
+                    )}
+                  </div>
                 )}
               </div>
             )}

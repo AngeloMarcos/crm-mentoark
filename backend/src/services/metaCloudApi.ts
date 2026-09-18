@@ -70,27 +70,51 @@ function graphUrl(cfg: MetaOficialConfig, path: string): string {
   return `https://graph.facebook.com/${cfg.graph_api_version}/${path}`;
 }
 
+// [AUDITORIA] LÓGICA (2026-09-16): a Graph API devolve o limite de mensagens como um enum tipo
+// "TIER_250" / "TIER_10K" / "TIER_UNLIMITED" — igual ao rótulo mostrado em Business Manager, mas
+// nunca documentado com uma lista fechada de valores possíveis (Meta já mudou os degraus antes,
+// ex.: o antigo "TIER_1K" virou um patamar de 2 mil). Em vez de mapear um enum fixo (quebraria
+// silenciosamente se a Meta adicionar um degrau novo), extrai o número e o multiplicador "K" do
+// próprio nome do enum — funciona pra qualquer TIER_<n>[K] que a Meta já usou ou venha a usar.
+export function parseLimiteMensagens(tier: string | null | undefined): { valor: number | null; label: string } {
+  if (!tier) return { valor: null, label: '—' };
+  if (tier === 'TIER_UNLIMITED') return { valor: null, label: 'Ilimitado' };
+  const m = /^TIER_(\d+)(K)?$/.exec(tier);
+  if (!m) return { valor: null, label: tier };
+  const valor = parseInt(m[1], 10) * (m[2] ? 1000 : 1);
+  return { valor, label: valor.toLocaleString('pt-BR') };
+}
+
 // [AUDITORIA] LÓGICA: chamada leve (GET, não gasta cota de mensagem) só pra confirmar que
 // `phone_number_id` + token realmente correspondem a um número válido e acessível com esse
 // token — usado pelo botão "Testar conexão" da tela de configuração, mesmo espírito de
-// `testarEvolution()` (Agentes.tsx) já usado pro canal não-oficial.
-export async function testarConexaoMetaOficial(cfg: MetaOficialConfig): Promise<{ ok: boolean; numeroExibicao?: string; nomeVerificado?: string; qualidade?: string; erro?: string }> {
+// `testarEvolution()` (Agentes.tsx) já usado pro canal não-oficial. Também traz `quality_rating`
+// e `messaging_limit_tier` (pedido do usuário: ver quanto de limite a Meta libera, mesmo sem
+// ainda ter a estrutura completa de disparo pela API Oficial) pra persistir e mostrar na tela.
+export async function testarConexaoMetaOficial(cfg: MetaOficialConfig): Promise<{
+  ok: boolean; numeroExibicao?: string; nomeVerificado?: string; qualidade?: string;
+  limiteTier?: string; limiteValor?: number | null; limiteLabel?: string; erro?: string;
+}> {
   if (!cfg.phone_number_id || !cfg.access_token_enc) {
     return { ok: false, erro: 'Preencha Phone Number ID e Access Token antes de testar.' };
   }
   try {
     const token = decriptar(cfg.access_token_enc);
-    const url = graphUrl(cfg, `${cfg.phone_number_id}?fields=verified_name,display_phone_number,quality_rating`);
+    const url = graphUrl(cfg, `${cfg.phone_number_id}?fields=verified_name,display_phone_number,quality_rating,messaging_limit_tier`);
     const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     const data: any = await resp.json().catch(() => ({}));
     if (!resp.ok) {
       return { ok: false, erro: data?.error?.message || `Erro ${resp.status} da Graph API` };
     }
+    const { valor, label } = parseLimiteMensagens(data.messaging_limit_tier);
     return {
       ok: true,
       numeroExibicao: data.display_phone_number,
       nomeVerificado: data.verified_name,
       qualidade: data.quality_rating,
+      limiteTier: data.messaging_limit_tier,
+      limiteValor: valor,
+      limiteLabel: label,
     };
   } catch (err: any) {
     log.error('META_OFICIAL', 'Falha ao testar conexão', { err: err?.message });

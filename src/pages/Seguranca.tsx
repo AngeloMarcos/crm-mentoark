@@ -1,4 +1,5 @@
 import { CRMLayout } from "@/components/CRMLayout";
+import { AdminConfigNav } from "@/components/admin/AdminConfigNav";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
   Lock, Users, Database, ShieldCheck, Key, 
@@ -13,6 +14,8 @@ export default function SegurancaPage() {
   return (
     <CRMLayout>
       <div className="space-y-6">
+        <AdminConfigNav />
+
         {/* Header Profissional */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">

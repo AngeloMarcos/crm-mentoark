@@ -1227,7 +1227,7 @@ export default function whatsappRouter(pool: Pool): Router {
         `SELECT
            m.id, m.message_id, m.from_me, m.message_type, m.content,
            m.media_url, m.media_mimetype, m.status, m.push_name,
-           m.timestamp_wa, m.created_at, m.is_read,
+           m.timestamp_wa, m.created_at, m.is_read, m.fixada,
            COALESCE(s.status, m.status) AS delivery_status,
            u.display_name AS sender_name
          FROM whatsapp_messages m
@@ -1258,6 +1258,7 @@ export default function whatsappRouter(pool: Pool): Router {
         sender_name: row.sender_name || null,
         created_at: row.created_at,
         timestamp_wa: row.timestamp_wa,
+        fixada: row.fixada || false,
       }));
 
       return res.json(mensagens);
@@ -2216,7 +2217,13 @@ export default function whatsappRouter(pool: Pool): Router {
         try {
           const key = m.key || {};
           const remoteJid: string = key.remoteJid || m.remoteJid || '';
-          if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
+          // [AUDITORIA] FIX APLICADO (2026-09-18 — pedido do usuário: "filtro de grupo ainda
+          // não tá funcionando"): antes pulava toda mensagem de grupo (`@g.us`) na sincronização
+          // de histórico — resultado, nenhuma conta tinha histórico de grupo importado, só
+          // mensagem nova chegada depois de conectar (o webhook em tempo real já suporta grupo
+          // normalmente). O filtro "Grupos" da lista de conversas (WhatsAppInterface.tsx) estava
+          // correto o tempo todo — mostrava vazio porque não havia dado nenhum pra filtrar.
+          if (!remoteJid) continue;
           const messageId = key.id || m.id || `${remoteJid}_${m.messageTimestamp}`;
           const fromMe = !!key.fromMe;
           const ts = Number(m.messageTimestamp || Math.floor(Date.now() / 1000));
@@ -2869,6 +2876,27 @@ export default function whatsappRouter(pool: Pool): Router {
       }).catch(() => {});
     }
     return res.json({ ok: true });
+  });
+
+  // PATCH /messages/:id/fixar — "mensagem fixada" é uma feature só do CRM (não sincroniza com o
+  // WhatsApp real — a Evolution API não expõe fixar/desafixar mensagem, ver migrations.ts).
+  // Visível pra qualquer atendente do tenant, não só quem fixou.
+  router.patch('/messages/:id/fixar', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const id = req.params.id;
+    const fixada = !!req.body?.fixada;
+    const tenantId = await resolveOwnerId(userId);
+    await req.setDbUserId!(tenantId);
+    const r = await (await req.getDb!()).query(
+      `UPDATE whatsapp_messages
+       SET fixada = $1, fixada_em = CASE WHEN $1 THEN NOW() ELSE NULL END,
+           fixada_por = CASE WHEN $1 THEN $2 ELSE NULL END
+       WHERE (id::text = $3 OR message_id = $3) AND user_id = $4
+       RETURNING id, fixada`,
+      [fixada, userId, id, tenantId]
+    ).catch(() => ({ rows: [] as any[] }));
+    if (!r.rows.length) return res.status(404).json({ message: 'Mensagem não encontrada' });
+    return res.json({ ok: true, fixada: r.rows[0].fixada });
   });
 
   router.patch('/conversas/:phone/read', async (req: AuthRequest, res: Response) => {

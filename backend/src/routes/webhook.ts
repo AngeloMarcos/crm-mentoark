@@ -476,7 +476,9 @@ export default function webhookRouter(pool: Pool): Router {
             try {
               const key = m.key || {};
               const remoteJid: string = key.remoteJid || m.remoteJid || '';
-              if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
+              // [AUDITORIA] FIX APLICADO (2026-09-18 — mesmo achado de routes/whatsapp.ts
+              // POST /sync-history): não pula mais grupo (@g.us) na sincronização de histórico.
+              if (!remoteJid) continue;
               const messageId = key.id || m.id;
               if (!messageId) continue;
               const fromMe = !!key.fromMe;
@@ -713,7 +715,9 @@ export default function webhookRouter(pool: Pool): Router {
                 try {
                   const key = m.key || {};
                   const remoteJid: string = key.remoteJid || m.remoteJid || '';
-                  if (!remoteJid || remoteJid.endsWith('@g.us')) continue;
+                  // [AUDITORIA] FIX APLICADO (2026-09-18 — mesmo achado acima): não pula mais
+                  // grupo (@g.us) nesta sincronização passiva também.
+                  if (!remoteJid) continue;
                   const messageId = key.id || m.id;
                   if (!messageId) continue;
                   const fromMe = !!key.fromMe;

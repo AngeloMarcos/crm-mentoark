@@ -481,6 +481,14 @@ export default function DisparosPage() {
   const [form, setForm] = useState({
     nome: "",
     tipo_midia: "texto" as "texto" | "imagem" | "audio" | "documento",
+    // [AUDITORIA] LÓGICA (Sprint Vínculo Vivo Campanha↔Template, 2026-09-18 — pedido do usuário:
+    // "um não deve depender do outro" — editar o template deve atualizar campanha já em
+    // andamento criada a partir dele): antes a campanha só copiava os campos do template no
+    // INSERT (`StepReview.handleStart`), sem guardar de qual template veio — editar o template
+    // depois nunca alcançava nenhuma campanha já criada. Precisa viver em `form` (não como estado
+    // local só de `StepMessage`, onde `loadedTemplateId` já existia) porque é `StepReview` quem
+    // grava a campanha, e só recebe `form` como prop.
+    template_id: null as string | null,
     mensagem: "",
     perfil_velocidade: "safe" as "safe" | "moderate" | "fast",
     janela_inicio: "08:00",
@@ -2151,6 +2159,7 @@ function StepMessage({ form, setForm }: any) {
   const carregarTemplate = (tpl: any) => {
     setForm({
       ...form,
+      template_id: tpl.id,
       tipo_midia: tpl.tipo_midia,
       mensagem: tpl.tipo_midia === "texto" ? tpl.mensagem : "",
       legenda_midia: tpl.tipo_midia === "texto" ? "" : (tpl.legenda_midia || tpl.mensagem || ""),
@@ -2253,7 +2262,7 @@ function StepMessage({ form, setForm }: any) {
     setSalvandoTemplate(false);
     if (error) { toast.error(error.message); return; }
     toast.success(!comoNovo && loadedTemplateId ? "Alterações salvas no template!" : "Template salvo!");
-    if (data) { setLoadedTemplateId(data.id); setLoadedTemplateNome(data.nome); }
+    if (data) { setLoadedTemplateId(data.id); setLoadedTemplateNome(data.nome); setForm((f: any) => ({ ...f, template_id: data.id })); }
     setSaveModalOpen(false);
   };
 
@@ -2523,8 +2532,58 @@ function StepMessage({ form, setForm }: any) {
 
 
 function StepAntiBan({ form, setForm }: any) {
+  const { isAdmin } = useAuth();
   const [instancias, setInstancias] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // [AUDITORIA] LÓGICA (2026-09-18 — pedido do usuário: "pode tirar essa trava, deixe como
+  // opcional na configuração do sistema"): teto diário deixou de ser um valor fixo de 50 —
+  // agora é configurável por conta (`GET/PATCH /api/disparos/config-limite`, backend). Busca o
+  // teto real da conta ao abrir esta etapa; só admin pode editá-lo (decisão de risco pro número
+  // do time inteiro, não preferência pessoal de quem está montando a campanha no momento).
+  const [tetoConta, setTetoConta] = useState(50);
+  const [editandoTeto, setEditandoTeto] = useState(false);
+  const [tetoInput, setTetoInput] = useState("50");
+  const [salvandoTeto, setSalvandoTeto] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/disparos/config-limite`, {
+          headers: { Authorization: `Bearer ${await getFreshToken()}` },
+        });
+        if (r.ok) {
+          const d = await r.json();
+          setTetoConta(d.limite_diario_disparos_max || 50);
+          setTetoInput(String(d.limite_diario_disparos_max || 50));
+        }
+      } catch { /* falha ao buscar teto não trava a tela — fica no default 50 */ }
+    })();
+  }, []);
+
+  const salvarTeto = async () => {
+    const v = parseInt(tetoInput, 10);
+    if (!Number.isFinite(v) || v < 1 || v > 1000) {
+      toast.error("Informe um número entre 1 e 1000.");
+      return;
+    }
+    setSalvandoTeto(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/disparos/config-limite`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${await getFreshToken()}` },
+        body: JSON.stringify({ limite_diario_disparos_max: v }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.message || "Falha ao salvar");
+      setTetoConta(d.limite_diario_disparos_max);
+      setEditandoTeto(false);
+      toast.success("Teto diário da conta atualizado");
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setSalvandoTeto(false);
+    }
+  };
   // [AUDITORIA] BUG (Sprint Disparos/Multi-instância, 2026-07-25): <Switch /> sem
   // checked/onCheckedChange — não filtrava nada, e o limiar (>70) nem batia com o hardcoded
   // (>=40) do botão "Selecionar todas" logo ao lado. [AUDITORIA] FIX APLICADO: estado local
@@ -2765,23 +2824,40 @@ function StepAntiBan({ form, setForm }: any) {
               <Input
                 type="number"
                 min={1}
-                max={50}
+                max={tetoConta}
                 value={form.limite_diario_mensagens}
                 // [AUDITORIA] FIX APLICADO (Sprint Limite Diário Seguro, 2026-09-11 — pedido do
                 // usuário): clamp no próprio onChange, não só o atributo HTML `max` — `max` no
                 // input type=number bloqueia as setinhas/scroll, mas ainda deixa o operador digitar
-                // "500" manualmente sem travar nada visualmente até o submit. Backend
-                // (routes/disparos.ts) reforça o mesmo teto de 50 de qualquer forma, mas a UI não
-                // devia deixar o campo mostrar um número que o servidor vai reduzir depois.
+                // um valor maior manualmente sem travar nada visualmente até o submit. Backend
+                // (routes/disparos.ts) reforça o mesmo teto de qualquer forma, mas a UI não devia
+                // deixar o campo mostrar um número que o servidor vai reduzir depois.
+                // [AUDITORIA] FIX APLICADO (2026-09-18): teto deixou de ser fixo em 50 — agora é
+                // `tetoConta`, configurável pela própria conta (ver useEffect acima).
                 onChange={e => {
                   const v = parseInt(e.target.value);
-                  setForm({ ...form, limite_diario_mensagens: Number.isFinite(v) ? Math.min(50, Math.max(1, v)) : 1 });
+                  setForm({ ...form, limite_diario_mensagens: Number.isFinite(v) ? Math.min(tetoConta, Math.max(1, v)) : 1 });
                 }}
                 className="h-8"
               />
-              <p className="text-[10px] text-muted-foreground">
-                Máximo permitido: 50/dia por instância — teto de segurança pra não travar/banir o número. Recomendado começar mais baixo (20 a 30) em chips novos/em aquecimento.
-              </p>
+              {!editandoTeto ? (
+                <p className="text-[10px] text-muted-foreground">
+                  Máximo permitido: {tetoConta}/dia por instância — teto de segurança da sua conta, pra não travar/banir o número. Recomendado começar mais baixo (20 a 30) em chips novos/em aquecimento.
+                  {isAdmin && (
+                    <button type="button" className="ml-1 underline hover:text-foreground" onClick={() => { setTetoInput(String(tetoConta)); setEditandoTeto(true); }}>
+                      Ajustar teto da conta
+                    </button>
+                  )}
+                </p>
+              ) : (
+                <div className="flex items-center gap-2 pt-1">
+                  <Input type="number" min={1} max={1000} value={tetoInput} onChange={e => setTetoInput(e.target.value)} className="h-8 w-24" />
+                  <Button type="button" size="sm" className="h-8" disabled={salvandoTeto} onClick={salvarTeto}>
+                    {salvandoTeto ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Salvar"}
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" className="h-8" onClick={() => setEditandoTeto(false)}>Cancelar</Button>
+                </div>
+              )}
             </div>
             {/* [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): campo novo —
                 sem ele, nada impedia o mesmo contato de receber duas campanhas diferentes em
@@ -2938,6 +3014,12 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
         // não gravar em branco. Coluna é só informativa/auditoria (não lida por `disparoProcessor.ts`
         // nem por `get_next_disparo_batch`, confirmado por grep), sem impacto no envio real.
         mensagem_template: form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia,
+        // [AUDITORIA] LÓGICA (Sprint Vínculo Vivo Campanha↔Template, 2026-09-18): grava de qual
+        // template esta campanha nasceu (`null` quando montada na mão, sem carregar nenhum) — é
+        // isso que permite `disparoProcessor.ts` reler o template ao vivo a cada tick em vez de
+        // depender só desta cópia congelada. Ver plano completo em
+        // C:\Users\angel\.claude\plans\smooth-crafting-shannon.md.
+        template_id: form.template_id || null,
         tipo_midia: form.tipo_midia,
         url_midia: form.url_midia,
         legenda_midia: form.legenda_midia,

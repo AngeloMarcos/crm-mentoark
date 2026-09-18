@@ -1,10 +1,12 @@
 import { Router, Response, NextFunction } from 'express';
 import { Pool } from 'pg';
 import { makeCrud } from '../crud';
-import { AuthRequest } from '../middleware';
+import { AuthRequest, adminMiddleware } from '../middleware';
 import { log } from '../logger';
 import { evolutionFetch } from '../utils/resilientFetch';
 import { criarProvider, OpenAIProvider } from '../services/providers';
+import { resolverOwnerId } from '../services/subscription';
+import { resolverTetoDiarioDisparo } from '../services/disparoProcessor';
 
 // ── Rate limiting persistente via banco ──────────────────────────────────────
 async function checkRateLimit(pool: Pool, userId: string): Promise<boolean> {
@@ -42,22 +44,22 @@ function normalizarTelefone(raw: string): string | null {
 
 // [AUDITORIA] LÓGICA (Sprint Limite Diário Seguro, 2026-09-11 — pedido explícito do usuário:
 // "limite os usuarios a disparar menos de 50 por dia para não travar ou banir a conta deles"):
-// teto ABSOLUTO de 50 mensagens/dia por instância, reforçado aqui no servidor — `Disparos.tsx`
-// já limita o campo a max=50 na UI, mas confiar só no frontend deixaria a porta aberta pra
-// qualquer POST/PUT direto na API (Postman, script, integração externa) herdar o default antigo
-// de 500 do banco ou qualquer valor digitado manualmente. Clamp, não rejeita a requisição
-// inteira — campanha continua sendo criada/atualizada normalmente, só com o valor travado no
-// teto seguro (silencioso de propósito: o operador não perde a ação por causa de um número que a
-// própria UI já devia ter impedido de chegar aqui).
-const TETO_SEGURO_DISPARO_DIARIO = 50;
-function clamparLimiteDiario(req: AuthRequest, _res: Response, next: NextFunction) {
-  if (req.body && req.body.limite_diario_mensagens != null) {
-    const v = Number(req.body.limite_diario_mensagens);
-    if (Number.isFinite(v)) {
-      req.body.limite_diario_mensagens = Math.max(1, Math.min(TETO_SEGURO_DISPARO_DIARIO, Math.trunc(v)));
+// nasceu como teto ABSOLUTO fixo de 50 msgs/dia por instância. [AUDITORIA] FIX APLICADO
+// (2026-09-18 — pedido do usuário: "pode tirar essa trava, deixe como opcional na configuração
+// do sistema"): virou configurável POR TENANT (`users.limite_diario_disparos_max`, ver
+// migrations.ts) — `resolverTetoDiarioDisparo` mora em `services/disparoProcessor.ts` (quem
+// aplica o teto de verdade no envio) e é reaproveitada aqui, evitando duas fontes de verdade.
+function makeClamparLimiteDiario(pool: Pool) {
+  return async function clamparLimiteDiario(req: AuthRequest, _res: Response, next: NextFunction) {
+    if (req.body && req.body.limite_diario_mensagens != null) {
+      const v = Number(req.body.limite_diario_mensagens);
+      if (Number.isFinite(v) && req.userId) {
+        const teto = await resolverTetoDiarioDisparo(pool, req.userId);
+        req.body.limite_diario_mensagens = Math.max(1, Math.min(teto, Math.trunc(v)));
+      }
     }
-  }
-  next();
+    next();
+  };
 }
 
 function dentroDaJanela(): boolean {
@@ -387,7 +389,8 @@ REGRAS ESTRITAS:
   // pra `requeuePendentes()` (`disparoProcessor.ts`) no caso irmão (motor aborta o lote antes
   // de processar todas as linhas já dequeueadas).
   // Cria campanha (POST '/') cai direto no CRUD genérico (`base`, abaixo) — intercepta só pra
-  // aplicar o teto de 50/dia antes do INSERT.
+  // aplicar o teto diário (configurável por tenant) antes do INSERT.
+  const clamparLimiteDiario = makeClamparLimiteDiario(pool);
   router.post('/', clamparLimiteDiario);
 
   router.put('/:id', clamparLimiteDiario, async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -415,6 +418,38 @@ REGRAS ESTRITAS:
       ).catch(err => log.warn('DISPARO', 'Falha ao resetar disparo_logs travados em sending', { disparoId: req.params.id, err: err?.message }));
     }
     next();
+  });
+
+  // [AUDITORIA] LÓGICA (2026-09-18 — pedido do usuário: "pode tirar essa trava, deixe como
+  // opcional na configuração do sistema"): teto diário de disparo por instância vira uma
+  // configuração DA CONTA (não mais um valor fixo de 50 no código) — cada tenant decide seu
+  // próprio limite de risco. GET qualquer membro do time pode ver; PATCH só admin (é uma decisão
+  // de risco pro número inteiro do time, não uma preferência pessoal). Registradas ANTES de
+  // `router.use('/', base)` — senão o CRUD genérico tentaria tratar "config-limite" como um
+  // `:id` de campanha.
+  router.get('/config-limite', async (req: AuthRequest, res: Response) => {
+    try {
+      const teto = await resolverTetoDiarioDisparo(pool, req.userId!);
+      return res.json({ limite_diario_disparos_max: teto });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  router.patch('/config-limite', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+      const v = Math.trunc(Number(req.body?.limite_diario_disparos_max));
+      // Sem teto máximo de propósito (pedido do usuário) — só um piso sensato (1) e um limite
+      // superior generoso (1000) contra erro de digitação virando um valor absurdo sem querer.
+      if (!Number.isFinite(v) || v < 1 || v > 1000) {
+        return res.status(400).json({ message: 'Informe um número entre 1 e 1000.' });
+      }
+      const ownerId = await resolverOwnerId(pool, req.userId!);
+      await pool.query(`UPDATE users SET limite_diario_disparos_max = $1 WHERE id = $2`, [v, ownerId]);
+      return res.json({ limite_diario_disparos_max: v });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
   });
 
   router.use('/', base);

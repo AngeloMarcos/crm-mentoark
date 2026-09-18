@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAuthToken } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
+import { AdminConfigNav } from "@/components/admin/AdminConfigNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -129,12 +130,15 @@ export default function AdminAssinaturasPage() {
   if (assinatura && !assinatura.sou_master) {
     return (
       <CRMLayout>
-        <div className="max-w-md mx-auto mt-20 text-center space-y-3">
-          <ShieldAlert className="h-10 w-10 mx-auto text-muted-foreground" />
-          <h2 className="text-lg font-bold">Acesso restrito</h2>
-          <p className="text-sm text-muted-foreground">
-            Esta página é exclusiva do administrador do sistema.
-          </p>
+        <div className="space-y-6">
+          <AdminConfigNav />
+          <div className="max-w-md mx-auto mt-20 text-center space-y-3">
+            <ShieldAlert className="h-10 w-10 mx-auto text-muted-foreground" />
+            <h2 className="text-lg font-bold">Acesso restrito</h2>
+            <p className="text-sm text-muted-foreground">
+              Esta página é exclusiva do administrador do sistema.
+            </p>
+          </div>
         </div>
       </CRMLayout>
     );
@@ -143,6 +147,8 @@ export default function AdminAssinaturasPage() {
   return (
     <CRMLayout>
       <div className="space-y-6 max-w-6xl mx-auto">
+        <AdminConfigNav />
+
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-black">Assinaturas</h1>

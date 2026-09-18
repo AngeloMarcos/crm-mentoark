@@ -802,10 +802,23 @@ export async function runMigrations(pool: Pool): Promise<void> {
         LIMIT batch_size
       ),
       next_msgs AS (
+        -- [AUDITORIA] FIX APLICADO (Sprint Vinculo Vivo Campanha-Template, 2026-09-18 - pedido
+        -- do usuario: "editar o template deve atualizar o envio da campanha, um nao deve
+        -- depender do outro"): antes, tipo_midia/url_midia/legenda_midia vinham so de d (a
+        -- campanha) - retrato congelado no momento em que a campanha foi criada - editar o
+        -- template depois nunca alcancava uma campanha ja em andamento. Com d.template_id
+        -- preenchido, LEFT JOIN traz o estado ATUAL do template a cada tick (roda a cada ~2s) e
+        -- COALESCE prioriza os campos de t (o template); campanha sem template vinculado
+        -- (d.template_id IS NULL, ou template apagado - ON DELETE SET NULL) cai pros campos
+        -- antigos de d sem quebrar nada.
         SELECT l.id, l.disparo_id, l.user_id, l.telefone, l.mensagem_enviada,
-               d.tipo_midia, d.url_midia, d.legenda_midia, d.variar_imagem
+               COALESCE(t.tipo_midia, d.tipo_midia) AS tipo_midia,
+               COALESCE(t.url_midia, d.url_midia) AS url_midia,
+               COALESCE(t.legenda_midia, d.legenda_midia) AS legenda_midia,
+               d.variar_imagem
         FROM disparo_logs l
         JOIN disparos d ON d.id = l.disparo_id
+        LEFT JOIN disparo_templates t ON t.id = d.template_id
         WHERE l.id IN (SELECT id FROM candidatos)
         FOR UPDATE OF l SKIP LOCKED
       )
@@ -1780,6 +1793,41 @@ export async function runMigrations(pool: Pool): Promise<void> {
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   `).catch(() => {});
 
+  // [AUDITORIA] LÓGICA (Sprint Vínculo Vivo Campanha↔Template, 2026-09-18 — pedido do usuário:
+  // "editar o template deve atualizar a campanha que estiver rodando com ele, um não deve
+  // depender do outro"): antes, `disparos` só copiava tipo_midia/url_midia/legenda_midia do
+  // template no momento da criação (StepReview.handleStart, Disparos.tsx) — sem NENHUM registro
+  // de qual template originou a campanha, editar o template depois nunca alcançava nada já
+  // criado. `ON DELETE SET NULL` (não CASCADE) — apagar um template não pode apagar nem quebrar
+  // campanha nenhuma, só volta a campanha a usar seu próprio retrato congelado como fallback
+  // (ver get_next_disparo_batch() logo abaixo, que já foi ajustada pra isso). Nullable — campanha
+  // montada na mão, sem carregar template nenhum, continua funcionando exatamente como sempre.
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS template_id UUID REFERENCES disparo_templates(id) ON DELETE SET NULL`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_disparos_template ON disparos(template_id) WHERE template_id IS NOT NULL`).catch(() => {});
+
+  // [AUDITORIA] LÓGICA (Sprint Estrutura Coerente de Mídia, 2026-09-18 — pedido do usuário: "veja
+  // uma forma melhor e mais coerente de armazenar esses arquivos"): `url_midia` sempre foi só uma
+  // string solta — sem tipo/tamanho/nome — mesmo já existindo `galeria_midias` (populada no
+  // upload real, `routes/galeria.ts`, com tudo isso). Em vez de duplicar essas colunas aqui,
+  // referencia a linha que já existe — single source of truth. `ON DELETE SET NULL`: apagar o
+  // arquivo da galeria não quebra o template (ele guarda `url_midia` própria, só perde o vínculo
+  // rico) — quem consome pode então avisar "mídia de origem removida" em vez de descobrir isso só
+  // quando o disparo falhar de verdade.
+  await pool.query(`ALTER TABLE disparo_templates ADD COLUMN IF NOT EXISTS header_media_id UUID REFERENCES galeria_midias(id) ON DELETE SET NULL`).catch(() => {});
+  log.info('MIGRATIONS', 'disparos.template_id + disparo_templates.header_media_id (vínculo vivo) OK');
+
+  // [AUDITORIA] LÓGICA (2026-09-18 — pedido do usuário: "pode tirar essa trava, deixe como
+  // opcional na configuração do sistema"): o teto de 50 msgs/dia por instância (Sprint Limite
+  // Diário Seguro, 2026-09-11) era um valor FIXO no código (`TETO_SEGURO_DISPARO_DIARIO` em
+  // routes/disparos.ts, e `Math.min(50, ...)` em disparoProcessor.ts) — nenhum cliente conseguia
+  // passar disso, mesmo sabendo o próprio número/risco. Decisão do usuário: vira configurável
+  // POR TENANT (não por campanha — isso já existe, `disparos.limite_diario_mensagens`; isto aqui
+  // é o TETO que esse campo não pode ultrapassar). Guardado no dono do tenant (`COALESCE(owner_id,
+  // id)`, mesmo padrão de `resolverOwnerId`) — time inteiro compartilha o mesmo teto. Default 50
+  // preserva o comportamento atual pra todo mundo que nunca mexer nisso.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS limite_diario_disparos_max INTEGER NOT NULL DEFAULT 50`).catch(() => {});
+  log.info('MIGRATIONS', 'users.limite_diario_disparos_max (teto de disparo configurável) OK');
+
   // ── Corridas via WhatsApp — integração com sistema de gestão de corridas do cliente ──
   // [AUDITORIA] LÓGICA: registra todo pedido de corrida identificado numa conversa de
   // WhatsApp (via ferramenta de IA `criar_corrida`, mcp/tools.ts) ou criado manualmente pela
@@ -2237,6 +2285,14 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
 
+  // [AUDITORIA] LÓGICA (2026-09-16 — pedido do usuário: ver limite de mensagens da API Oficial
+  // antes de ter a estrutura completa de disparo por ela): a Graph API expõe `messaging_limit_tier`
+  // no nó do phone number (ex: "TIER_250", "TIER_10K", "TIER_UNLIMITED") — mesmo valor mostrado em
+  // Business Manager. Guardado junto de `quality_rating` (já buscado em `testarConexaoMetaOficial`
+  // mas nunca persistido) pra aparecer na tela sem precisar clicar "Testar conexão" a cada visita.
+  await pool.query(`ALTER TABLE whatsapp_oficial_config ADD COLUMN IF NOT EXISTS quality_rating TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE whatsapp_oficial_config ADD COLUMN IF NOT EXISTS messaging_limit_tier TEXT`).catch(() => {});
+
   log.info('MIGRATIONS', 'whatsapp_oficial_config (Meta Cloud API) OK');
 
   // ── assinaturas: período gratuito de 3 dias por tenant (owner_id) ─────────────
@@ -2337,6 +2393,27 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE disparos ALTER COLUMN limite_diario_mensagens SET DEFAULT 50`).catch(() => {});
   await pool.query(`UPDATE disparos SET limite_diario_mensagens = 50 WHERE limite_diario_mensagens > 50`).catch(() => {});
   log.info('MIGRATIONS', 'disparos: limite_diario_mensagens travado em 50 (default da coluna + campanhas existentes acima disso, reduzidas)');
+
+  // [AUDITORIA] LÓGICA (2026-09-16 — melhoria de segurança pedida pelo usuário): bloqueio de
+  // conta por tentativas de login erradas. Antes só existia rate-limit por IP+email (10/15min,
+  // `loginLimiter` em auth.ts) — alguém trocando de IP (ou distribuindo tentativas por uma
+  // botnet) nunca esbarrava em nada. `failed_login_attempts` conta erros consecutivos; ao
+  // atingir o limite (ver MAX_TENTATIVAS_LOGIN em auth.ts) a conta entra em `locked_until` por
+  // um tempo curto e o contador zera — um login certo em qualquer momento também zera os dois.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0`).catch(() => {});
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ`).catch(() => {});
+  log.info('MIGRATIONS', 'users: bloqueio de conta por tentativas de login OK');
+
+  // [AUDITORIA] LÓGICA (2026-09-17 — pedido do usuário: "mensagens fixadas"): a Evolution API
+  // (camada usada pra falar com o WhatsApp) não expõe nenhum endpoint de fixar/desafixar
+  // mensagem — conferido no controller de chat da própria Evolution, 23 métodos, nenhum é pin.
+  // Por decisão do usuário, isso vira uma feature SÓ do CRM (não sincroniza com o WhatsApp real
+  // de ninguém) — sinalizar mensagem importante pro time, visível por qualquer atendente do
+  // tenant. Mesmo padrão de coluna+rota já usado por outras ações de mensagem (`deleted_at`).
+  await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS fixada BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS fixada_em TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS fixada_por UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
+  log.info('MIGRATIONS', 'whatsapp_messages: mensagens fixadas (CRM-only) OK');
 
   log.info('MIGRATIONS', 'OK');
 }

@@ -36,6 +36,11 @@ const registerLimiter = rateLimit({
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Bloqueio de conta por tentativas de login erradas — complementa o rate-limit por IP (que não
+// pega alguém distribuindo tentativas por IPs diferentes). Ver migrations.ts pras colunas.
+const MAX_TENTATIVAS_LOGIN = 5;
+const BLOQUEIO_LOGIN_MINUTOS = 15;
+
 function signAccessToken(user: { id: string; email: string; role: string; display_name: string }) {
   const opts: SignOptions = { expiresIn: (process.env.JWT_EXPIRES_IN || '1h') as SignOptions['expiresIn'] };
   return jwt.sign(
@@ -101,6 +106,13 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
       return res.status(401).json({ message: 'E-mail ou senha incorretos' });
     }
 
+    if (user.locked_until && new Date(user.locked_until).getTime() > Date.now()) {
+      const minutosRestantes = Math.ceil((new Date(user.locked_until).getTime() - Date.now()) / 60000);
+      return res.status(423).json({
+        message: `Conta temporariamente bloqueada por excesso de tentativas incorretas. Tente novamente em ${minutosRestantes} min.`,
+      });
+    }
+
     if (DEBUG_AUTH) log.info('AUTH', 'Usuário encontrado. Verificando senha...', { email: user.email, userId: user.id });
 
     let valid = false;
@@ -127,10 +139,26 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
 
     if (!valid) {
       if (DEBUG_AUTH) log.warn('AUTH', 'Senha incorreta para o usuário', { email });
+
+      const tentativas = (user.failed_login_attempts || 0) + 1;
+      if (tentativas >= MAX_TENTATIVAS_LOGIN) {
+        await pool.query(
+          `UPDATE users SET failed_login_attempts = 0, locked_until = now() + ($2 * interval '1 minute') WHERE id = $1`,
+          [user.id, BLOQUEIO_LOGIN_MINUTOS]
+        );
+        log.warn('AUTH', 'Conta bloqueada por excesso de tentativas de login', { userId: user.id, email });
+        return res.status(423).json({
+          message: `Muitas tentativas incorretas. Conta bloqueada por ${BLOQUEIO_LOGIN_MINUTOS} minutos.`,
+        });
+      }
+      await pool.query('UPDATE users SET failed_login_attempts = $1 WHERE id = $2', [tentativas, user.id]);
       return res.status(401).json({ message: 'E-mail ou senha incorretos' });
     }
 
-    await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    await pool.query(
+      'UPDATE users SET last_login_at = NOW(), failed_login_attempts = 0, locked_until = NULL WHERE id = $1',
+      [user.id]
+    );
 
     const access_token = signAccessToken({ id: user.id, email: user.email, role: user.role, display_name: user.display_name });
     const refresh_token = await createRefreshToken(user.id);
@@ -260,6 +288,14 @@ router.patch('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
       }
       const hash = await bcrypt.hash(String(new_password), 10);
       await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.userId]);
+
+      // Trocar a própria senha revoga os refresh tokens de todas as outras sessões — o
+      // access token corrente (JWT, curta duração) continua valendo até expirar sozinho, mas
+      // nenhum dispositivo consegue tirar um novo a partir daqui sem logar de novo.
+      await pool.query(
+        'UPDATE refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false',
+        [req.userId]
+      ).catch(err => log.warn('AUTH', 'Falha ao revogar sessões após troca de senha', { userId: req.userId, err: err?.message }));
     }
 
     // Validar avatar_url (aceita http(s) ou data URL de imagem, max ~600KB)

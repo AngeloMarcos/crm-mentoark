@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
 import { AuthRequest, adminMiddleware } from '../middleware';
+import { log } from '../logger';
 
 export default function usuarios(pool: Pool): Router {
 
@@ -324,7 +325,44 @@ export default function usuarios(pool: Pool): Router {
         [hash, user_id]
       );
       if (!r.rows.length) return res.status(404).json({ message: 'Usuário não encontrado' });
+
+      // Reset de senha pelo admin invalida todas as sessões existentes do usuário — sem isso,
+      // quem já estava logado (ex: dispositivo comprometido) continuaria com acesso via refresh
+      // token antigo mesmo após a senha ser trocada.
+      await pool.query(
+        `UPDATE refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false`,
+        [user_id]
+      ).catch(err => log.warn('USUARIOS', 'Falha ao revogar sessões após reset de senha', { user_id, err: err?.message }));
+
       return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/profiles/:user_id/revoke-sessions — encerra (logout forçado) todas as sessões
+  // ativas do usuário, sem precisar trocar a senha dele (ex: funcionário desligado, suspeita de
+  // acesso indevido). Escopado ao próprio tenant do admin — nunca a usuários de outra conta.
+  router.post('/profiles/:user_id/revoke-sessions', adminMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+      const { user_id } = req.params;
+      const adminId = req.userId!;
+      if (!user_id) return res.status(400).json({ message: 'user_id obrigatório' });
+
+      const alvo = await pool.query(
+        `SELECT id FROM users WHERE id = $1 AND (owner_id = $2 OR id = $2)`,
+        [user_id, adminId]
+      );
+      if (!alvo.rows.length) return res.status(404).json({ message: 'Usuário não encontrado' });
+
+      const r = await pool.query(
+        `UPDATE refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false RETURNING id`,
+        [user_id]
+      );
+      log.info('USUARIOS', 'Sessões encerradas manualmente pelo admin', {
+        user_id, adminId, sessoesRevogadas: r.rows.length,
+      });
+      return res.json({ ok: true, sessoes_revogadas: r.rows.length });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

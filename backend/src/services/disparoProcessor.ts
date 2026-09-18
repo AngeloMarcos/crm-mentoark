@@ -5,6 +5,7 @@ import { botSentTexts, botMessageIds, BOT_ECHO_TTL_MS } from './agentEngine';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
 import { garantirMidiaEstavel, gerarVariacaoImagem } from '../utils/whatsappMediaStorage';
 import { withTenantContext } from '../db';
+import { resolverOwnerId } from './subscription';
 import { log } from '../logger';
 
 // [AUDITORIA] BUG GRAVÍSSIMO CORRIGIDO (achado real do usuário, 2026-09-11 — conta
@@ -250,7 +251,42 @@ async function calcularDelayMs(pool: Pool, disparoId: string): Promise<number> {
 // concorrente não tem mais um "lote" sequencial único cujo tempo de vida fazia sentido pra esse
 // cache; ele já era, na prática, "resolve uma vez por campanha e reaproveita", então vive tão bem
 // (ou melhor: sobrevive entre ticks, não só dentro de um lote) como cache de módulo.
+// [AUDITORIA] LÓGICA (2026-09-18 — pedido do usuário: "pode tirar essa trava, deixe como
+// opcional na configuração do sistema"): teto de mensagens/dia por instância era um valor FIXO
+// de 50 no código — virou configurável por tenant (`users.limite_diario_disparos_max`, ver
+// migrations.ts). Exportada daqui (não de routes/disparos.ts) porque é este arquivo quem
+// realmente aplica o teto no envio; a rota de configuração (GET/PATCH /api/disparos/
+// config-limite) importa esta mesma função, evitando duas fontes de verdade divergentes.
+export async function resolverTetoDiarioDisparo(pool: Pool, userId: string): Promise<number> {
+  const TETO_FALLBACK = 50;
+  try {
+    const ownerId = await resolverOwnerId(pool, userId);
+    const r = await pool.query(`SELECT limite_diario_disparos_max FROM users WHERE id = $1`, [ownerId]);
+    const v = Number(r.rows[0]?.limite_diario_disparos_max);
+    return Number.isFinite(v) && v > 0 ? v : TETO_FALLBACK;
+  } catch {
+    return TETO_FALLBACK;
+  }
+}
+
 const urlMidiaEstavelPorCampanha = new Map<string, string>();
+// [AUDITORIA] FIX APLICADO (Sprint Vínculo Vivo Campanha↔Template, 2026-09-18): este Map nunca
+// teve nenhum `.delete()`/limite em lugar nenhum — crescia pra sempre, processo inteiro, uma
+// entrada por combinação (campanha, url de mídia) já vista. Não há um evento único e confiável
+// de "campanha terminou" neste arquivo pra disparar limpeza pontual (grep não achou nenhum
+// `UPDATE disparos SET status = 'concluido'` — o fim de campanha aqui é implícito, só para de
+// aparecer lote pra ela). Em vez de caçar esse gancho, teto simples por tamanho: nunca deixa
+// crescer indefinidamente, removendo as entradas mais antigas (ordem de inserção do Map) quando
+// excede o teto — mesma filosofia de "nunca trava o envio por excesso de zelo" do resto do
+// arquivo, só fecha o vazamento sem precisar saber o momento exato de cada campanha acabar.
+const MAX_ENTRADAS_CACHE_MIDIA = 500;
+function limitarCacheMidia() {
+  while (urlMidiaEstavelPorCampanha.size > MAX_ENTRADAS_CACHE_MIDIA) {
+    const chaveMaisAntiga = urlMidiaEstavelPorCampanha.keys().next().value;
+    if (chaveMaisAntiga === undefined) break;
+    urlMidiaEstavelPorCampanha.delete(chaveMaisAntiga);
+  }
+}
 
 export async function processarDisparos(pool: Pool) {
   try {
@@ -371,7 +407,8 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
           );
           if (capMetaRes.rows.length) {
             const donoCampanha = capMetaRes.rows[0].user_id;
-            const limiteDiario = Math.min(50, Number(capMetaRes.rows[0].limite_diario_mensagens) || 50);
+            const tetoConta = await resolverTetoDiarioDisparo(pool, donoCampanha);
+            const limiteDiario = Math.min(tetoConta, Number(capMetaRes.rows[0].limite_diario_mensagens) || tetoConta);
 
             const instanciasSelecionadas = await resolverInstanciasCampanha(pool, disparo_id, donoCampanha);
             let candidatos: InstanciaElegivel[] = instanciasSelecionadas;
@@ -420,11 +457,20 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         // [AUDITORIA] FIX APLICADO (Sprint 6, item 1): ver comentário completo na declaração de
         // `urlMidiaEstavelPorCampanha` acima. Só roda pra mídia (`tipo_midia !== 'texto'`) e só
         // uma vez por campanha por execução deste lote.
-        if (tipo_midia && tipo_midia !== 'texto' && url_midia && !urlMidiaEstavelPorCampanha.has(disparo_id)) {
+        // [AUDITORIA] FIX APLICADO (Sprint Vínculo Vivo Campanha↔Template, 2026-09-18): chave do
+        // cache passou de `disparo_id` sozinho para `${disparo_id}:${url_midia}` — com o template
+        // agora lido ao vivo a cada tick (ver get_next_disparo_batch()), `url_midia` pode mudar NO
+        // MEIO da campanha (operador editou o template). Chave só por `disparo_id` prendia a
+        // campanha pra sempre na PRIMEIRA url resolvida, ignorando qualquer edição depois —
+        // incluindo o próprio pedido desta sprint. Trocar a url de origem agora naturalmente vira
+        // uma entrada nova de cache, sem precisar de lógica de invalidação.
+        const cacheKeyMidia = `${disparo_id}:${url_midia}`;
+        if (tipo_midia && tipo_midia !== 'texto' && url_midia && !urlMidiaEstavelPorCampanha.has(cacheKeyMidia)) {
           try {
             const urlEstavel = await garantirMidiaEstavel(url_midia);
             if (urlEstavel) {
-              urlMidiaEstavelPorCampanha.set(disparo_id, urlEstavel);
+              urlMidiaEstavelPorCampanha.set(cacheKeyMidia, urlEstavel);
+              limitarCacheMidia();
               if (urlEstavel !== url_midia) {
                 await pool.query(`UPDATE disparos SET url_midia = $1 WHERE id = $2`, [urlEstavel, disparo_id])
                   .catch(errUpd => log.warn('DISPARO', 'Falha ao persistir url_midia estável na campanha', { disparo_id, err: errUpd?.message }));
@@ -656,7 +702,7 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         // 4. Enviar mensagem
         // Usa a URL estável já cacheada pra esta campanha (ver bloco de transição de campanha
         // acima), com fallback pra `url_midia` crua se a estabilização falhou/não rodou.
-        let urlMidiaFinal = urlMidiaEstavelPorCampanha.get(disparo_id) || url_midia;
+        let urlMidiaFinal = urlMidiaEstavelPorCampanha.get(`${disparo_id}:${url_midia}`) || url_midia;
         // [AUDITORIA] FIX APLICADO (Sprint Variação de Imagem, 2026-08-25, pedido do usuário —
         // anti-fingerprint): campanha com `variar_imagem=true` gera uma variação de hash único
         // POR MENSAGEM aqui (nunca cacheada — diferente da URL estável acima, que É cacheada de
@@ -669,6 +715,13 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         if (variar_imagem && tipo_midia === 'imagem' && urlMidiaFinal) {
           urlMidiaFinal = await gerarVariacaoImagem(urlMidiaFinal);
         }
+        // [AUDITORIA] FIX APLICADO (2026-09-18 — mesmo achado do fix em whatsappMediaStorage.ts):
+        // template pedia mídia (tipo_midia !== 'texto') mas ela não resolveu pra nenhuma URL
+        // (arquivo confirmado sumido, ver garantirMidiaEstavel) — o branch abaixo já degradava
+        // pra texto puro silenciosamente; esta flag deixa isso visível em `disparo_logs.erro`
+        // (sem bloquear o envio nem contar como falha/retry — a mensagem de texto realmente foi
+        // entregue, só sem a mídia planejada).
+        const midiaEsperadaMasIndisponivel = tipo_midia !== 'texto' && !!tipo_midia && !urlMidiaFinal;
         let endpoint = `${baseUrl}/message/sendText/${instancia}`;
         let body: any = { number: digits, text: textoFinal };
 
@@ -678,6 +731,18 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
             number: digits,
             media: urlMidiaFinal,
             mediatype: 'image',
+            caption: legendaFinal
+          };
+        } else if (tipo_midia === 'video' && urlMidiaFinal) {
+          // [AUDITORIA] FIX APLICADO (Sprint Suporte a Vídeo, 2026-09-18 — pedido do usuário):
+          // mesmíssimo formato de `sendMedia` já usado por imagem, só troca `mediatype` — Evolution
+          // já suporta, nunca tinha sido plugado (vídeo não existia como `tipo_midia` em lugar
+          // nenhum do sistema até esta sprint).
+          endpoint = `${baseUrl}/message/sendMedia/${instancia}`;
+          body = {
+            number: digits,
+            media: urlMidiaFinal,
+            mediatype: 'video',
             caption: legendaFinal
           };
         } else if (tipo_midia === 'audio' && urlMidiaFinal) {
@@ -748,7 +813,7 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         }
 
         // 5. Salvar na tabela whatsapp_messages para aparecer no painel de chat
-        const msgType = tipo_midia === 'texto' || !tipo_midia ? 'text' : tipo_midia === 'imagem' ? 'image' : tipo_midia === 'audio' ? 'audio' : 'document';
+        const msgType = tipo_midia === 'texto' || !tipo_midia ? 'text' : tipo_midia === 'imagem' ? 'image' : tipo_midia === 'video' ? 'video' : tipo_midia === 'audio' ? 'audio' : 'document';
         const msgContent = tipo_midia === 'texto' || !tipo_midia ? textoFinal : (legendaFinal || null);
 
         // [AUDITORIA] FIX APLICADO (2026-07-21): INSERT roda dentro de withTenantContext
@@ -768,7 +833,7 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
             msgType,
             msgContent,
             tipo_midia !== 'texto' && urlMidiaFinal ? urlMidiaFinal : null,
-            tipo_midia === 'imagem' ? 'image/jpeg' : tipo_midia === 'audio' ? 'audio/ogg' : tipo_midia === 'documento' ? 'application/pdf' : null
+            tipo_midia === 'imagem' ? 'image/jpeg' : tipo_midia === 'video' ? 'video/mp4' : tipo_midia === 'audio' ? 'audio/ogg' : tipo_midia === 'documento' ? 'application/pdf' : null
           ]
         )).catch(err => log.error('DISPARO INSERT whatsapp_messages ERROR', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
 
@@ -776,9 +841,12 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         errosConsecutivosPorCampanha.set(disparo_id, 0);
 
         // 5. Atualizar status para enviado
+        if (midiaEsperadaMasIndisponivel) {
+          log.error('DISPARO', 'Mídia do template indisponível no momento do envio — mensagem entregue só com texto', { disparo_id, log_id, tipo_midia, telefone: digits });
+        }
         await pool.query(
-          `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW(), erro = NULL, instancia = $2 WHERE id = $1`,
-          [log_id, instancia]
+          `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW(), erro = $3, instancia = $2 WHERE id = $1`,
+          [log_id, instancia, midiaEsperadaMasIndisponivel ? 'Mídia indisponível no momento do envio — mensagem entregue só com o texto.' : null]
         );
         await pool.query(
           `UPDATE disparos SET enviados = enviados + 1 WHERE id = $1`,

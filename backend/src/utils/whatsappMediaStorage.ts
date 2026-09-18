@@ -463,7 +463,30 @@ function isUrlJaEstavel(url: string): boolean {
 export async function garantirMidiaEstavel(mediaUrl: string | null | undefined): Promise<string | null> {
   if (!mediaUrl) return mediaUrl ?? null;
   if (!/^https?:\/\//i.test(mediaUrl)) return mediaUrl; // data:, base64 cru, etc. — nada a cachear
-  if (isUrlJaEstavel(mediaUrl)) return mediaUrl;
+  // [AUDITORIA] FIX APLICADO (2026-09-18 — pedido do usuário: "cliente informando que ao
+  // disparar imagem não envia a imagem"): antes, uma URL do nosso próprio domínio (já
+  // `isUrlJaEstavel`) voltava sem NENHUMA verificação — se o arquivo tivesse sumido do disco
+  // (ex: perdido antes do fix de volume do Docker de 2026-08-04, ou apagado manualmente), a
+  // campanha inteira saía silenciosamente só com texto (`disparoProcessor.ts` cai pro branch
+  // `sendText` quando `urlMidiaFinal` é falsy), sem log nem aviso nenhum pro operador — só o
+  // cliente final percebia, na prática. HEAD leve (timeout curto, só uma vez por campanha via
+  // `urlMidiaEstavelPorCampanha`) — só trata 404/410 como "definitivamente sumiu" (retorna null,
+  // sinal pro chamador registrar o aviso); qualquer outra falha (timeout, 5xx transitório) é
+  // tratada como incerta e a URL original segue confiada, mesma filosofia fail-open do resto
+  // deste arquivo — nunca bloqueia por excesso de zelo numa falha passageira de rede.
+  if (isUrlJaEstavel(mediaUrl)) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const check = await fetch(mediaUrl, { method: 'HEAD', signal: controller.signal }).catch(() => null);
+      clearTimeout(timer);
+      if (check && (check.status === 404 || check.status === 410)) {
+        log.error('WA_MEDIA_OUT', 'Mídia de saída (URL própria) não encontrada — arquivo sumiu do disco', { mediaUrl: mediaUrl.slice(0, 150), status: check.status });
+        return null;
+      }
+    } catch { /* checagem best-effort — qualquer erro aqui não deve bloquear o envio */ }
+    return mediaUrl;
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DOWNLOAD_EXTERNO_TIMEOUT_MS);

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { getAuthToken } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
+import { AdminConfigNav } from "@/components/admin/AdminConfigNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Plus, Pencil, Trash2, ArrowLeft } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
@@ -12,7 +13,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { useNavigate } from "react-router-dom";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => getAuthToken();
@@ -31,7 +31,6 @@ interface ModuloInfo {
 }
 
 export default function CargosPage() {
-  const navigate = useNavigate();
   const [cargos, setCargos] = useState<Cargo[]>([]);
   const [todosModulos, setTodosModulos] = useState<ModuloInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -109,15 +108,12 @@ export default function CargosPage() {
   return (
     <CRMLayout>
       <div className="space-y-6">
+        <AdminConfigNav />
+
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/usuarios")}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <div>
-              <h1 className="text-3xl font-bold">Gerenciar Cargos</h1>
-              <p className="text-muted-foreground">Defina papéis e permissões de acesso</p>
-            </div>
+          <div>
+            <h1 className="text-3xl font-bold">Gerenciar Cargos</h1>
+            <p className="text-muted-foreground">Defina papéis e permissões de acesso</p>
           </div>
           <Button onClick={() => { resetForm(); setModal(true); }} className="gap-2">
             <Plus className="h-4 w-4" /> Adicionar Novo Cargo

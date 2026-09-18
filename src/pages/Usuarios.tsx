@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { getAuthToken } from "@/lib/api-token";
 import { CRMLayout } from "@/components/CRMLayout";
+import { AdminConfigNav } from "@/components/admin/AdminConfigNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, UserPlus, Pencil, Trash2, Search, Eye, EyeOff, LayoutGrid, IdCard, ShieldCheck, KeyRound, Building2, Plus } from "lucide-react";
+import { Loader2, UserPlus, Pencil, Trash2, Search, Eye, EyeOff, IdCard, ShieldCheck, KeyRound, Building2, Plus, LogOut } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -16,7 +17,6 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { useNavigate } from "react-router-dom";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 const token = () => getAuthToken();
@@ -91,7 +91,6 @@ function CadastroSelect({
 }
 
 export default function UsuariosPage() {
-  const navigate = useNavigate();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [cargos, setCargos] = useState<Cargo[]>([]);
   const [catalogo, setCatalogo] = useState<ModuloCatalogo[]>([]);
@@ -265,6 +264,21 @@ export default function UsuariosPage() {
     else toast.error("Não foi possível excluir");
   };
 
+  const revokeSessions = async (u: UserRow) => {
+    if (!confirm(`Encerrar todas as sessões ativas de ${u.display_name || u.email}? A pessoa será desconectada e precisará entrar de novo.`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/profiles/${u.user_id}/revoke-sessions`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.message || "Falha ao encerrar sessões");
+      toast.success(data.sessoes_revogadas > 0 ? `Sessões encerradas (${data.sessoes_revogadas})` : "Nenhuma sessão ativa encontrada");
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
   const modsNormais = useMemo(() => catalogo.filter(m => !m.adminOnly), [catalogo]);
   const modsAdmin = useMemo(() => catalogo.filter(m => m.adminOnly), [catalogo]);
   const senhaMismatch = (senha || confirmSenha) && senha !== confirmSenha;
@@ -272,19 +286,16 @@ export default function UsuariosPage() {
   return (
     <CRMLayout>
       <div className="space-y-6">
+        <AdminConfigNav />
+
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold">Gerenciar Usuários</h1>
             <p className="text-muted-foreground">Adicione, edite e gerencie os membros da sua equipe</p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => navigate("/usuarios/cargos")} className="gap-2">
-              <LayoutGrid className="h-4 w-4" /> Gerenciar Cargos
-            </Button>
-            <Button onClick={() => { resetForm(); setModal(true); }} className="bg-primary hover:bg-primary/90 gap-2">
-              <UserPlus className="h-4 w-4" /> Adicionar Novo Usuário
-            </Button>
-          </div>
+          <Button onClick={() => { resetForm(); setModal(true); }} className="bg-primary hover:bg-primary/90 gap-2">
+            <UserPlus className="h-4 w-4" /> Adicionar Novo Usuário
+          </Button>
         </div>
 
         <Card>
@@ -348,8 +359,9 @@ export default function UsuariosPage() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right space-x-1">
-                          <Button variant="ghost" size="icon" onClick={() => handleEdit(u)}><Pencil className="h-4 w-4" /></Button>
-                          <Button variant="ghost" size="icon" onClick={() => deleteUser(u.user_id)} className="text-destructive"><Trash2 className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleEdit(u)} title="Editar"><Pencil className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => revokeSessions(u)} title="Encerrar sessões (logout forçado)"><LogOut className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => deleteUser(u.user_id)} className="text-destructive" title="Excluir"><Trash2 className="h-4 w-4" /></Button>
                         </TableCell>
                       </TableRow>
                     ))}

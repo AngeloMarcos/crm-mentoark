@@ -10,6 +10,7 @@
  * feito com setInterval + fetch (ver comentário "substitui Supabase Realtime").
  */
 import { useState, useMemo, useEffect, useRef, useCallback, type ChangeEvent, type ClipboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { Label } from "@/components/ui/label";
 import {
   ContextMenu,
@@ -29,8 +30,8 @@ import {
   UserPlus, Check, Smartphone,
   ShieldAlert, Tag, Sparkles, Zap,
   BotOff, Bot, ImageIcon, Reply,
-  ChevronUp, Pin, Archive, BellOff, MessageCircle,
-  Copy, Video, FileText, Trash2, Forward, Star,
+  ChevronUp, Pin, PinOff, Archive, BellOff, MessageCircle,
+  Copy, Video, FileText, Trash2, Forward, Star, Play,
   AlertCircle, Activity, ArrowLeft, Users,
   Download, FileSpreadsheet, UserSearch, LogOut,
   Link as LinkIcon,
@@ -134,6 +135,9 @@ interface Message {
   midia_nome?: string;
   status?: DeliveryStatus;
   is_read?: boolean;
+  /** "Mensagem fixada" — feature só do CRM, não sincroniza com o WhatsApp real (ver
+   * migrations.ts: a Evolution API não tem endpoint de pin). */
+  fixada?: boolean;
   reply_to?: {
     message_id: string;
     content: string;
@@ -162,6 +166,7 @@ function mapRowsToMessages(rows: any[], chatName: string): Message[] {
     midia_nome: m.midia_nome,
     status: m.status || m.delivery_status,
     is_read: m.is_read,
+    fixada: m.fixada || false,
     reply_to: m.reply_to_message_id ? {
       message_id: m.reply_to_message_id,
       content: m.reply_to_content || 'Mensagem original',
@@ -411,7 +416,16 @@ function MediaSendPreview({
     onSend(files.map((f, i) => ({ file: f, caption: (captions[i] || '').trim() })));
   };
 
-  return (
+  // [AUDITORIA] BUG (achado 2026-09-18 — pedido do usuário: "ainda não tem preview de mídia
+  // igual já pedi antes"): `fixed inset-0` só cobre a tela INTEIRA se nenhum ancestral tiver
+  // `transform`/`filter`/`backdrop-filter` — cada um desses vira containing block pra elementos
+  // fixed. O wrapper raiz do painel (`wa-panel`, ~linha 2795) tem `backdrop-blur-xl` permanente,
+  // então este modal renderizava confinado ao tamanho do painel de chat em vez de tela cheia
+  // (exatamente o "chip pequeno" visto pelo usuário, não o preview em tela cheia esperado).
+  // [AUDITORIA] FIX APLICADO: portal direto pro `document.body`, fora da árvore do painel —
+  // imune a qualquer transform/filter/backdrop-filter de ancestral, do jeito que um modal
+  // fullscreen deveria ser desde o início.
+  return createPortal(
     <div className="fixed inset-0 z-[70] flex flex-col bg-[#0b141a] text-[#e9edef] animate-in fade-in duration-150">
       {/* Cabeçalho */}
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-3 sm:px-5">
@@ -534,7 +548,99 @@ function MediaSendPreview({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
+  );
+}
+
+// [AUDITORIA] BUG (achado 2026-09-18 — pedido do usuário: "melhorias para vídeos e pdfs,
+// excel etc"): documento (PDF/Excel/Word) era um `<a href=... target="_blank">` puro apontando
+// pra uma rota autenticada (`GET /api/whatsapp/media`, exige Bearer token) — navegação de
+// browser normal não manda esse header, então clicar em qualquer documento falhava com 401 e
+// nada abria. Mesmo motivo pelo qual imagem/vídeo já usam `useAuthedMediaUrl` (fetch manual com
+// header + blob URL) em vez de `src`/`href` direto. [AUDITORIA] FIX APLICADO: mesmo padrão,
+// sob demanda (só busca o arquivo quando clicado, não pré-carrega documentos grandes à toa como
+// os hooks de imagem fazem hoje) — PDF abre em nova aba (o navegador já tem visualizador
+// nativo), outros tipos baixam direto via link temporário.
+function iconeDocumento(nome?: string | null, mime?: string | null) {
+  const ext = (nome?.split('.').pop() || mime?.split('/').pop() || '').toLowerCase();
+  if (ext.includes('pdf')) return { Icon: FileText, cls: 'text-red-500 bg-red-500/10' };
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return { Icon: FileSpreadsheet, cls: 'text-emerald-600 bg-emerald-500/10' };
+  if (['ppt', 'pptx'].includes(ext)) return { Icon: FileText, cls: 'text-orange-500 bg-orange-500/10' };
+  if (['doc', 'docx'].includes(ext)) return { Icon: FileText, cls: 'text-blue-500 bg-blue-500/10' };
+  return { Icon: FileText, cls: 'text-muted-foreground bg-muted/30' };
+}
+
+function DocumentLink({
+  url, nome, mime, variant = 'bubble', timestamp,
+}: {
+  url: string;
+  nome?: string | null;
+  mime?: string | null;
+  variant?: 'bubble' | 'panel';
+  timestamp?: string;
+}) {
+  const [loading, setLoading] = useState(false);
+  const { Icon, cls } = iconeDocumento(nome, mime);
+
+  const abrir = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const proxyUrl = `${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(url)}`;
+      const t = getAuthToken();
+      const headers: Record<string, string> = t ? { Authorization: `Bearer ${t}` } : {};
+      const r = await fetch(proxyUrl, { headers });
+      if (!r.ok) throw new Error('Falha ao baixar');
+      const blob = await r.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const ext = (nome || '').split('.').pop()?.toLowerCase();
+      if (ext === 'pdf' || mime === 'application/pdf') {
+        window.open(blobUrl, '_blank', 'noopener');
+      } else {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = nome || 'documento';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch {
+      toast.error('Não foi possível abrir o documento — tente novamente.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (variant === 'panel') {
+    return (
+      <button
+        onClick={abrir}
+        disabled={loading}
+        className="flex items-center gap-3 p-3 bg-muted/20 hover:bg-muted/30 border border-border/30 rounded-xl transition-colors group w-full text-left disabled:opacity-60"
+      >
+        <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${cls}`}>
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-5 w-5" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-bold truncate text-foreground/80">{nome || 'Documento'}</p>
+          {timestamp && <p className="text-[10px] text-muted-foreground/60 uppercase font-black">{timestamp}</p>}
+        </div>
+        <ChevronRight className="h-4 w-4 text-muted-foreground/20 group-hover:text-primary transition-colors shrink-0" />
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={abrir}
+      disabled={loading}
+      className="flex items-center gap-2 text-xs text-primary underline py-1 disabled:opacity-60 disabled:no-underline"
+    >
+      {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+      {nome || 'Documento'}
+    </button>
   );
 }
 
@@ -701,6 +807,10 @@ export function WhatsAppInterface() {
   // localmente, ver ChatAvatar/useAuthedMediaUrl acima) — resolve pra blob URL autenticada
   // antes de renderizar no <img> do modal ampliado.
   const photoModalResolvedUrl = useAuthedMediaUrl(photoModal);
+  // Vídeo em tela cheia — mesma ideia do photoModal, pro clique na miniatura da galeria
+  // "Mídia Compartilhada" (achado 2026-09-18: miniatura era só um ícone estático, sem onClick).
+  const [videoModal, setVideoModal] = useState<{ url: string; mime?: string } | null>(null);
+  const videoModalResolvedUrl = useAuthedMediaUrl(videoModal?.url);
   // Edição de nome do contato
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
@@ -802,6 +912,8 @@ export function WhatsAppInterface() {
   }, []);
   // Filtro ativo da lista de conversas (número real, ver Chat.numero) — "" = todos os números
   const [instanciaFiltro, setInstanciaFiltro] = useState("");
+  // Filtro "somente grupos" (pedido do usuário) — usa o `is_group` que já vem de GET /conversas.
+  const [apenasGrupos, setApenasGrupos] = useState(false);
 
 
   // Estados para seleção múltipla
@@ -1306,13 +1418,17 @@ export function WhatsAppInterface() {
       list = list.filter(c => c.numero === instanciaFiltro);
     }
 
+    if (apenasGrupos) {
+      list = list.filter(c => c.is_group);
+    }
+
     // Ordenação: Fixados primeiro, depois por timestamp
     return list.sort((a, b) => {
       if (a.is_pinned && !b.is_pinned) return -1;
       if (!a.is_pinned && b.is_pinned) return 1;
       return (b.rawTimestamp || "").localeCompare(a.rawTimestamp || "");
     });
-  }, [chats, globalSearchTerm, activeTab, instanciaFiltro]);
+  }, [chats, globalSearchTerm, activeTab, instanciaFiltro, apenasGrupos]);
 
 
   // [AUDITORIA] LÓGICA — Camada 3 (rastreio "mensagens não atualizam", 2026-07-08): esta função
@@ -2424,6 +2540,40 @@ export function WhatsAppInterface() {
     }
   };
 
+  // "Fixar mensagem" — ao contrário de "Favoritar" (`handleToggleStar`, só local, nunca
+  // persiste), esta chama o backend de verdade (PATCH /messages/:id/fixar) — é uma feature
+  // visível pra qualquer atendente do tenant, não só uma marcação pessoal na sessão atual.
+  const handleTogglePinMessages = async () => {
+    if (!activeChat) return;
+    const alvos = activeChat.messages.filter(m => selectedMessageIds.has(m.id));
+    if (!alvos.length) return;
+
+    setIsActionLoading(true);
+    try {
+      const headers = await apiHeaders();
+      await Promise.all(alvos.map(m =>
+        fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(m.message_id || m.id)}/fixar`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ fixada: !m.fixada }),
+        })
+      ));
+
+      setChats(prev => prev.map(c =>
+        c.id === activeChatId
+          ? { ...c, messages: c.messages.map(m => selectedMessageIds.has(m.id) ? { ...m, fixada: !m.fixada } : m) }
+          : c
+      ));
+      toast.success(`${alvos.length} mensagem(ns) atualizada(s)`);
+    } catch {
+      toast.error("Erro ao fixar/desafixar mensagens");
+    } finally {
+      setIsActionLoading(false);
+      setIsSelectMode(false);
+      setSelectedMessageIds(new Set());
+    }
+  };
+
   const handleForwardMessages = async (targetPhone: string, targetSource?: string) => {
     if (!activeChat || selectedMessageIds.size === 0) return;
     
@@ -2876,15 +3026,13 @@ export function WhatsAppInterface() {
             </div>
           )}
 
-          {/* [AUDITORIA] BUG (achado 2026-07-27): os dois "chips" abaixo ("Status Especial" com X
-              pra remover, "Etiqueta" com chevron de dropdown) são só `<div>` com `cursor-pointer`
-              — sem `onClick`, sem estado nenhum ligado (não existe filtro por "status especial"
-              no modelo de dados, e o filtro por etiqueta que existe de verdade é outro, dentro do
-              painel de detalhes de cada contato). Mesma classe do ícone de filtro
-              (`SlidersHorizontal`) logo acima — aparentam ser parte de uma feature de filtros da
-              lista que nunca foi implementada, só desenhada. [AUDITORIA] FIX PENDENTE (motivo:
-              precisa de decisão de produto sobre quais filtros existem de fato, mesma pendência do
-              ícone de filtro). */}
+          {/* [AUDITORIA] FIX APLICADO (2026-09-17, pedido do usuário): o chip "Status Especial"
+              era um `<div>` sem `onClick` nem estado (ver histórico — não existia filtro de
+              "status especial" no modelo de dados). Virou o filtro real pedido: "Grupos", usando
+              `c.is_group` (já resolvido pelo backend em GET /conversas). "Etiqueta" continua sem
+              filtro próprio aqui de propósito — o filtro por etiqueta que existe de verdade fica
+              dentro do painel de detalhes de cada contato, decisão de produto ainda pendente
+              sobre se cabe também aqui na lista. */}
           {/* Filter chip */}
           <div className="flex gap-2 flex-wrap">
             {instanciaFiltro && (
@@ -2898,9 +3046,18 @@ export function WhatsAppInterface() {
                 <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
               </div>
             )}
-            <div className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95">
-              Status Especial
-              <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
+            <div
+              className={`flex items-center gap-1.5 border rounded-full px-3 py-1 text-[11px] font-semibold cursor-pointer transition-all active:scale-95 ${
+                apenasGrupos
+                  ? "bg-primary/5 hover:bg-primary/10 border-primary/10 text-primary"
+                  : "bg-muted/50 hover:bg-muted border-transparent text-muted-foreground"
+              }`}
+              onClick={() => setApenasGrupos(v => !v)}
+              title={apenasGrupos ? "Mostrando só grupos — clique para ver todos" : "Mostrar só grupos"}
+            >
+              <Users className="h-3 w-3" />
+              Grupos
+              {apenasGrupos && <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />}
             </div>
             <div className="flex items-center gap-1.5 bg-muted/50 hover:bg-muted border border-transparent rounded-full px-3 py-1 text-[11px] font-semibold text-muted-foreground cursor-pointer transition-all active:scale-95">
               Etiqueta
@@ -3696,6 +3853,40 @@ export function WhatsAppInterface() {
               </div>
             )}
 
+            {/* Mensagens fixadas (CRM-only — não sincroniza com o WhatsApp real, ver Message.fixada) */}
+            {activeChat && activeChat.messages.some(m => m.fixada) && (
+              <div className="border-b bg-primary/[0.03] px-4 py-1.5 space-y-1 max-h-28 overflow-y-auto shrink-0">
+                {activeChat.messages.filter(m => m.fixada).map(m => (
+                  <div
+                    key={m.id}
+                    className="flex items-center gap-2 text-xs cursor-pointer group/pin rounded-md px-1.5 py-1 hover:bg-primary/5"
+                    onClick={() => messageRefs.current.get(m.id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                  >
+                    <Pin className="h-3 w-3 text-primary shrink-0 fill-primary/20" />
+                    <span className="font-semibold text-primary/80 shrink-0">{m.senderName ?? activeChat.name}:</span>
+                    <span className="truncate text-muted-foreground flex-1">{m.content || '[mídia]'}</span>
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const headers = await apiHeaders();
+                        fetch(`${API_BASE}/api/whatsapp/messages/${encodeURIComponent(m.message_id || m.id)}/fixar`, {
+                          method: 'PATCH', headers, body: JSON.stringify({ fixada: false }),
+                        }).catch(() => {});
+                        setChats(prev => prev.map(c => c.id === activeChatId
+                          ? { ...c, messages: c.messages.map(mm => mm.id === m.id ? { ...mm, fixada: false } : mm) }
+                          : c
+                        ));
+                      }}
+                      className="opacity-0 group-hover/pin:opacity-100 shrink-0 text-muted-foreground hover:text-destructive transition-opacity"
+                      title="Desafixar"
+                    >
+                      <PinOff className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Messages */}
             <ScrollArea
               className="flex-1 bg-muted/10 relative"
@@ -3735,8 +3926,18 @@ export function WhatsAppInterface() {
                       <Star className="h-4 w-4" />
                       Favoritar
                     </Button>
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
+                      onClick={handleTogglePinMessages}
+                      disabled={isActionLoading}
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-primary/5 hover:text-primary transition-all text-xs font-bold uppercase tracking-tight"
+                      title="Fixar/desafixar no CRM — não sincroniza com o WhatsApp real"
+                    >
+                      <Pin className="h-4 w-4" />
+                      Fixar
+                    </Button>
+                    <Button
+                      variant="ghost"
                       onClick={() => setShowForwardModal(true)}
                       disabled={isActionLoading}
                       className="h-9 px-3 gap-2 rounded-xl hover:bg-blue-50 hover:text-blue-600 transition-all text-xs font-bold uppercase tracking-tight"
@@ -3902,6 +4103,13 @@ export function WhatsAppInterface() {
                               </div>
                             )}
 
+                            {/* Ícone de Fixado (CRM-only) */}
+                            {m.fixada && (
+                              <div className={`absolute -top-1 ${isOut ? (starredMessageIds.has(m.id) ? '-left-6' : '-left-1') : (starredMessageIds.has(m.id) ? '-right-6' : '-right-1')} bg-background rounded-full p-1 shadow-sm border border-primary/30 z-10`}>
+                                <Pin className="h-2.5 w-2.5 text-primary fill-primary/20" />
+                              </div>
+                            )}
+
                           {/* Menu de Resposta (Reply) */}
                           {!isNote && (
                             <button
@@ -3957,14 +4165,7 @@ export function WhatsAppInterface() {
                           ) : m.tipo === 'video' && m.midia_url ? (
                             <AuthedVideo src={m.midia_url} mime={m.midia_mime} className="rounded max-w-[260px] mb-1" />
                           ) : m.tipo === 'document' && m.midia_url ? (
-                            <a
-                              href={`${API_BASE}/api/whatsapp/media?url=${encodeURIComponent(m.midia_url)}`}
-                              target="_blank" rel="noreferrer"
-                              className="flex items-center gap-2 text-xs text-primary underline py-1"
-                              download={m.midia_nome || true}
-                            >
-                              <Paperclip className="h-4 w-4" /> {m.midia_nome || 'Documento'}
-                            </a>
+                            <DocumentLink url={m.midia_url} nome={m.midia_nome} mime={m.midia_mime} />
                           ) : m.tipo === 'sticker' && m.midia_url ? (
                             <AuthedImg src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
                           ) : null}
@@ -4330,8 +4531,9 @@ export function WhatsAppInterface() {
         )}
       </div>
 
-      {/* Modal de foto ampliada */}
-      {photoModal && (
+      {/* Modal de foto ampliada — mesmo motivo do portal em MediaSendPreview (achado 2026-09-18):
+          `fixed inset-0` fica confinado ao painel por causa do `backdrop-blur-xl` ancestral. */}
+      {photoModal && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
           onClick={() => setPhotoModal(null)}
@@ -4345,7 +4547,33 @@ export function WhatsAppInterface() {
               <X className="h-4 w-4" />
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Modal de vídeo em tela cheia — mesmo motivo de portal do modal de foto acima. */}
+      {videoModal && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => setVideoModal(null)}
+        >
+          <div className="relative max-w-[90vw] max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            {videoModalResolvedUrl ? (
+              <video src={videoModalResolvedUrl} controls autoPlay className="max-w-[80vw] max-h-[80vh] rounded-2xl shadow-2xl" />
+            ) : (
+              <div className="flex items-center justify-center w-[40vw] h-[40vh] text-white/60">
+                <Loader2 className="h-8 w-8 animate-spin" />
+              </div>
+            )}
+            <button
+              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white text-black flex items-center justify-center shadow-lg hover:bg-gray-100"
+              onClick={() => setVideoModal(null)}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* ── RIGHT: Contact Profile Panel ── */}
@@ -4652,14 +4880,20 @@ export function WhatsAppInterface() {
                     <div
                       key={m.id}
                       className="aspect-square rounded-xl bg-muted/30 border border-border/30 overflow-hidden flex items-center justify-center cursor-pointer hover:bg-muted/50 transition-all hover:scale-105 group"
-                      onClick={() => m.midia_url && m.tipo === 'image' && setPhotoModal(m.midia_url)}
+                      onClick={() => {
+                        if (!m.midia_url) return;
+                        if (m.tipo === 'image') setPhotoModal(m.midia_url);
+                        else if (m.tipo === 'video') setVideoModal({ url: m.midia_url, mime: m.midia_mime });
+                      }}
                     >
                       {m.tipo === 'image' && m.midia_url ? (
                         <AuthedImg src={m.midia_url} alt="mídia" className="w-full h-full object-cover" />
                       ) : m.tipo === 'video' ? (
                         <div className="relative w-full h-full flex items-center justify-center bg-black/5">
                           <Video className="h-6 w-6 text-muted-foreground/40" />
-                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <Play className="h-5 w-5 text-white fill-white" />
+                          </div>
                         </div>
                       ) : (
                         <Mic className="h-5 w-5 text-muted-foreground/30" />
@@ -4689,22 +4923,9 @@ export function WhatsAppInterface() {
                   .slice(-3)
                   .reverse()
                   .map(m => (
-                    <a
-                      key={m.id}
-                      href={m.midia_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center gap-3 p-3 bg-muted/20 hover:bg-muted/30 border border-border/30 rounded-xl transition-colors group"
-                    >
-                      <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
-                        <FileText className="h-5 w-5 text-blue-500" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold truncate text-foreground/80">{m.midia_nome || "Documento"}</p>
-                        <p className="text-[10px] text-muted-foreground/60 uppercase font-black">{m.timestamp}</p>
-                      </div>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground/20 group-hover:text-primary transition-colors" />
-                    </a>
+                    m.midia_url ? (
+                      <DocumentLink key={m.id} url={m.midia_url} nome={m.midia_nome} mime={m.midia_mime} variant="panel" timestamp={m.timestamp} />
+                    ) : null
                   ))}
                 {activeChat.messages.filter(m => m.tipo === 'document').length === 0 && (
                   <div className="py-4 flex flex-col items-center justify-center bg-muted/10 rounded-xl border border-dashed border-border/50">

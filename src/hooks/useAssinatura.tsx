@@ -46,7 +46,10 @@ export function AssinaturaProvider({ children }: { children: ReactNode }) {
       if (r.ok) {
         const data: AssinaturaInfo = await r.json();
         setAssinatura(data);
-        setReadOnly(!!data.read_only);
+        // O backend (assinaturaGuard) já isenta MASTER_EMAILS da trava — sem esse mesmo
+        // exemplo aqui, o master ficava bloqueado no próprio client antes mesmo da requisição
+        // sair (ex: play de campanha), mesmo quando o backend deixaria passar.
+        setReadOnly(!!data.read_only && !data.sou_master);
       }
     } catch {
       /* silencioso — sem status o banner some e a trava fica desligada (fail-open) */
