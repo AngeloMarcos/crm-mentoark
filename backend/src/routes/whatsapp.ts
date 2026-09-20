@@ -1070,6 +1070,10 @@ export default function whatsappRouter(pool: Pool): Router {
     try {
       const userId = req.userId!;
       const showArchived = req.query.archived === 'true';
+      // Filtros aplicados ANTES do LIMIT 300 (antes eram só no navegador, sobre a lista já
+      // cortada — um filtro podia parecer vazio mesmo com dados no banco).
+      const apenasGrupos = req.query.grupos === 'true';
+      const numeroFiltro = typeof req.query.numero === 'string' && req.query.numero.trim() ? req.query.numero.trim() : null;
       const tenantId = await resolveOwnerId(userId); // Carrega o ID do dono da conta
       // [AUDITORIA] FIX APLICADO (2026-07-21): setDbUserId(tenantId) -- a query abaixo filtra
       // por tenantId (dono da equipe), não pelo userId bruto; RLS precisa ver o mesmo id.
@@ -1154,9 +1158,22 @@ export default function whatsappRouter(pool: Pool): Router {
          LEFT JOIN whatsapp_instance_numeros win ON win.instance_name = r.instance_name
          WHERE r.rn = 1
            AND COALESCE(cu.is_archived, false) = $2
-         ORDER BY cu.is_pinned DESC NULLS LAST, r.created_at DESC
+           AND ($3::boolean IS NOT TRUE OR r.is_group)
+           AND ($4::text IS NULL OR COALESCE(win.numero, r.instance_name) = $4::text)
+         -- [AUDITORIA] BUG (achado 2026-09-18 — "já tá conectado mas não aparece os grupos",
+         -- mesma investigação do ledger instância-número): cu.is_pinned só existe pra contato
+         -- individual (o LEFT JOIN de contato_unico exige NOT r.is_group) — pra TODO grupo esse
+         -- campo é sempre NULL. DESC NULLS LAST manda todo NULL pro fim da ordenação INTEIRA,
+         -- depois de QUALQUER conversa individual não-nula (mesmo as com is_pinned=false,
+         -- antigas) — não só depois das fixadas. Com mais de 300 conversas individuais nesta
+         -- conta, isso empurra 100 por cento dos grupos pra fora do LIMIT sempre, não importa
+         -- quão recente a última mensagem do grupo seja. [AUDITORIA] FIX APLICADO: COALESCE com
+         -- false antes do DESC — grupo passa a competir por posição na mesma escala 0/1 que
+         -- conversa individual não fixada, ordenado por recência de verdade dali pra baixo, como
+         -- já era o comportamento pretendido (só fixados no topo).
+         ORDER BY COALESCE(cu.is_pinned, false) DESC, r.created_at DESC
          LIMIT 300`,
-        [tenantId, showArchived]
+        [tenantId, showArchived, apenasGrupos, numeroFiltro]
       );
 
       const conversas = r.rows.map(row => {

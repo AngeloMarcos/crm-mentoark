@@ -425,26 +425,30 @@ function MediaSendPreview({
   // [AUDITORIA] FIX APLICADO: portal direto pro `document.body`, fora da árvore do painel —
   // imune a qualquer transform/filter/backdrop-filter de ancestral, do jeito que um modal
   // fullscreen deveria ser desde o início.
+  // [AUDITORIA] AJUSTE (pedido do usuário 2026-09-18: "deixou a visualização de foto no centro
+  // com o restante desfocado, deixe assim para envio também") — fundo trocado de sólido
+  // (`#0b141a`) para o mesmo tratamento do modal de foto/vídeo (`bg-black/80 backdrop-blur`):
+  // mídia centralizada, resto da tela escurecido e desfocado, em vez de um app em tela cheia.
   return createPortal(
-    <div className="fixed inset-0 z-[70] flex flex-col bg-[#0b141a] text-[#e9edef] animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-[70] flex flex-col bg-black/85 backdrop-blur-md text-[#e9edef] animate-in fade-in duration-150">
       {/* Cabeçalho */}
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/5 px-3 sm:px-5">
+      <div className="flex h-14 shrink-0 items-center justify-between px-3 sm:px-5">
         <button
           onClick={() => !sending && onClose()}
-          className="rounded-full p-2 transition-colors hover:bg-white/10 disabled:opacity-30"
+          className="rounded-full bg-black/40 p-2 shadow-lg backdrop-blur-sm transition-colors hover:bg-black/60 disabled:opacity-30"
           disabled={sending}
           title="Cancelar (Esc)"
         >
           <X className="h-5 w-5" />
         </button>
-        <span className="truncate px-2 text-sm text-[#8696a0]">
+        <span className="truncate rounded-full bg-black/40 px-3 py-1 text-sm text-[#e9edef] shadow-lg backdrop-blur-sm">
           {files.length > 1
             ? `${activeIndex + 1} de ${files.length}`
             : kind === 'image' ? 'Foto' : kind === 'video' ? 'Vídeo' : 'Arquivo'}
         </span>
         <button
           onClick={() => !sending && onRemove(activeIndex)}
-          className="rounded-full p-2 transition-colors hover:bg-white/10 disabled:opacity-30"
+          className="rounded-full bg-black/40 p-2 shadow-lg backdrop-blur-sm transition-colors hover:bg-black/60 disabled:opacity-30"
           disabled={sending}
           title="Remover este arquivo"
         >
@@ -452,14 +456,14 @@ function MediaSendPreview({
         </button>
       </div>
 
-      {/* Mídia */}
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 sm:p-8">
+      {/* Mídia — centralizada, mesmo tratamento do modal de foto/vídeo (fundo desfocado ao redor) */}
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 sm:p-8" onClick={() => !sending && onClose()}>
         {kind === 'image' ? (
-          <img src={activeUrl} alt={active.name} className="max-h-full max-w-full rounded-lg object-contain" />
+          <img src={activeUrl} alt={active.name} onClick={e => e.stopPropagation()} className="max-h-full max-w-full rounded-2xl object-contain shadow-2xl" />
         ) : kind === 'video' ? (
-          <video src={activeUrl} controls className="max-h-full max-w-full rounded-lg" />
+          <video src={activeUrl} controls onClick={e => e.stopPropagation()} className="max-h-full max-w-full rounded-2xl shadow-2xl" />
         ) : (
-          <div className="flex flex-col items-center gap-4 text-center">
+          <div className="flex flex-col items-center gap-4 rounded-2xl bg-black/40 p-8 text-center shadow-2xl backdrop-blur-sm" onClick={e => e.stopPropagation()}>
             <div className="flex h-28 w-24 items-center justify-center rounded-xl bg-[#202c33]">
               <FileText className="h-12 w-12 text-[#8696a0]" />
             </div>
@@ -475,7 +479,7 @@ function MediaSendPreview({
 
       {/* Legenda do arquivo ativo */}
       <div className="shrink-0 px-3 sm:px-6">
-        <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-lg bg-[#2a3942] px-4 py-2.5">
+        <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-lg bg-black/40 px-4 py-2.5 shadow-lg backdrop-blur-sm">
           <input
             value={captions[activeIndex] ?? ''}
             onChange={e => setActiveCaption(e.target.value)}
@@ -914,6 +918,18 @@ export function WhatsAppInterface() {
   const [instanciaFiltro, setInstanciaFiltro] = useState("");
   // Filtro "somente grupos" (pedido do usuário) — usa o `is_group` que já vem de GET /conversas.
   const [apenasGrupos, setApenasGrupos] = useState(false);
+  // Refs espelham os filtros pra fetchConversas (chamado por vários setInterval com closure antiga)
+  const apenasGruposRef = useRef(false);
+  const instanciaFiltroRef = useRef("");
+  const ultimoFiltroBuscadoRef = useRef<string | null>(null);
+  apenasGruposRef.current = apenasGrupos;
+  instanciaFiltroRef.current = instanciaFiltro;
+  // Ao trocar de filtro, busca já (sem esperar o próximo tick do polling)
+  useEffect(() => {
+    if (ultimoFiltroBuscadoRef.current === null) return; // primeira carga é do efeito de montagem
+    fetchConversas(activeTab === "arquivadas");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apenasGrupos, instanciaFiltro]);
 
 
   // Estados para seleção múltipla
@@ -1440,7 +1456,17 @@ export function WhatsAppInterface() {
   const fetchConversas = async (isArchived = false) => {
     try {
       console.log(`[WA] fetchConversas iniciando (archived=${isArchived})...`);
-      const res = await fetch(`${API_BASE}/api/whatsapp/conversas?archived=${isArchived}`, { headers: await apiHeaders() });
+      // Filtros "Grupos" e "número" vão pro backend (aplicados antes do LIMIT 300) — filtrar só
+      // no navegador sobre a lista já cortada fazia o filtro parecer vazio com dados no banco.
+      const grupos = apenasGruposRef.current;
+      const numero = instanciaFiltroRef.current;
+      const filtroKey = `${grupos}|${numero}|${isArchived}`;
+      const filtroMudou = ultimoFiltroBuscadoRef.current !== null && ultimoFiltroBuscadoRef.current !== filtroKey;
+      ultimoFiltroBuscadoRef.current = filtroKey;
+      const qs = new URLSearchParams({ archived: String(isArchived) });
+      if (grupos) qs.set('grupos', 'true');
+      if (numero) qs.set('numero', numero);
+      const res = await fetch(`${API_BASE}/api/whatsapp/conversas?${qs.toString()}`, { headers: await apiHeaders() });
       if (!res.ok) {
         console.error('[WA] fetchConversas falhou', res.status);
         return;
@@ -1457,7 +1483,7 @@ export function WhatsAppInterface() {
         
         console.log(`[WA] Chat ${row.session_id}: isNew=${isNew}, fromClient=${fromClient}, notActive=${notActive}`);
         
-        if (isNew && fromClient && notActive && prev) {
+        if (isNew && fromClient && notActive && prev && !filtroMudou) {
           newArrivals.push(row.session_id);
         }
         prevUltimaAtividadeRef.current.set(row.session_id, row.ultima_atividade);
@@ -1504,7 +1530,7 @@ export function WhatsAppInterface() {
         // Auto-selecionar novos contatos se não houver chat ativo
         rows.forEach(row => {
           const isNewContact = !prevMap.has(row.session_id);
-          if (isNewContact && row.ultimo_role === 'user') {
+          if (isNewContact && row.ultimo_role === 'user' && !filtroMudou) {
             if (!activeChatIdRef.current) {
               setActiveChatId(row.session_id);
             } else {

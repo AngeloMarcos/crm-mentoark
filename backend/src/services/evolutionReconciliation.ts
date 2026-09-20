@@ -56,6 +56,22 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
   const cacheServidor = new Map<string, Promise<EvolutionInstanceInfo[] | null>>();
   const chaveServidor = (url: string, apiKey: string) => `${url}::${apiKey}`;
 
+  // [AUDITORIA] LÓGICA (achado 2026-09-18 — "não está mais aparecendo os grupos do meu número
+  // pessoal", mesmo número 5511991909106 do Sprint Grupos Somem 2026-09-04): o ledger só era
+  // populado pra `instancia` que já existisse como linha em `integracoes_config`/`agentes` —
+  // quando o número reconecta pela enésima vez sob um nome NOVO sem passar pela tela de conexão
+  // (reconexão automática do lado da Evolution), esse nome novo (ex: `crm_435ee4720fc3_3`, o
+  // sufixo incrementa a cada reconexão) nunca vira linha em `integracoes_config`, então o loop
+  // abaixo nunca sequer pergunta pra Evolution sobre ele — o ledger fica pra sempre sem essa
+  // entrada, mesmo a Evolution reportando `ownerJid` certinho. `whatsapp_messages`/webhook.ts
+  // já aceitam e gravam mensagens de qualquer `instance_name`, então o dado (inclusive de grupo)
+  // existe no banco — só o ledger que nunca sabe a quem esse nome pertence. Guarda aqui, por
+  // servidor, a que `user_id` cada "família" de instância (prefixo antes do sufixo `_N`)
+  // pertence, pra depois varrer TODAS as instâncias que a Evolution retornar (não só as já
+  // conhecidas) e gravar o ledger de qualquer uma cujo prefixo bata com uma família conhecida.
+  const baseInstancia = (nome: string) => nome.replace(/_\d+$/, '');
+  const donoPorBase = new Map<string, { userId: string; url: string; apiKey: string }>();
+
   // [AUDITORIA] LÓGICA (histórico, pré-Sprint 1): esta rotina existia originalmente pra corrigir
   // `agent_configs.evolution_instancia` — uma ÚNICA linha por tenant que podia ficar "travada"
   // apontando pra uma instância morta quando outra do mesmo tenant abria no lugar dela. Ver
@@ -70,6 +86,11 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
     }
     const instancias = await cacheServidor.get(chave);
     if (!instancias) continue; // servidor indisponível — não corrige nada às cegas
+
+    const chaveBase = `${chave}::${baseInstancia(conector.instancia)}`;
+    if (!donoPorBase.has(chaveBase)) {
+      donoPorBase.set(chaveBase, { userId: conector.user_id, url: conector.url, apiKey: conector.api_key });
+    }
 
     const encontrada = instancias.find(i => i.name === conector.instancia);
     const aberta = encontrada?.connectionStatus === 'open';
@@ -121,6 +142,33 @@ export async function reconciliarInstanciasEvolution(pool: Pool): Promise<{ corr
     const lista = porTenant.get(conector.user_id) || [];
     lista.push({ instancia: conector.instancia, aberta, url: conector.url, api_key: conector.api_key });
     porTenant.set(conector.user_id, lista);
+  }
+
+  // [AUDITORIA] FIX APLICADO (achado 2026-09-18, comentário acima em `donoPorBase`): varre TODAS
+  // as instâncias que cada servidor Evolution retornou (não só as já conhecidas em
+  // `integracoes_config`) e grava o ledger de qualquer uma cujo prefixo bata com uma família já
+  // conhecida — cobre reconexão automática sob nome novo sem exigir que o usuário reabra a tela
+  // de Integrações pra "descobrir" a instância de novo.
+  for (const [chave, instanciasPromise] of cacheServidor) {
+    const instancias = await instanciasPromise;
+    if (!instancias) continue;
+    for (const inst of instancias) {
+      if (!inst?.name || !inst.ownerJid) continue;
+      const chaveBase = `${chave}::${baseInstancia(inst.name)}`;
+      const dono = donoPorBase.get(chaveBase);
+      if (!dono) continue; // família de instância desconhecida — não associa a ninguém às cegas
+      const numeroReal = String(inst.ownerJid).split('@')[0].replace(/\D/g, '');
+      if (!numeroReal) continue;
+      await pool.query(
+        `INSERT INTO whatsapp_instance_numeros (instance_name, user_id, numero, atualizado_em)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (instance_name) DO UPDATE SET numero = EXCLUDED.numero, atualizado_em = NOW()
+         WHERE whatsapp_instance_numeros.numero IS DISTINCT FROM EXCLUDED.numero`,
+        [inst.name, dono.userId, numeroReal]
+      ).catch((err: any) => {
+        log.warn('EVOLUTION_SYNC', 'Falha ao gravar ledger de instância órfã', { err: err?.message, instancia: inst.name });
+      });
+    }
   }
 
   // [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): `agentes` guarda uma linha POR
