@@ -2594,6 +2594,28 @@ export async function runMigrations(pool: Pool): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_bot ON contatos (user_id) WHERE bot_detectado = true`);
     // Qual versão da mensagem (0=A, 1=B...) cada contato recebeu — base do teste A/B. Nulo = campanha de versão única.
     await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS variante_idx SMALLINT`);
+
+    // Grupos importados: papel do contato no grupo e medição de quantos participantes têm telefone visível
+    // (o resto é LID e não dá para disparar). Histórico por importação; nada existente é alterado.
+    await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS papel_grupo TEXT`);
+    await pool.query(`UPDATE contatos SET papel_grupo = 'admin' WHERE papel_grupo IS NULL AND origem = 'Grupo WhatsApp' AND notas LIKE 'Admin do grupo%'`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS grupo_importacoes (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL,
+        group_jid       TEXT        NOT NULL,
+        nome            TEXT,
+        lista_id        UUID,
+        total_no_grupo  INTEGER     NOT NULL DEFAULT 0,
+        com_telefone    INTEGER     NOT NULL DEFAULT 0,
+        sem_telefone    INTEGER     NOT NULL DEFAULT 0,
+        pct_com_telefone NUMERIC(5,2),
+        novos           INTEGER     NOT NULL DEFAULT 0,
+        ja_existiam     INTEGER     NOT NULL DEFAULT 0,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_grupo_importacoes_user ON grupo_importacoes (user_id, group_jid, created_at DESC)`);
     log.info('MIGRATIONS', 'higienizacao respostas (contatos.resposta_*, bot_detectado, propensao, contato_respostas) OK');
   } catch (err: any) {
     log.error('MIGRATIONS', 'Falha na migration de respostas de disparo', { err: err?.message, stack: err?.stack });

@@ -40,6 +40,7 @@ const ROTULOS_PESO: Record<string, string> = {
   sem_whatsapp: "Sem WhatsApp",
   sem_foto: "Sem foto de perfil",
   grupo_b2c: "Só em grupos de consumidor final",
+  admin_grupo: "Administrador de grupo",
 };
 
 const csv = (s: string) => s.split(",").map(x => x.trim()).filter(Boolean);

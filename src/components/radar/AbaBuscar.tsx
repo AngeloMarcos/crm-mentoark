@@ -78,7 +78,7 @@ export function AbaBuscar({ status }: { status?: StatusRadar }) {
         <CardHeader>
           <CardTitle className="text-lg">Nova busca de grupos</CardTitle>
           <CardDescription>
-            Procura links de convite na internet pelo nicho escolhido. Só lê resultados de busca: não entra em nenhum grupo.
+            Procura links de convite na internet pelo nicho escolhido. Depois, cada link novo é verificado sozinho: expirado é descartado e grupo que não condiz com o nicho é rejeitado. Não entra em nenhum grupo.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -86,6 +86,12 @@ export function AbaBuscar({ status }: { status?: StatusRadar }) {
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
               Busca real desligada: {status.aviso ?? "provedor simulado"}. As buscas não retornarão grupos.
             </div>
+          )}
+          {status?.raspagem?.ativa && (
+            <p className="text-xs text-muted-foreground">
+              Diretórios de grupos também são lidos (respeitando o robots.txt de cada site, até {status.raspagem.limite_dia} páginas por dia; hoje: {status.raspagem.paginas_hoje}).
+              O uso depende dos termos de cada site — desligue com RADAR_RASPAR_DIRETORIOS=false.
+            </p>
           )}
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">

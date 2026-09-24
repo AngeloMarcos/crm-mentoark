@@ -73,6 +73,7 @@ export async function migrarRadar(pool: Pool): Promise<void> {
       'link_ativo BOOLEAN', 'somente_admins BOOLEAN', 'aprovacao_admin BOOLEAN', 'validado_em TIMESTAMPTZ',
       'erro_validacao TEXT', 'score INTEGER', 'score_motivos JSONB', 'avaliado_em TIMESTAMPTZ',
       'aderencia TEXT', 'aderencia_motivo TEXT', 'motivo_descarte TEXT', 'link_verificado_em TIMESTAMPTZ',
+      'pct_com_telefone NUMERIC(5,2)', 'importado_lista_id UUID', 'importado_em TIMESTAMPTZ',
     ];
     for (const c of colunas) await pool.query(`ALTER TABLE radar_grupos ADD COLUMN IF NOT EXISTS ${c}`);
     await pool.query(
@@ -86,6 +87,25 @@ export async function migrarRadar(pool: Pool): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
+    // Nichos: busca automática diária (rodízio de consultas) e DDDs para variações de consulta.
+    for (const c of ['agendar BOOLEAN NOT NULL DEFAULT false', 'ddds TEXT[] NOT NULL DEFAULT \'{}\'', 'rodada INTEGER NOT NULL DEFAULT 0', 'ultima_busca_em TIMESTAMPTZ']) {
+      await pool.query(`ALTER TABLE radar_nichos ADD COLUMN IF NOT EXISTS ${c}`);
+    }
+    await pool.query(`ALTER TABLE radar_buscas ADD COLUMN IF NOT EXISTS paginas_raspadas INTEGER NOT NULL DEFAULT 0`);
+    // Páginas de diretório já raspadas: evita repetir e sustenta o teto diário.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS radar_paginas (
+        id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     UUID        NOT NULL,
+        url         TEXT        NOT NULL,
+        status      TEXT        NOT NULL,
+        links       INTEGER     NOT NULL DEFAULT 0,
+        novos       INTEGER     NOT NULL DEFAULT 0,
+        erro        TEXT,
+        raspada_em  TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_radar_paginas_user_url ON radar_paginas (user_id, url, raspada_em DESC)`);
     // Pausa por bloqueio/limite do provedor (busca) ou do WhatsApp (verificação de link): persiste entre reinícios.
     await pool.query(`
       CREATE TABLE IF NOT EXISTS radar_pausas (

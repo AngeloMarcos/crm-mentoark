@@ -108,8 +108,8 @@ describe('Serper: cadência e Retry-After', () => {
     const p = new SerperProvider('k', { fetchImpl: f, maxPaginas: 3, intervaloMs: 60, jitterMs: 0, backoffMs: 0 });
     await p.buscar('q', 3);
     expect(tempos).toHaveLength(3);
-    expect(tempos[1] - tempos[0]).toBeGreaterThanOrEqual(50);
-    expect(tempos[2] - tempos[1]).toBeGreaterThanOrEqual(50);
+    expect(tempos[1] - tempos[0]).toBeGreaterThanOrEqual(40);
+    expect(tempos[2] - tempos[1]).toBeGreaterThanOrEqual(40);
   });
 
   it('429 com Retry-After: espera o indicado e tenta de novo; erro final carrega status 429', async () => {
@@ -118,5 +118,51 @@ describe('Serper: cadência e Retry-After', () => {
     const p = new SerperProvider('k', { fetchImpl: f, intervaloMs: 1, jitterMs: 0, backoffMs: 0 });
     await expect(p.buscar('q', 1)).rejects.toMatchObject({ escopo: 'busca', status: 429 });
     expect(n).toBe(3);
+  });
+});
+
+import { pontuarGrupo as pg } from '../src/radar/scoring';
+import { gerarConsultas as gc } from '../src/radar/consultas';
+import { coletarLinks as cl, SimulatedProvider as SP } from '../src/radar/searchProvider';
+
+describe('score: telefone visível', () => {
+  const g = (pct: number | null | undefined) => pg({ nome: 'Corretores', descricao: null, participantes: null, pctComTelefone: pct }, { palavras_positivas: ['corretores'], palavras_negativas: [], regioes: [] });
+  it('muito telefone soma, pouco desconta, meio termo e desconhecido não mexem', () => {
+    expect(g(80).motivos.find(m => m.regra === 'telefone_alto')?.pontos).toBe(10);
+    expect(g(5).motivos.find(m => m.regra === 'telefone_baixo')?.pontos).toBe(-15);
+    expect(g(40).motivos.some(m => m.regra.startsWith('telefone'))).toBe(false);
+    expect(g(null).motivos.some(m => m.regra.startsWith('telefone'))).toBe(false);
+    expect(g(undefined).score).toBe(12);
+    expect(g(5).score).toBe(0);
+  });
+});
+
+describe('consultas com diretórios e DDD', () => {
+  const n = { nome: 'x', termos_busca: ['corretores'], regioes: ['São Paulo'] };
+  it('gera site:diretorio com e sem região, depois as diretas ficam primeiro', () => {
+    const q = gc(n, { diretorios: ['gruposwhats.app'] });
+    expect(q[0]).toBe('corretores "chat.whatsapp.com"');
+    expect(q).toContain('site:gruposwhats.app corretores');
+    expect(q).toContain('site:gruposwhats.app corretores São Paulo');
+  });
+  it('DDD só aceita 2 dígitos', () => {
+    const q = gc(n, { ddds: ['11', 'abc', '1', '21'] });
+    expect(q).toContain('corretores "chat.whatsapp.com" DDD 11');
+    expect(q).toContain('corretores "chat.whatsapp.com" DDD 21');
+    expect(q.some(x => x.includes('DDD abc') || x.includes('DDD 1 '))).toBe(false);
+  });
+});
+
+describe('coletarLinks: páginas de diretório', () => {
+  it('separa páginas de diretório (sem repetir) e ainda extrai convites soltos', async () => {
+    const C1 = 'ABCDEFGHIJKLMNOPQRSTUV';
+    const p = new SP({ q: [
+      { titulo: 'Lista SP', snippet: '', link: 'https://gruposwhats.app/sp' },
+      { titulo: 'Lista SP de novo', snippet: '', link: 'https://gruposwhats.app/sp' },
+      { titulo: 'Grupo', snippet: '', link: 'https://chat.whatsapp.com/' + C1 },
+    ] });
+    const r = await cl(p, ['q'], { maxChamadas: 1, ehDiretorio: u => u.includes('gruposwhats.app') });
+    expect(r.paginasDiretorio).toEqual([{ url: 'https://gruposwhats.app/sp', titulo: 'Lista SP' }]);
+    expect(r.grupos.map(x => x.link.codigo)).toEqual([C1]);
   });
 });

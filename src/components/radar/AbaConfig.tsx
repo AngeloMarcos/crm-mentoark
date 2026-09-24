@@ -71,11 +71,13 @@ function NichoEditor({ n }: { n: Nicho }) {
   const [f, setF] = useState({
     nome: n.nome, termos: texto(n.termos_busca), pos: texto(n.palavras_positivas),
     neg: texto(n.palavras_negativas), reg: texto(n.regioes), ativo: n.ativo,
+    agendar: !!n.agendar, ddds: texto(n.ddds ?? []),
   });
   const salvar = useMutation({
     mutationFn: async () => api.patch(`/api/radar/nichos/${n.id}`, {
       nome: f.nome, termos_busca: lista(f.termos), palavras_positivas: lista(f.pos),
       palavras_negativas: lista(f.neg), regioes: lista(f.reg), ativo: f.ativo,
+      agendar: f.agendar, ddds: lista(f.ddds),
     }),
     onSuccess: () => { toast.success("Nicho salvo — recalcule os scores para aplicar"); qc.invalidateQueries({ queryKey: ["radar-nichos"] }); },
     onError: (e: any) => toast.error(e?.message ?? "Não foi possível salvar o nicho"),
@@ -97,6 +99,12 @@ function NichoEditor({ n }: { n: Nicho }) {
         <Textarea rows={3} value={f.neg} onChange={e => setF({ ...f, neg: e.target.value })} /></div>
       <div className="space-y-1 md:col-span-2"><Label>Regiões</Label>
         <Textarea rows={2} value={f.reg} onChange={e => setF({ ...f, reg: e.target.value })} /></div>
+      <div className="space-y-1"><Label>DDDs (variações de busca, ex.: 11, 21)</Label>
+        <Input value={f.ddds} onChange={e => setF({ ...f, ddds: e.target.value })} placeholder="11, 21, 19" /></div>
+      <div className="flex items-center gap-2 pt-6">
+        <Switch checked={f.agendar} onCheckedChange={v => setF({ ...f, agendar: v })} />
+        <Label>Buscar sozinho todo dia (só traz grupos novos)</Label>
+      </div>
       <div className="flex gap-2 md:col-span-2">
         <Button size="sm" onClick={() => salvar.mutate()} disabled={salvar.isPending}><Save className="mr-2 h-4 w-4" />Salvar nicho</Button>
         <Button size="sm" variant="ghost" onClick={() => { if (confirm(`Remover o nicho “${n.nome}”? Os grupos já catalogados ficam sem nicho.`)) excluir.mutate(); }}>

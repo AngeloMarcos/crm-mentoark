@@ -464,7 +464,7 @@ async function etapaClassificacao(
   for (;;) {
     const lote = await pool.query(
       `SELECT c.id, c.nome, c.push_name, c.tipo_telefone, c.telefone_normalizado, c.whatsapp_status,
-              c.is_business, c.business_categoria, c.business_descricao, c.nome_confiavel,
+              c.is_business, c.business_categoria, c.business_descricao, c.nome_confiavel, c.papel_grupo,
               (c.profile_pic_url IS NOT NULL OR c.foto_perfil IS NOT NULL) AS tem_foto,
               COALESCE((SELECT array_agg(l.nome) FROM contato_listas cl JOIN listas l ON l.id = cl.lista_id
                         WHERE cl.contato_id = c.id), '{}') AS listas
@@ -482,7 +482,7 @@ async function etapaClassificacao(
         nome: r.nome, pushName: r.push_name, businessCategoria: r.business_categoria,
         businessDescricao: r.business_descricao, isBusiness: r.is_business, tipoTelefone: r.tipo_telefone,
         telefoneNormalizado: r.telefone_normalizado, whatsappStatus: r.whatsapp_status,
-        nomeConfiavel: r.nome_confiavel, temFoto: !!r.tem_foto, listas: r.listas ?? [],
+        nomeConfiavel: r.nome_confiavel, temFoto: !!r.tem_foto, papelGrupo: r.papel_grupo, listas: r.listas ?? [],
       }, cc);
       ids.push(r.id);
       nichos.push(res.nicho);

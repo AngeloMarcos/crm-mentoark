@@ -6,7 +6,8 @@ import { retentarMidiaPendente } from './services/mediaRetry';
 import { recalcularTodosScores } from './services/instanceScore';
 import { processarMaturador } from './services/maturadorProcessor';
 import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
-import { enfileirarLinkPublico } from './radar/fila';
+import { enfileirarBusca, enfileirarLinkPublico } from './radar/fila';
+import { criarBuscaAgendada } from './radar/busca';
 
 // [AUDITORIA] FIX APLICADO (Sprint Limpeza de Disco, 2026-08-23): dias de retenção pra mídia
 // recebida (áudio/imagem/vídeo/documento) salva em disco — configurável via env pra poder
@@ -21,6 +22,21 @@ const DIAS_RETENCAO_MIDIA = Number(process.env.DIAS_RETENCAO_MIDIA_WHATSAPP) || 
 const HORAS_RETENCAO_VARIANTES = Number(process.env.HORAS_RETENCAO_VARIANTES_IMAGEM) || 12;
 
 export function initCronJobs() {
+  // Radar de Grupos: busca automática diária dos nichos marcados como "agendar" (rodízio de consultas, só traz
+  // grupos novos). Espaça os nichos para não estourar o ritmo do provedor de busca.
+  cron.schedule('10 5 * * *', async () => {
+    try {
+      const r = await pool.query(`SELECT * FROM radar_nichos WHERE agendar = true AND ativo = true ORDER BY ultima_busca_em NULLS FIRST LIMIT 5`);
+      let criadas = 0;
+      for (const n of r.rows) {
+        if (await criarBuscaAgendada(pool, n, enfileirarBusca)) criadas++;
+      }
+      if (r.rows.length) log.info('CRON', 'Radar: buscas agendadas', { nichos: r.rows.length, criadas });
+    } catch (err: any) {
+      log.error('CRON', 'Erro nas buscas agendadas do Radar', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Radar de Grupos: revalida os links do catálogo pela página pública (sem instância, sem entrar em nada);
   // lote pequeno e ritmo baixo na fila.
   cron.schedule('30 4 * * *', async () => {

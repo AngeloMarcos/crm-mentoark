@@ -22,6 +22,7 @@ export interface PesosScore {
   sem_whatsapp: number;     // número validado como sem WhatsApp
   sem_foto: number;         // sem foto de perfil conhecida
   grupo_b2c: number;        // só aparece em grupos de consumidor final
+  admin_grupo: number;      // é admin de grupo: costuma ser dono de comunidade ou negócio
 }
 
 export interface ConfigClassificacao {
@@ -44,6 +45,7 @@ export const PESOS_PADRAO: PesosScore = {
   sem_whatsapp: -50,
   sem_foto: -3,
   grupo_b2c: -10,
+  admin_grupo: 15,
 };
 
 // Palavras já sem acento (a comparação também remove acento). As categorias do WhatsApp Business
@@ -190,6 +192,8 @@ export interface EntradaLead {
   whatsappStatus?: string | null;
   nomeConfiavel?: boolean | null;
   temFoto?: boolean;
+  /** Papel no grupo de origem ("admin" quando o WhatsApp o lista como administrador). */
+  papelGrupo?: string | null;
   /** Nomes das listas/grupos de origem do contato. */
   listas: string[];
 }
@@ -271,6 +275,7 @@ export function classificarLead(e: EntradaLead, cc: ConfigCompilada): ResultadoC
   if (listasNegocio >= 2) somar('multiplas_listas', `${listasNegocio} listas`);
   if (e.temFoto === false) somar('sem_foto');
   if (soGruposB2c) somar('grupo_b2c');
+  if (e.papelGrupo === 'admin') somar('admin_grupo');
 
   const bruto = motivos.reduce((s, m) => s + m.pontos, 0);
   return {

@@ -6,6 +6,8 @@ export interface DadosGrupo {
   nome: string | null;
   descricao: string | null;
   participantes: number | null;
+  /** % dos participantes com número visível (o resto é LID, que não dá para disparar). null = nunca medido. */
+  pctComTelefone?: number | null;
 }
 
 export interface CriteriosNicho {
@@ -26,6 +28,10 @@ export interface PesosScore {
   tamanho_min: number;
   tamanho_max: number;
   restrito_profissionais: number; // "somente corretores", "exclusivo para profissionais"...
+  telefone_alto: number;        // % com telefone >= telefone_alto_min
+  telefone_baixo: number;       // desconto quando % com telefone < telefone_baixo_max
+  telefone_alto_min: number;
+  telefone_baixo_max: number;
   auto_rejeitar_baixa_aderencia: number; // 1 = descarta sozinho grupo cujo nome não condiz com o nicho; 0 = só marca
 }
 
@@ -41,6 +47,10 @@ export const PESOS_PADRAO: PesosScore = {
   tamanho_min: 50,
   tamanho_max: 1024,
   restrito_profissionais: 15,
+  telefone_alto: 10,
+  telefone_baixo: 15,
+  telefone_alto_min: 60,
+  telefone_baixo_max: 20,
   auto_rejeitar_baixa_aderencia: 1,
 };
 
@@ -129,6 +139,13 @@ export function pontuarGrupo(
     } else {
       motivos.push({ regra: 'tamanho_fora', pontos: 0, detalhe: `${n} participantes (fora de ${pesos.tamanho_min}-${pesos.tamanho_max})` });
     }
+  }
+
+  // Telefone visível: grupo em que quase todo mundo é LID rende poucos leads disparáveis.
+  const pct = grupo.pctComTelefone;
+  if (typeof pct === 'number') {
+    if (pct >= pesos.telefone_alto_min) motivos.push({ regra: 'telefone_alto', pontos: pesos.telefone_alto, detalhe: `${Math.round(pct)}% com telefone` });
+    else if (pct < pesos.telefone_baixo_max) motivos.push({ regra: 'telefone_baixo', pontos: -pesos.telefone_baixo, detalhe: `só ${Math.round(pct)}% com telefone` });
   }
 
   // Restrição a profissionais

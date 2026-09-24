@@ -38,6 +38,13 @@ export default function RadarGruposPage() {
           </div>
         )}
 
+        {(s?.pausas?.busca || s?.pausas?.verificacao_links) && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm space-y-1">
+            {s.pausas?.busca && <div><strong>Buscas</strong> {s.pausas.busca}. O Radar espera sozinho para não agravar o bloqueio.</div>}
+            {s.pausas?.verificacao_links && <div><strong>Verificação de links</strong> {s.pausas.verificacao_links}.</div>}
+          </div>
+        )}
+
         <Tabs defaultValue="buscar" className="w-full">
           <TabsList className="grid w-full max-w-lg grid-cols-3">
             <TabsTrigger value="buscar">Buscar</TabsTrigger>

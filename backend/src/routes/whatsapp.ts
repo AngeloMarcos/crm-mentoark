@@ -17,6 +17,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { AuthRequest } from '../middleware';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
+import { vincularImportados } from '../radar/validacao';
 import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, garantirMidiaEstavel, MAX_OUTBOUND_MEDIA_BYTES, extensaoParaArquivo, buscarInfoGrupo, buscarNomesParticipantesGrupo, buscarNomeViaFetchProfile } from '../utils/whatsappMediaStorage';
 import { buscarPreviewLink } from '../utils/linkPreview';
 import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
@@ -1043,10 +1044,11 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       const idsParaVincular: string[] = [];
+      const adminsExistentes: string[] = [];
       const novosGrupo: typeof candidatosGrupo = [];
       for (const c of candidatosGrupo) {
         const existenteId = idPorSufixo.get((c.n.normalizado as string).slice(-11));
-        if (existenteId) { jaExistiam++; idsParaVincular.push(existenteId); } else novosGrupo.push(c);
+        if (existenteId) { jaExistiam++; idsParaVincular.push(existenteId); if (c.p.admin) adminsExistentes.push(existenteId); } else novosGrupo.push(c);
       }
 
       if (idsParaVincular.length || novosGrupo.length) await garantirLista();
@@ -1084,17 +1086,33 @@ export default function whatsappRouter(pool: Pool): Router {
         const nomeLimpo = resolverNomeLimpo(nomeResolvido, null, p.telefone);
         const inserted = await pool.query(
           `INSERT INTO contatos (user_id, nome, telefone, origem, status, notas, lista_id, nome_verificado,
-                                 telefone_original, telefone_normalizado, tipo_telefone, primeiro_nome, nome_confiavel, whatsapp_status)
-           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4, $5, $6, $3, $7, $8, $9, $10, $11)
+                                 telefone_original, telefone_normalizado, tipo_telefone, primeiro_nome, nome_confiavel, whatsapp_status, papel_grupo)
+           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4, $5, $6, $3, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
            RETURNING id`,
           [tenantId, nomeResolvido || p.telefone, p.telefone, notas, listaId, !!nomeResolvido,
-           c.n.normalizado, c.n.tipo, nomeLimpo.primeiroNome, nomeLimpo.confiavel, c.n.tipo === 'fixo' ? 'sem_whatsapp' : 'pendente']
+           c.n.normalizado, c.n.tipo, nomeLimpo.primeiroNome, nomeLimpo.confiavel, c.n.tipo === 'fixo' ? 'sem_whatsapp' : 'pendente', p.admin ? 'admin' : null]
         ).catch(err => {
           log.warn('WA_GROUP_IMPORT', 'Falha ao inserir participante', { telefone: p.telefone, err: err?.message });
           return { rows: [] as any[] };
         });
         if (inserted.rows.length) { novos++; if (nomeResolvido) nomesResolvidos++; } else jaExistiam++; // corrida com outro insert concorrente — trata como "já existia"
+      }
+
+      // Medição: quantos participantes têm telefone visível (o resto é LID e não dá para disparar) e papel de admin.
+      // Só preenche colunas novas (papel_grupo nunca sobrescreve nada) e falha aqui nunca derruba a importação.
+      try {
+        if (adminsExistentes.length) {
+          await pool.query(`UPDATE contatos SET papel_grupo = 'admin' WHERE user_id = $1 AND id = ANY($2::uuid[]) AND papel_grupo IS NULL`, [tenantId, Array.from(new Set(adminsExistentes))]);
+        }
+        const pct = totalNoGrupo > 0 ? Math.round((info.participantes.length / totalNoGrupo) * 10000) / 100 : null;
+        await pool.query(
+          `INSERT INTO grupo_importacoes (user_id, group_jid, nome, lista_id, total_no_grupo, com_telefone, sem_telefone, pct_com_telefone, novos, ja_existiam)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [tenantId, groupJid, info.subject, listaId, totalNoGrupo, info.participantes.length, semNumeroResolvido, pct, novos, jaExistiam]);
+        await vincularImportados(pool, tenantId);
+      } catch (err: any) {
+        log.warn('WA_GROUP_IMPORT', 'Não foi possível registrar a medição da importação (a importação foi concluída)', { err: err?.message });
       }
 
       log.info('WA_GROUP_IMPORT', 'Importação de contatos de grupo concluída', {
@@ -1105,6 +1123,7 @@ export default function whatsappRouter(pool: Pool): Router {
         novos, jaExistiam, vinculados, descartados, semNumeroResolvido, nomesResolvidos,
         totalParticipantes: info.participantes.length,
         totalNoGrupo,
+        pctComTelefone: totalNoGrupo > 0 ? Math.round((info.participantes.length / totalNoGrupo) * 100) : null,
         grupoNome: info.subject,
         listaId,
         listaNome,

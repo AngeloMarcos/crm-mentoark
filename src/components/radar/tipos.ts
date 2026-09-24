@@ -9,6 +9,8 @@ export interface StatusRadar {
   limite_consultas_dia: number;
   redis: { usadoMb: number; maxMb: number; alerta: boolean } | null;
   leitura_convites: { configurada: boolean; instancia: string | null };
+  pausas?: { busca: string | null; verificacao_links: string | null };
+  raspagem?: { ativa: boolean; diretorios: string[]; paginas_hoje: number; limite_dia: number };
 }
 
 export interface Nicho {
@@ -19,6 +21,8 @@ export interface Nicho {
   palavras_negativas: string[];
   regioes: string[];
   ativo: boolean;
+  agendar?: boolean;
+  ddds?: string[];
 }
 
 export interface Motivo { regra: string; pontos: number; detalhe: string }
@@ -43,6 +47,13 @@ export interface Grupo {
   erro_validacao: string | null;
   score: number | null;
   score_motivos: Motivo[] | null;
+  aderencia: "alta" | "media" | "baixa" | "sem_dados" | null;
+  aderencia_motivo: string | null;
+  motivo_descarte: string | null;
+  link_verificado_em: string | null;
+  pct_com_telefone: number | string | null;
+  importado_lista_id: string | null;
+  importado_em: string | null;
   created_at: string;
 }
 
@@ -74,6 +85,8 @@ export const ROTULOS_REGRA: Record<string, string> = {
   tamanho_pequeno: "Grupo pequeno",
   tamanho_fora: "Tamanho fora da faixa",
   restrito_profissionais: "Restrito a profissionais",
+  telefone_alto: "Muitos com telefone",
+  telefone_baixo: "Poucos com telefone",
 };
 
 export const ROTULOS_PESO: Record<string, { rotulo: string; ajuda: string }> = {
@@ -88,6 +101,11 @@ export const ROTULOS_PESO: Record<string, { rotulo: string; ajuda: string }> = {
   tamanho_min: { rotulo: "Mínimo da faixa ideal", ajuda: "Nº mínimo de participantes da faixa ideal." },
   tamanho_max: { rotulo: "Máximo da faixa ideal", ajuda: "Nº máximo de participantes da faixa ideal." },
   restrito_profissionais: { rotulo: "Restrito a profissionais", ajuda: "Pontos para frases como “somente corretores”." },
+  telefone_alto: { rotulo: "Bônus: muitos participantes com telefone", ajuda: "Pontos quando a % de participantes com telefone visível passa do mínimo abaixo (medida ao importar o grupo)." },
+  telefone_alto_min: { rotulo: "Mínimo de % com telefone para o bônus", ajuda: "Ex.: 60 = o bônus vale a partir de 60% dos participantes com telefone." },
+  telefone_baixo: { rotulo: "Desconto: poucos participantes com telefone", ajuda: "Grupos em que quase todos são LID (sem número) rendem poucos leads disparáveis." },
+  telefone_baixo_max: { rotulo: "Abaixo de quantos % o desconto vale", ajuda: "Ex.: 20 = o desconto vale quando menos de 20% têm telefone." },
+  auto_rejeitar_baixa_aderencia: { rotulo: "Descartar grupo fora do nicho (1 = sim, 0 = só marcar)", ajuda: "Quando o nome do grupo não tem nenhuma palavra do nicho, ele é rejeitado sozinho (dá para reaprovar)." },
 };
 
 export function rotuloMotivo(m: Motivo): string {
@@ -122,4 +140,16 @@ export async function planilhaParaCsv(file: File): Promise<string> {
     }
   }
   return linhas.join("\n");
+}
+
+export const ROTULO_ADERENCIA: Record<string, string> = {
+  alta: "Condiz", media: "Condiz em parte", baixa: "Não condiz", sem_dados: "Sem dados",
+};
+
+/** Texto curto do motivo de descarte automático. */
+export function rotuloDescarte(m: string | null): string | null {
+  if (!m) return null;
+  if (m === "link_invalido") return "Link expirado ou inexistente";
+  if (m.startsWith("baixa_aderencia")) return "Não condiz com o nicho";
+  return m;
 }

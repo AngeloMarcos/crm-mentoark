@@ -69,7 +69,7 @@ export function termoDaConsulta(consulta: string | null): string[] {
  * passar a condizer (nicho editado), volta a `descoberto`; aprovar/rejeitar manualmente sempre vale.
  */
 export async function pontuarEGravar(pool: Pool, g: any, pesos: PesosScore, nicho: NichoCompleto | null): Promise<void> {
-  const r = pontuarGrupo({ nome: g.nome, descricao: g.descricao, participantes: g.participantes }, nicho, pesos);
+  const r = pontuarGrupo({ nome: g.nome, descricao: g.descricao, participantes: g.participantes, pctComTelefone: g.pct_com_telefone === null || g.pct_com_telefone === undefined ? null : Number(g.pct_com_telefone) }, nicho, pesos);
   const ad = avaliarAderencia({ nome: g.nome, descricao: g.descricao }, nicho, termoDaConsulta(g.consulta));
 
   let status = g.status as string;
@@ -88,6 +88,45 @@ export async function pontuarEGravar(pool: Pool, g: any, pesos: PesosScore, nich
             motivo_descarte = CASE WHEN $7::boolean THEN $8 ELSE motivo_descarte END, updated_at = now()
       WHERE id = $1`,
     [g.id, r.score, JSON.stringify(r.motivos), ad.nivel, ad.motivo, status, descarte !== undefined, descarte ?? null]);
+}
+
+/** Normaliza nome de grupo para comparar ("Corretores SP " == "corretores sp"). */
+export const chaveNome = (n: string | null | undefined) => (n ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/**
+ * Liga o catálogo às importações de grupo que já aconteceram (mesmo jid, ou mesmo nome): marca o grupo como
+ * "já importado" (não é lead novo) e traz a % de participantes com telefone visível, que entra no score.
+ * Só preenche campos do Radar; não mexe em contatos nem em listas.
+ */
+export async function vincularImportados(pool: Pool, userId: string): Promise<number> {
+  const imp = await pool.query(
+    `SELECT DISTINCT ON (group_jid) group_jid, nome, lista_id, pct_com_telefone, created_at
+       FROM grupo_importacoes WHERE user_id = $1 ORDER BY group_jid, created_at DESC`, [userId]);
+  if (!imp.rows.length) return 0;
+  const porJid = new Map<string, any>();
+  const porNome = new Map<string, any>();
+  for (const i of imp.rows) { porJid.set(i.group_jid, i); const k = chaveNome(i.nome); if (k) porNome.set(k, i); }
+
+  const gr = await pool.query(
+    `SELECT * FROM radar_grupos WHERE user_id = $1 AND plataforma = 'whatsapp' AND (jid IS NOT NULL OR nome IS NOT NULL)`, [userId]);
+  const pesos = await carregarPesos(pool, userId);
+  const cache = new Map<string, NichoCompleto | null>();
+  let n = 0;
+  for (const g of gr.rows) {
+    const i = (g.jid && porJid.get(g.jid)) || porNome.get(chaveNome(g.nome));
+    if (!i) continue;
+    const pct = i.pct_com_telefone === null ? null : Number(i.pct_com_telefone);
+    const mudou = g.importado_lista_id !== i.lista_id || Number(g.pct_com_telefone ?? -1) !== Number(pct ?? -1);
+    if (!mudou) continue;
+    const upd = await pool.query(
+      `UPDATE radar_grupos SET importado_lista_id = $2, importado_em = $3, pct_com_telefone = $4, updated_at = now() WHERE id = $1 RETURNING *`,
+      [g.id, i.lista_id, i.created_at, pct]);
+    const k = g.nicho_id ?? '';
+    if (!cache.has(k)) cache.set(k, await nichoDoGrupo(pool, userId, g.nicho_id));
+    if (upd.rows[0].nome) await pontuarEGravar(pool, upd.rows[0], pesos, cache.get(k)!);
+    n++;
+  }
+  return n;
 }
 
 export async function pontuarTodos(pool: Pool, userId: string): Promise<number> {
@@ -141,6 +180,7 @@ export async function verificarLinkPublico(pool: Pool, grupoId: string): Promise
       WHERE id = $1 RETURNING *`, [g.id, res.nome]);
   const pesos = await carregarPesos(pool, g.user_id);
   await pontuarEGravar(pool, upd.rows[0], pesos, await nichoDoGrupo(pool, g.user_id, g.nicho_id));
+  await vincularImportados(pool, g.user_id).catch(() => {});
   return 'ok';
 }
 

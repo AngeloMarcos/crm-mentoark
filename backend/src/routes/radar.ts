@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { randomUUID } from 'crypto';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
-import { configProviderDoAmbiente, consultasUsadasHoje, gerarConsultas, LIMITES, semearNichosSeVazio } from '../radar/busca';
+import { configProviderDoAmbiente, consultasDoNicho, consultasUsadasHoje, LIMITES, paginasRaspadasHoje, RASPAGEM, semearNichosSeVazio } from '../radar/busca';
 import { enfileirarBusca, enfileirarLinkPublico, enfileirarValidacao, memoriaRedis, redisConfigurado } from '../radar/fila';
 import { carregarPesos, configLeitura, pausaAtiva, pontuarTodos, textoPausa } from '../radar/validacao';
 import { mesclarPesos } from '../radar/scoring';
@@ -32,7 +32,7 @@ export default function radarRouter(pool: Pool): Router {
           verificacao_links: await pausaAtiva(pool, 'link_publico').then(p => (p ? textoPausa(p) : null)),
         },
         leitura_convites: { configurada: !!configLeitura(), instancia: configLeitura()?.instancia ?? null },
-        crawler_diretorios: false,
+        raspagem: { ativa: RASPAGEM.ativa(), diretorios: RASPAGEM.diretorios(), paginas_hoje: await paginasRaspadasHoje(pool, req.userId!), limite_dia: RASPAGEM.porDia() },
       });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -72,12 +72,16 @@ export default function radarRouter(pool: Pool): Router {
            palavras_negativas = COALESCE($6, palavras_negativas),
            regioes = COALESCE($7, regioes),
            ativo = COALESCE($8, ativo),
+           agendar = COALESCE($9, agendar),
+           ddds = COALESCE($10, ddds),
            updated_at = now()
          WHERE id = $1 AND user_id = $2 RETURNING *`,
         [req.params.id, req.userId, b.nome ? String(b.nome).trim() : null,
          b.termos_busca ? lista(b.termos_busca) : null, b.palavras_positivas ? lista(b.palavras_positivas) : null,
          b.palavras_negativas ? lista(b.palavras_negativas) : null, b.regioes ? lista(b.regioes) : null,
-         typeof b.ativo === 'boolean' ? b.ativo : null],
+         typeof b.ativo === 'boolean' ? b.ativo : null,
+         typeof b.agendar === 'boolean' ? b.agendar : null,
+         b.ddds ? lista(b.ddds).map((d: string) => d.replace(/\D/g, '')).filter((d: string) => /^\d{2}$/.test(d)) : null],
       );
       if (!r.rows[0]) return res.status(404).json({ error: 'Nicho não encontrado' });
       res.json(r.rows[0]);
@@ -117,7 +121,7 @@ export default function radarRouter(pool: Pool): Router {
 
       // Termo customizado substitui os termos do nicho (mantém as regiões do nicho).
       const termo = String(req.body?.termo ?? '').replace(/"/g, '').trim().slice(0, 120);
-      const consultas = gerarConsultas(termo ? { ...nicho, termos_busca: [termo] } : nicho, { incluirTelegram: !!incluir_telegram, max: maxConsultas });
+      const consultas = consultasDoNicho(nicho, { termo: termo || undefined, incluirTelegram: !!incluir_telegram, max: maxConsultas });
       if (!consultas.length) return res.status(400).json({ error: 'O nicho não tem termos de busca' });
 
       const ins = await pool.query(
@@ -146,7 +150,7 @@ export default function radarRouter(pool: Pool): Router {
   // ── Catálogo de grupos ───────────────────────────────────────────────────────────────────────
   router.get('/grupos', async (req: AuthRequest, res) => {
     try {
-      const { status, nicho_id, plataforma, order, min_score, q, aderencia } = req.query as Record<string, string>;
+      const { status, nicho_id, plataforma, order, min_score, q, aderencia, importado, fonte } = req.query as Record<string, string>;
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Math.max(Number(req.query.offset) || 0, 0);
       const w = ['g.user_id = $1'];
@@ -155,6 +159,9 @@ export default function radarRouter(pool: Pool): Router {
       if (plataforma) { v.push(plataforma); w.push(`g.plataforma = $${v.length}`); }
       if (nicho_id && UUID_RE.test(nicho_id)) { v.push(nicho_id); w.push(`g.nicho_id = $${v.length}`); }
       if (aderencia && ['alta', 'media', 'baixa', 'sem_dados'].includes(aderencia)) { v.push(aderencia); w.push(`g.aderencia = ${v.length}`); }
+      if (importado === 'sim') w.push('g.importado_lista_id IS NOT NULL');
+      if (importado === 'nao') w.push('g.importado_lista_id IS NULL');
+      if (fonte && ['busca', 'diretorio', 'planilha'].includes(fonte)) { v.push(fonte); w.push(`g.fonte = $${v.length}`); }
       if (q && q.trim()) { v.push(`%${q.trim().slice(0, 80)}%`); w.push(`(g.nome ILIKE ${v.length} OR g.titulo_origem ILIKE ${v.length} OR g.descricao ILIKE ${v.length})`); }
       if (min_score && Number.isFinite(Number(min_score))) { v.push(Number(min_score)); w.push(`g.score >= ${v.length}`); }
       v.push(limit, offset);

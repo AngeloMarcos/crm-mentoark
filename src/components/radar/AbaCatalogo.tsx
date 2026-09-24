@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ExternalLink, Eye, Loader2, RefreshCw, X } from "lucide-react";
+import { Check, ExternalLink, Eye, Link2, Loader2, RefreshCw, X } from "lucide-react";
 import { api } from "@/integrations/database/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Grupo, Nicho, StatusRadar, rotuloMotivo, statusLabel } from "./tipos";
+import { Grupo, Nicho, ROTULO_ADERENCIA, StatusRadar, rotuloDescarte, rotuloMotivo, statusLabel } from "./tipos";
 
 const POR_PAGINA = 25;
 const TODOS = "todos";
@@ -27,6 +27,8 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
   const [minScore, setMinScore] = useState("");
   const [st, setSt] = useState(TODOS);
   const [nicho, setNicho] = useState(TODOS);
+  const [ader, setAder] = useState(TODOS);
+  const [imp, setImp] = useState(TODOS);
   const [pagina, setPagina] = useState(0);
 
   useEffect(() => {
@@ -44,12 +46,14 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
   if (minScore) params.set("min_score", minScore);
   if (st !== TODOS) params.set("status", st);
   if (nicho !== TODOS) params.set("nicho_id", nicho);
+  if (ader !== TODOS) params.set("aderencia", ader);
+  if (imp !== TODOS) params.set("importado", imp);
 
   const grupos = useQuery({
     queryKey: ["radar-grupos", params.toString()],
     queryFn: async () => (await api.get(`/api/radar/grupos?${params}`)).data as { total: number; itens: Grupo[] },
     // Enquanto houver leituras pendentes na fila, reatualiza para mostrar o resultado chegando.
-    refetchInterval: (query) => ((query.state.data as any)?.itens?.some((g: Grupo) => g.status === "descoberto" && !g.validado_em) ? 15000 : false),
+    refetchInterval: (query) => ((query.state.data as any)?.itens?.some((g: Grupo) => g.plataforma === "whatsapp" && g.status === "descoberto" && !g.link_verificado_em) ? 10000 : false),
   });
 
   const decidir = useMutation({
@@ -67,6 +71,16 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
     onError: (e: any) => toast.error(e?.message ?? "Não foi possível enfileirar a leitura"),
   });
 
+  const verificar = useMutation({
+    mutationFn: async (ids?: string[]) => (await api.post("/api/radar/grupos/verificar-links", ids ? { ids } : { limite: 50 })).data,
+    onSuccess: (r: any) => {
+      toast.success(r.enfileirados ? `${r.enfileirados} link(s) na fila de verificação (1 a cada ~6s)` : "Nenhum link pendente de verificação");
+      if (r.aviso) toast.warning(r.aviso);
+      qc.invalidateQueries({ queryKey: ["radar-grupos"] });
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Não foi possível enfileirar a verificação"),
+  });
+
   const total = grupos.data?.total ?? 0;
   const leituraOk = status?.leitura_convites.configurada ?? false;
   const paginas = Math.max(1, Math.ceil(total / POR_PAGINA));
@@ -75,13 +89,12 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
     <div className="space-y-4 pt-4">
       {status && !leituraOk && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-          Leitura de convites desligada: nenhuma instância de leitura configurada no servidor. Sem ela os grupos ficam sem nome,
-          participantes e score.
+          Leitura de participantes desligada: nenhuma instância configurada. A verificação de links e o nome do grupo funcionam sem instância; só o nº de participantes depende dela.
         </div>
       )}
 
       <Card>
-        <CardContent className="grid gap-3 p-4 md:grid-cols-5">
+        <CardContent className="grid gap-3 p-4 md:grid-cols-7">
           <Input placeholder="Buscar no nome ou descrição…" value={q} onChange={e => setQ(e.target.value)} className="md:col-span-2" />
           <Input type="number" min={0} max={100} placeholder="Score mínimo" value={minScore}
             onChange={e => { setMinScore(e.target.value); setPagina(0); }} />
@@ -90,6 +103,21 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
             <SelectContent>
               <SelectItem value={TODOS}>Todas as situações</SelectItem>
               {["descoberto", "aprovado", "rejeitado", "invalido"].map(s => <SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={ader} onValueChange={v => { setAder(v); setPagina(0); }}>
+            <SelectTrigger><SelectValue placeholder="Condiz com o nicho?" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={TODOS}>Aderência: todas</SelectItem>
+              {["alta", "media", "baixa", "sem_dados"].map(a => <SelectItem key={a} value={a}>{ROTULO_ADERENCIA[a]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={imp} onValueChange={v => { setImp(v); setPagina(0); }}>
+            <SelectTrigger><SelectValue placeholder="Já importado?" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={TODOS}>Importação: todos</SelectItem>
+              <SelectItem value="nao">Ainda não importados</SelectItem>
+              <SelectItem value="sim">Já importados</SelectItem>
             </SelectContent>
           </Select>
           <Select value={nicho} onValueChange={v => { setNicho(v); setPagina(0); }}>
@@ -104,11 +132,18 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-sm text-muted-foreground">{total} grupo(s) no catálogo</span>
-        <Button variant="outline" size="sm" disabled={!leituraOk || validar.isPending} onClick={() => validar.mutate(undefined)}
-          title={leituraOk ? "Lê nome, participantes e link ativo dos próximos 20 grupos pendentes (sem entrar)" : "Instância de leitura não configurada"}>
-          {validar.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-          Ler convites pendentes (20)
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={verificar.isPending} onClick={() => verificar.mutate(undefined)}
+            title="Abre a página pública de cada convite: descarta link expirado e confere se o nome condiz com o nicho (sem instância, sem entrar)">
+            {verificar.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Link2 className="mr-2 h-4 w-4" />}
+            Verificar links pendentes (50)
+          </Button>
+          <Button variant="outline" size="sm" disabled={!leituraOk || validar.isPending} onClick={() => validar.mutate(undefined)}
+            title={leituraOk ? "Lê participantes, descrição e criação pela instância (sem entrar)" : "Instância de leitura não configurada"}>
+            {validar.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Ler participantes (20)
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -119,7 +154,7 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
                 <TableHead className="min-w-[260px]">Grupo</TableHead>
                 <TableHead>Origem</TableHead>
                 <TableHead className="text-right">Particip.</TableHead>
-                <TableHead className="min-w-[280px]">Score e motivos</TableHead>
+                <TableHead className="min-w-[280px]">Score, aderência e motivos</TableHead>
                 <TableHead>Situação</TableHead>
                 <TableHead className="text-right">Ações</TableHead>
               </TableRow>
@@ -134,6 +169,7 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
                       : <div className="text-muted-foreground italic">Nome ainda não lido</div>}
                     {!g.nome && g.titulo_origem && <div className="max-w-xs truncate text-xs text-muted-foreground" title={g.titulo_origem}>Página: {g.titulo_origem}</div>}
                     {g.descricao && <div className="max-w-xs truncate text-xs text-muted-foreground" title={g.descricao}>{g.descricao}</div>}
+                    {rotuloDescarte(g.motivo_descarte) && (g.status === "invalido" || g.status === "rejeitado") && <div className="text-xs text-red-600" title={g.aderencia_motivo ?? g.erro_validacao ?? ""}>Descartado: {rotuloDescarte(g.motivo_descarte)}</div>}
                     {g.erro_validacao && g.status !== "invalido" && <div className="max-w-xs truncate text-xs text-red-600" title={g.erro_validacao}>{g.erro_validacao}</div>}
                     <a href={g.url} target="_blank" rel="noreferrer noopener" className="mt-0.5 inline-flex items-center gap-1 text-xs text-primary hover:underline">
                       {g.codigo_convite.slice(0, 8)}… <ExternalLink className="h-3 w-3" />
@@ -141,11 +177,25 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
                   </TableCell>
                   <TableCell>
                     <div className="text-sm">{g.nicho_nome ?? "Sem nicho"}</div>
-                    <div className="text-xs text-muted-foreground">{g.fonte === "planilha" ? "Planilha" : g.plataforma === "telegram" ? "Busca · Telegram" : "Busca"}</div>
+                    <div className="text-xs text-muted-foreground">{g.fonte === "planilha" ? "Planilha" : g.fonte === "diretorio" ? "Diretório" : g.plataforma === "telegram" ? "Busca · Telegram" : "Busca"}</div>
+                    {g.importado_lista_id && <Badge variant="secondary" className="mt-1 font-normal" title="Este grupo já foi importado para uma lista de contatos: não é lead novo.">Já importado</Badge>}
+                    {g.pct_com_telefone !== null && g.pct_com_telefone !== undefined && (
+                      <div className="mt-1 text-xs text-muted-foreground" title="Participantes com número visível (o resto é LID e não dá para disparar).">
+                        {Math.round(Number(g.pct_com_telefone))}% com telefone
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="text-right">{g.participantes ?? "—"}</TableCell>
                   <TableCell>
-                    <BadgeScore score={g.score} />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <BadgeScore score={g.score} />
+                      {g.aderencia && g.aderencia !== "sem_dados" && (
+                        <Badge variant="outline" title={g.aderencia_motivo ?? ""}
+                          className={g.aderencia === "alta" ? "border-emerald-500/40 text-emerald-600" : g.aderencia === "baixa" ? "border-red-500/40 text-red-600" : "border-amber-500/40 text-amber-600"}>
+                          {ROTULO_ADERENCIA[g.aderencia]}
+                        </Badge>
+                      )}
+                    </div>
                     <div className="mt-1 flex flex-wrap gap-1">
                       {(g.score_motivos ?? []).map(m => (
                         <Badge key={m.regra} variant="outline" title={m.detalhe}
@@ -162,8 +212,8 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
                   </TableCell>
                   <TableCell className="text-right whitespace-nowrap">
                     {g.plataforma === "whatsapp" && (
-                      <Button size="icon" variant="ghost" title="Ler convite (sem entrar)" disabled={!leituraOk || validar.isPending}
-                        onClick={() => validar.mutate([g.id])}><Eye className="h-4 w-4" /></Button>
+                      <Button size="icon" variant="ghost" title="Verificar link e nome (sem entrar)" disabled={verificar.isPending}
+                        onClick={() => verificar.mutate([g.id])}><Eye className="h-4 w-4" /></Button>
                     )}
                     <Button size="icon" variant="ghost" title="Aprovar" disabled={g.status === "invalido" || g.status === "aprovado"}
                       onClick={() => decidir.mutate({ id: g.id, status: "aprovado" })}><Check className="h-4 w-4 text-emerald-600" /></Button>

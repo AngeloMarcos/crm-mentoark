@@ -32,7 +32,7 @@ export class RadarSearchError extends Error {
   }
 }
 
-export interface LimitesExecucao { maxChamadas: number; maxCustoUsd?: number }
+export interface LimitesExecucao { maxChamadas: number; maxCustoUsd?: number; ehDiretorio?: (url: string) => boolean }
 
 export interface GrupoEncontrado {
   link: LinkGrupo;
@@ -49,6 +49,8 @@ export interface ResumoExecucao {
   custoUsd: number;
   interrompidaPor: 'teto_chamadas' | 'teto_custo' | 'erro_provider' | null;
   erros: string[];
+  /** Páginas de diretório achadas nos resultados (para raspar), sem repetir. */
+  paginasDiretorio: { url: string; titulo: string }[];
   /** Erro que derrubou a execução inteira (chave, crédito, limite): quem chama decide pausar o Radar. */
   erroBusca?: { status: number; mensagem: string };
 }
@@ -60,12 +62,17 @@ export async function coletarLinks(
   limites: LimitesExecucao,
 ): Promise<ResumoExecucao> {
   const r: ResumoExecucao = {
-    grupos: [], consultasFeitas: 0, chamadasFeitas: 0, linksVistos: 0, custoUsd: 0, interrompidaPor: null, erros: [],
+    grupos: [], consultasFeitas: 0, chamadasFeitas: 0, linksVistos: 0, custoUsd: 0, interrompidaPor: null, erros: [], paginasDiretorio: [],
   };
   const vistos = new Set<string>();
+  const paginasVistas = new Set<string>();
 
   const absorver = (consulta: string, resultados: ResultadoBusca[]) => {
     for (const res of resultados) {
+      if (limites.ehDiretorio?.(res.link) && !paginasVistas.has(res.link)) {
+        paginasVistas.add(res.link);
+        r.paginasDiretorio.push({ url: res.link, titulo: res.titulo });
+      }
       for (const link of extrairLinks(`${res.link} ${res.titulo} ${res.snippet}`)) {
         r.linksVistos++;
         const chave = `${link.plataforma}:${link.codigo}`;
