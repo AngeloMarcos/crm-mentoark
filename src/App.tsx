@@ -13,6 +13,7 @@ import PrivacyPage from "./pages/Privacy";
 import ExclusaoDadosPage from "./pages/ExclusaoDados";
 import DashboardPage from "./pages/Dashboard";
 import LeadsPage from "./pages/Leads";
+import RadarGruposPage from "./pages/RadarGrupos";
 import ExportarDadosPage from "./pages/ExportarDados";
 import TagsPage from "./pages/Tags";
 import ContatosPage from "./pages/Contatos";
@@ -84,6 +85,7 @@ const App = () => (
               <Route path="/dashboard"    element={<ProtectedRoute requireModulo="dashboard">  <DashboardPage /></ProtectedRoute>} />
               <Route path="/bi"           element={<ProtectedRoute requireModulo="dashboard">  <CentralBIPage /></ProtectedRoute>} />
               <Route path="/leads"        element={<ProtectedRoute requireModulo="leads">       <LeadsPage /></ProtectedRoute>} />
+              <Route path="/radar-grupos" element={<ProtectedRoute requireModulo="leads">       <RadarGruposPage /></ProtectedRoute>} />
               <Route path="/exportar-dados" element={<ProtectedRoute requireModulo="leads">     <ExportarDadosPage /></ProtectedRoute>} />
               <Route path="/tags-funil"   element={<ProtectedRoute requireModulo="leads">       <TagsPage /></ProtectedRoute>} />
               <Route path="/contatos"     element={<ProtectedRoute requireModulo="contatos">    <ContatosPage /></ProtectedRoute>} />

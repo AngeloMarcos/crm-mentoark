@@ -5,7 +5,7 @@ import {
   Brain, Package, Images, BookOpen, ShieldCheck, LogOut, ShieldOff,
   Lock, MessagesSquare, Car,
   Library, Settings as SettingsIcon, Users as UsersIcon, Link2, Monitor, Users2,
-  Activity, LayoutTemplate, Download, CreditCard,
+  Activity, LayoutTemplate, Download, CreditCard, Radar,
 } from "lucide-react";
 import { useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -77,6 +77,7 @@ const navGroups: NavGroup[] = [
     color: "text-orange-500",
     items: [
       { title: "Leads", url: "/leads", icon: UserPlus, modulo: "leads", color: "text-indigo-500" },
+      { title: "Radar de Grupos", url: "/radar-grupos", icon: Radar, modulo: "leads", color: "text-cyan-500" },
       { title: "Exportar Dados", url: "/exportar-dados", icon: Download, modulo: "leads", color: "text-emerald-500" },
       { title: "Contatos", url: "/contatos", icon: BookUser, modulo: "contatos", color: "text-purple-500" },
       { title: "Tags e Funil", url: "/tags-funil", icon: Tags, modulo: "leads", color: "text-violet-500" },

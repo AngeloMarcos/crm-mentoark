@@ -103,6 +103,14 @@ echo "✅ Build local OK"
 
 echo "── Passo 2/4 — sincronizando árvore(s) de código-fonte completa(s) para $TARGET ($REMOTE_BASE) ──"
 echo "   (arquivo(s) que motivaram este deploy: ${FILES[*]})"
+# package.json/package-lock.json também: sem isso, dependência nova (ex.: bullmq) some do build na VPS e o
+# container cai com "Cannot find module" (aconteceu no deploy do Radar em 2026-09-24).
+sync_manifests() {
+  local local_dir="$1" remote_dir="$2" m
+  for m in package.json package-lock.json; do
+    if [[ -f "$local_dir/$m" ]]; then scp -q "$local_dir/$m" "${VPS_USER}@${VPS_HOST}:$remote_dir/$m"; fi
+  done
+}
 sync_dir() {
   local local_dir="$1" remote_dir="$2"
   ssh "${VPS_USER}@${VPS_HOST}" "mkdir -p '$remote_dir'"
@@ -116,10 +124,12 @@ sync_dir() {
 if [[ "$TOCA_BACKEND" == "true" ]]; then
   echo "  🔄 backend/src/ → $REMOTE_BASE/backend/src/"
   sync_dir "$REPO_ROOT/backend/src" "$REMOTE_BASE/backend/src"
+  sync_manifests "$REPO_ROOT/backend" "$REMOTE_BASE/backend"
 fi
 if [[ "$TOCA_FRONTEND" == "true" ]]; then
   echo "  🔄 src/ → $REMOTE_BASE/src/"
   sync_dir "$REPO_ROOT/src" "$REMOTE_BASE/src"
+  sync_manifests "$REPO_ROOT" "$REMOTE_BASE"
 fi
 
 echo "── Passo 3/4 — rebuild dos serviços afetados ──"

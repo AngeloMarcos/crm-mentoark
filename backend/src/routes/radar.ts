@@ -108,7 +108,9 @@ export default function radarRouter(pool: Pool): Router {
       const pedido = Math.max(1, Math.min(Number(req.body?.max_consultas) || 10, LIMITES.consultasPorBusca()));
       const maxConsultas = Math.min(pedido, restante);
 
-      const consultas = gerarConsultas(nicho, { incluirTelegram: !!incluir_telegram, max: maxConsultas });
+      // Termo customizado substitui os termos do nicho (mantém as regiões do nicho).
+      const termo = String(req.body?.termo ?? '').replace(/"/g, '').trim().slice(0, 120);
+      const consultas = gerarConsultas(termo ? { ...nicho, termos_busca: [termo] } : nicho, { incluirTelegram: !!incluir_telegram, max: maxConsultas });
       if (!consultas.length) return res.status(400).json({ error: 'O nicho não tem termos de busca' });
 
       const ins = await pool.query(
@@ -137,7 +139,7 @@ export default function radarRouter(pool: Pool): Router {
   // ── Catálogo de grupos ───────────────────────────────────────────────────────────────────────
   router.get('/grupos', async (req: AuthRequest, res) => {
     try {
-      const { status, nicho_id, plataforma, order, min_score } = req.query as Record<string, string>;
+      const { status, nicho_id, plataforma, order, min_score, q } = req.query as Record<string, string>;
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Math.max(Number(req.query.offset) || 0, 0);
       const w = ['g.user_id = $1'];
@@ -145,6 +147,7 @@ export default function radarRouter(pool: Pool): Router {
       if (status) { v.push(status); w.push(`g.status = $${v.length}`); }
       if (plataforma) { v.push(plataforma); w.push(`g.plataforma = $${v.length}`); }
       if (nicho_id && UUID_RE.test(nicho_id)) { v.push(nicho_id); w.push(`g.nicho_id = $${v.length}`); }
+      if (q && q.trim()) { v.push(`%${q.trim().slice(0, 80)}%`); w.push(`(g.nome ILIKE ${v.length} OR g.titulo_origem ILIKE ${v.length} OR g.descricao ILIKE ${v.length})`); }
       if (min_score && Number.isFinite(Number(min_score))) { v.push(Number(min_score)); w.push(`g.score >= ${v.length}`); }
       v.push(limit, offset);
       const r = await pool.query(
