@@ -72,6 +72,7 @@ export async function migrarRadar(pool: Pool): Promise<void> {
       'titulo_origem TEXT', 'jid TEXT', 'participantes INTEGER', 'criado_no_whatsapp TIMESTAMPTZ',
       'link_ativo BOOLEAN', 'somente_admins BOOLEAN', 'aprovacao_admin BOOLEAN', 'validado_em TIMESTAMPTZ',
       'erro_validacao TEXT', 'score INTEGER', 'score_motivos JSONB', 'avaliado_em TIMESTAMPTZ',
+      'aderencia TEXT', 'aderencia_motivo TEXT', 'motivo_descarte TEXT', 'link_verificado_em TIMESTAMPTZ',
     ];
     for (const c of colunas) await pool.query(`ALTER TABLE radar_grupos ADD COLUMN IF NOT EXISTS ${c}`);
     await pool.query(
@@ -85,7 +86,16 @@ export async function migrarRadar(pool: Pool): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
-    log.info('MIGRATIONS', 'radar (radar_nichos, radar_buscas, radar_grupos, radar_score_config) OK');
+    // Pausa por bloqueio/limite do provedor (busca) ou do WhatsApp (verificação de link): persiste entre reinícios.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS radar_pausas (
+        recurso    TEXT        PRIMARY KEY,
+        ate        TIMESTAMPTZ NOT NULL,
+        motivo     TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    log.info('MIGRATIONS', 'radar (radar_nichos, radar_buscas, radar_grupos, radar_score_config, radar_pausas) OK');
   } catch (err: any) {
     log.error('MIGRATIONS', 'Falha na migration do radar', { err: err?.message, stack: err?.stack });
   }

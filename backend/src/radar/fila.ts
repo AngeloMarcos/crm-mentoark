@@ -3,14 +3,16 @@ import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { log } from '../logger';
 import { executarBusca } from './busca';
-import { validarGrupo, ValidacaoIndisponivel } from './validacao';
+import { pausaAtiva, validarGrupo, verificarLinkPublico, ValidacaoIndisponivel } from './validacao';
 
 const FILA_BUSCA = 'radar-busca';
 const FILA_VALIDAR = 'radar-validar';
+const FILA_LINK = 'radar-link';
 // Homolog e produção dividem o mesmo Redis: sem prefixo próprio um ambiente consumiria os jobs do outro.
 const PREFIXO = () => process.env.RADAR_QUEUE_PREFIX || 'crm';
 let filaBusca: Queue | null = null;
 let filaValidar: Queue | null = null;
+let filaLink: Queue | null = null;
 const workers: Worker[] = [];
 let poolRef: Pool | null = null;
 let infoClient: IORedis | null = null;
@@ -36,7 +38,7 @@ export function redisConfigurado(): boolean { return !!process.env.REDIS_URL; }
 export function iniciarFilaRadar(pool: Pool): void {
   poolRef = pool;
   try { iniciarInterno(pool); } catch (err: any) {
-    filaBusca = null; filaValidar = null;
+    filaBusca = null; filaValidar = null; filaLink = null;
     log.error('RADAR', 'fila indisponível — buscas rodarão inline', { err: err?.message });
   }
 }
@@ -50,7 +52,7 @@ function iniciarInterno(pool: Pool): void {
     prefix: PREFIXO(), connection: c,
     defaultJobOptions: { attempts: 1, ...limpeza }, // busca pode ser POST pago: nunca repetir automaticamente
   });
-  workers.push(new Worker(FILA_BUSCA, async job => { await executarBusca(pool, job.data.buscaId); }, {
+  workers.push(new Worker(FILA_BUSCA, async job => { await executarBusca(pool, job.data.buscaId, enfileirarLinkPublico); }, {
     connection: c, prefix: PREFIXO(), concurrency: 1, limiter: { max: 1, duration: 1000 },
   }));
 
@@ -65,15 +67,57 @@ function iniciarInterno(pool: Pool): void {
     catch (err) { if (err instanceof ValidacaoIndisponivel) throw new Error(err.message); throw err; }
   }, { connection: c, prefix: PREFIXO(), concurrency: 1, limiter: { max: 1, duration: intervalo } }));
 
+  // Verificação de link pela página pública do WhatsApp: ritmo lento (1 a cada ~6s + jitter no job) e, se o
+  // WhatsApp sinalizar limite, a fila INTEIRA espera (rateLimit nativo do BullMQ) em vez de insistir.
+  const intervaloLink = Number(process.env.RADAR_LINK_INTERVALO_MS) || 6000;
+  filaLink = new Queue(FILA_LINK, {
+    prefix: PREFIXO(), connection: c,
+    defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 60_000 }, ...limpeza },
+  });
+  const wLink: Worker = new Worker(FILA_LINK, async job => {
+    try { await verificarLinkPublico(pool, job.data.grupoId); }
+    catch (err) {
+      if (err instanceof ValidacaoIndisponivel) {
+        const p = await pausaAtiva(pool, 'link_publico');
+        if (p) { await wLink.rateLimit(Math.max(1000, p.ate.getTime() - Date.now())); throw Worker.RateLimitError(); }
+        throw new Error(err.message);
+      }
+      throw err;
+    }
+  }, { connection: c, prefix: PREFIXO(), concurrency: 1, limiter: { max: 1, duration: intervaloLink } });
+  workers.push(wLink);
+
   for (const w of workers) w.on('failed', (job, err) => log.warn('RADAR', 'job falhou', { fila: w.name, jobId: job?.id, tentativa: job?.attemptsMade, err: err.message }));
-  for (const q of [filaBusca, filaValidar]) q.on('error', err => log.error('RADAR', 'erro na fila', { err: err.message }));
-  log.info('RADAR', 'filas radar-busca e radar-validar iniciadas');
+  for (const q of [filaBusca, filaValidar, filaLink]) q.on('error', err => log.error('RADAR', 'erro na fila', { err: err.message }));
+  log.info('RADAR', 'filas radar-busca, radar-validar e radar-link iniciadas');
 }
 
 /** Enfileira a busca. jobId = id da busca (que já é único por request_id): BullMQ ignora duplicatas. */
 export async function enfileirarBusca(pool: Pool, buscaId: string): Promise<'fila' | 'inline'> {
   if (filaBusca) { await filaBusca.add('buscar', { buscaId }, { jobId: buscaId }); return 'fila'; }
-  setImmediate(() => { executarBusca(pool, buscaId).catch(() => {}); });
+  setImmediate(() => { executarBusca(pool, buscaId, enfileirarLinkPublico).catch(() => {}); });
+  return 'inline';
+}
+
+/** Enfileira a verificação de link (página pública) de cada grupo. Sem Redis, roda em sequência inline. */
+export async function enfileirarLinkPublico(grupoIds: string[]): Promise<'fila' | 'inline'> {
+  if (!grupoIds.length) return 'fila';
+  if (filaLink) {
+    const dia = new Date().toISOString().slice(0, 10);
+    await filaLink.addBulk(grupoIds.map(id => ({ name: 'link', data: { grupoId: id }, opts: { jobId: `lnk-${id}-${dia}` } })));
+    return 'fila';
+  }
+  const pool = poolRef;
+  if (pool) {
+    const intervalo = Number(process.env.RADAR_LINK_INTERVALO_MS) || 6000;
+    (async () => {
+      for (const id of grupoIds) {
+        try { await verificarLinkPublico(pool, id); }
+        catch (err: any) { log.warn('RADAR', 'verificação inline falhou', { id, err: err?.message }); if (err instanceof ValidacaoIndisponivel) break; }
+        await new Promise(r => setTimeout(r, intervalo));
+      }
+    })().catch(() => {});
+  }
   return 'inline';
 }
 

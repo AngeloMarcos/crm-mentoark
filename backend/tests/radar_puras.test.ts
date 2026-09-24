@@ -1,3 +1,5 @@
+process.env.RADAR_SEARCH_DELAY_MS = '1';
+process.env.RADAR_SEARCH_JITTER_MS = '1';
 import { describe, it, expect } from 'vitest';
 import { extrairLinks } from '../src/radar/extrairLinks';
 import { gerarConsultas } from '../src/radar/consultas';

@@ -49,6 +49,8 @@ export interface ResumoExecucao {
   custoUsd: number;
   interrompidaPor: 'teto_chamadas' | 'teto_custo' | 'erro_provider' | null;
   erros: string[];
+  /** Erro que derrubou a execução inteira (chave, crédito, limite): quem chama decide pausar o Radar. */
+  erroBusca?: { status: number; mensagem: string };
 }
 
 /** Executa as consultas respeitando o teto de chamadas/custo; deduplica pelo código de convite. */
@@ -97,7 +99,11 @@ export async function coletarLinks(
       r.custoUsd += chamadas * provider.custoPorChamadaUsd;
       if (err instanceof RadarSearchError) absorver(consulta, err.resultadosParciais);
       r.erros.push(`${consulta}: ${err?.message ?? 'erro'}`);
-      if (!(err instanceof RadarSearchError) || err.escopo === 'busca') { r.interrompidaPor = 'erro_provider'; break; }
+      if (!(err instanceof RadarSearchError) || err.escopo === 'busca') {
+        r.interrompidaPor = 'erro_provider';
+        if (err instanceof RadarSearchError) r.erroBusca = { status: err.status, mensagem: err.message };
+        break;
+      }
     }
   }
   return r;

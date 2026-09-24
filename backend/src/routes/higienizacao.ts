@@ -7,6 +7,8 @@ import {
   CONFIG_PADRAO, enfileirarHigienizacao, getConfig, getConfigClassificacao, normalizarPendentes, ParamsHigienizacao,
   salvarConfigClassificacao,
 } from '../services/higienizacao';
+import { metricasRespostas, recalcularPropensao, reprocessarRespostas } from '../services/respostas';
+import { montarRecorte, OpcoesElegibilidade, ROTULOS_EXCLUSAO } from '../utils/elegibilidade';
 import { CONFIG_PADRAO as CLASSIFICACAO_PADRAO, ConfigInvalida, notaDaLista } from '../utils/classificacao';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -42,6 +44,8 @@ export default function higienizacaoRouter(pool: Pool): Router {
         enriquecer: req.body?.enriquecer !== false,
         classificar: req.body?.classificar !== false,
         forcar: req.body?.forcar === true,
+        respostas: req.body?.respostas !== false,
+        propensao: req.body?.propensao !== false,
       };
       if (contatoIds.length) params.contato_ids = contatoIds;
       else if (listaIds.length) {
@@ -288,6 +292,66 @@ export default function higienizacaoRouter(pool: Pool): Router {
       const n = await normalizarPendentes(pool, 20, tenantId);
       return res.json({ normalizados: n });
     } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/higienizacao/precheck — recorte da audiência ANTES de disparar: quem pode receber e por que
+  // os demais ficam de fora (nada some em silêncio). Elegíveis voltam ordenados do mais para o menos provável.
+  router.post('/precheck', async (req: AuthRequest, res: Response) => {
+    try {
+      const tenantId = await resolverOwnerId(pool, req.userId!);
+      const ids = listaDeUuids(req.body?.contato_ids, 50000);
+      if (ids === null) return res.status(400).json({ message: 'Identificadores inválidos.' });
+      const op: OpcoesElegibilidade = {
+        cooldownHoras: Math.max(0, Number(req.body?.cooldown_horas) || 0),
+        excluirRobos: req.body?.excluir_robos !== false,
+        excluirSemNome: req.body?.excluir_sem_nome === true,
+        diasSuprimirNegativa: Math.max(0, Number(req.body?.dias_suprimir_negativa) || 90),
+      };
+      const contatos: any[] = [];
+      for (let i = 0; i < ids.length; i += 5000) {
+        const q = await pool.query(
+          `SELECT id, telefone, telefone_normalizado, tipo_telefone, whatsapp_status, opt_out, bot_detectado,
+                  resposta_categoria, resposta_em, ultimo_disparo_em, nome_confiavel, propensao
+             FROM contatos WHERE user_id = $1 AND id = ANY($2::uuid[])`, [tenantId, ids.slice(i, i + 5000)]);
+        contatos.push(...q.rows);
+      }
+      const recorte = montarRecorte(contatos, op);
+      return res.json({
+        total: recorte.total,
+        elegiveis: recorte.elegiveis.map(c => c.id),
+        excluidos: recorte.excluidos,
+        rotulos: ROTULOS_EXCLUSAO,
+        com_propensao: recorte.elegiveis.filter(c => c.propensao !== null).length,
+      });
+    } catch (err: any) {
+      log.error('HIGIENIZACAO', 'Erro em POST /precheck', { err: err?.message });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/higienizacao/respostas/reprocessar — lê o histórico de respostas (idempotente) e recalcula a propensão.
+  router.post('/respostas/reprocessar', async (req: AuthRequest, res: Response) => {
+    try {
+      if (await ehMembro(req.userId!)) return res.status(403).json({ message: 'Sem permissão.' });
+      const tenantId = await resolverOwnerId(pool, req.userId!);
+      const respostas = await reprocessarRespostas(pool, tenantId);
+      const propensao = await recalcularPropensao(pool, tenantId);
+      return res.json({ respostas, propensao: { atualizados: propensao.atualizados, amostras: propensao.modelo.total, taxa_global: propensao.modelo.taxaGlobal, segmentos: propensao.modelo.segmentos } });
+    } catch (err: any) {
+      log.error('HIGIENIZACAO', 'Erro em POST /respostas/reprocessar', { err: err?.message });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/higienizacao/respostas/metricas — taxa REAL de interesse (robô de atendimento não conta como resposta).
+  router.get('/respostas/metricas', async (req: AuthRequest, res: Response) => {
+    try {
+      const tenantId = await resolverOwnerId(pool, req.userId!);
+      return res.json(await metricasRespostas(pool, tenantId));
+    } catch (err: any) {
+      log.error('HIGIENIZACAO', 'Erro em GET /respostas/metricas', { err: err?.message });
       return res.status(500).json({ message: err.message });
     }
   });

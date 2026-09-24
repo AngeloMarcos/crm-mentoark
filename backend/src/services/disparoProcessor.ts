@@ -7,6 +7,7 @@ import { garantirMidiaEstavel, gerarVariacaoImagem } from '../utils/whatsappMedi
 import { withTenantContext } from '../db';
 import { resolverOwnerId } from './subscription';
 import { log } from '../logger';
+import { avaliarElegibilidade } from '../utils/elegibilidade';
 
 // [AUDITORIA] BUG GRAVÍSSIMO CORRIGIDO (achado real do usuário, 2026-09-11 — conta
 // cotinedeborah@gmail.com com 2 campanhas em 0/2661 enviados, 0% por mais de 1h; usuário: "cada
@@ -537,6 +538,27 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
           ).catch(err => log.error('DISPARO', 'Falha ao marcar log como cancelado_pelo_cliente', { err: err?.message }));
           log.info('DISPARO', 'Mensagem pulada — contato em opt-out', { disparo_id, telefone });
           return;
+        }
+
+        // Higienização: motivos que nunca devem receber envio, mesmo que o contato tenha mudado de estado
+        // depois da preparação (recusou, número sem WhatsApp, inválido...). Robô e "sem nome" ficam de fora
+        // de propósito: são escolhas da pré-checagem, não vetos.
+        const higRes = await pool.query(
+          `SELECT id, telefone, telefone_normalizado, tipo_telefone, whatsapp_status, opt_out, bot_detectado,
+                  resposta_categoria, resposta_em, ultimo_disparo_em, nome_confiavel, propensao
+             FROM contatos WHERE user_id = $1 AND RIGHT(regexp_replace(telefone, '\\D', '', 'g'), 11) = RIGHT($2, 11) LIMIT 1`,
+          [user_id, String(telefone).replace(/\D/g, '')]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (higRes.rows[0]) {
+          const motivoHig = avaliarElegibilidade(higRes.rows[0], { excluirRobos: false, excluirSemNome: false, cooldownHoras: 0 });
+          if (motivoHig && motivoHig !== 'sem_telefone') {
+            await pool.query(
+              `UPDATE disparo_logs SET status = 'failed', erro = $2 WHERE id = $1`,
+              [log_id, `excluido_higienizacao:${motivoHig}`]
+            ).catch(err => log.error('DISPARO', 'Falha ao marcar log excluído pela higienização', { err: err?.message }));
+            log.info('DISPARO', 'Mensagem pulada — excluído pela higienização', { disparo_id, telefone, motivo: motivoHig });
+            return;
+          }
         }
 
         // [AUDITORIA] FIX APLICADO (Sprint Cooldown de Disparos, 2026-07-30): checagem defensiva

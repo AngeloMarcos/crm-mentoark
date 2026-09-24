@@ -30,6 +30,7 @@ import { normalizarTelefoneBR } from "@/lib/phone";
 import { baixarModeloContatosXLSX } from "@/lib/modeloImportacao";
 import { BuscarLeadsModal } from "@/components/campanhas/BuscarLeadsModal";
 import { HigienizarDialog } from "@/components/leads/HigienizarDialog";
+import { ResultadosDisparosDialog } from "@/components/leads/ResultadosDisparosDialog";
 
 function formatWhatsappNumber(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -116,6 +117,7 @@ export default function LeadsPage() {
   }>>(new Map());
   const [vinculos, setVinculos] = useState<Map<string, Set<string>>>(new Map());
   const [modalHigienizar, setModalHigienizar] = useState(false);
+  const [modalResultados, setModalResultados] = useState(false);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("todos");
@@ -660,6 +662,10 @@ export default function LeadsPage() {
               <ShieldCheck className="h-4 w-4 mr-1" />
               Higienizar lista
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setModalResultados(true)}>
+              <SearchCheck className="h-4 w-4 mr-1" />
+              Resultados dos disparos
+            </Button>
             <Button variant="outline" size="sm" onClick={() => setModalBuscarLeads(true)}>
               <SearchCheck className="h-4 w-4 mr-1" /> Buscar Leads
             </Button>
@@ -1184,6 +1190,8 @@ export default function LeadsPage() {
         open={modalBuscarLeads}
         onClose={() => { setModalBuscarLeads(false); carregar(); }}
       />
+
+      <ResultadosDisparosDialog open={modalResultados} onClose={() => setModalResultados(false)} />
 
       <HigienizarDialog
         open={modalHigienizar}

@@ -26,6 +26,7 @@ export interface PesosScore {
   tamanho_min: number;
   tamanho_max: number;
   restrito_profissionais: number; // "somente corretores", "exclusivo para profissionais"...
+  auto_rejeitar_baixa_aderencia: number; // 1 = descarta sozinho grupo cujo nome não condiz com o nicho; 0 = só marca
 }
 
 export const PESOS_PADRAO: PesosScore = {
@@ -40,6 +41,7 @@ export const PESOS_PADRAO: PesosScore = {
   tamanho_min: 50,
   tamanho_max: 1024,
   restrito_profissionais: 15,
+  auto_rejeitar_baixa_aderencia: 1,
 };
 
 /** Palavras que indicam grupo de consumidor/promoção — ruins para captação B2B. */
@@ -68,6 +70,17 @@ export function contemPalavra(textoNorm: string, palavraNorm: string): boolean {
   return new RegExp(`(^|[^a-z0-9])${escapar(palavraNorm)}([^a-z0-9]|$)`).test(textoNorm);
 }
 
+/**
+ * Casa por RAIZ para palavras longas: "imobiliária" acha "imobiliário", "corretores" acha "corretora".
+ * Palavras curtas (< 6 letras) e frases continuam exatas — "ia", "bets", "pix" não podem virar pedaço de outra palavra.
+ */
+export function contemRaiz(textoNorm: string, palavraNorm: string): boolean {
+  if (!palavraNorm) return false;
+  if (palavraNorm.length < 6 || /\s/.test(palavraNorm)) return contemPalavra(textoNorm, palavraNorm);
+  const raiz = palavraNorm.slice(0, Math.max(5, palavraNorm.length - 3));
+  return textoNorm.split(/[^a-z0-9]+/).some(t => t.startsWith(raiz));
+}
+
 const unicas = (lista: string[]) => [...new Set(lista.map(normalizar).filter(Boolean))];
 
 export function pontuarGrupo(
@@ -85,8 +98,8 @@ export function pontuarGrupo(
     let pos = 0;
     const achadasPos: string[] = [];
     for (const p of unicas(nicho.palavras_positivas)) {
-      if (contemPalavra(nome, p)) { pos += pesos.positiva_nome; achadasPos.push(`${p} (nome)`); }
-      else if (contemPalavra(desc, p)) { pos += pesos.positiva_descricao; achadasPos.push(`${p} (descrição)`); }
+      if (contemRaiz(nome, p)) { pos += pesos.positiva_nome; achadasPos.push(`${p} (nome)`); }
+      else if (contemRaiz(desc, p)) { pos += pesos.positiva_descricao; achadasPos.push(`${p} (descrição)`); }
     }
     if (pos > 0) {
       const pontos = Math.min(pos, pesos.teto_positivas);
@@ -136,4 +149,45 @@ export function mesclarPesos(parcial: unknown): PesosScore {
     }
   }
   return out;
+}
+
+// ── Aderência: o grupo encontrado condiz com o que procuramos? (só regras, sem IA) ───────────────────
+
+export type NivelAderencia = 'alta' | 'media' | 'baixa' | 'sem_dados';
+export interface ResultadoAderencia { nivel: NivelAderencia; motivo: string }
+
+const STOP = new Set(['de', 'da', 'do', 'das', 'dos', 'para', 'por', 'com', 'em', 'e', 'a', 'o', 'as', 'os', 'um', 'uma']);
+
+/** Palavras de ≥3 letras dos termos de busca (ex.: "corretores de imóveis" → corretores, imoveis). */
+function palavrasDosTermos(termos: string[]): string[] {
+  const out = new Set<string>();
+  for (const t of termos) for (const p of normalizar(t).split(/[^a-z0-9]+/)) if (p.length >= 3 && !STOP.has(p)) out.add(p);
+  return [...out];
+}
+
+/**
+ * Compara nome (e descrição, se houver) com as palavras positivas e os termos de busca do nicho.
+ *  alta  = palavra do nicho no NOME e nenhuma negativa
+ *  media = palavra só na descrição, ou no nome mas com negativa junto
+ *  baixa = nenhuma palavra do nicho (ou negativa sem nenhuma positiva no nome)
+ */
+export function avaliarAderencia(
+  grupo: { nome: string | null; descricao: string | null },
+  nicho: (CriteriosNicho & { termos_busca?: string[] }) | null,
+  termosExtras: string[] = [],
+): ResultadoAderencia {
+  const nome = normalizar(grupo.nome);
+  const desc = normalizar(grupo.descricao);
+  if (!nome) return { nivel: 'sem_dados', motivo: 'Nome do grupo ainda não lido' };
+  if (!nicho && !termosExtras.length) return { nivel: 'sem_dados', motivo: 'Grupo sem nicho para comparar' };
+
+  const alvo = unicas([...(nicho?.palavras_positivas ?? []), ...palavrasDosTermos([...(nicho?.termos_busca ?? []), ...termosExtras])]);
+  const noNome = alvo.filter(p => contemRaiz(nome, p));
+  const naDesc = alvo.filter(p => contemRaiz(desc, p));
+  const neg = unicas([...NEGATIVAS_PADRAO, ...(nicho?.palavras_negativas ?? [])]).filter(n => contemPalavra(`${nome} ${desc}`, n));
+
+  if (noNome.length && !neg.length) return { nivel: 'alta', motivo: `Nome contém: ${noNome.slice(0, 4).join(', ')}` };
+  if (noNome.length) return { nivel: 'media', motivo: `Nome contém ${noNome[0]}, mas também: ${neg.slice(0, 3).join(', ')}` };
+  if (naDesc.length && !neg.length) return { nivel: 'media', motivo: `Só a descrição menciona: ${naDesc.slice(0, 3).join(', ')}` };
+  return { nivel: 'baixa', motivo: neg.length ? `Sem palavras do nicho e com: ${neg.slice(0, 3).join(', ')}` : 'Nenhuma palavra do nicho no nome' };
 }

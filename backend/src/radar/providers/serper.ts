@@ -11,6 +11,29 @@ export interface OpcoesSerper {
   num?: number;
   /** Backoff base para 429/5xx (ms). Testes passam 0. */
   backoffMs?: number;
+  /** Intervalo mínimo entre chamadas (ms) — evita rajada que dispara limite/bloqueio. Testes passam 0. */
+  intervaloMs?: number;
+  /** Variação aleatória somada ao intervalo (ms), para não ter cadência de robô. */
+  jitterMs?: number;
+}
+
+// Cadência compartilhada por TODAS as buscas do processo: duas buscas seguidas não furam o intervalo.
+let proximaChamadaEm = 0;
+
+/** Espera até o próximo slot e reserva o seguinte (intervalo + jitter). */
+async function aguardarSlot(intervaloMs: number, jitterMs: number): Promise<void> {
+  const agora = Date.now();
+  const meu = Math.max(agora, proximaChamadaEm);
+  proximaChamadaEm = meu + intervaloMs + Math.floor(Math.random() * (jitterMs + 1));
+  if (meu > agora) await espera(meu - agora);
+}
+
+/** `Retry-After` em segundos (ou data HTTP) → ms, limitado a 60s por tentativa. */
+export function lerRetryAfter(valor: string | null): number | null {
+  if (!valor) return null;
+  const seg = Number(valor);
+  const ms = Number.isFinite(seg) ? seg * 1000 : Date.parse(valor) - Date.now();
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, 60_000) : null;
 }
 
 /**
@@ -19,6 +42,9 @@ export interface OpcoesSerper {
  * POST pago, então a regra é: só se repete uma chamada quando o servidor RESPONDEU rejeitando
  * (429 ou 5xx: não houve resultado entregue). Timeout/queda de rede é ambíguo — a chamada pode já ter
  * sido cobrada — e nunca é repetida. Uma chamada que devolveu 200 nunca é refeita.
+ *
+ * Contra bloqueio: intervalo mínimo + jitter entre TODAS as chamadas, `Retry-After` respeitado e, se o
+ * limite persistir, a busca para com erro de escopo "busca" (quem chama pausa o Radar por um tempo).
  */
 export class SerperProvider implements SearchProvider {
   readonly nome = 'serper';
@@ -27,12 +53,16 @@ export class SerperProvider implements SearchProvider {
   private maxPaginas: number;
   private backoffMs: number;
   private num: number;
+  private intervaloMs: number;
+  private jitterMs: number;
 
   constructor(private apiKey: string, opts: OpcoesSerper = {}) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.maxPaginas = opts.maxPaginas ?? 3;
     this.backoffMs = opts.backoffMs ?? 1500;
     this.num = opts.num ?? 10;
+    this.intervaloMs = opts.intervaloMs ?? (Number(process.env.RADAR_SEARCH_DELAY_MS) || 2500);
+    this.jitterMs = opts.jitterMs ?? (Number(process.env.RADAR_SEARCH_JITTER_MS) || 1500);
   }
 
   async buscar(consulta: string, maxChamadas: number): Promise<RespostaBusca> {
@@ -61,6 +91,7 @@ export class SerperProvider implements SearchProvider {
 
   private async pagina(consulta: string, page: number): Promise<ResultadoBusca[]> {
     for (let tentativa = 0; tentativa < 3; tentativa++) {
+      await aguardarSlot(this.intervaloMs, this.jitterMs);
       let res: Response;
       try {
         res = await this.fetchImpl(URL_SERPER, {
@@ -81,8 +112,11 @@ export class SerperProvider implements SearchProvider {
         throw new RadarSearchError('Créditos do Serper esgotados. Recarregue para continuar.', 'busca', res.status);
       }
       if (res.status === 429 || res.status >= 500) {
-        // Resposta de rejeição, sem resultado entregue: seguro tentar de novo com backoff.
-        if (tentativa < 2) { await espera(this.backoffMs * 2 ** tentativa); continue; }
+        // Resposta de rejeição, sem resultado entregue: seguro tentar de novo, respeitando Retry-After.
+        if (tentativa < 2) {
+          await espera(lerRetryAfter(res.headers.get('retry-after')) ?? this.backoffMs * 2 ** tentativa);
+          continue;
+        }
         if (res.status === 429) {
           throw new RadarSearchError('Limite de requisições ou crédito do Serper atingido (429). Busca pausada.', 'busca', 429);
         }

@@ -68,6 +68,7 @@ import { MonitoringDashboard } from "@/components/disparos/MonitoringDashboard";
 // sair da tela. Agora a campanha aberta vive em `?campanha=<id>` (useSearchParams), sobrevive a
 // F5/link direto, mesmo padrão já usado e comprovado em `MonitorWhatsApp.tsx`.
 import { CampanhasList } from "@/components/disparos/CampanhasList";
+import { RecorteCard, RecorteAudiencia, OpcoesRecorte } from "@/components/disparos/RecorteCard";
 import { useSearchParams } from "react-router-dom";
 
 // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): "há X min/h/dias" em pt-BR sem
@@ -468,6 +469,8 @@ export default function DisparosPage() {
   const [step, setStep] = useState(0);
   const [targetContacts, setTargetContacts] = useState<any[]>([]);
   const [loadingCount, setLoadingCount] = useState(false);
+  const [recorte, setRecorte] = useState<RecorteAudiencia | null>(null);
+  const [opcoesRecorte, setOpcoesRecorte] = useState<OpcoesRecorte>({ excluirRobos: true, excluirSemNome: false });
   // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): `modo` substitui a lógica antiga
   // de "sempre abre no wizard" — tela padrão agora é a lista de campanhas (`CampanhasList`),
   // wizard só aparece sob ação explícita ("+ Nova Campanha"). Campanha aberta pra
@@ -721,11 +724,26 @@ export default function DisparosPage() {
       }
       // Deduplica pelo número normalizado (mesmo número em formatos diferentes conta uma vez).
       const unique = Array.from(new Map(comWhatsapp.map((c: any) => [c.telefone_normalizado || c.telefone, c] as [string, any])).values());
-      setTargetContacts(unique);
+      // Pré-checagem da higienização: tira quem recusou, virou robô conhecido ou não pode receber, e ordena
+      // do mais para o menos provável de responder. Se falhar, segue com a lista de antes (nunca trava o disparo).
+      try {
+        const { data: pre } = await api.post("/api/higienizacao/precheck", {
+          contato_ids: unique.map((c: any) => c.id),
+          excluir_robos: opcoesRecorte.excluirRobos,
+          excluir_sem_nome: opcoesRecorte.excluirSemNome,
+        });
+        const porId = new Map(unique.map((c: any) => [c.id, c] as [string, any]));
+        const ordenados = (pre.elegiveis as string[]).map(id => porId.get(id)).filter(Boolean);
+        setRecorte({ selecionados: unique.length, elegiveis: ordenados.length, excluidos: pre.excluidos ?? {}, rotulos: pre.rotulos ?? {}, comPropensao: pre.com_propensao ?? 0 });
+        setTargetContacts(ordenados);
+      } catch {
+        setRecorte(null);
+        setTargetContacts(unique);
+      }
       setLoadingCount(false);
     };
     fetchCount();
-  }, [form.tags_selecionadas, form.estagios_selecionados, form.listas_selecionadas]);
+  }, [form.tags_selecionadas, form.estagios_selecionados, form.listas_selecionadas, opcoesRecorte.excluirRobos, opcoesRecorte.excluirSemNome]);
 
   // Validação por etapa — habilita "Próximo" só quando OK
   const stepValid = useMemo(() => {
@@ -852,7 +870,7 @@ export default function DisparosPage() {
         </div>
 
         <div className="min-h-[400px]">
-          {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} targetContacts={targetContacts} setTargetContacts={setTargetContacts} />}
+          {step === 0 && <StepContacts form={form} setForm={setForm} liveCount={targetContacts.length} loadingCount={loadingCount} targetContacts={targetContacts} setTargetContacts={setTargetContacts} recorte={recorte} opcoesRecorte={opcoesRecorte} setOpcoesRecorte={setOpcoesRecorte} />}
           {step === 1 && <StepMessage form={form} setForm={setForm} />}
           {step === 2 && <StepAntiBan form={form} setForm={setForm} />}
           {/* [AUDITORIA] FIX APLICADO (Sprint Estruturar Disparo, 2026-08-11): `onStart` não seta
@@ -884,7 +902,7 @@ export default function DisparosPage() {
   );
 }
 
-function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [], setTargetContacts }: any) {
+function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts = [], setTargetContacts, recorte, opcoesRecorte, setOpcoesRecorte }: any) {
   const { user } = useAuth();
   const [previewSearch, setPreviewSearch] = useState("");
   // [AUDITORIA] LÓGICA (achado real, `SPRINT_NOME_REAL_CONTATOS_GRUPO.md`): participante de grupo
@@ -1366,6 +1384,8 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
           </p>
         </div>
       </div>
+
+      <RecorteCard recorte={recorte} opcoes={opcoesRecorte} onChange={setOpcoesRecorte} carregando={loadingCount} />
 
       <Tabs defaultValue="lista" className="w-full">
         <TabsList className="grid w-full grid-cols-4">
@@ -3138,6 +3158,8 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       // substituirPlaceholders/resolverSpintax — mesma ordem de composição de sempre, só com uma
       // camada nova por baixo.
       const variantesValidas = form.mensagens_variantes.filter(v => v.trim());
+      // created_at escalonado (1ms por contato): a fila de envio lê por created_at, então a ordem da pré-checagem (mais provável primeiro) vira a ordem de envio.
+      const baseTs = Date.now();
       const logs = contatosValidos.map((c, i) => {
         const textoBase = variantesValidas.length >= 2
           ? escolherVariante(variantesValidas, form.distribuicao_variantes, form.regra_variante_por_tag, c, i)
@@ -3149,7 +3171,8 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           telefone: c.telefone,
           nome: c.nome,
           mensagem_enviada: personalizarMensagem(textoBase, c, form.variacao_automatica),
-          status: 'pending'
+          status: 'pending',
+          created_at: new Date(baseTs + i).toISOString()
         };
       });
 

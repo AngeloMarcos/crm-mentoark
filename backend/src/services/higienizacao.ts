@@ -6,6 +6,7 @@ import { log } from '../logger';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { normalizarTelefone } from '../utils/telefone';
 import { resolverNome } from '../utils/nomes';
+import { recalcularPropensao, reprocessarRespostas } from './respostas';
 import { classificarLead, compilarConfig, ConfigClassificacao, mesclarConfig } from '../utils/classificacao';
 
 export interface HigienizacaoConfig {
@@ -21,6 +22,8 @@ export interface ParamsHigienizacao {
   enriquecer?: boolean;  // default true
   classificar?: boolean; // default true: nicho, B2B/B2C e score
   forcar?: boolean;      // ignora a janela de revalidação
+  respostas?: boolean;   // default true: lê as respostas aos disparos (robô, recusa, interesse, opt-out)
+  propensao?: boolean;   // default true: recalcula a propensão a responder pelo histórico
 }
 
 export interface JobHigienizacao {
@@ -521,6 +524,19 @@ async function executarJob(pool: Pool, job: JobHigienizacao): Promise<void> {
   if (job.params.validar !== false) await etapaValidacao(pool, job, cfg, resultado);
   if (job.params.enriquecer !== false) await etapaEnriquecimento(pool, job, cfg, resultado);
   if (job.params.classificar !== false) await etapaClassificacao(pool, job, resultado);
+
+  // Estas duas etapas usam só o banco (nada do WhatsApp) e valem para a conta inteira.
+  if (job.params.respostas !== false) {
+    await atualizarProgresso(pool, job.id, 'lendo respostas', 0, 0, resultado);
+    const r = await reprocessarRespostas(pool, job.user_id);
+    for (const [k, v] of Object.entries(r)) resultado[`respostas_${k}`] = v;
+  }
+  if (job.params.propensao !== false) {
+    await atualizarProgresso(pool, job.id, 'calculando propensão', 0, 0, resultado);
+    const p = await recalcularPropensao(pool, job.user_id);
+    resultado.propensao_contatos = p.atualizados;
+    resultado.propensao_amostras = p.modelo.total;
+  }
 }
 
 // ── Fila ─────────────────────────────────────────────────────────────────────────────────

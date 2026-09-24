@@ -4,8 +4,8 @@ import { randomUUID } from 'crypto';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { configProviderDoAmbiente, consultasUsadasHoje, gerarConsultas, LIMITES, semearNichosSeVazio } from '../radar/busca';
-import { enfileirarBusca, enfileirarValidacao, memoriaRedis, redisConfigurado } from '../radar/fila';
-import { carregarPesos, configLeitura, pontuarTodos } from '../radar/validacao';
+import { enfileirarBusca, enfileirarLinkPublico, enfileirarValidacao, memoriaRedis, redisConfigurado } from '../radar/fila';
+import { carregarPesos, configLeitura, pausaAtiva, pontuarTodos, textoPausa } from '../radar/validacao';
 import { mesclarPesos } from '../radar/scoring';
 import { importarCsv } from '../radar/importarPlanilha';
 
@@ -27,6 +27,10 @@ export default function radarRouter(pool: Pool): Router {
         consultas_hoje: usadas, limite_consultas_dia: LIMITES.consultasPorDia(),
         redis: await memoriaRedis(),
         // Crawler de diretórios fica desligado por padrão; uso depende dos termos de cada site.
+        pausas: {
+          busca: await pausaAtiva(pool, `busca:${provider.nome}`).then(p => (p ? textoPausa(p) : null)),
+          verificacao_links: await pausaAtiva(pool, 'link_publico').then(p => (p ? textoPausa(p) : null)),
+        },
         leitura_convites: { configurada: !!configLeitura(), instancia: configLeitura()?.instancia ?? null },
         crawler_diretorios: false,
       });
@@ -103,6 +107,9 @@ export default function radarRouter(pool: Pool): Router {
       const nicho = (await pool.query(`SELECT * FROM radar_nichos WHERE id = $1 AND user_id = $2`, [nicho_id, userId])).rows[0];
       if (!nicho) return res.status(404).json({ error: 'Nicho não encontrado' });
 
+      const pausa = await pausaAtiva(pool, `busca:${configProviderDoAmbiente().provider.nome}`);
+      if (pausa) return res.status(429).json({ error: `Buscas ${textoPausa(pausa)}` });
+
       const restante = LIMITES.consultasPorDia() - (await consultasUsadasHoje(pool, userId));
       if (restante <= 0) return res.status(429).json({ error: 'Limite diário de consultas do Radar atingido.' });
       const pedido = Math.max(1, Math.min(Number(req.body?.max_consultas) || 10, LIMITES.consultasPorBusca()));
@@ -139,7 +146,7 @@ export default function radarRouter(pool: Pool): Router {
   // ── Catálogo de grupos ───────────────────────────────────────────────────────────────────────
   router.get('/grupos', async (req: AuthRequest, res) => {
     try {
-      const { status, nicho_id, plataforma, order, min_score, q } = req.query as Record<string, string>;
+      const { status, nicho_id, plataforma, order, min_score, q, aderencia } = req.query as Record<string, string>;
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Math.max(Number(req.query.offset) || 0, 0);
       const w = ['g.user_id = $1'];
@@ -147,6 +154,7 @@ export default function radarRouter(pool: Pool): Router {
       if (status) { v.push(status); w.push(`g.status = $${v.length}`); }
       if (plataforma) { v.push(plataforma); w.push(`g.plataforma = $${v.length}`); }
       if (nicho_id && UUID_RE.test(nicho_id)) { v.push(nicho_id); w.push(`g.nicho_id = $${v.length}`); }
+      if (aderencia && ['alta', 'media', 'baixa', 'sem_dados'].includes(aderencia)) { v.push(aderencia); w.push(`g.aderencia = ${v.length}`); }
       if (q && q.trim()) { v.push(`%${q.trim().slice(0, 80)}%`); w.push(`(g.nome ILIKE ${v.length} OR g.titulo_origem ILIKE ${v.length} OR g.descricao ILIKE ${v.length})`); }
       if (min_score && Number.isFinite(Number(min_score))) { v.push(Number(min_score)); w.push(`g.score >= ${v.length}`); }
       v.push(limit, offset);
@@ -158,6 +166,26 @@ export default function radarRouter(pool: Pool): Router {
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+
+  // ── Verificação de link pela página pública (sem instância, sem entrar): descarta link morto ─────────
+  router.post('/grupos/verificar-links', async (req: AuthRequest, res) => {
+    try {
+      const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown) => UUID_RE.test(String(x))) : [];
+      const limite = Math.max(1, Math.min(Number(req.body?.limite) || 50, 200));
+      const r = ids.length
+        ? await pool.query(`SELECT id FROM radar_grupos WHERE user_id = $1 AND id = ANY($2::uuid[]) AND plataforma = 'whatsapp' AND status <> 'rejeitado'`, [req.userId, ids])
+        : await pool.query(
+            `SELECT id FROM radar_grupos WHERE user_id = $1 AND plataforma = 'whatsapp' AND link_verificado_em IS NULL
+               AND status IN ('descoberto','aprovado') ORDER BY created_at LIMIT $2`, [req.userId, limite]);
+      if (!r.rows.length) return res.json({ enfileirados: 0 });
+      const pausa = await pausaAtiva(pool, 'link_publico');
+      const modo = await enfileirarLinkPublico(r.rows.map((x: any) => x.id));
+      res.status(202).json({ enfileirados: r.rows.length, modo, aviso: pausa ? `Verificação ${textoPausa(pausa)}; os links entram na fila e são checados depois.` : null });
+    } catch (err: any) {
+      log.error('RADAR', 'erro ao enfileirar verificação de links', { err: err?.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // ── Pré-visualização do convite (sem entrar): nome, descrição, participantes, link ativo + score ──
   router.post('/grupos/validar', async (req: AuthRequest, res) => {

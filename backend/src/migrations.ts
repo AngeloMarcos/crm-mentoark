@@ -2567,6 +2567,36 @@ export async function runMigrations(pool: Pool): Promise<void> {
     log.error('MIGRATIONS', 'Falha na migration de higienização (fase 3)', { err: err?.message, stack: err?.stack });
   }
 
+  // Higienização — inteligência de respostas: classificação de cada resposta a disparo (robô, recusa,
+  // interesse, opt-out) e propensão a responder. Só colunas/tabelas NOVAS; nada existente é alterado.
+  try {
+    for (const col of [
+      'resposta_categoria TEXT', 'resposta_em TIMESTAMPTZ', 'bot_detectado BOOLEAN NOT NULL DEFAULT false',
+      'interesse_detectado_em TIMESTAMPTZ', 'propensao NUMERIC(5,2)', 'propensao_calculada_em TIMESTAMPTZ',
+    ]) {
+      await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ${col}`);
+    }
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS contato_respostas (
+        id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id       UUID        NOT NULL,
+        contato_id    UUID        NOT NULL REFERENCES contatos(id) ON DELETE CASCADE,
+        message_id    TEXT        NOT NULL,
+        categoria     TEXT        NOT NULL,
+        trecho        TEXT,
+        respondido_em TIMESTAMPTZ NOT NULL,
+        origem        TEXT        NOT NULL DEFAULT 'webhook',
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (user_id, message_id)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contato_respostas_contato ON contato_respostas (user_id, contato_id, respondido_em)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_bot ON contatos (user_id) WHERE bot_detectado = true`);
+    log.info('MIGRATIONS', 'higienizacao respostas (contatos.resposta_*, bot_detectado, propensao, contato_respostas) OK');
+  } catch (err: any) {
+    log.error('MIGRATIONS', 'Falha na migration de respostas de disparo', { err: err?.message, stack: err?.stack });
+  }
+
   await migrarRadar(pool);
 
   log.info('MIGRATIONS', 'OK');

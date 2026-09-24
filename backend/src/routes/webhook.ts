@@ -72,6 +72,7 @@ import { transcreverAudio } from '../utils/transcribe';
 import { analisarImagem } from '../utils/vision';
 import { registrarUsoIA, estimarCustoUsd, estimarCustoWhisperUsd, orcamentoDiarioExcedido } from '../utils/aiCusto';
 import { log } from '../logger';
+import { registrarRespostaDeDisparo } from '../services/respostas';
 import { registrarLogoutEvent, verificarLoopDeLogout } from '../services/logoutCircuitBreaker';
 
 const MIDIA_TIPOS = new Set(['image', 'audio', 'video', 'document', 'sticker']);
@@ -1495,6 +1496,11 @@ export default function webhookRouter(pool: Pool): Router {
         log.info('WEBHOOK', 'INSERT RESULT (0=duplicata, 1=novo, -1=erro)', {
           traceId, rowCount: (insertResult as any).rowCount,
         });
+
+        // Resposta a disparo (robô, recusa, interesse, opt-out): só mensagem nova de conversa individual.
+        if ((insertResult as any).rowCount === 1 && !isGroup && texto) {
+          void registrarRespostaDeDisparo(pool, { userId: userId as string, telefone, messageId, texto });
+        }
 
         // ── Decriptografar e persistir mídia (áudio/imagem/vídeo/documento/figurinha) ─────
         // [AUDITORIA] LÓGICA: media_url gravado acima é a URL crua da Evolution, sempre
