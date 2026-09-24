@@ -2545,5 +2545,26 @@ export async function runMigrations(pool: Pool): Promise<void> {
     log.error('MIGRATIONS', 'Falha na migration de higienização', { err: err?.message, stack: err?.stack });
   }
 
+  // Higienização Fase 3: classificação (nicho, B2B/B2C) e score. `score_detalhe` guarda os
+  // motivos de cada ponto (explicação sem IA); `classificacao` em higienizacao_config guarda os
+  // pesos/dicionário editados pela conta (ausente = padrão do código).
+  try {
+    const colunasFase3 = [
+      'nicho_detectado TEXT',
+      'tipo_publico TEXT',
+      'lead_score INTEGER',
+      'score_detalhe JSONB',
+      'classificado_em TIMESTAMPTZ',
+    ];
+    for (const col of colunasFase3) {
+      await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ${col}`);
+    }
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_user_score ON contatos (user_id, lead_score DESC) WHERE lead_score IS NOT NULL`);
+    await pool.query(`ALTER TABLE higienizacao_config ADD COLUMN IF NOT EXISTS classificacao JSONB`);
+    log.info('MIGRATIONS', 'higienizacao fase 3 (nicho, tipo_publico, lead_score, classificacao) OK');
+  } catch (err: any) {
+    log.error('MIGRATIONS', 'Falha na migration de higienização (fase 3)', { err: err?.message, stack: err?.stack });
+  }
+
   log.info('MIGRATIONS', 'OK');
 }

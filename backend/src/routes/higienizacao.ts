@@ -4,8 +4,10 @@ import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { resolverOwnerId } from '../services/subscription';
 import {
-  CONFIG_PADRAO, enfileirarHigienizacao, getConfig, normalizarPendentes, ParamsHigienizacao,
+  CONFIG_PADRAO, enfileirarHigienizacao, getConfig, getConfigClassificacao, normalizarPendentes, ParamsHigienizacao,
+  salvarConfigClassificacao,
 } from '../services/higienizacao';
+import { CONFIG_PADRAO as CLASSIFICACAO_PADRAO, ConfigInvalida, notaDaLista } from '../utils/classificacao';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -38,6 +40,7 @@ export default function higienizacaoRouter(pool: Pool): Router {
       const params: ParamsHigienizacao = {
         validar: req.body?.validar !== false,
         enriquecer: req.body?.enriquecer !== false,
+        classificar: req.body?.classificar !== false,
         forcar: req.body?.forcar === true,
       };
       if (contatoIds.length) params.contato_ids = contatoIds;
@@ -153,6 +156,47 @@ export default function higienizacaoRouter(pool: Pool): Router {
     }
   });
 
+  // GET/PUT /api/higienizacao/score-config — pesos do score, DDDs, nichos-alvo e dicionário de
+  // nichos (palavras) editáveis por conta. `padrao` devolve os valores de fábrica pro botão "Restaurar".
+  router.get('/score-config', async (req: AuthRequest, res: Response) => {
+    try {
+      const tenantId = await resolverOwnerId(pool, req.userId!);
+      return res.json({ config: await getConfigClassificacao(pool, tenantId), padrao: CLASSIFICACAO_PADRAO });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  router.put('/score-config', async (req: AuthRequest, res: Response) => {
+    try {
+      if (await ehMembro(req.userId!)) return res.status(403).json({ message: 'Sem permissão.' });
+      const tenantId = await resolverOwnerId(pool, req.userId!);
+      const config = await salvarConfigClassificacao(pool, tenantId, req.body);
+      return res.json({ config });
+    } catch (err: any) {
+      if (err instanceof ConfigInvalida) return res.status(400).json({ message: err.message });
+      log.error('HIGIENIZACAO', 'Erro em PUT /score-config', { err: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/higienizacao/contatos/:id/score — o "por quê" do score de um contato.
+  router.get('/contatos/:id/score', async (req: AuthRequest, res: Response) => {
+    try {
+      if (!UUID.test(req.params.id)) return res.status(400).json({ message: 'Identificador inválido.' });
+      const tenantId = await resolverOwnerId(pool, req.userId!);
+      const r = await pool.query(
+        `SELECT lead_score, nicho_detectado, tipo_publico, score_detalhe, classificado_em
+         FROM contatos WHERE id = $1 AND user_id = $2`,
+        [req.params.id, tenantId],
+      );
+      if (!r.rows.length) return res.status(404).json({ message: 'Contato não encontrado.' });
+      return res.json(r.rows[0]);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /api/higienizacao/listas-resumo — contagem REAL por lista (via contato_listas).
   router.get('/listas-resumo', async (req: AuthRequest, res: Response) => {
     try {
@@ -166,6 +210,8 @@ export default function higienizacaoRouter(pool: Pool): Router {
                 count(*) FILTER (WHERE c.whatsapp_status = 'erro')::int     AS erros,
                 count(*) FILTER (WHERE c.is_business)::int                  AS business,
                 count(*) FILTER (WHERE c.nome_confiavel)::int               AS com_nome,
+                count(*) FILTER (WHERE c.whatsapp_status IS NOT NULL AND c.whatsapp_status <> 'pendente')::int AS verificados,
+                round(avg(c.lead_score))::int                               AS score_medio,
                 max(c.whatsapp_verificado_em)                               AS ultima_verificacao
          FROM listas l
          LEFT JOIN contato_listas cl ON cl.lista_id = l.id
@@ -181,7 +227,8 @@ export default function higienizacaoRouter(pool: Pool): Router {
          FROM contatos WHERE user_id = $1`,
         [tenantId],
       );
-      return res.json({ listas: listas.rows, totais: totais.rows[0] });
+      const comNota = listas.rows.map((l: any) => ({ ...l, nota: notaDaLista(l) }));
+      return res.json({ listas: comNota, totais: totais.rows[0] });
     } catch (err: any) {
       log.error('HIGIENIZACAO', 'Erro em GET /listas-resumo', { err: err?.message, stack: err?.stack });
       return res.status(500).json({ message: err.message });

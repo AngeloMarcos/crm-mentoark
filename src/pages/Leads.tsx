@@ -74,6 +74,12 @@ interface Contato {
   notas: string | null;
   lista_id: string | null;
   created_at: string;
+  // Higienização (preenchidos pelo backend; null até o contato ser higienizado/classificado)
+  lead_score?: number | null;
+  nicho_detectado?: string | null;
+  tipo_publico?: string | null;
+  whatsapp_status?: string | null;
+  is_business?: boolean | null;
 }
 
 const statusOptions = [
@@ -104,7 +110,10 @@ export default function LeadsPage() {
   const [tarefasPendentes, setTarefasPendentes] = useState<Map<string, number>>(new Map());
   // Higienização: contagem real por lista e vínculo N:N contato x lista (um contato pode estar em
   // várias listas; `contatos.lista_id` guarda só a principal).
-  const [resumoListas, setResumoListas] = useState<Map<string, { total: number; validos: number; sem_whatsapp: number; pendentes: number }>>(new Map());
+  const [resumoListas, setResumoListas] = useState<Map<string, {
+    total: number; validos: number; sem_whatsapp: number; pendentes: number; business: number; com_nome: number;
+    score_medio: number | null; nota: "A" | "B" | "C" | "D" | null;
+  }>>(new Map());
   const [vinculos, setVinculos] = useState<Map<string, Set<string>>>(new Map());
   const [modalHigienizar, setModalHigienizar] = useState(false);
 
@@ -708,6 +717,18 @@ export default function LeadsPage() {
                   onClick={() => setListaFiltro(ativo ? "todas" : l.id)}
                 >
                   {l.nome} <span className="opacity-70">({count})</span>
+                  {resumo?.nota && (
+                    <span
+                      className={`rounded px-1 text-[10px] font-bold ${
+                        resumo.nota === "A" ? "bg-success/20 text-success"
+                        : resumo.nota === "B" ? "bg-info/20 text-info"
+                        : resumo.nota === "C" ? "bg-warning/20 text-warning"
+                        : "bg-destructive/20 text-destructive"}`}
+                      title={`Qualidade da lista: score médio ${resumo.score_medio ?? "—"} · ${Math.round((resumo.validos / Math.max(1, resumo.total)) * 100)}% com WhatsApp · ${Math.round((resumo.business / Math.max(1, resumo.total)) * 100)}% Business · ${Math.round((resumo.com_nome / Math.max(1, resumo.total)) * 100)}% com nome`}
+                    >
+                      {resumo.nota}
+                    </span>
+                  )}
                   <button
                     onClick={(e) => { e.stopPropagation(); removerLista(l.id); }}
                     className="ml-1 rounded hover:bg-destructive/20 p-0.5"
@@ -766,6 +787,21 @@ export default function LeadsPage() {
                           <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                             <Building2 className="h-3 w-3" />{c.empresa}
                             {c.cargo && ` • ${c.cargo}`}
+                          </p>
+                        )}
+                        {c.lead_score != null && (
+                          <p className="text-xs mt-0.5 flex items-center gap-1.5">
+                            <span
+                              className={`rounded px-1 font-semibold ${
+                                c.lead_score >= 70 ? "bg-success/15 text-success"
+                                : c.lead_score >= 40 ? "bg-warning/15 text-warning"
+                                : "bg-muted text-muted-foreground"}`}
+                              title="Score do lead (0-100), calculado por regras"
+                            >
+                              Score {c.lead_score}
+                            </span>
+                            {c.nicho_detectado && <span className="text-muted-foreground">{c.nicho_detectado.replace(/_/g, " ")}</span>}
+                            {c.is_business && <Badge variant="outline" className="text-[10px] h-4 px-1">Business</Badge>}
                           </p>
                         )}
                       </TableCell>

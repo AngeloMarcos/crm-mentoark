@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, ShieldCheck, XCircle } from "lucide-react";
+import { Loader2, ShieldCheck, SlidersHorizontal, XCircle } from "lucide-react";
 import { toast } from "sonner";
+import { ScoreConfigDialog } from "@/components/leads/ScoreConfigDialog";
 
 interface Job {
   id: string;
@@ -33,6 +34,7 @@ const ETAPAS: Record<string, string> = {
   normalizando: "Normalizando telefones e nomes",
   validando: "Validando números no WhatsApp",
   enriquecendo: "Buscando perfil e WhatsApp Business",
+  classificando: "Classificando nicho e calculando o score",
   concluido: "Concluído",
 };
 
@@ -42,6 +44,8 @@ export function HigienizarDialog({ open, onClose, listaId, listaNome, onConcluid
   const [escopo, setEscopo] = useState<"lista" | "todas">(listaId !== "todas" ? "lista" : "todas");
   const [validar, setValidar] = useState(true);
   const [enriquecer, setEnriquecer] = useState(true);
+  const [classificar, setClassificar] = useState(true);
+  const [configOpen, setConfigOpen] = useState(false);
   const [forcar, setForcar] = useState(false);
   const [iniciando, setIniciando] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
@@ -86,7 +90,7 @@ export function HigienizarDialog({ open, onClose, listaId, listaNome, onConcluid
     if (job.status === "done") {
       const r = job.resultado ?? {};
       toast.success("Higienização concluída", {
-        description: `${r.validos ?? 0} válidos · ${r.sem_whatsapp ?? 0} sem WhatsApp · ${r.business ?? 0} Business`,
+        description: `${r.validos ?? 0} válidos · ${r.sem_whatsapp ?? 0} sem WhatsApp · ${r.business ?? 0} Business · ${r.publico_b2b ?? 0} B2B`,
       });
       onConcluido();
     } else if (job.status === "failed") {
@@ -97,7 +101,7 @@ export function HigienizarDialog({ open, onClose, listaId, listaNome, onConcluid
   const iniciar = async () => {
     setIniciando(true);
     try {
-      const body: Record<string, unknown> = { validar, enriquecer, forcar };
+      const body: Record<string, unknown> = { validar, enriquecer, classificar, forcar };
       if (escopo === "lista" && temLista) body.lista_ids = [listaId];
       const { data } = await api.post("/api/higienizacao/executar", body);
       finalizadoRef.current = null;
@@ -166,6 +170,7 @@ export function HigienizarDialog({ open, onClose, listaId, listaNome, onConcluid
                 {job.erro && <div className="text-destructive flex items-center gap-1"><XCircle className="h-4 w-4" />{job.erro}</div>}
                 <div className="text-muted-foreground">
                   {r.validos ?? 0} válidos · {r.sem_whatsapp ?? 0} sem WhatsApp · {r.erros ?? 0} com erro · {r.business ?? 0} Business
+                  {r.classificacao_total !== undefined && ` · ${r.publico_b2b ?? 0} B2B · ${r.publico_b2c ?? 0} B2C`}
                 </div>
               </div>
             )}
@@ -192,6 +197,13 @@ export function HigienizarDialog({ open, onClose, listaId, listaNome, onConcluid
                 <span>Buscar perfil e WhatsApp Business<br /><span className="text-xs text-muted-foreground">Nome, categoria e site de contas comerciais. É a etapa mais lenta.</span></span>
               </label>
               <label className="flex items-start gap-2 text-sm">
+                <Checkbox checked={classificar} onCheckedChange={(v) => setClassificar(v === true)} />
+                <span>Classificar (nicho, B2B/B2C e score)<br /><span className="text-xs text-muted-foreground">Só regras e pesos, sem IA. Aplica as tags nicho:* e publico:*.
+                  {" "}<button type="button" className="underline inline-flex items-center gap-1" onClick={(e) => { e.preventDefault(); setConfigOpen(true); }}>
+                    <SlidersHorizontal className="h-3 w-3" />Configurar score e nichos
+                  </button></span></span>
+              </label>
+              <label className="flex items-start gap-2 text-sm">
                 <Checkbox checked={forcar} onCheckedChange={(v) => setForcar(v === true)} />
                 <span>Reverificar também os já verificados<br /><span className="text-xs text-muted-foreground">Ignora a janela de revalidação.</span></span>
               </label>
@@ -203,7 +215,7 @@ export function HigienizarDialog({ open, onClose, listaId, listaNome, onConcluid
           {ativo ? (
             <Button variant="outline" onClick={cancelar}>Cancelar higienização</Button>
           ) : (
-            <Button onClick={iniciar} disabled={iniciando || (!validar && !enriquecer)}>
+            <Button onClick={iniciar} disabled={iniciando || (!validar && !enriquecer && !classificar)}>
               {iniciando ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />}
               Iniciar higienização
             </Button>
@@ -211,6 +223,7 @@ export function HigienizarDialog({ open, onClose, listaId, listaNome, onConcluid
           <Button variant="ghost" onClick={onClose}>Fechar</Button>
         </DialogFooter>
       </DialogContent>
+      <ScoreConfigDialog open={configOpen} onClose={() => setConfigOpen(false)} />
     </Dialog>
   );
 }

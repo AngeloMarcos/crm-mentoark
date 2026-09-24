@@ -6,6 +6,7 @@ import { log } from '../logger';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { normalizarTelefone } from '../utils/telefone';
 import { resolverNome } from '../utils/nomes';
+import { classificarLead, compilarConfig, ConfigClassificacao, mesclarConfig } from '../utils/classificacao';
 
 export interface HigienizacaoConfig {
   revalidar_dias: number;
@@ -18,6 +19,7 @@ export interface ParamsHigienizacao {
   contato_ids?: string[];
   validar?: boolean;     // default true
   enriquecer?: boolean;  // default true
+  classificar?: boolean; // default true: nicho, B2B/B2C e score
   forcar?: boolean;      // ignora a janela de revalidação
 }
 
@@ -404,6 +406,110 @@ async function etapaEnriquecimento(
   }
 }
 
+// ── Configuração da classificação (pesos, dicionário de nichos, DDDs) ────────────────────
+export async function getConfigClassificacao(pool: Pool, tenantId: string): Promise<ConfigClassificacao> {
+  const r = await pool.query(`SELECT classificacao FROM higienizacao_config WHERE user_id = $1`, [tenantId]);
+  return mesclarConfig(r.rows[0]?.classificacao ?? undefined);
+}
+
+// Lança ConfigInvalida (utils/classificacao) quando o conteúdo é inválido.
+export async function salvarConfigClassificacao(pool: Pool, tenantId: string, parcial: unknown): Promise<ConfigClassificacao> {
+  const atual = await getConfigClassificacao(pool, tenantId);
+  const p: any = parcial && typeof parcial === 'object' ? parcial : {};
+  // Campos ausentes no corpo mantêm o valor atual da conta (não voltam ao padrão).
+  const novo = mesclarConfig({
+    pesos: { ...atual.pesos, ...(p.pesos ?? {}) },
+    ddds_interesse: p.ddds_interesse ?? atual.ddds_interesse,
+    nichos_alvo: p.nichos_alvo ?? atual.nichos_alvo,
+    dicionario: p.dicionario ?? atual.dicionario,
+    grupo_b2c_palavras: p.grupo_b2c_palavras ?? atual.grupo_b2c_palavras,
+  });
+  await pool.query(
+    `INSERT INTO higienizacao_config (user_id, classificacao, updated_at) VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (user_id) DO UPDATE SET classificacao = $2::jsonb, updated_at = now()`,
+    [tenantId, JSON.stringify(novo)],
+  );
+  return novo;
+}
+
+// ── Etapa 3: classificação (nicho, B2B/B2C) e score ──────────────────────────────────────
+// Só regras e pesos, sem IA. Roda por último porque o score usa o resultado da validação e do
+// enriquecimento. As tags "nicho:*" e "publico:*" são gerenciadas por esta etapa (as antigas
+// dessas duas famílias são trocadas; qualquer outra tag do contato fica intocada).
+async function etapaClassificacao(
+  pool: Pool, job: JobHigienizacao, resultado: Record<string, number>,
+): Promise<void> {
+  const tenantId = job.user_id;
+  const cc = compilarConfig(await getConfigClassificacao(pool, tenantId));
+  const alvo = condicaoAlvo(job.params);
+  const base = `FROM contatos c WHERE c.user_id = $1 AND ${alvo.sql}`;
+  const valoresBase = [tenantId, ...alvo.values];
+
+  const cont = await pool.query(`SELECT count(*)::int AS n ${base}`, valoresBase);
+  const total: number = cont.rows[0].n;
+  resultado.classificacao_total = total;
+  resultado.publico_b2b = 0;
+  resultado.publico_b2c = 0;
+  resultado.publico_indefinido = 0;
+  await atualizarProgresso(pool, job.id, 'classificando', total, 0, resultado);
+  if (!total) return;
+
+  const idxKeyset = valoresBase.length + 1;
+  let ultimoId = '00000000-0000-0000-0000-000000000000';
+  let processados = 0;
+
+  for (;;) {
+    const lote = await pool.query(
+      `SELECT c.id, c.nome, c.push_name, c.tipo_telefone, c.telefone_normalizado, c.whatsapp_status,
+              c.is_business, c.business_categoria, c.business_descricao, c.nome_confiavel,
+              (c.profile_pic_url IS NOT NULL OR c.foto_perfil IS NOT NULL) AS tem_foto,
+              COALESCE((SELECT array_agg(l.nome) FROM contato_listas cl JOIN listas l ON l.id = cl.lista_id
+                        WHERE cl.contato_id = c.id), '{}') AS listas
+       ${base} AND c.id > $${idxKeyset}::uuid
+       ORDER BY c.id LIMIT 500`,
+      [...valoresBase, ultimoId],
+    );
+    if (!lote.rows.length) break;
+    ultimoId = lote.rows[lote.rows.length - 1].id;
+
+    const ids: string[] = [], nichos: (string | null)[] = [], tipos: string[] = [];
+    const scores: number[] = [], detalhes: string[] = [];
+    for (const r of lote.rows) {
+      const res = classificarLead({
+        nome: r.nome, pushName: r.push_name, businessCategoria: r.business_categoria,
+        businessDescricao: r.business_descricao, isBusiness: r.is_business, tipoTelefone: r.tipo_telefone,
+        telefoneNormalizado: r.telefone_normalizado, whatsappStatus: r.whatsapp_status,
+        nomeConfiavel: r.nome_confiavel, temFoto: !!r.tem_foto, listas: r.listas ?? [],
+      }, cc);
+      ids.push(r.id);
+      nichos.push(res.nicho);
+      tipos.push(res.tipoPublico);
+      scores.push(res.score);
+      detalhes.push(JSON.stringify({ motivos: res.motivos, fontes_nicho: res.fontesNicho }));
+      resultado[`publico_${res.tipoPublico}`] = (resultado[`publico_${res.tipoPublico}`] ?? 0) + 1;
+    }
+
+    await pool.query(
+      `UPDATE contatos c SET
+         nicho_detectado = v.nicho, tipo_publico = v.tipo, lead_score = v.score,
+         score_detalhe = v.det::jsonb, classificado_em = now(),
+         tags = COALESCE((SELECT array_agg(t) FROM unnest(COALESCE(c.tags, '{}'::text[])) t
+                          WHERE t NOT LIKE 'nicho:%' AND t NOT LIKE 'publico:%'), '{}'::text[])
+                || CASE WHEN v.nicho IS NOT NULL THEN ARRAY['nicho:' || v.nicho] ELSE '{}'::text[] END
+                || CASE WHEN v.tipo <> 'indefinido' THEN ARRAY['publico:' || v.tipo] ELSE '{}'::text[] END
+       FROM (
+         SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS nicho, unnest($3::text[]) AS tipo,
+                unnest($4::int[]) AS score, unnest($5::text[]) AS det
+       ) v
+       WHERE c.id = v.id AND c.user_id = $6`,
+      [ids, nichos, tipos, scores, detalhes, tenantId],
+    );
+
+    processados += lote.rows.length;
+    await atualizarProgresso(pool, job.id, 'classificando', total, processados, resultado);
+  }
+}
+
 // ── Execução do job ──────────────────────────────────────────────────────────────────────
 async function executarJob(pool: Pool, job: JobHigienizacao): Promise<void> {
   const cfg = await getConfig(pool, job.user_id);
@@ -414,6 +520,7 @@ async function executarJob(pool: Pool, job: JobHigienizacao): Promise<void> {
 
   if (job.params.validar !== false) await etapaValidacao(pool, job, cfg, resultado);
   if (job.params.enriquecer !== false) await etapaEnriquecimento(pool, job, cfg, resultado);
+  if (job.params.classificar !== false) await etapaClassificacao(pool, job, resultado);
 }
 
 // ── Fila ─────────────────────────────────────────────────────────────────────────────────

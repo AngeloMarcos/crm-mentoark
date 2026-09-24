@@ -507,6 +507,13 @@ export const api = {
       return { data: await res.json() };
     } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
   },
+  put: async (path: string, body: any) => {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { method: 'PUT', headers: await _authHeadersFresh(), body: JSON.stringify(body) });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw { message: friendlyError(res.status, e.message), status: res.status }; }
+      return { data: await res.json() };
+    } catch (err: any) { if (err?.status) throw err; throw { message: friendlyError(undefined, err?.message) }; }
+  },
   patch: async (path: string, body: any) => {
     try {
       const res = await fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: await _authHeadersFresh(), body: JSON.stringify(body) });
