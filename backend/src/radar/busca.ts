@@ -2,7 +2,7 @@ import { Pool } from 'pg';
 import { log } from '../logger';
 import { gerarConsultas } from './consultas';
 import { criarProvider } from './providers';
-import { coletarLinks } from './searchProvider';
+import { coletarLinks, statusDaBusca } from './searchProvider';
 import { NICHOS_PADRAO } from './nichosPadrao';
 
 export function configProviderDoAmbiente() {
@@ -78,7 +78,7 @@ export async function executarBusca(pool: Pool, buscaId: string): Promise<void> 
     await pool.query(
       `UPDATE radar_buscas SET status = $2, provider = $3, consultas_feitas = $4, custo_usd = $5, novos = $6,
               existentes = $7, interrompida_por = $8, aviso = $9, erro = $10, links_vistos = $11, finished_at = now() WHERE id = $1`,
-      [busca.id, resumo.interrompidaPor === 'erro_provider' ? 'falhou' : 'concluida', provider.nome,
+      [busca.id, statusDaBusca(resumo), provider.nome,
        resumo.chamadasFeitas, resumo.custoUsd, novos, existentes, resumo.interrompidaPor, aviso ?? null,
        resumo.erros.length ? resumo.erros.join(' | ').slice(0, 1000) : null, resumo.linksVistos],
     );

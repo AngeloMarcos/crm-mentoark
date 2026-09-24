@@ -112,3 +112,13 @@ export class SimulatedProvider implements SearchProvider {
     return { resultados: this.respostas[consulta] ?? [], chamadas: 1 };
   }
 }
+
+/**
+ * Situação final de uma busca. 'falhou' quando o provedor derrubou a execução OU quando toda consulta
+ * iniciada deu erro (ex.: todas recusadas com 400) — antes esse caso aparecia como "concluída" com 0 grupos.
+ */
+export function statusDaBusca(r: ResumoExecucao): 'concluida' | 'falhou' {
+  if (r.interrompidaPor === 'erro_provider') return 'falhou';
+  if (r.consultasFeitas > 0 && r.erros.length >= r.consultasFeitas) return 'falhou';
+  return 'concluida';
+}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { extrairLinks } from '../src/radar/extrairLinks';
 import { gerarConsultas } from '../src/radar/consultas';
-import { coletarLinks, RadarSearchError, SimulatedProvider, SearchProvider } from '../src/radar/searchProvider';
+import { coletarLinks, RadarSearchError, SimulatedProvider, SearchProvider, statusDaBusca } from '../src/radar/searchProvider';
 import { GoogleCseProvider } from '../src/radar/providers/googleCse';
 import { SerperProvider } from '../src/radar/providers/serper';
 import { criarProvider } from '../src/radar/providers';
@@ -178,5 +178,15 @@ describe('importarCsv', () => {
     expect(importarCsv(`https://chat.whatsapp.com/${COD}\n`).itens).toHaveLength(1);
     expect(importarCsv('').itens).toHaveLength(0);
     expect(parseCsv('a,b\n1,2')).toEqual([['a', 'b'], ['1', '2']]);
+  });
+});
+
+describe('statusDaBusca', () => {
+  const base = { grupos: [], consultasFeitas: 2, chamadasFeitas: 0, linksVistos: 0, custoUsd: 0, interrompidaPor: null, erros: [] as string[] };
+  it('todas as consultas com erro = falhou; erro parcial = concluída', () => {
+    expect(statusDaBusca({ ...base, erros: ['a', 'b'] })).toBe('falhou');
+    expect(statusDaBusca({ ...base, erros: ['a'] })).toBe('concluida');
+    expect(statusDaBusca({ ...base })).toBe('concluida');
+    expect(statusDaBusca({ ...base, interrompidaPor: 'erro_provider' })).toBe('falhou');
   });
 });
