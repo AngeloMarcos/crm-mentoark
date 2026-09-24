@@ -2592,6 +2592,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_contato_respostas_contato ON contato_respostas (user_id, contato_id, respondido_em)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_bot ON contatos (user_id) WHERE bot_detectado = true`);
+    // Qual versão da mensagem (0=A, 1=B...) cada contato recebeu — base do teste A/B. Nulo = campanha de versão única.
+    await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS variante_idx SMALLINT`);
     log.info('MIGRATIONS', 'higienizacao respostas (contatos.resposta_*, bot_detectado, propensao, contato_respostas) OK');
   } catch (err: any) {
     log.error('MIGRATIONS', 'Falha na migration de respostas de disparo', { err: err?.message, stack: err?.stack });

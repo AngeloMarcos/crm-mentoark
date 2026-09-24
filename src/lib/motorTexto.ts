@@ -349,6 +349,26 @@ export const BIBLIOTECA_VARIACOES: { label: string; spintax: string }[] = [
  * gravadas e usa a primeira que bater no mapa — sem tag configurada bater, cai pro round-robin
  * (nunca deixa o contato sem mensagem por falta de regra).
  */
+/** Índice (dentro de `variantes`) da versão que o contato recebe; -1 se não há variantes. */
+export function escolherVarianteIdx(
+  variantes: string[],
+  distribuicao: "round_robin" | "regra",
+  regraPorTag: Record<string, number>,
+  contato: { tags?: string[] | null },
+  indice: number,
+): number {
+  if (!variantes.length) return -1;
+  if (distribuicao === "regra" && Array.isArray(contato.tags)) {
+    for (const tag of contato.tags) {
+      if (Object.prototype.hasOwnProperty.call(regraPorTag, tag)) {
+        const idx = regraPorTag[tag];
+        if (idx >= 0 && idx < variantes.length) return idx;
+      }
+    }
+  }
+  return indice % variantes.length;
+}
+
 export function escolherVariante(
   variantes: string[],
   distribuicao: "round_robin" | "regra",
@@ -356,14 +376,6 @@ export function escolherVariante(
   contato: { tags?: string[] | null },
   indice: number,
 ): string {
-  if (!variantes.length) return "";
-  if (distribuicao === "regra" && Array.isArray(contato.tags)) {
-    for (const tag of contato.tags) {
-      if (Object.prototype.hasOwnProperty.call(regraPorTag, tag)) {
-        const idx = regraPorTag[tag];
-        if (idx >= 0 && idx < variantes.length) return variantes[idx];
-      }
-    }
-  }
-  return variantes[indice % variantes.length];
+  const idx = escolherVarianteIdx(variantes, distribuicao, regraPorTag, contato, indice);
+  return idx < 0 ? "" : variantes[idx];
 }

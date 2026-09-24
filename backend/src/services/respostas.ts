@@ -114,7 +114,7 @@ export async function reprocessarRespostas(pool: Pool, userId: string): Promise<
 // Melhor categoria de cada envio nas 72h: interesse > opt_out > negativa > outra > auto_resposta.
 const CTE_ENVIOS = `
   WITH env AS (
-    SELECT l.id, l.disparo_id, l.contato_id, l.enviado_at, c.origem,
+    SELECT l.id, l.disparo_id, l.contato_id, l.enviado_at, l.variante_idx, c.origem,
            EXTRACT(hour FROM l.enviado_at AT TIME ZONE 'America/Sao_Paulo')::int AS hora,
            ${NOME_REAL('l.nome')} AS nome_real,
            (SELECT r.categoria FROM contato_respostas r
@@ -143,7 +143,16 @@ export async function metricasRespostas(pool: Pool, userId: string) {
     `${CTE_ENVIOS} SELECT e.disparo_id AS chave, d.nome, ${AGREGADOS.replace(/\bcat\b/g, 'e.cat')}
        FROM env e LEFT JOIN disparos d ON d.id = e.disparo_id GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 30`.replace('FROM env e', 'FROM env e'),
     [userId]);
-  return { janela_horas: JANELA_RESPOSTA_HORAS, geral: geral.rows[0], por_origem: porOrigem.rows, por_hora: porHora.rows, por_disparo: porDisparo.rows };
+  // Teste A/B: uma linha por (campanha, versão). Só campanhas com 2+ versões gravadas.
+  const porVersao = await pool.query(
+    `${CTE_ENVIOS}
+     SELECT e.disparo_id, d.nome, e.variante_idx AS versao, ${AGREGADOS.replace(/\bcat\b/g, 'e.cat')}
+       FROM env e LEFT JOIN disparos d ON d.id = e.disparo_id
+      WHERE e.variante_idx IS NOT NULL
+      GROUP BY 1, 2, 3
+     HAVING e.disparo_id IN (SELECT disparo_id FROM env WHERE variante_idx IS NOT NULL GROUP BY 1 HAVING count(DISTINCT variante_idx) >= 2)
+      ORDER BY 2, 3`, [userId]);
+  return { janela_horas: JANELA_RESPOSTA_HORAS, geral: geral.rows[0], por_origem: porOrigem.rows, por_hora: porHora.rows, por_disparo: porDisparo.rows, por_versao: porVersao.rows };
 }
 
 // ── Propensão ─────────────────────────────────────────────────────────────────────────────────────

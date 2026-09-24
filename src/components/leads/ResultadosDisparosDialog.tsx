@@ -14,7 +14,8 @@ interface Linha {
   enviados: number; responderam: number; humanas: number; robos: number;
   interesse: number; negativas: number; opt_outs: number;
 }
-interface Metricas { janela_horas: number; geral: Linha; por_origem: Linha[]; por_hora: Linha[]; por_disparo: Linha[] }
+interface LinhaVersao extends Linha { disparo_id: string; versao: number }
+interface Metricas { janela_horas: number; geral: Linha; por_origem: Linha[]; por_hora: Linha[]; por_disparo: Linha[]; por_versao?: LinhaVersao[] }
 
 const pct = (n: number, d: number) => (d ? `${((100 * n) / d).toFixed(1)}%` : "—");
 
@@ -47,6 +48,61 @@ function Tabela({ titulo, linhas, rotulo }: { titulo: string; linhas: Linha[]; r
           </TableBody>
         </Table>
       </div>
+    </div>
+  );
+}
+
+const MIN_POR_VERSAO = 100;
+
+/** Teste A/B: uma tabela por campanha, uma linha por versão da mensagem. */
+function TesteVersoes({ linhas }: { linhas: LinhaVersao[] }) {
+  if (!linhas.length) return null;
+  const grupos = new Map<string, LinhaVersao[]>();
+  for (const l of linhas) grupos.set(l.disparo_id, [...(grupos.get(l.disparo_id) ?? []), l]);
+  return (
+    <div className="space-y-3">
+      <h4 className="text-sm font-semibold">Teste de versões da mensagem</h4>
+      {[...grupos.values()].map(vs => {
+        const pequena = vs.some(v => v.enviados < MIN_POR_VERSAO);
+        const melhor = [...vs].sort((a, b) => b.interesse / Math.max(1, b.enviados) - a.interesse / Math.max(1, a.enviados))[0];
+        return (
+          <div key={vs[0].disparo_id} className="space-y-2">
+            <div className="text-xs text-muted-foreground">{vs[0].nome ?? "Campanha"}</div>
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Versão</TableHead>
+                    <TableHead className="text-right">Enviados</TableHead>
+                    <TableHead className="text-right">Resposta humana</TableHead>
+                    <TableHead className="text-right">Interesse</TableHead>
+                    <TableHead className="text-right">Pediram para parar</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {vs.map(v => (
+                    <TableRow key={v.versao}>
+                      <TableCell className="font-medium">
+                        Versão {String.fromCharCode(65 + v.versao)}
+                        {!pequena && v === melhor && <span className="ml-2 text-xs text-emerald-600">na frente</span>}
+                      </TableCell>
+                      <TableCell className="text-right">{v.enviados}</TableCell>
+                      <TableCell className="text-right">{v.humanas} <span className="text-muted-foreground">({pct(v.humanas, v.enviados)})</span></TableCell>
+                      <TableCell className="text-right font-medium">{v.interesse} <span className="text-muted-foreground font-normal">({pct(v.interesse, v.enviados)})</span></TableCell>
+                      <TableCell className="text-right">{v.opt_outs}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            {pequena && (
+              <p className="text-xs text-amber-600">
+                Amostra pequena: com menos de {MIN_POR_VERSAO} envios por versão a diferença pode ser sorte. Espere mais envios antes de escolher uma.
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -107,6 +163,7 @@ export function ResultadosDisparosDialog({ open, onClose }: { open: boolean; onC
               rotulo={l => `${l.chave} · ${l.nome_real ? "com nome" : "só número"}`} />
             <Tabela titulo="Por horário do envio" linhas={m.data!.por_hora}
               rotulo={l => `${String(l.chave).padStart(2, "0")}h`} />
+            <TesteVersoes linhas={m.data!.por_versao ?? []} />
             <Tabela titulo="Por campanha" linhas={m.data!.por_disparo}
               rotulo={l => l.nome ?? String(l.chave ?? "—")} />
           </div>

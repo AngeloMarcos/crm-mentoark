@@ -41,6 +41,7 @@ import {
   mensagemSemPersonalizacao,
   BIBLIOTECA_VARIACOES,
   escolherVariante,
+  escolherVarianteIdx,
   personalizarMensagem,
   temTermoVariavel,
   TAMANHO_DICIONARIO_VARIACAO,
@@ -3161,6 +3162,9 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
       // created_at escalonado (1ms por contato): a fila de envio lê por created_at, então a ordem da pré-checagem (mais provável primeiro) vira a ordem de envio.
       const baseTs = Date.now();
       const logs = contatosValidos.map((c, i) => {
+        const varianteIdx = variantesValidas.length >= 2
+          ? escolherVarianteIdx(variantesValidas, form.distribuicao_variantes, form.regra_variante_por_tag, c, i)
+          : null;
         const textoBase = variantesValidas.length >= 2
           ? escolherVariante(variantesValidas, form.distribuicao_variantes, form.regra_variante_por_tag, c, i)
           : (form.tipo_midia === "texto" ? form.mensagem : form.legenda_midia);
@@ -3172,6 +3176,7 @@ function StepReview({ form, targetContacts, loadingContacts, onStart }: any) {
           nome: c.nome,
           mensagem_enviada: personalizarMensagem(textoBase, c, form.variacao_automatica),
           status: 'pending',
+          variante_idx: varianteIdx,
           created_at: new Date(baseTs + i).toISOString()
         };
       });
