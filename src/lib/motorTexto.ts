@@ -56,10 +56,22 @@ function removerPlaceholderVazio(texto: string, placeholder: string): string {
 export function substituirPlaceholders(mensagem: string, contato: {
   nome?: string; telefone?: string; empresa?: string; email?: string; cargo?: string;
   cidade?: string; estado?: string; interesse?: string; data_nascimento?: string;
+  // Higienização: preenchidos pelo backend (nome limpo, sem emoji/telefone). null/undefined = contato
+  // ainda não higienizado, cai na regra antiga abaixo.
+  primeiro_nome?: string | null; nome_confiavel?: boolean | null;
 }): string {
-  const semNomeReal = !!contato.telefone && contato.nome === contato.telefone;
-  const nome = semNomeReal ? "" : (contato.nome || "cliente");
-  const primeiroNome = semNomeReal ? "" : nome.split(" ")[0];
+  // Nome que na verdade é um número (6+ dígitos) nunca é saudação.
+  const nomeParecePhone = !!contato.nome && contato.nome.replace(/\D/g, "").length >= 6;
+  const temPrimeiroLimpo = contato.nome_confiavel === true && !!contato.primeiro_nome;
+  const semNomeReal = !temPrimeiroLimpo && (
+    contato.nome_confiavel === false ||
+    nomeParecePhone ||
+    (!!contato.telefone && contato.nome === contato.telefone)
+  );
+  const nome = semNomeReal
+    ? ""
+    : (temPrimeiroLimpo && nomeParecePhone ? (contato.primeiro_nome as string) : (contato.nome || "cliente"));
+  const primeiroNome = semNomeReal ? "" : (temPrimeiroLimpo ? (contato.primeiro_nome as string) : nome.split(" ")[0]);
   const dataHoje = new Date().toLocaleDateString("pt-BR");
 
   let resultado = mensagem;

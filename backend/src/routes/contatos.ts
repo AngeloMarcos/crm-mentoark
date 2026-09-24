@@ -3,6 +3,8 @@ import { Pool } from 'pg';
 import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
+import { normalizarTelefone } from '../utils/telefone';
+import { resolverNome } from '../utils/nomes';
 
 export default function contatos(pool: Pool): Router {
   const router = makeCrud(pool, 'contatos');
@@ -193,8 +195,15 @@ export default function contatos(pool: Pool): Router {
     // (migrations.ts) e mesmas 4 variáveis novas em `motorTexto.ts`. Sem essa entrada aqui, o
     // frontend já mandaria esses campos no payload (Disparos.tsx, `confirmarImportacao`) mas o
     // INSERT ignoraria silenciosamente — `COLS` é a lista fixa que decide o que de fato grava.
-    const COLS = ['user_id', 'nome', 'telefone', 'email', 'empresa', 'cargo', 'cidade', 'estado', 'interesse', 'data_nascimento', 'notas', 'origem', 'status', 'tags', 'lista_id'];
+    const COLS = ['user_id', 'nome', 'telefone', 'email', 'empresa', 'cargo', 'cidade', 'estado', 'interesse', 'data_nascimento', 'notas', 'origem', 'status', 'tags', 'lista_id',
+      'telefone_original', 'telefone_normalizado', 'tipo_telefone', 'primeiro_nome', 'nome_confiavel', 'whatsapp_status'];
     const BATCH = 500;
+    // Higienização (Fase 1): número inválido não entra; número repetido no arquivo (mesmo em
+    // formatos diferentes) conta uma vez; contato que já existe na conta é VINCULADO à lista
+    // (N:N) em vez de ignorado, sem alterar nenhum dado dele.
+    let invalidos = 0;
+    let vinculados = 0;
+    const chavesVistas = new Set<string>();
     const inseridos: { id: string; telefone: string }[] = [];
     // Set (não array) — dedupe telefone repetido dentro do próprio arquivo antes de calcular
     // "jaExistiam" por diferença (linha 2/3/... do mesmo telefone não deve inflar essa contagem;
@@ -208,14 +217,63 @@ export default function contatos(pool: Pool): Router {
         const vals: any[] = [];
         let idx = 1;
 
-        for (const raw of lote) {
+        const candidatos: any[] = [];
+        for (const item of lote) {
+          const tel = String(item?.telefone || '').trim();
+          if (!tel) continue;
+          const n = normalizarTelefone(tel);
+          if (n.tipo === 'invalido') { invalidos++; continue; }
+          const chave = n.normalizado as string;
+          if (chavesVistas.has(chave)) continue;
+          chavesVistas.add(chave);
+          const nomeInfo = resolverNome(item?.nome, null, tel);
+          candidatos.push({ ...item, telefone: tel, __norm: chave, __tipo: n.tipo, __pn: nomeInfo.primeiroNome, __conf: nomeInfo.confiavel });
+        }
+
+        const existentes = candidatos.length
+          ? await pool.query(
+              `SELECT id, telefone, telefone_normalizado FROM contatos
+               WHERE user_id = $1 AND (telefone = ANY($2::text[]) OR telefone_normalizado = ANY($3::text[]))`,
+              [userId, candidatos.map(c => c.telefone), candidatos.map(c => c.__norm)],
+            )
+          : { rows: [] as any[] };
+        const idPorChave = new Map<string, string>();
+        for (const e of existentes.rows) {
+          idPorChave.set(e.telefone, e.id);
+          if (e.telefone_normalizado) idPorChave.set(e.telefone_normalizado, e.id);
+        }
+
+        const candidatosNovos: any[] = [];
+        const paraVincular = new Map<string, string[]>();
+        for (const c of candidatos) {
+          telefonesEnviados.add(c.telefone);
+          const idExistente = idPorChave.get(c.telefone) ?? idPorChave.get(c.__norm);
+          if (!idExistente) { candidatosNovos.push(c); continue; }
+          if (c.lista_id) {
+            const arr = paraVincular.get(c.lista_id) ?? [];
+            arr.push(idExistente);
+            paraVincular.set(c.lista_id, arr);
+          }
+        }
+        for (const [listaId, contatoIds] of paraVincular) {
+          const v = await pool.query(
+            `INSERT INTO contato_listas (contato_id, lista_id, user_id, origem)
+             SELECT unnest($1::uuid[]), $2::uuid, $3::uuid, 'importacao'
+             WHERE EXISTS (SELECT 1 FROM listas WHERE id = $2::uuid AND user_id = $3::uuid)
+             ON CONFLICT (contato_id, lista_id) DO NOTHING
+             RETURNING contato_id`,
+            [contatoIds, listaId, userId],
+          );
+          vinculados += v.rowCount ?? 0;
+        }
+
+        for (const raw of candidatosNovos) {
           // Defesa extra: nunca confiar só na validação do frontend pra não gravar linha sem
           // telefone (o índice único é `WHERE telefone IS NOT NULL` — telefone nulo/vazio nem
           // participa da checagem de conflito, então uma linha assim sempre insere, mesmo
           // duplicada, se deixada passar).
           const telefone = String(raw?.telefone || '').trim();
           if (!telefone) continue;
-          telefonesEnviados.add(telefone);
 
           const row = [
             userId,
@@ -238,6 +296,12 @@ export default function contatos(pool: Pool): Router {
             raw?.status || 'novo',
             Array.isArray(raw?.tags) ? raw.tags : [],
             raw?.lista_id || null,
+            telefone,
+            raw.__norm,
+            raw.__tipo,
+            raw.__pn,
+            raw.__conf,
+            raw.__tipo === 'fixo' ? 'sem_whatsapp' : 'pendente',
           ];
           placeholders.push(`(${row.map(() => `$${idx++}`).join(', ')})`);
           vals.push(...row);
@@ -259,6 +323,8 @@ export default function contatos(pool: Pool): Router {
         inseridos: inseridos.length,
         jaExistiam: telefonesJaExistiam.length,
         telefonesJaExistiam,
+        vinculados,
+        invalidos,
       });
     } catch (err: any) {
       log.error('CONTATOS', 'Erro em importar-lote', { err: err?.message, stack: err?.stack });

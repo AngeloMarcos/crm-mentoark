@@ -435,6 +435,20 @@ function analisarLinhasImportacao(rows: string[][]): AnaliseImportacao {
 // de lista sem precisar de endpoint novo. `build` deve retornar uma QueryBuilder fresca (sem
 // `.limit()`/`.page()` ainda aplicados) a cada chamada, já que o builder não é reutilizável após
 // `_exec()`.
+// Contatos de uma ou mais listas considerando o vínculo N:N (contato_listas): quem está em várias
+// listas vem uma vez só, e quem foi importado por outra lista (sem ser a "principal") também entra.
+async function fetchAllContatosDasListas(listaIds: string[]): Promise<any[]> {
+  const PAGE_SIZE = 500;
+  const all: any[] = [];
+  for (let page = 1; ; page++) {
+    const { data } = await api.get(`/api/higienizacao/contatos-das-listas?lista_ids=${encodeURIComponent(listaIds.join(","))}&limit=${PAGE_SIZE}&page=${page}`);
+    if (!Array.isArray(data) || !data.length) break;
+    all.push(...data);
+    if (data.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
 async function fetchAllContatos(build: () => any): Promise<any[]> {
   const PAGE_SIZE = 500;
   const all: any[] = [];
@@ -609,7 +623,7 @@ export default function DisparosPage() {
       // preenchido no contato. `email`/`cargo` já eram variável desde sempre mas nunca tinham sido
       // selecionados aqui — lacuna antiga, fechada junto com os 4 campos novos.
       if (form.tags_selecionadas.length > 0) {
-        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, opt_out, ultimo_disparo_em, funil_estagio_id"));
+        const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, opt_out, ultimo_disparo_em, funil_estagio_id, primeiro_nome, nome_confiavel, whatsapp_status"));
         const filtered = data.filter((c: any) =>
           Array.isArray(c.tags) && form.tags_selecionadas.some((t: string) => c.tags.includes(t))
         );
@@ -623,7 +637,7 @@ export default function DisparosPage() {
             // adicionado ao select — necessário pra regra de variante por tag (ver item 3,
             // StepReview.handleStart) funcionar independente de qual dos 3 modos (tag/estágio/
             // lista) selecionou o contato, não só quando a busca em si foi por tag.
-            .select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, opt_out, ultimo_disparo_em, funil_estagio_id")
+            .select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, opt_out, ultimo_disparo_em, funil_estagio_id, primeiro_nome, nome_confiavel, whatsapp_status")
             .in("funil_estagio_id", form.estagios_selecionados)
         );
         list = [...list, ...data];
@@ -642,17 +656,11 @@ export default function DisparosPage() {
           // instâncias do anti-ban nesta mesma tela). Operador ainda pode incluir esses contatos
           // de propósito atribuindo tag/lista/estágio manualmente — os outros 2 modos continuam
           // trazendo qualquer contato, sem essa exclusão.
-          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem"));
+          const data = await fetchAllContatos(() => api.from("contatos").select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id, origem, primeiro_nome, nome_confiavel, whatsapp_status"));
           const semGrupo = data.filter((c: any) => c.origem !== "Grupo WhatsApp");
           list = [...list, ...semGrupo];
         } else {
-          const data = await fetchAllContatos(() =>
-            api
-              .from("contatos")
-              // tags adicionado — ver comentário no bloco de estágio acima (mesmo motivo)
-              .select("id, nome, telefone, empresa, email, cargo, cidade, estado, interesse, data_nascimento, tags, lista_id, opt_out, ultimo_disparo_em, funil_estagio_id")
-              .in("lista_id", form.listas_selecionadas)
-          );
+          const data = await fetchAllContatosDasListas(form.listas_selecionadas);
           list = [...list, ...data];
         }
       }
@@ -701,7 +709,18 @@ export default function DisparosPage() {
           { description: "Grupos não podem receber campanha individual de Disparo." }
         );
       }
-      const unique = Array.from(new Map(semGrupoSintetico.map(c => [c.telefone, c])).values());
+      // Higienização: número já validado como SEM WhatsApp (ou fixo/inválido) não recebe campanha.
+      // `whatsapp_status` só existe pra quem passou pela normalização — os demais seguem normal.
+      const comWhatsapp = semGrupoSintetico.filter((c: any) => c.whatsapp_status !== "sem_whatsapp");
+      const semWhatsappCount = semGrupoSintetico.length - comWhatsapp.length;
+      if (semWhatsappCount > 0) {
+        toast.warning(
+          `${semWhatsappCount} contato(s) sem WhatsApp foram excluídos da seleção`,
+          { description: "Números fixos, inválidos ou já validados como sem WhatsApp. Use Higienizar em Leads para revalidar." }
+        );
+      }
+      // Deduplica pelo número normalizado (mesmo número em formatos diferentes conta uma vez).
+      const unique = Array.from(new Map(comWhatsapp.map((c: any) => [c.telefone_normalizado || c.telefone, c] as [string, any])).values());
       setTargetContacts(unique);
       setLoadingCount(false);
     };
@@ -963,13 +982,19 @@ function StepContacts({ form, setForm, liveCount, loadingCount, targetContacts =
 
     // Buscar contagem de contatos por lista (em paralelo)
     if (listasData && listasData.length) {
+      // Contagem real por lista (N:N), numa chamada só — antes: 1 chamada por lista, por lista_id.
       const counts: Record<string, number> = {};
-      await Promise.all(
-        listasData.map(async (l: any) => {
-          const { count } = await api.from("contatos").select("id", { count: "exact", head: true }).eq("lista_id", l.id);
-          counts[l.id] = count || 0;
-        })
-      );
+      try {
+        const { data: resumo } = await api.get("/api/higienizacao/listas-resumo");
+        for (const l of (resumo?.listas ?? [])) counts[l.id] = l.total || 0;
+      } catch {
+        await Promise.all(
+          listasData.map(async (l: any) => {
+            const { count } = await api.from("contatos").select("id", { count: "exact", head: true }).eq("lista_id", l.id);
+            counts[l.id] = count || 0;
+          })
+        );
+      }
       setListasCounts(counts);
     }
 

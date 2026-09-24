@@ -1122,16 +1122,20 @@ export function WhatsAppInterface() {
         toast.error(err.message || 'Erro ao importar contatos do grupo');
         return;
       }
-      const { novos, jaExistiam, descartados, semNumeroResolvido, listaNome, nomesResolvidos } = await res.json();
+      const { novos, jaExistiam, vinculados: vinc, descartados, semNumeroResolvido, listaNome, nomesResolvidos } = await res.json();
+      const vinculados: number = vinc ?? 0;
       setResultadoImportacaoGrupo({ novos, jaExistiam, descartados, semNumeroResolvido, listaNome, nomesResolvidos: nomesResolvidos ?? 0 });
       // [AUDITORIA] FIX APLICADO (achado do usuário, 2026-08-06): antes o toast só dizia quantos
       // contatos entraram, sem dizer ONDE — usuário não achava os contatos depois, porque a
       // importação nunca tinha criado lista nenhuma (ver fix no backend, whatsapp.ts). Agora
       // aponta o nome exato da lista nova (só existe se `novos > 0` — backend só cria a lista
       // quando há pelo menos 1 contato genuinamente novo).
+      // Higienização: quem já existia no CRM não é duplicado nem alterado — só vinculado à lista nova.
       toast.success(
-        novos > 0 ? `${novos} contato(s) importado(s) para a lista "${listaNome}"` : `Nenhum contato novo — ${jaExistiam} já existiam no CRM`,
-        { description: jaExistiam > 0 && novos > 0 ? `${jaExistiam} já existiam e não foram alterados.` : undefined }
+        listaNome
+          ? `Lista "${listaNome}": ${novos} novo(s), ${vinculados} já existente(s) vinculado(s)`
+          : `Nenhum contato importado — ${descartados > 0 ? `${descartados} número(s) inválido(s)` : 'grupo sem participantes com número'}`,
+        { description: jaExistiam > 0 ? `${jaExistiam} já existiam no CRM e não foram alterados.` : undefined }
       );
     } catch {
       toast.error('Sem conexão com o servidor');

@@ -22,6 +22,8 @@ import { buscarPreviewLink } from '../utils/linkPreview';
 import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
 import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
 import { log } from '../logger';
+import { normalizarTelefone as normalizarTel } from '../utils/telefone';
+import { resolverNome as resolverNomeLimpo } from '../utils/nomes';
 
 // [AUDITORIA] LÓGICA: mesmo diretório/rota estática (`/uploads`, montado em index.ts) e mesmo
 // padrão multer já usados por catalogo.ts/galeria.ts — reaproveitado abaixo pelo upload de
@@ -999,29 +1001,74 @@ export default function whatsappRouter(pool: Pool): Router {
       let nomesResolvidos = 0;
       let listaId: string | null = null;
       let listaNome: string | null = null;
-      for (const p of info.participantes) {
-        if (p.telefone.length < 10 || p.telefone.length > 13) { descartados++; continue; }
-
-        const existente = await pool.query(
-          `SELECT id FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`,
-          [tenantId, `%${p.telefone.slice(-11)}`]
+      // [AUDITORIA] LÓGICA (Higienização, Fase 1): antes, participante que já existia na conta era
+      // ignorado (`jaExistiam++; continue`) — o contato ficava só na lista antiga e a lista nova
+      // do grupo nascia incompleta. Agora: normaliza (descarta inválido), resolve TODOS os
+      // existentes numa consulta só (antes: 1 consulta por participante, com ILIKE sem índice) e
+      // VINCULA quem já existe à lista nova (N:N, `contato_listas`) sem alterar nenhum dado dele.
+      let vinculados = 0;
+      const garantirLista = async () => {
+        if (listaId) return;
+        const agora = new Date();
+        const dataFormatada = `${String(agora.getDate()).padStart(2, '0')}/${String(agora.getMonth() + 1).padStart(2, '0')}/${agora.getFullYear()}`;
+        listaNome = `Importação Grupo ${info.subject || groupJid} ${dataFormatada}`;
+        const listaRes = await pool.query(
+          `INSERT INTO listas (user_id, nome) VALUES ($1, $2) RETURNING id`,
+          [tenantId, listaNome]
         );
-        if (existente.rows.length) { jaExistiam++; continue; }
+        listaId = listaRes.rows[0].id;
+      };
+
+      const candidatosGrupo: { p: (typeof info.participantes)[number]; n: ReturnType<typeof normalizarTel> }[] = [];
+      for (const p of info.participantes) {
+        const n = normalizarTel(p.telefone);
+        if (n.tipo === 'invalido') { descartados++; continue; }
+        candidatosGrupo.push({ p, n });
+      }
+
+      const idPorSufixo = new Map<string, string>();
+      if (candidatosGrupo.length) {
+        const sufixos = candidatosGrupo.map(c => (c.n.normalizado as string).slice(-11));
+        const existentesRes = await pool.query(
+          `SELECT id, telefone, telefone_normalizado FROM contatos
+           WHERE user_id = $1 AND telefone IS NOT NULL
+             AND (RIGHT(regexp_replace(telefone, '\\D', '', 'g'), 11) = ANY($2::text[])
+                  OR RIGHT(telefone_normalizado, 11) = ANY($2::text[]))`,
+          [tenantId, sufixos]
+        );
+        for (const e of existentesRes.rows) {
+          idPorSufixo.set(String(e.telefone).replace(/\D/g, '').slice(-11), e.id);
+          if (e.telefone_normalizado) idPorSufixo.set(String(e.telefone_normalizado).slice(-11), e.id);
+        }
+      }
+
+      const idsParaVincular: string[] = [];
+      const novosGrupo: typeof candidatosGrupo = [];
+      for (const c of candidatosGrupo) {
+        const existenteId = idPorSufixo.get((c.n.normalizado as string).slice(-11));
+        if (existenteId) { jaExistiam++; idsParaVincular.push(existenteId); } else novosGrupo.push(c);
+      }
+
+      if (idsParaVincular.length || novosGrupo.length) await garantirLista();
+      if (idsParaVincular.length && listaId) {
+        const v = await pool.query(
+          `INSERT INTO contato_listas (contato_id, lista_id, user_id, origem)
+           SELECT unnest($1::uuid[]), $2::uuid, $3::uuid, 'grupo'
+           ON CONFLICT (contato_id, lista_id) DO NOTHING
+           RETURNING contato_id`,
+          [Array.from(new Set(idsParaVincular)), listaId, tenantId]
+        );
+        vinculados = v.rowCount ?? 0;
+      }
+
+      for (const c of novosGrupo) {
+        const p = c.p;
 
         // [AUDITORIA] LÓGICA: lista criada só na primeira vez que há de fato um contato novo pra
         // inserir (lazy) — grupo onde todo mundo já existia como contato não sobra com uma lista
         // vazia à toa. `data-fns`/`toLocaleDateString` evitados de propósito (dependem de dados
         // ICU que nem sempre estão presentes numa imagem Node enxuta) — formatação manual dd/mm/aaaa.
-        if (!listaId) {
-          const agora = new Date();
-          const dataFormatada = `${String(agora.getDate()).padStart(2, '0')}/${String(agora.getMonth() + 1).padStart(2, '0')}/${agora.getFullYear()}`;
-          listaNome = `Importação Grupo ${info.subject || groupJid} ${dataFormatada}`;
-          const listaRes = await pool.query(
-            `INSERT INTO listas (user_id, nome) VALUES ($1, $2) RETURNING id`,
-            [tenantId, listaNome]
-          );
-          listaId = listaRes.rows[0].id;
-        }
+        await garantirLista();
 
         // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, 2026-08-26): antes disso, nome
         // nascia sempre igual ao telefone (Evolution não devolvia nome nenhum). Agora tenta a
@@ -1034,12 +1081,15 @@ export default function whatsappRouter(pool: Pool): Router {
         // "nome" não é confiável.
         const nomeResolvido = await resolverNomeParticipante(tenantId, p.telefone, nomesDoGrupo);
         const notas = p.admin ? `Admin do grupo "${info.subject || groupJid}"` : '';
+        const nomeLimpo = resolverNomeLimpo(nomeResolvido, null, p.telefone);
         const inserted = await pool.query(
-          `INSERT INTO contatos (user_id, nome, telefone, origem, status, notas, lista_id, nome_verificado)
-           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4, $5, $6)
+          `INSERT INTO contatos (user_id, nome, telefone, origem, status, notas, lista_id, nome_verificado,
+                                 telefone_original, telefone_normalizado, tipo_telefone, primeiro_nome, nome_confiavel, whatsapp_status)
+           VALUES ($1, $2, $3, 'Grupo WhatsApp', 'novo', $4, $5, $6, $3, $7, $8, $9, $10, $11)
            ON CONFLICT (user_id, telefone) WHERE telefone IS NOT NULL DO NOTHING
            RETURNING id`,
-          [tenantId, nomeResolvido || p.telefone, p.telefone, notas, listaId, !!nomeResolvido]
+          [tenantId, nomeResolvido || p.telefone, p.telefone, notas, listaId, !!nomeResolvido,
+           c.n.normalizado, c.n.tipo, nomeLimpo.primeiroNome, nomeLimpo.confiavel, c.n.tipo === 'fixo' ? 'sem_whatsapp' : 'pendente']
         ).catch(err => {
           log.warn('WA_GROUP_IMPORT', 'Falha ao inserir participante', { telefone: p.telefone, err: err?.message });
           return { rows: [] as any[] };
@@ -1048,11 +1098,11 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       log.info('WA_GROUP_IMPORT', 'Importação de contatos de grupo concluída', {
-        userId: tenantId, groupJid, novos, jaExistiam, descartados, semNumeroResolvido, totalNoGrupo, listaId, listaNome, nomesResolvidos,
+        userId: tenantId, groupJid, novos, jaExistiam, vinculados, descartados, semNumeroResolvido, totalNoGrupo, listaId, listaNome, nomesResolvidos,
       });
 
       return res.json({
-        novos, jaExistiam, descartados, semNumeroResolvido, nomesResolvidos,
+        novos, jaExistiam, vinculados, descartados, semNumeroResolvido, nomesResolvidos,
         totalParticipantes: info.participantes.length,
         totalNoGrupo,
         grupoNome: info.subject,

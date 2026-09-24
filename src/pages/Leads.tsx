@@ -29,6 +29,7 @@ import {
 import { normalizarTelefoneBR } from "@/lib/phone";
 import { baixarModeloContatosXLSX } from "@/lib/modeloImportacao";
 import { BuscarLeadsModal } from "@/components/campanhas/BuscarLeadsModal";
+import { HigienizarDialog } from "@/components/leads/HigienizarDialog";
 
 function formatWhatsappNumber(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -101,6 +102,11 @@ export default function LeadsPage() {
   const [listas, setListas] = useState<Lista[]>([]);
   const [contatos, setContatos] = useState<Contato[]>([]);
   const [tarefasPendentes, setTarefasPendentes] = useState<Map<string, number>>(new Map());
+  // Higienização: contagem real por lista e vínculo N:N contato x lista (um contato pode estar em
+  // várias listas; `contatos.lista_id` guarda só a principal).
+  const [resumoListas, setResumoListas] = useState<Map<string, { total: number; validos: number; sem_whatsapp: number; pendentes: number }>>(new Map());
+  const [vinculos, setVinculos] = useState<Map<string, Set<string>>>(new Map());
+  const [modalHigienizar, setModalHigienizar] = useState(false);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("todos");
@@ -164,6 +170,16 @@ export default function LeadsPage() {
 
       setListas(l ?? []);
       setContatos(c);
+      try {
+        const [{ data: resumo }, { data: vinc }] = await Promise.all([
+          api.get("/api/higienizacao/listas-resumo"),
+          api.get("/api/higienizacao/vinculos"),
+        ]);
+        setResumoListas(new Map((resumo?.listas ?? []).map((x: any) => [x.id, x])));
+        setVinculos(new Map(Object.entries(vinc ?? {}).map(([listaId, ids]) => [listaId, new Set(ids as string[])])));
+      } catch (err) {
+        console.error("[LeadsPage] Erro resumo/vínculos:", err);
+      }
       const map = new Map<string, number>();
       (tar ?? []).forEach((t: { contato_id: string | null }) => {
         if (!t.contato_id) return;
@@ -481,12 +497,14 @@ export default function LeadsPage() {
       return;
     }
 
-    const { error } = await api
-      .from("contatos")
-      .insert(novos.map((n) => ({ ...n, user_id: user.id })));
-
-    if (error) {
-      toast({ title: "Erro na importação", description: error.message, variant: "destructive" });
+    // Importação em lote com deduplicação: telefone repetido (mesmo em formatos diferentes) não
+    // derruba o lote, e contato que já existe é vinculado à lista em vez de duplicado/ignorado.
+    let resumo: { inseridos: number; jaExistiam: number; vinculados: number; invalidos: number };
+    try {
+      const { data } = await api.post("/api/contatos/importar-lote", { contatos: novos });
+      resumo = data;
+    } catch (err: any) {
+      toast({ title: "Erro na importação", description: err?.message, variant: "destructive" });
       return;
     }
 
@@ -495,7 +513,7 @@ export default function LeadsPage() {
     setImportLista("");
     toast({
       title: `✅ Importação concluída`,
-      description: `${novos.length} importados, ${ignorados.length} ignorados de ${totalLinhas} linhas${isCnpjBiz ? " • formato Cnpj.biz" : ""}`,
+      description: `${resumo.inseridos} novos, ${resumo.jaExistiam} já existiam${resumo.vinculados ? ` (${resumo.vinculados} vinculados à lista)` : ""}, ${resumo.invalidos} inválidos, ${ignorados.length} ignorados de ${totalLinhas} linhas${isCnpjBiz ? " • formato Cnpj.biz" : ""}`,
     });
     if (ignorados.length > 0) {
       const exemplos = ignorados.slice(0, 3)
@@ -516,7 +534,7 @@ export default function LeadsPage() {
     if (pctFixos >= 30) {
       toast({
         title: `⚠️ ${pctFixos}% dos números são fixos ou inválidos`,
-        description: `Esta lista contém muitos telefones fixos — disparos via WhatsApp irão falhar. Use "Validar lista no WhatsApp" para confirmar.`,
+        description: `Esta lista contém muitos telefones fixos — disparos via WhatsApp irão falhar. Use "Higienizar lista" para confirmar.`,
         variant: "destructive",
       });
     }
@@ -585,35 +603,6 @@ export default function LeadsPage() {
     toast({ title: `✅ ${filtrados.length} contatos exportados` });
   };
 
-  // ============ VALIDAR LISTA NO WHATSAPP ============
-  const [validandoWa, setValidandoWa] = useState(false);
-  const validarListaWhatsApp = async () => {
-    if (!user) return;
-    const ids = filtered.map((c) => c.id);
-    if (ids.length === 0) {
-      toast({ title: "Nenhum contato para validar" });
-      return;
-    }
-    if (!confirm(`Validar ${ids.length} contato(s) no WhatsApp?\n\nIsso consulta a Evolution API e marca números inexistentes com a tag "whatsapp_invalido".`)) return;
-    setValidandoWa(true);
-    try {
-      const { data, error } = await api.functions.invoke("validar-numeros-whatsapp", {
-        body: { contato_ids: ids },
-      });
-      if (error) throw error;
-      const r = data as { total: number; validos: number; invalidos: number; fixos: number };
-      toast({
-        title: "✅ Validação concluída",
-        description: `${r.validos} válidos · ${r.invalidos} inválidos (${r.fixos} fixos detectados)`,
-      });
-      carregar();
-    } catch (err: any) {
-      toast({ title: "Erro na validação", description: err.message, variant: "destructive" });
-    } finally {
-      setValidandoWa(false);
-    }
-  };
-
   // ============ FILTROS ============
   const filtered = useMemo(() => contatos.filter((c) => {
     const s = search.toLowerCase();
@@ -623,9 +612,9 @@ export default function LeadsPage() {
       (c.email ?? "").toLowerCase().includes(s) ||
       (c.empresa ?? "").toLowerCase().includes(s);
     const matchStatus = statusFilter === "todos" || c.status === statusFilter;
-    const matchLista = listaFiltro === "todas" || c.lista_id === listaFiltro;
+    const matchLista = listaFiltro === "todas" || c.lista_id === listaFiltro || !!vinculos.get(listaFiltro)?.has(c.id);
     return matchSearch && matchStatus && matchLista;
-  }), [contatos, search, statusFilter, listaFiltro]);
+  }), [contatos, search, statusFilter, listaFiltro, vinculos]);
 
   return (
     <CRMLayout>
@@ -658,9 +647,9 @@ export default function LeadsPage() {
             <Button variant="outline" size="sm" onClick={exportarCsv}>
               <Download className="h-4 w-4 mr-1" /> Exportar CSV
             </Button>
-            <Button variant="outline" size="sm" onClick={validarListaWhatsApp} disabled={validandoWa}>
-              {validandoWa ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1" />}
-              Validar lista no WhatsApp
+            <Button variant="outline" size="sm" onClick={() => setModalHigienizar(true)}>
+              <ShieldCheck className="h-4 w-4 mr-1" />
+              Higienizar lista
             </Button>
             <Button variant="outline" size="sm" onClick={() => setModalBuscarLeads(true)}>
               <SearchCheck className="h-4 w-4 mr-1" /> Buscar Leads
@@ -709,7 +698,8 @@ export default function LeadsPage() {
           <div className="flex gap-2 flex-wrap">
             {listas.map((l) => {
               const ativo = listaFiltro === l.id;
-              const count = contatos.filter((c) => c.lista_id === l.id).length;
+              const resumo = resumoListas.get(l.id);
+              const count = resumo?.total ?? contatos.filter((c) => c.lista_id === l.id).length;
               return (
                 <Badge
                   key={l.id}
@@ -1157,6 +1147,14 @@ export default function LeadsPage() {
       <BuscarLeadsModal
         open={modalBuscarLeads}
         onClose={() => { setModalBuscarLeads(false); carregar(); }}
+      />
+
+      <HigienizarDialog
+        open={modalHigienizar}
+        onClose={() => setModalHigienizar(false)}
+        listaId={listaFiltro}
+        listaNome={listas.find((l) => l.id === listaFiltro)?.nome}
+        onConcluido={carregar}
       />
     </CRMLayout>
   );

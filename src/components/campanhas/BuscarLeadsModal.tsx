@@ -261,6 +261,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
     try {
       let novos = 0;
       let jaExistiam = 0;
+      let vinculados = 0;
 
       if (comTel.length) {
         const token = getAuthToken();
@@ -273,6 +274,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
         const json = await res.json();
         novos += Number(json.inseridos) || 0;
         jaExistiam += Number(json.jaExistiam) || 0;
+        vinculados += Number(json.vinculados) || 0;
       }
 
       if (semTel.length) {
@@ -281,7 +283,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
         novos += semTel.length;
       }
 
-      return { novos, jaExistiam, duplicadosNaBusca };
+      return { novos, jaExistiam, vinculados, duplicadosNaBusca };
     } catch (err: unknown) {
       toast.error(`Erro ao importar: ${err instanceof Error ? err.message : String(err)}`);
       return undefined;
@@ -295,6 +297,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
     if (!r) return;
     const partes = [`${r.novos} novos salvos em Leads`];
     if (r.jaExistiam) partes.push(`${r.jaExistiam} já existiam (mantidos como estavam)`);
+    if (r.vinculados) partes.push(`${r.vinculados} vinculados à lista`);
     if (r.duplicadosNaBusca) partes.push(`${r.duplicadosNaBusca} repetidos na busca`);
     if (r.novos) toast.success(partes.join(" · "));
     else toast.info(partes.join(" · "));
@@ -322,19 +325,13 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
       if (errLista || !lista) throw new Error(errLista?.message ?? "Erro ao criar lista");
 
       // 2. Importar contatos nessa lista
-      // Só celulares (fixo não recebe WhatsApp). Contato que já existia na conta fica de fora da
-      // lista nova — total_leads reflete só quem de fato entrou nela.
+      // Só celulares (fixo não recebe WhatsApp). Contato que já existia na conta é vinculado à lista
+      // nova (N:N) sem ser alterado — total_leads = novos + vinculados.
       const imp = await importarContatos(lista.id, true);
       if (!imp) throw new Error("Falha ao importar os contatos");
-      const total = imp.novos;
-      if (!total) {
-        throw new Error(
-          imp.jaExistiam
-            ? `Todos os ${imp.jaExistiam} celulares selecionados já existem nos seus contatos — nenhum lead novo pra esse disparo.`
-            : "Nenhum contato importado"
-        );
-      }
-      if (imp.jaExistiam) toast.info(`${imp.jaExistiam} contatos já existiam e ficaram de fora do disparo`);
+      const total = imp.novos + imp.vinculados;
+      if (!total) throw new Error("Nenhum contato importado");
+      if (imp.jaExistiam) toast.info(`${imp.jaExistiam} contatos já existiam na sua base e foram vinculados à lista (sem alteração)`);
 
       // 3. Criar disparo (rascunho)
       const { data: disparo, error: errDisparo } = await api

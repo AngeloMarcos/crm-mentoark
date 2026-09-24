@@ -2415,5 +2415,135 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS fixada_por UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
   log.info('MIGRATIONS', 'whatsapp_messages: mensagens fixadas (CRM-only) OK');
 
+  // ── Módulo de Higienização de Listas (Fases 1 e 2) ─────────────────────────────────────
+  // Só aditivo: colunas novas com default, tabelas novas. Nada existente é alterado ou apagado.
+  // telefone/nome originais nunca são sobrescritos: a versão normalizada/limpa vive em colunas
+  // próprias, então desfazer = ignorar as colunas novas.
+  try {
+    const colunasContatos = [
+      'telefone_original TEXT',
+      'telefone_normalizado TEXT',
+      'tipo_telefone TEXT',
+      'primeiro_nome TEXT',
+      'nome_confiavel BOOLEAN',
+      "whatsapp_status TEXT NOT NULL DEFAULT 'pendente'",
+      'whatsapp_jid TEXT',
+      'whatsapp_verificado_em TIMESTAMPTZ',
+      'is_business BOOLEAN',
+      'business_categoria TEXT',
+      'business_descricao TEXT',
+      'business_site TEXT',
+      'business_email TEXT',
+      'enriquecido_em TIMESTAMPTZ',
+    ];
+    for (const col of colunasContatos) {
+      await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ${col}`);
+    }
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_user_tel_norm ON contatos (user_id, telefone_normalizado) WHERE telefone_normalizado IS NOT NULL`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_user_wa_status ON contatos (user_id, whatsapp_status)`);
+    // Índice parcial que torna barata a varredura de contatos ainda não normalizados
+    // (qualquer ponto do sistema que insira contato sem normalizar é apanhado por ela).
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_tel_pendente ON contatos (id) WHERE tipo_telefone IS NULL AND telefone IS NOT NULL`);
+
+    // N:N contato x lista. contatos.lista_id continua existindo por compatibilidade
+    // (lista principal); o trigger abaixo garante que ela esteja sempre refletida aqui.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS contato_listas (
+        contato_id  UUID        NOT NULL REFERENCES contatos(id) ON DELETE CASCADE,
+        lista_id    UUID        NOT NULL REFERENCES listas(id)   ON DELETE CASCADE,
+        user_id     UUID        NOT NULL,
+        origem      TEXT,
+        importado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (contato_id, lista_id)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contato_listas_lista ON contato_listas (lista_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contato_listas_user ON contato_listas (user_id)`);
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION contatos_sync_contato_listas() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.lista_id IS NOT NULL THEN
+          INSERT INTO contato_listas (contato_id, lista_id, user_id, origem)
+          VALUES (NEW.id, NEW.lista_id, NEW.user_id, 'lista_principal')
+          ON CONFLICT (contato_id, lista_id) DO NOTHING;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await pool.query(`DROP TRIGGER IF EXISTS trg_contatos_sync_listas ON contatos`);
+    await pool.query(`
+      CREATE TRIGGER trg_contatos_sync_listas
+      AFTER INSERT OR UPDATE OF lista_id ON contatos
+      FOR EACH ROW EXECUTE FUNCTION contatos_sync_contato_listas()
+    `);
+    await pool.query(`
+      INSERT INTO contato_listas (contato_id, lista_id, user_id, origem)
+      SELECT id, lista_id, user_id, 'legado' FROM contatos WHERE lista_id IS NOT NULL
+      ON CONFLICT (contato_id, lista_id) DO NOTHING
+    `);
+
+    // Telefone editado: invalida a normalização e a validação anteriores, e a varredura de
+    // pendentes recalcula. Só dispara quando o telefone realmente muda.
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION contatos_reset_normalizacao() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.telefone IS DISTINCT FROM OLD.telefone THEN
+          NEW.tipo_telefone := NULL;
+          NEW.telefone_normalizado := NULL;
+          NEW.whatsapp_status := 'pendente';
+          NEW.whatsapp_jid := NULL;
+          NEW.whatsapp_verificado_em := NULL;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await pool.query(`DROP TRIGGER IF EXISTS trg_contatos_reset_normalizacao ON contatos`);
+    await pool.query(`
+      CREATE TRIGGER trg_contatos_reset_normalizacao
+      BEFORE UPDATE OF telefone ON contatos
+      FOR EACH ROW EXECUTE FUNCTION contatos_reset_normalizacao()
+    `);
+
+    // Fila de jobs em Postgres (FOR UPDATE SKIP LOCKED) — retomável após queda: um job
+    // running sem heartbeat recente volta pra queued e o handler é idempotente.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS higienizacao_jobs (
+        id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id       UUID        NOT NULL,
+        tipo          TEXT        NOT NULL DEFAULT 'higienizar',
+        status        TEXT        NOT NULL DEFAULT 'queued',
+        params        JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        etapa         TEXT,
+        total         INTEGER     NOT NULL DEFAULT 0,
+        processados   INTEGER     NOT NULL DEFAULT 0,
+        resultado     JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        erro          TEXT,
+        cancelar      BOOLEAN     NOT NULL DEFAULT false,
+        heartbeat_at  TIMESTAMPTZ,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        started_at    TIMESTAMPTZ,
+        finished_at   TIMESTAMPTZ,
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_higienizacao_jobs_fila ON higienizacao_jobs (status, created_at)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_higienizacao_jobs_user ON higienizacao_jobs (user_id, created_at DESC)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS higienizacao_config (
+        user_id                 UUID        PRIMARY KEY,
+        revalidar_dias          INTEGER     NOT NULL DEFAULT 30,
+        validacoes_por_min      INTEGER     NOT NULL DEFAULT 6,
+        enriquecimentos_por_min INTEGER     NOT NULL DEFAULT 30,
+        updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    log.info('MIGRATIONS', 'higienizacao (colunas de contatos, contato_listas, higienizacao_jobs, higienizacao_config) OK');
+  } catch (err: any) {
+    log.error('MIGRATIONS', 'Falha na migration de higienização', { err: err?.message, stack: err?.stack });
+  }
+
   log.info('MIGRATIONS', 'OK');
 }
