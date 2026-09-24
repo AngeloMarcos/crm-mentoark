@@ -66,7 +66,26 @@ export async function migrarRadar(pool: Pool): Promise<void> {
       )
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_radar_grupos_user_status ON radar_grupos (user_id, status, created_at DESC)`);
-    log.info('MIGRATIONS', 'radar (radar_nichos, radar_buscas, radar_grupos) OK');
+    // Etapa 2: pré-visualização do convite (sem entrar) e score. `nome` passa a guardar SÓ o nome real
+    // do grupo (vindo da Evolution); o título da página onde o link foi achado vai para titulo_origem.
+    const colunas = [
+      'titulo_origem TEXT', 'jid TEXT', 'participantes INTEGER', 'criado_no_whatsapp TIMESTAMPTZ',
+      'link_ativo BOOLEAN', 'somente_admins BOOLEAN', 'aprovacao_admin BOOLEAN', 'validado_em TIMESTAMPTZ',
+      'erro_validacao TEXT', 'score INTEGER', 'score_motivos JSONB', 'avaliado_em TIMESTAMPTZ',
+    ];
+    for (const c of colunas) await pool.query(`ALTER TABLE radar_grupos ADD COLUMN IF NOT EXISTS ${c}`);
+    await pool.query(
+      `UPDATE radar_grupos SET titulo_origem = nome, nome = NULL
+        WHERE fonte = 'busca' AND titulo_origem IS NULL AND validado_em IS NULL AND nome IS NOT NULL`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_radar_grupos_score ON radar_grupos (user_id, score DESC NULLS LAST)`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS radar_score_config (
+        user_id    UUID        PRIMARY KEY,
+        pesos      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    log.info('MIGRATIONS', 'radar (radar_nichos, radar_buscas, radar_grupos, radar_score_config) OK');
   } catch (err: any) {
     log.error('MIGRATIONS', 'Falha na migration do radar', { err: err?.message, stack: err?.stack });
   }

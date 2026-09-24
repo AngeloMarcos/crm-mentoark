@@ -1,3 +1,5 @@
+import { NEGATIVAS_PADRAO } from './scoring';
+
 export interface NichoPadrao {
   nome: string;
   termos_busca: string[];
@@ -5,12 +7,6 @@ export interface NichoPadrao {
   palavras_negativas: string[];
   regioes: string[];
 }
-
-/** Palavras que indicam grupo de consumidor/promoção — ruim para captação B2B. Usadas na Etapa 2 (score). */
-export const NEGATIVAS_PADRAO = [
-  'promoção', 'promocao', 'achadinhos', 'cupom', 'ofertas', 'sorteio', 'vagas', 'emprego',
-  'ganhe dinheiro', 'apostas', 'bets', 'pix', 'figurinhas', 'amizade', 'moradores',
-];
 
 const SP = ['São Paulo', 'Campinas', 'Guarulhos', 'Santos'];
 

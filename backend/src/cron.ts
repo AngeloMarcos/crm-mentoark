@@ -6,6 +6,8 @@ import { retentarMidiaPendente } from './services/mediaRetry';
 import { recalcularTodosScores } from './services/instanceScore';
 import { processarMaturador } from './services/maturadorProcessor';
 import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
+import { enfileirarValidacao } from './radar/fila';
+import { configLeitura } from './radar/validacao';
 
 // [AUDITORIA] FIX APLICADO (Sprint Limpeza de Disco, 2026-08-23): dias de retenção pra mídia
 // recebida (áudio/imagem/vídeo/documento) salva em disco — configurável via env pra poder
@@ -20,6 +22,26 @@ const DIAS_RETENCAO_MIDIA = Number(process.env.DIAS_RETENCAO_MIDIA_WHATSAPP) || 
 const HORAS_RETENCAO_VARIANTES = Number(process.env.HORAS_RETENCAO_VARIANTES_IMAGEM) || 12;
 
 export function initCronJobs() {
+  // Radar de Grupos: revalida o catálogo (link ainda ativo? tamanho mudou?) — só leitura de convite, sem
+  // entrar em nada. Só roda com instância de leitura configurada; lote pequeno e ritmo baixo na fila.
+  cron.schedule('30 4 * * *', async () => {
+    try {
+      if (!configLeitura()) return;
+      const lote = Number(process.env.RADAR_REVALIDAR_LOTE) || 40;
+      const dias = Number(process.env.RADAR_REVALIDAR_DIAS) || 7;
+      const r = await pool.query(
+        `SELECT id FROM radar_grupos WHERE plataforma = 'whatsapp' AND status IN ('descoberto','aprovado')
+           AND (validado_em IS NULL OR validado_em < now() - make_interval(days => $1))
+         ORDER BY validado_em NULLS FIRST LIMIT $2`, [dias, lote]);
+      if (r.rows.length) {
+        await enfileirarValidacao(r.rows.map((x: any) => x.id));
+        log.info('CRON', 'Radar: revalidação de convites enfileirada', { grupos: r.rows.length });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro na revalidação do Radar', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Todo dia às 03:00 (horário de Brasília) — Limpeza diária de tabelas de crescimento
   cron.schedule('0 3 * * *', async () => {
     try {

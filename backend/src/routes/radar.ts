@@ -4,7 +4,9 @@ import { randomUUID } from 'crypto';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { configProviderDoAmbiente, consultasUsadasHoje, gerarConsultas, LIMITES, semearNichosSeVazio } from '../radar/busca';
-import { enfileirarBusca, memoriaRedis, redisConfigurado } from '../radar/fila';
+import { enfileirarBusca, enfileirarValidacao, memoriaRedis, redisConfigurado } from '../radar/fila';
+import { carregarPesos, configLeitura, pontuarTodos } from '../radar/validacao';
+import { mesclarPesos } from '../radar/scoring';
 import { importarCsv } from '../radar/importarPlanilha';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -25,6 +27,7 @@ export default function radarRouter(pool: Pool): Router {
         consultas_hoje: usadas, limite_consultas_dia: LIMITES.consultasPorDia(),
         redis: await memoriaRedis(),
         // Crawler de diretórios fica desligado por padrão; uso depende dos termos de cada site.
+        leitura_convites: { configurada: !!configLeitura(), instancia: configLeitura()?.instancia ?? null },
         crawler_diretorios: false,
       });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -134,7 +137,7 @@ export default function radarRouter(pool: Pool): Router {
   // ── Catálogo de grupos ───────────────────────────────────────────────────────────────────────
   router.get('/grupos', async (req: AuthRequest, res) => {
     try {
-      const { status, nicho_id, plataforma } = req.query as Record<string, string>;
+      const { status, nicho_id, plataforma, order, min_score } = req.query as Record<string, string>;
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Math.max(Number(req.query.offset) || 0, 0);
       const w = ['g.user_id = $1'];
@@ -142,12 +145,57 @@ export default function radarRouter(pool: Pool): Router {
       if (status) { v.push(status); w.push(`g.status = $${v.length}`); }
       if (plataforma) { v.push(plataforma); w.push(`g.plataforma = $${v.length}`); }
       if (nicho_id && UUID_RE.test(nicho_id)) { v.push(nicho_id); w.push(`g.nicho_id = $${v.length}`); }
+      if (min_score && Number.isFinite(Number(min_score))) { v.push(Number(min_score)); w.push(`g.score >= ${v.length}`); }
       v.push(limit, offset);
       const r = await pool.query(
         `SELECT g.*, n.nome AS nicho_nome, COUNT(*) OVER()::int AS total
            FROM radar_grupos g LEFT JOIN radar_nichos n ON n.id = g.nicho_id
-          WHERE ${w.join(' AND ')} ORDER BY g.created_at DESC LIMIT $${v.length - 1} OFFSET $${v.length}`, v);
+          WHERE ${w.join(' AND ')} ORDER BY ${order === 'score' ? 'g.score DESC NULLS LAST, g.created_at DESC' : 'g.created_at DESC'} LIMIT $${v.length - 1} OFFSET $${v.length}`, v);
       res.json({ total: r.rows[0]?.total ?? 0, itens: r.rows });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+
+  // ── Pré-visualização do convite (sem entrar): nome, descrição, participantes, link ativo + score ──
+  router.post('/grupos/validar', async (req: AuthRequest, res) => {
+    try {
+      if (!configLeitura()) {
+        return res.status(409).json({ error: 'Nenhuma instância configurada para ler convites (RADAR_EVOLUTION_INSTANCE, EVOLUTION_API_URL, EVOLUTION_API_KEY).' });
+      }
+      const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown) => UUID_RE.test(String(x))) : [];
+      const limite = Math.max(1, Math.min(Number(req.body?.limite) || 20, 100));
+      const r = ids.length
+        ? await pool.query(`SELECT id FROM radar_grupos WHERE user_id = $1 AND id = ANY($2::uuid[]) AND plataforma = 'whatsapp' AND status <> 'rejeitado'`, [req.userId, ids])
+        : await pool.query(
+            `SELECT id FROM radar_grupos WHERE user_id = $1 AND plataforma = 'whatsapp' AND validado_em IS NULL AND status IN ('descoberto','aprovado')
+              ORDER BY created_at LIMIT $2`, [req.userId, limite]);
+      if (!r.rows.length) return res.json({ enfileirados: 0 });
+      const modo = await enfileirarValidacao(r.rows.map((x: any) => x.id));
+      res.status(202).json({ enfileirados: r.rows.length, modo });
+    } catch (err: any) {
+      log.error('RADAR', 'erro ao enfileirar validação', { err: err?.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Recalcula o score de todos os grupos já lidos (após editar nichos/pesos). Não chama a Evolution.
+  router.post('/grupos/pontuar', async (req: AuthRequest, res) => {
+    try { res.json({ recalculados: await pontuarTodos(pool, req.userId!) }); }
+    catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  router.get('/pesos', async (req: AuthRequest, res) => {
+    try { res.json(await carregarPesos(pool, req.userId!)); }
+    catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  router.put('/pesos', async (req: AuthRequest, res) => {
+    try {
+      const pesos = mesclarPesos(req.body);
+      await pool.query(
+        `INSERT INTO radar_score_config (user_id, pesos) VALUES ($1,$2::jsonb)
+         ON CONFLICT (user_id) DO UPDATE SET pesos = EXCLUDED.pesos, updated_at = now()`, [req.userId, JSON.stringify(pesos)]);
+      res.json(pesos);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 

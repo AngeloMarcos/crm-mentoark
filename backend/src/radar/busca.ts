@@ -67,7 +67,7 @@ export async function executarBusca(pool: Pool, buscaId: string): Promise<void> 
     let existentes = 0;
     for (const g of resumo.grupos) {
       const ins = await pool.query(
-        `INSERT INTO radar_grupos (user_id, plataforma, codigo_convite, url, nome, nicho_id, fonte, busca_id, consulta)
+        `INSERT INTO radar_grupos (user_id, plataforma, codigo_convite, url, titulo_origem, nicho_id, fonte, busca_id, consulta)
          VALUES ($1,$2,$3,$4,$5,$6,'busca',$7,$8)
          ON CONFLICT (user_id, plataforma, codigo_convite) DO NOTHING`,
         [busca.user_id, g.link.plataforma, g.link.codigo, g.link.url, g.titulo.slice(0, 200) || null, nicho?.id ?? null, busca.id, g.consulta],
