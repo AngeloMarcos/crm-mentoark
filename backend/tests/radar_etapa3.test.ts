@@ -87,6 +87,7 @@ describe('termoDaConsulta / pesos', () => {
     expect(termoDaConsulta('corretores de imóveis "chat.whatsapp.com" São Paulo')).toEqual(['corretores de imóveis']);
     expect(termoDaConsulta('dentistas "t.me"')).toEqual(['dentistas']);
     expect(termoDaConsulta(null)).toEqual([]);
+    expect(termoDaConsulta('diretorio:https://gruposdezap.com/grupos-whats/olx-sao-paulo/')).toEqual([]);
   });
   it('auto_rejeitar_baixa_aderencia vem ligado e pode ser desligado', () => {
     expect(PESOS_PADRAO.auto_rejeitar_baixa_aderencia).toBe(1);

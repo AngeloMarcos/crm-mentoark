@@ -153,3 +153,19 @@ export function rotuloDescarte(m: string | null): string | null {
   if (m.startsWith("baixa_aderencia")) return "Não condiz com o nicho";
   return m;
 }
+
+/**
+ * Texto pronto para mandar ao cliente: só grupos vivos e que condizem com o nicho, do melhor para o pior.
+ * Não promete nº de participantes nem contatos: mostra ONDE estão as pessoas (nome + link de convite).
+ */
+export function listaParaCliente(grupos: Grupo[], titulo?: string, max = 30): { texto: string; total: number } {
+  const bons = grupos
+    .filter(g => g.plataforma === "whatsapp" && g.nome && g.link_ativo !== false
+      && !["invalido", "rejeitado"].includes(g.status) && (g.aderencia === "alta" || g.aderencia === "media"))
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+    .slice(0, max);
+  if (!bons.length) return { texto: "", total: 0 };
+  const linhas = bons.map(g => `• ${g.nome}\n  ${g.url}`);
+  const cab = titulo ? `Grupos de WhatsApp — ${titulo}` : "Grupos de WhatsApp para o seu segmento";
+  return { texto: `${cab}\n(${bons.length} grupos com link ativo, conferidos)\n\n${linhas.join("\n\n")}`, total: bons.length };
+}

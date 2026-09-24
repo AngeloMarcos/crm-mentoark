@@ -58,7 +58,8 @@ async function nichoDoGrupo(pool: Pool, userId: string, nichoId: string | null):
 
 /** O termo usado na busca que achou o grupo ("corretores" em `corretores "chat.whatsapp.com" São Paulo`). */
 export function termoDaConsulta(consulta: string | null): string[] {
-  if (!consulta) return [];
+  // Grupos vindos de raspagem guardam 'diretorio:<url da página>' — isso NÃO é o termo buscado.
+  if (!consulta || consulta.startsWith('diretorio:')) return [];
   const t = consulta.split(/\s"(?:chat\.whatsapp\.com|t\.me)"/)[0].trim();
   return t ? [t] : [];
 }

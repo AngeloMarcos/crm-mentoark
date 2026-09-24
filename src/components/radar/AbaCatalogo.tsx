@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ExternalLink, Eye, Link2, Loader2, RefreshCw, X } from "lucide-react";
+import { Check, ClipboardCopy, ExternalLink, Eye, Link2, Loader2, RefreshCw, X } from "lucide-react";
 import { api } from "@/integrations/database/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Grupo, Nicho, ROTULO_ADERENCIA, StatusRadar, rotuloDescarte, rotuloMotivo, statusLabel } from "./tipos";
+import { Grupo, Nicho, ROTULO_ADERENCIA, StatusRadar, listaParaCliente, rotuloDescarte, rotuloMotivo, statusLabel } from "./tipos";
 
 const POR_PAGINA = 25;
 const TODOS = "todos";
@@ -81,6 +81,22 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
     onError: (e: any) => toast.error(e?.message ?? "Não foi possível enfileirar a verificação"),
   });
 
+  const copiarLista = useMutation({
+    mutationFn: async () => {
+      const p = new URLSearchParams({ order: "score", limit: "200" });
+      if (nicho !== TODOS) p.set("nicho_id", nicho);
+      const { data } = await api.get(`/api/radar/grupos?${p}`);
+      const nomeNicho = (nichos.data ?? []).find(n => n.id === nicho)?.nome;
+      return listaParaCliente((data as { itens: Grupo[] }).itens, nomeNicho);
+    },
+    onSuccess: async ({ texto, total }) => {
+      if (!total) { toast.warning("Nenhum grupo pronto ainda: verifique os links primeiro (só entram grupos vivos que condizem com o nicho)."); return; }
+      try { await navigator.clipboard.writeText(texto); toast.success(`Lista com ${total} grupos copiada. Cole na conversa com o cliente.`); }
+      catch { toast.error("O navegador bloqueou a cópia. Tente de novo."); }
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Não foi possível montar a lista"),
+  });
+
   const total = grupos.data?.total ?? 0;
   const leituraOk = status?.leitura_convites.configurada ?? false;
   const paginas = Math.max(1, Math.ceil(total / POR_PAGINA));
@@ -133,6 +149,11 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-sm text-muted-foreground">{total} grupo(s) no catálogo</span>
         <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" disabled={copiarLista.isPending} onClick={() => copiarLista.mutate()}
+            title="Copia o texto pronto com os melhores grupos vivos (do nicho filtrado) para mandar ao cliente">
+            {copiarLista.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ClipboardCopy className="mr-2 h-4 w-4" />}
+            Copiar lista para o cliente
+          </Button>
           <Button size="sm" disabled={verificar.isPending} onClick={() => verificar.mutate(undefined)}
             title="Abre a página pública de cada convite: descarta link expirado e confere se o nome condiz com o nicho (sem instância, sem entrar)">
             {verificar.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Link2 className="mr-2 h-4 w-4" />}
