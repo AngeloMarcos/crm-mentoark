@@ -83,6 +83,8 @@ import { initCronJobs } from './cron';
 import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
 import { processarFilaHigienizacao } from './services/higienizacao';
+import radarRouter from './routes/radar';
+import { iniciarFilaRadar } from './radar/fila';
 import higienizacaoRouter from './routes/higienizacao';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
@@ -437,6 +439,7 @@ for (const table of SHARED_TABLES) {
 
 // Specialized routes
 app.use('/api/higienizacao', higienizacaoRouter(pool));
+app.use('/api/radar', radarRouter(pool));
 app.use('/api/contatos', contatosRouter(pool));
 app.use('/api/disparos', disparosRouter(pool));
 // [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): prefixo próprio
@@ -638,6 +641,7 @@ app.listen(PORT, '0.0.0.0', () => {
 
   // Fila de higienização (Postgres, SKIP LOCKED): singleflight interno em processarFilaHigienizacao
   setInterval(() => { processarFilaHigienizacao(pool).catch(() => {}); }, 3000);
+  iniciarFilaRadar(pool);
 });
 
 export default app;

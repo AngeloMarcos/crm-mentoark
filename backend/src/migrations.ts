@@ -16,6 +16,7 @@
  */
 
 import { Pool } from 'pg';
+import { migrarRadar } from './radar/migrations';
 import { log } from './logger';
 
 export async function runMigrations(pool: Pool): Promise<void> {
@@ -2565,6 +2566,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
   } catch (err: any) {
     log.error('MIGRATIONS', 'Falha na migration de higienização (fase 3)', { err: err?.message, stack: err?.stack });
   }
+
+  await migrarRadar(pool);
 
   log.info('MIGRATIONS', 'OK');
 }
