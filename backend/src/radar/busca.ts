@@ -5,7 +5,7 @@ import { criarProvider } from './providers';
 import { coletarLinks, statusDaBusca } from './searchProvider';
 import { pausaAtiva, pausar, textoPausa } from './validacao';
 import { NICHOS_PADRAO } from './nichosPadrao';
-import { ehDiretorio, listaDiretorios, rasparPagina } from './raspagem';
+import { ehDiretorio, hostDe, listaDiretorios, pareceListaDeGrupos, rasparPagina } from './raspagem';
 import { randomUUID } from 'crypto';
 
 export function configProviderDoAmbiente() {
@@ -29,12 +29,13 @@ export const RASPAGEM = {
 /** Consultas do nicho (ou do termo customizado), já com diretórios e DDDs quando a raspagem está ligada. */
 export function consultasDoNicho(
   nicho: { termos_busca: string[]; regioes: string[]; ddds?: string[] },
-  opts: { termo?: string; incluirTelegram?: boolean; max?: number; deslocamento?: number } = {},
+  opts: { termo?: string; incluirTelegram?: boolean; max?: number; deslocamento?: number; diretorios?: string[] } = {},
 ): string[] {
   const base = { nome: '', ...(opts.termo ? { ...nicho, termos_busca: [opts.termo] } : nicho) };
   const todas = gerarConsultas(base, {
     incluirTelegram: opts.incluirTelegram,
-    diretorios: RASPAGEM.ativa() ? RASPAGEM.diretorios() : [],
+    diretorios: RASPAGEM.ativa() ? (opts.diretorios ?? RASPAGEM.diretorios()) : [],
+    listas: RASPAGEM.ativa(),
     ddds: nicho.ddds ?? [],
   });
   if (!todas.length) return [];
@@ -42,6 +43,25 @@ export function consultasDoNicho(
   // Deslocamento: as buscas agendadas giram pela lista para não repetir sempre as mesmas primeiras consultas.
   const ini = (opts.deslocamento ?? 0) % todas.length;
   return [...todas.slice(ini), ...todas.slice(0, ini)].slice(0, max);
+}
+
+/**
+ * Hosts que já provaram não render: 3+ páginas lidas com sucesso e NENHUM convite em nenhuma delas (últimos 30 dias).
+ * Evita gastar consulta e tempo de novo em site que esconde o convite atrás de clique/login.
+ */
+export async function hostsImprodutivos(pool: Pool, userId: string): Promise<Set<string>> {
+  const { rows } = await pool.query(
+    `SELECT regexp_replace(split_part(url, '/', 3), '^www\\.', '') AS host,
+            count(*) FILTER (WHERE status = 'ok')::int AS lidas, COALESCE(sum(links), 0)::int AS convites
+       FROM radar_paginas WHERE user_id = $1 AND raspada_em > now() - interval '30 days'
+      GROUP BY 1 HAVING count(*) FILTER (WHERE status = 'ok') >= 3 AND COALESCE(sum(links), 0) = 0`, [userId]);
+  return new Set(rows.map((r: any) => String(r.host)));
+}
+
+/** Diretórios configurados menos os que já provaram não render. */
+export async function diretoriosUteis(pool: Pool, userId: string): Promise<string[]> {
+  const ruins = await hostsImprodutivos(pool, userId);
+  return RASPAGEM.diretorios().filter(d => !ruins.has(d));
 }
 
 export async function paginasRaspadasHoje(pool: Pool, userId: string): Promise<number> {
@@ -108,7 +128,7 @@ export async function executarBusca(
     const resumo = await coletarLinks(provider, consultas, {
       maxChamadas: busca.max_consultas,
       maxCustoUsd: LIMITES.custoPorBuscaUsd(),
-      ehDiretorio: RASPAGEM.ativa() ? (u: string) => ehDiretorio(u, RASPAGEM.diretorios()) : undefined,
+      ehDiretorio: RASPAGEM.ativa() ? (u: string, t: string) => ehDiretorio(u, RASPAGEM.diretorios()) || pareceListaDeGrupos(u, t) : undefined,
     });
 
     // Limite/chave/crédito: pausa o Radar por um tempo (persistido) para não martelar o provedor.
@@ -139,8 +159,10 @@ export async function executarBusca(
       try {
         const feitasHoje = await paginasRaspadasHoje(pool, busca.user_id);
         let restanteDia = Math.max(0, RASPAGEM.porDia() - feitasHoje);
+        const ruins = await hostsImprodutivos(pool, busca.user_id);
         for (const pg of resumo.paginasDiretorio.slice(0, RASPAGEM.porBusca())) {
           if (restanteDia <= 0) break;
+          if (ruins.has(hostDe(pg.url) ?? '')) continue; // site que já provou esconder o convite
           const jaFeita = await pool.query(
             `SELECT 1 FROM radar_paginas WHERE user_id = $1 AND url = $2 AND status = 'ok' AND raspada_em > now() - interval '7 days' LIMIT 1`, [busca.user_id, pg.url]);
           if (jaFeita.rows.length) continue;
@@ -208,7 +230,7 @@ export async function criarBuscaAgendada(
   if (restante <= 0) return false;
   const max = Math.min(Number(process.env.RADAR_AGENDADA_MAX) || 6, restante);
   const passo = Math.max(1, max);
-  const consultas = consultasDoNicho(nicho, { max, deslocamento: (nicho.rodada ?? 0) * passo });
+  const consultas = consultasDoNicho(nicho, { max, deslocamento: (nicho.rodada ?? 0) * passo, diretorios: await diretoriosUteis(pool, nicho.user_id) });
   if (!consultas.length) return false;
   const ins = await pool.query(
     `INSERT INTO radar_buscas (user_id, request_id, nicho_id, consultas, max_consultas) VALUES ($1,$2,$3,$4::jsonb,$5) RETURNING id`,

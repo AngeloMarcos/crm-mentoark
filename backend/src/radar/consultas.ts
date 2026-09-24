@@ -11,6 +11,8 @@ export interface OpcoesConsultas {
   diretorios?: string[];
   /** DDDs da região/nicho: gera `termo "chat.whatsapp.com" DDD 11` como variação. */
   ddds?: string[];
+  /** Páginas que listam grupos (blogs, entidades, associações): "lista de links de grupos de whatsapp <termo>". */
+  listas?: boolean;
   /** Teto de consultas devolvidas (o teto de custo real é aplicado de novo na execução). */
   max?: number;
 }
@@ -34,6 +36,12 @@ export function gerarConsultas(nicho: NichoBusca, opts: OpcoesConsultas = {}): s
     for (const t of termos) {
       add(`site:${d} ${t}`);
       for (const r of regioes) add(`site:${d} ${t} ${r.replace(/"/g, '')}`);
+    }
+  }
+  if (opts.listas) {
+    for (const t of termos) {
+      add(`lista de links de grupos de whatsapp ${t}`);
+      for (const r of regioes) add(`grupos de whatsapp ${t} ${r.replace(/"/g, '')} links`);
     }
   }
   for (const ddd of (opts.ddds ?? []).map(x => x.replace(/\D/g, '')).filter(x => /^\d{2}$/.test(x))) {

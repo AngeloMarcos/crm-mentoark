@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  _resetRaspagem, ehDiretorio, extrairLinksDaPagina, listaDiretorios, rasparPagina, regrasDoRobots, robotsPermite, DIRETORIOS_PADRAO,
+  _resetRaspagem, ehDiretorio, extrairLinksDaPagina, listaDiretorios, pareceListaDeGrupos, rasparPagina, regrasDoRobots, robotsPermite, DIRETORIOS_PADRAO,
 } from '../src/radar/raspagem';
 
 const A = 'AAAAAAAAAAAAAAAAAAAAAA';   // 22
@@ -108,5 +108,23 @@ describe('rasparPagina', () => {
     await rasparPagina('https://d6.test/a', { fetchImpl: f, delayMs: 60 });
     await rasparPagina('https://d6.test/b', { fetchImpl: f, delayMs: 60 });
     expect(t[1] - t[0]).toBeGreaterThanOrEqual(50);
+  });
+});
+
+describe('pareceListaDeGrupos (padrões vistos em sites reais)', () => {
+  it('reconhece páginas que listam grupos', () => {
+    expect(pareceListaDeGrupos('https://www.corretoresnobrasil.com.br/grupos', 'Grupos de corretores')).toBe(true);
+    expect(pareceListaDeGrupos('https://creci-pe.gov.br/participe-dos-grupos-oficiais-no-whatsapp/', 'Participe')).toBe(true);
+    expect(pareceListaDeGrupos('https://x.com/a', '+284 Links de Grupos de Imobiliária para WhatsApp')).toBe(true);
+    expect(pareceListaDeGrupos('https://x.com/a', 'Lista de grupos de WhatsApp para vendedores')).toBe(true);
+    expect(pareceListaDeGrupos('https://trabalhardigital.com.br/grupo/grupo-de-whatsapp-gestao-de-trafego/', 'Gestão')).toBe(true);
+  });
+  it('ignora páginas comuns e redes sociais', () => {
+    expect(pareceListaDeGrupos('https://blog.com/como-vender-imoveis', 'Como vender mais imóveis')).toBe(false);
+    expect(pareceListaDeGrupos('https://www.reddit.com/r/x/grupos-de-whatsapp', 'Grupos de whatsapp')).toBe(false);
+    expect(pareceListaDeGrupos('nao-url', '')).toBe(false);
+  });
+  it('o diretório fechado (gruposwhats.app) não está mais na lista padrão', () => {
+    expect(DIRETORIOS_PADRAO).not.toContain('gruposwhats.app');
   });
 });

@@ -166,3 +166,12 @@ describe('coletarLinks: páginas de diretório', () => {
     expect(r.grupos.map(x => x.link.codigo)).toEqual([C1]);
   });
 });
+
+describe('consultas: páginas que listam grupos', () => {
+  it('gera "lista de links de grupos de whatsapp <termo>" com e sem região', () => {
+    const q = gc({ nome: 'x', termos_busca: ['corretores'], regioes: ['São Paulo'] }, { listas: true });
+    expect(q).toContain('lista de links de grupos de whatsapp corretores');
+    expect(q).toContain('grupos de whatsapp corretores São Paulo links');
+    expect(gc({ nome: 'x', termos_busca: ['corretores'], regioes: [] }).some(x => x.startsWith('lista de links'))).toBe(false);
+  });
+});

@@ -6,9 +6,21 @@
 import { extrairLinks, LinkGrupo } from './extrairLinks';
 
 /** Hosts tratados como diretório quando não há configuração (RADAR_DIRETORIOS). */
+// gruposwhats.app ficou de fora de propósito: o convite só aparece depois de um clique (página intermediária), não no HTML.
 export const DIRETORIOS_PADRAO = [
-  'gruposwhats.app', 'gruposdewhats.com.br', 'gruposdezap.com', 'linkdegrupo.com.br', 'gruposbrasil.com.br',
+  'gruposdewhats.com.br', 'gruposdezap.com', 'linkdegrupo.com.br', 'gruposbrasil.com.br',
 ];
+
+/**
+ * A página parece uma LISTA de grupos (ex.: "Grupos de WhatsApp de corretores", "links de grupos", "participe dos
+ * grupos")? Testado com sites reais: páginas de nicho como essas expõem convites direto no HTML, mesmo sem ser diretório.
+ */
+export function pareceListaDeGrupos(url: string, titulo: string): boolean {
+  const alvo = `${titulo} ${(() => { try { return decodeURIComponent(new URL(url).pathname); } catch { return ''; } })()}`
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/(^|\W)(reddit|facebook|instagram|youtube|tiktok|linkedin|twitter)(\W|$)/.test(hostDe(url) ?? '')) return false;
+  return /grupos?[\s/_-]*(de[\s/_-]*)?(whats|zap)|links?[\s/_-]*(de|dos)[\s/_-]*grupos?|lista[\s/_-]*de[\s/_-]*grupos?|participe[\s/_-]*dos[\s/_-]*grupos|grupos[\s/_-]*oficiais|\/grupos?(\/|$)/.test(alvo);
+}
 
 export const USER_AGENT_RASPAGEM = 'MentoArkRadar/1.0 (+https://crm.mentoark.com.br)';
 

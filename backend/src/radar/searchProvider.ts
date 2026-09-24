@@ -32,7 +32,7 @@ export class RadarSearchError extends Error {
   }
 }
 
-export interface LimitesExecucao { maxChamadas: number; maxCustoUsd?: number; ehDiretorio?: (url: string) => boolean }
+export interface LimitesExecucao { maxChamadas: number; maxCustoUsd?: number; ehDiretorio?: (url: string, titulo: string) => boolean }
 
 export interface GrupoEncontrado {
   link: LinkGrupo;
@@ -69,7 +69,7 @@ export async function coletarLinks(
 
   const absorver = (consulta: string, resultados: ResultadoBusca[]) => {
     for (const res of resultados) {
-      if (limites.ehDiretorio?.(res.link) && !paginasVistas.has(res.link)) {
+      if (limites.ehDiretorio?.(res.link, res.titulo) && !paginasVistas.has(res.link)) {
         paginasVistas.add(res.link);
         r.paginasDiretorio.push({ url: res.link, titulo: res.titulo });
       }

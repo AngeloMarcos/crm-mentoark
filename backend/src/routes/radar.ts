@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { randomUUID } from 'crypto';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
-import { configProviderDoAmbiente, consultasDoNicho, consultasUsadasHoje, LIMITES, paginasRaspadasHoje, RASPAGEM, semearNichosSeVazio } from '../radar/busca';
+import { configProviderDoAmbiente, consultasDoNicho, diretoriosUteis, consultasUsadasHoje, LIMITES, paginasRaspadasHoje, RASPAGEM, semearNichosSeVazio } from '../radar/busca';
 import { enfileirarBusca, enfileirarLinkPublico, enfileirarValidacao, memoriaRedis, redisConfigurado } from '../radar/fila';
 import { carregarPesos, configLeitura, pausaAtiva, pontuarTodos, textoPausa } from '../radar/validacao';
 import { mesclarPesos } from '../radar/scoring';
@@ -121,7 +121,7 @@ export default function radarRouter(pool: Pool): Router {
 
       // Termo customizado substitui os termos do nicho (mantém as regiões do nicho).
       const termo = String(req.body?.termo ?? '').replace(/"/g, '').trim().slice(0, 120);
-      const consultas = consultasDoNicho(nicho, { termo: termo || undefined, incluirTelegram: !!incluir_telegram, max: maxConsultas });
+      const consultas = consultasDoNicho(nicho, { termo: termo || undefined, incluirTelegram: !!incluir_telegram, max: maxConsultas, diretorios: await diretoriosUteis(pool, userId) });
       if (!consultas.length) return res.status(400).json({ error: 'O nicho não tem termos de busca' });
 
       const ins = await pool.query(
