@@ -66,7 +66,6 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
-import { processarMensagemGrupoAutorizado } from '../services/grupoTarefaEngine';
 import { withTenantContext } from '../db';
 import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
@@ -792,6 +791,13 @@ export default function webhookRouter(pool: Pool): Router {
       if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio instance=${payload.instance}`); return; }
       if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}" instance=${payload.instance}`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
+      // Política do produto: o CRM não interage com grupos — nada é salvo e nenhuma IA/tarefa/encaminhamento
+      // roda. Grupos eram 59% das mensagens em produção. Reativável só por env explícita, pensada para o
+      // futuro módulo de prospecção (instância dedicada).
+      if (isGroup && process.env.WEBHOOK_PROCESSAR_GRUPOS !== 'true') {
+        wlog('WEBHOOK_DROP', `grupo ignorado (política) instance=${payload.instance}`);
+        return;
+      }
 
       const messageId = payload.data?.key?.id || '';
       if (!messageId) return;
@@ -1806,82 +1812,8 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
-      // Rota N8N: se agente tem n8n_webhook_url configurado, encaminha para lá.
-      // [AUDITORIA] FIX APLICADO (achado da revisão externa/Google AI Studio, rodada 2 - 2026-07-10):
-      // este bloco rodava DEPOIS do `if (isGroup) return;` abaixo, então mensagens de grupo
-      // nunca chegavam ao N8N do usuário — mesmo quando a intenção era só auditoria/enriquecimento
-      // via N8N, sem disparar a IA. Movido para antes do descarte de grupo: agora grupo com
-      // n8n_webhook_url configurado é encaminhado normalmente (e sai por aqui, sem tocar a IA);
-      // grupo sem N8N configurado continua caindo no `if (isGroup) return;` como antes.
-      if (n8nWebhookUrl) {
-        log.info('WEBHOOK', 'Roteando para N8N', { traceId, n8nWebhookUrl, isGroup });
-        // [AUDITORIA] BUG (achado 1 da revisão externa/Google AI Studio, sprint seguinte à
-        // Sprint 4): mesmo problema já corrigido no achado B da Sprint 4 (fetch nativo do Node
-        // sem timeout), mas aqui é mais grave — n8nWebhookUrl é configurado por qualquer usuário
-        // (agentes.n8n_webhook_url), então uma instância N8N lenta/instável de UM usuário pode
-        // prender sockets de saída e degradar a recepção de webhook pra todo mundo.
-        // [AUDITORIA] FIX APLICADO: mesmo padrão do achado B (Sprint 4) — AbortController com
-        // timeout, aqui 8s (N8N processa workflows, tende a ser mais lento que a Evolution).
-        const n8nController = new AbortController();
-        const n8nTimer = setTimeout(() => n8nController.abort(), 8000);
-        fetch(n8nWebhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            instancia, messageId, telefone, pushName, texto, tipo,
-            midiaUrl: midia.url || null, timestamp: tsVal, userId, remoteJid, isGroup,
-          }),
-          signal: n8nController.signal,
-        })
-          .catch(err => log.error('WEBHOOK', 'Erro ao encaminhar para N8N', { traceId, err: err.message }))
-          .finally(() => clearTimeout(n8nTimer));
-        return;
-      }
-
-      // Grupos não disparam IA automaticamente (só chega aqui se não há N8N configurado)
-      // [AUDITORIA] LÓGICA (Sprint Tarefa por Grupo, 2026-08-02): ÚNICA exceção controlada ao
-      // bloqueio de grupo — se o JID bater com uma linha `ativo=true` em `grupos_ia_permitidos`
-      // (portão, ver migrations.ts), dispara um handler ISOLADO (`grupoTarefaEngine.ts`, não a
-      // engine de atendimento 1:1) que decide se a mensagem é uma demanda de trabalho e, se for,
-      // cria uma tarefa por rodízio. Fire-and-forget (mesmo padrão de `processarComDebounce`
-      // logo abaixo) — o `return` do bloco de grupo acontece sempre, autorizado ou não, então
-      // grupo NUNCA cai no fluxo genérico de `processarComDebounce`/`agentEngine.ts`.
-      // Roda ANTES da whitelist de homologação logo abaixo, de propósito: aquela whitelist é
-      // sobre "não deixar a IA 1:1 responder um CONTATO real por engano em homolog" — não se
-      // aplica ao conceito de grupo (que nem tem um "telefone" real; `telefone` pra grupo é o
-      // ID do grupo, nunca bateria com uma whitelist de números de teste). O portão de grupo
-      // já é, por padrão, MAIS restritivo que essa whitelist (nenhuma linha ativa = bloqueado
-      // igual a hoje, em qualquer ambiente).
-      if (isGroup) {
-        // [AUDITORIA] FIX APLICADO (achado em teste real, 2026-08-03): antes o log abaixo
-        // ("fora do portão") era síncrono, disparado incondicionalmente logo após iniciar a
-        // query fire-and-forget — aparecia sempre, mesmo quando o grupo ESTAVA autorizado
-        // (o `.then()` ainda não tinha resolvido nesse ponto). IIFE com `await` deixa o log
-        // correto sem perder o padrão fire-and-forget (webhook não espera o resultado).
-        void (async () => {
-          try {
-            const permissaoRes = await pool.query(
-              `SELECT id FROM grupos_ia_permitidos WHERE user_id = $1 AND group_jid = $2 AND ativo = true LIMIT 1`,
-              [userId, remoteJid]
-            );
-            if (permissaoRes.rows.length) {
-              await processarMensagemGrupoAutorizado(pool, {
-                userId: userId as string,
-                instancia,
-                remoteJid,
-                texto: texto || '',
-                contatoNome: pushName || null,
-                contatoTelefone: senderPhone || null,
-              });
-            } else {
-              log.info('WEBHOOK', 'Grupo — mensagem salva, IA não processada (fora do portão de grupos_ia_permitidos)', { traceId, telefone });
-            }
-          } catch (err: any) {
-            log.error('WEBHOOK', 'Erro ao checar/processar grupo autorizado', { traceId, err: err?.message });
-          }
-        })();
-        return;
-      }
+      // O CRM não encaminha mais para N8N (removido da infraestrutura) e grupos nunca chegam aqui
+      // (descartados no topo do handler, ver `WEBHOOK_PROCESSAR_GRUPOS`).
 
       // [AUDITORIA] LÓGICA: Whitelist de segurança da IA — só em homologação (2026-07-22).
       // DATABASE_URL_MIGRATIONS só existe no .env de homolog (piloto de RLS, ver
