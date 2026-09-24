@@ -9,6 +9,7 @@ export function configProviderDoAmbiente() {
   return criarProvider({
     provider: process.env.RADAR_SEARCH_PROVIDER,
     serperKey: process.env.SERPER_API_KEY,
+    serperNum: Number(process.env.SERPER_NUM) || null,
     googleApiKey: process.env.GOOGLE_CSE_API_KEY,
     googleCx: process.env.GOOGLE_CSE_CX,
   });

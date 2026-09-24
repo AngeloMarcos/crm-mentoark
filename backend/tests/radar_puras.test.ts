@@ -31,13 +31,13 @@ describe('gerarConsultas', () => {
   const nicho = { nome: 'Imob', termos_busca: ['corretores', 'imobiliária'], regioes: ['São Paulo'] };
   it('gera termos sem região e com região', () => {
     const q = gerarConsultas(nicho);
-    expect(q[0]).toBe('"chat.whatsapp.com" corretores');
-    expect(q).toContain('"chat.whatsapp.com" corretores "São Paulo"');
+    expect(q[0]).toBe('corretores "chat.whatsapp.com"');
+    expect(q).toContain('corretores "chat.whatsapp.com" São Paulo');
   });
   it('respeita max e telegram opcional', () => {
     expect(gerarConsultas(nicho, { max: 2 })).toHaveLength(2);
-    expect(gerarConsultas(nicho, { incluirTelegram: true }).some(q => q.startsWith('"t.me"'))).toBe(true);
-    expect(gerarConsultas(nicho).some(q => q.startsWith('"t.me"'))).toBe(false);
+    expect(gerarConsultas(nicho, { incluirTelegram: true }).some(q => q.endsWith('"t.me"'))).toBe(true);
+    expect(gerarConsultas(nicho).some(q => q.endsWith('"t.me"'))).toBe(false);
   });
   it('não duplica', () => {
     expect(gerarConsultas({ nome: 'x', termos_busca: ['a', 'a'], regioes: [] })).toHaveLength(1);
@@ -93,7 +93,7 @@ describe('SerperProvider', () => {
     }) as any;
     const r = await new SerperProvider('k', { fetchImpl: f, maxPaginas: 1 }).buscar('q', 5);
     expect(r.resultados.map(x => x.link)).toEqual(['https://a.com', 'https://b.com']);
-    expect(corpo).toMatchObject({ q: 'q', gl: 'br', hl: 'pt-br', num: 100, page: 1 });
+    expect(corpo).toMatchObject({ q: 'q', gl: 'br', hl: 'pt-br', num: 10, page: 1 });
     expect(r.chamadas).toBe(1);
   });
   it('pagina até vir vazio ou até o limite de chamadas', async () => {

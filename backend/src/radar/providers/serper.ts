@@ -7,6 +7,8 @@ export interface OpcoesSerper {
   fetchImpl?: typeof fetch;
   /** Páginas por consulta (cada página é uma chamada paga). */
   maxPaginas?: number;
+  /** Resultados por página. O plano gratuito do Serper só aceita 10 (100 dá HTTP 400 enganoso); planos pagos aceitam até 100. */
+  num?: number;
   /** Backoff base para 429/5xx (ms). Testes passam 0. */
   backoffMs?: number;
 }
@@ -24,11 +26,13 @@ export class SerperProvider implements SearchProvider {
   private fetchImpl: typeof fetch;
   private maxPaginas: number;
   private backoffMs: number;
+  private num: number;
 
   constructor(private apiKey: string, opts: OpcoesSerper = {}) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.maxPaginas = opts.maxPaginas ?? 3;
     this.backoffMs = opts.backoffMs ?? 1500;
+    this.num = opts.num ?? 10;
   }
 
   async buscar(consulta: string, maxChamadas: number): Promise<RespostaBusca> {
@@ -62,7 +66,7 @@ export class SerperProvider implements SearchProvider {
         res = await this.fetchImpl(URL_SERPER, {
           method: 'POST',
           headers: { 'X-API-KEY': this.apiKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ q: consulta, gl: 'br', hl: 'pt-br', num: 100, page }),
+          body: JSON.stringify({ q: consulta, gl: 'br', hl: 'pt-br', num: this.num, page }),
           signal: AbortSignal.timeout(20000),
         });
       } catch {
@@ -84,7 +88,10 @@ export class SerperProvider implements SearchProvider {
         }
         throw new RadarSearchError(`Serper indisponível (HTTP ${res.status}).`, 'consulta', res.status);
       }
-      if (!res.ok) throw new RadarSearchError(`Serper recusou a consulta (HTTP ${res.status}).`, 'consulta', res.status);
+      if (!res.ok) {
+        const motivo = await res.json().then((j: any) => String(j?.message ?? '')).catch(() => '');
+        throw new RadarSearchError(`Serper recusou a consulta (HTTP ${res.status})${motivo ? `: ${motivo}` : ''}.`, 'consulta', res.status);
+      }
 
       const body: any = await res.json();
       const out: ResultadoBusca[] = [];
