@@ -160,7 +160,10 @@ export function makeCrud(pool: Pool, tableName: string, options: CrudOptions = {
     const orderCol = String(req.query.order || '');
     if (orderCol && /^[a-z_]+$/.test(orderCol)) {
       const dir = req.query.asc === 'false' ? 'DESC' : 'ASC';
-      sql += ` ORDER BY ${orderCol} ${dir}`;
+      // idCol como desempate: importação em lote grava várias linhas com o mesmo created_at, e
+      // sem chave única na ordenação o LIMIT/OFFSET pode pular ou repetir linhas entre páginas.
+      const desempate = orderCol !== idCol && /^[a-z_]+$/.test(idCol) ? `, ${idCol}` : '';
+      sql += ` ORDER BY ${orderCol} ${dir}${desempate}`;
     }
 
     // [AUDITORIA] LÓGICA (2026-07-29): default de 100/teto de 500 por página — comportamento

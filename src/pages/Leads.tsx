@@ -136,18 +136,34 @@ export default function LeadsPage() {
     console.log("[LeadsPage] Carregando dados para user:", user.id);
     
     try {
-      const [{ data: l, error: el }, { data: c, error: ec }, { data: tar, error: et }] = await Promise.all([
+      // O GET genérico devolve no máximo 100 linhas por chamada: antes esta tela carregava só os
+      // 100 contatos mais recentes, e como filtro de lista, busca e contagem por lista rodam aqui
+      // no navegador, listas inteiras apareciam com (0) mesmo cheias no banco. Pagina até esgotar.
+      const carregarTodosContatos = async () => {
+        const PAGE = 500;
+        const todos: Contato[] = [];
+        for (let page = 1; ; page++) {
+          const { data, error } = await api.from("contatos").select("*").eq("user_id", user.id)
+            .order("created_at", { ascending: false }).limit(PAGE).page(page);
+          if (error) { console.error("[LeadsPage] Erro contatos:", error); break; }
+          if (!data || !data.length) break;
+          todos.push(...data);
+          if (data.length < PAGE) break;
+        }
+        return todos;
+      };
+
+      const [{ data: l, error: el }, c, { data: tar, error: et }] = await Promise.all([
         api.from("listas").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
-        api.from("contatos").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+        carregarTodosContatos(),
         api.from("tarefas").select("contato_id").eq("user_id", user.id).in("status", ["pendente", "em_andamento"]),
       ]);
 
       if (el) console.error("[LeadsPage] Erro listas:", el);
-      if (ec) console.error("[LeadsPage] Erro contatos:", ec);
       if (et) console.error("[LeadsPage] Erro tarefas:", et);
 
       setListas(l ?? []);
-      setContatos(c ?? []);
+      setContatos(c);
       const map = new Map<string, number>();
       (tar ?? []).forEach((t: { contato_id: string | null }) => {
         if (!t.contato_id) return;

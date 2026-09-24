@@ -97,6 +97,21 @@ function fmtTel(tel: string) {
   return tel;
 }
 
+// Google Places devolve o número nacional sem DDI ("(11) 98765-4321"), mas os contatos do CRM
+// (WhatsApp, importação de grupo) são guardados com 55 — sem normalizar, o mesmo lead vira duplicado.
+function normalizarTelefone(raw: string | null | undefined): string | null {
+  const d = (raw ?? "").replace(/\D/g, "");
+  if (d.length === 10 || d.length === 11) return `55${d}`;
+  if ((d.length === 12 || d.length === 13) && d.startsWith("55")) return d;
+  return null;
+}
+
+// Só celular (11 dígitos, 9 depois do DDD) recebe WhatsApp; fixo entra em Leads mas não em disparo.
+function ehCelularWhatsApp(raw: string | null | undefined): boolean {
+  const tel = normalizarTelefone(raw);
+  return !!tel && tel.length === 13 && tel[4] === "9";
+}
+
 function renderTpl(tpl: string, lead: LeadResultado) {
   const nome = lead.nome ?? "";
   const primeiroNome = nome.split(/\s+/)[0] ?? nome;
@@ -190,7 +205,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
   };
 
   const leadsComTelefone = resultados
-    ? [...selecionados].map(i => resultados[i]).filter(l => !!l?.telefone)
+    ? [...selecionados].map(i => resultados[i]).filter(l => ehCelularWhatsApp(l?.telefone))
     : [];
 
   const toggleSelecionado = (i: number) =>
@@ -202,16 +217,30 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
   };
 
   // ── Salvar em Leads (sem disparo) ──────────────────────────────────────────
-  const importarContatos = async (listaId?: string) => {
+  // Antes: insert em lote genérico sem ON CONFLICT — UM telefone que já existia na conta derrubava
+  // a importação inteira ("Erro ao importar"). Agora com telefone vai por /importar-lote (ON
+  // CONFLICT DO NOTHING, contato existente fica intocado); sem telefone (o índice único ignora
+  // NULL) segue no insert simples. `apenasWhatsApp` = só celulares (disparo).
+  const importarContatos = async (listaId?: string, apenasWhatsApp = false) => {
     if (!user || !resultados || selecionados.size === 0) return;
     setImportando(true);
 
-    const rows = [...selecionados].map(i => {
+    const vistos = new Set<string>();
+    const comTel: Record<string, unknown>[] = [];
+    const semTel: Record<string, unknown>[] = [];
+    let duplicadosNaBusca = 0;
+
+    for (const i of selecionados) {
       const l = resultados[i];
-      return {
-        user_id: user.id,
+      if (apenasWhatsApp && !ehCelularWhatsApp(l.telefone)) continue;
+      const telefone = normalizarTelefone(l.telefone);
+      if (telefone) {
+        if (vistos.has(telefone)) { duplicadosNaBusca++; continue; }
+        vistos.add(telefone);
+      }
+      const row = {
         nome: l.nome,
-        telefone: l.telefone ? l.telefone.replace(/\D/g, "") : null,
+        telefone,
         email: l.email ?? null,
         empresa: l.nome,
         cargo: l.segmento ?? null,
@@ -226,18 +255,49 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
           l.resumo_ia ?? null,
         ].filter(Boolean).join("\n"),
       };
-    });
+      (telefone ? comTel : semTel).push(row);
+    }
 
-    const { error } = await api.from("contatos").insert(rows);
-    setImportando(false);
+    try {
+      let novos = 0;
+      let jaExistiam = 0;
 
-    if (error) { toast.error(`Erro ao importar: ${error.message}`); return; }
-    return rows.length;
+      if (comTel.length) {
+        const token = getAuthToken();
+        const res = await fetch(`${API_BASE}/api/contatos/importar-lote`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ contatos: comTel }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+        const json = await res.json();
+        novos += Number(json.inseridos) || 0;
+        jaExistiam += Number(json.jaExistiam) || 0;
+      }
+
+      if (semTel.length) {
+        const { error } = await api.from("contatos").insert(semTel.map(r => ({ ...r, user_id: user.id })));
+        if (error) throw new Error(error.message);
+        novos += semTel.length;
+      }
+
+      return { novos, jaExistiam, duplicadosNaBusca };
+    } catch (err: unknown) {
+      toast.error(`Erro ao importar: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    } finally {
+      setImportando(false);
+    }
   };
 
   const salvarEmLeads = async () => {
-    const n = await importarContatos();
-    if (n) toast.success(`${n} contatos salvos em Leads`);
+    const r = await importarContatos();
+    if (!r) return;
+    const partes = [`${r.novos} novos salvos em Leads`];
+    if (r.jaExistiam) partes.push(`${r.jaExistiam} já existiam (mantidos como estavam)`);
+    if (r.duplicadosNaBusca) partes.push(`${r.duplicadosNaBusca} repetidos na busca`);
+    if (r.novos) toast.success(partes.join(" · "));
+    else toast.info(partes.join(" · "));
   };
 
   // ── Criar disparo ──────────────────────────────────────────────────────────
@@ -246,7 +306,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
     if (!nomeDisparo.trim()) { toast.error("Informe o nome do disparo"); return; }
     if (!mensagemTemplate.trim()) { toast.error("Informe a mensagem"); return; }
     if (leadsComTelefone.length === 0) {
-      toast.error("Nenhum lead selecionado tem telefone. Ative 'Com telefone' na busca.");
+      toast.error("Nenhum lead selecionado tem celular (fixo não recebe WhatsApp).");
       return;
     }
 
@@ -262,8 +322,19 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
       if (errLista || !lista) throw new Error(errLista?.message ?? "Erro ao criar lista");
 
       // 2. Importar contatos nessa lista
-      const total = await importarContatos(lista.id);
-      if (!total) throw new Error("Nenhum contato importado");
+      // Só celulares (fixo não recebe WhatsApp). Contato que já existia na conta fica de fora da
+      // lista nova — total_leads reflete só quem de fato entrou nela.
+      const imp = await importarContatos(lista.id, true);
+      if (!imp) throw new Error("Falha ao importar os contatos");
+      const total = imp.novos;
+      if (!total) {
+        throw new Error(
+          imp.jaExistiam
+            ? `Todos os ${imp.jaExistiam} celulares selecionados já existem nos seus contatos — nenhum lead novo pra esse disparo.`
+            : "Nenhum contato importado"
+        );
+      }
+      if (imp.jaExistiam) toast.info(`${imp.jaExistiam} contatos já existiam e ficaram de fora do disparo`);
 
       // 3. Criar disparo (rascunho)
       const { data: disparo, error: errDisparo } = await api
@@ -390,7 +461,7 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
                 <p className="text-sm font-medium">
                   {resultados.length} leads encontrados
                   {selecionados.size > 0 && <span className="text-muted-foreground font-normal ml-1">· {selecionados.size} selecionados</span>}
-                  {leadsComTelefone.length > 0 && <span className="text-muted-foreground font-normal ml-1">· {leadsComTelefone.length} com telefone</span>}
+                  {leadsComTelefone.length > 0 && <span className="text-muted-foreground font-normal ml-1">· {leadsComTelefone.length} com celular</span>}
                 </p>
                 {resultados.length > 0 && (
                   <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={toggleTodos}>
@@ -482,13 +553,13 @@ export function BuscarLeadsModal({ open, onClose }: BuscarLeadsModalProps) {
                       Configurar Disparo WhatsApp
                     </p>
                     <Badge variant="outline" className="text-xs">
-                      {leadsComTelefone.length} leads com telefone
+                      {leadsComTelefone.length} leads com celular (WhatsApp)
                     </Badge>
                   </div>
 
                   {leadsComTelefone.length === 0 && (
                     <p className="text-xs text-destructive bg-destructive/10 rounded p-2">
-                      Nenhum lead selecionado tem telefone. Refaça a busca com "Com telefone" ativado.
+                      Nenhum lead selecionado tem celular (telefone fixo não recebe WhatsApp). Selecione outros leads ou refaça a busca com "Com telefone" ativado.
                     </p>
                   )}
 
