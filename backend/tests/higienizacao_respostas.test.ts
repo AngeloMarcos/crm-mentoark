@@ -28,7 +28,7 @@ describe('classificarResposta (frases reais de produção, sem dados pessoais)',
   const cat = (t: string) => classificarResposta(t).categoria;
 
   it('interesse', () => {
-    for (const t of ['quero', 'Pode mostrar', 'Gostaria de conhecer melhor', 'quanto custa?', 'como funciona', 'me manda a proposta', 'tenho interesse sim']) {
+    for (const t of ['quero', 'Pode mostrar', 'Gostaria de conhecer melhor', 'quanto custa?', 'explica', 'me explica melhor', 'como funciona', 'me manda a proposta', 'tenho interesse sim']) {
       expect(cat(t), t).toBe('interesse');
     }
   });
@@ -52,6 +52,7 @@ describe('classificarResposta (frases reais de produção, sem dados pessoais)',
       'Olá! Obrigada pelo contato. No momento posso estar em atendimento, mas retornarei assim que possível.',
       'Para agilizar seu atendimento, digite o número da opção desejada',
       'Nosso horário de atendimento é de segunda a sexta',
+      '👋Olá !! estamos muito felizes com o seu contato 🛍️ Produtos e Serviços',
     ]) expect(cat(t), t).toBe('auto_resposta');
   });
   it('robô que menciona "gostaria de conhecer" continua sendo robô (não interesse)', () => {

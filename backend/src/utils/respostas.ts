@@ -34,6 +34,7 @@ const RECUSA: readonly RegExp[] = [
 const AUTO: readonly RegExp[] = [
   /\bagrade(?:ce|cemos)\s+(?:seu|o|sua|a|pelo|pela)\s+(?:contato|mensagem)\b/u,
   /\bagrade(?:ce|cemos)\s+por\s+(?:entrar\s+em\s+)?contato\b/u,
+  /\b(?:felizes|feliz)\s+com\s+(?:o\s+)?(?:seu|sua)\s+(?:contato|mensagem)\b/u,
   /\b(?:seja|sejam)\s+(?:muito\s+)?bem[- ]?vind[oa]s?\b/u,
   /\bbem[- ]?vind[oa]s?\s+(?:a|ao|à|ao\s+nosso)\b/u,
   /\bcomo\s+(?:podemos|posso|possamos)\s+(?:te\s+|lhe\s+|o\s+|a\s+)?ajudar\b/u,
@@ -61,6 +62,7 @@ const INTERESSE: readonly RegExp[] = [
   /\bpode\s+(?:mostrar|enviar|mandar|explicar|falar)\b/u,
   /\bgostaria\s+de\s+(?:conhecer|saber|ver|entender|mais\s+informacoes)\b/u,
   /\btenho\s+interesse\b/u,
+  /\b(?:me\s+)?explica(?:r)?\b/u,
   /\bquanto\s+(?:custa|e|fica|sai)\b/u,
   /\bcomo\s+funciona\b/u,
   /\bmanda\s+(?:a\s+|uma\s+)?(?:proposta|informacoes|valores|mais)\b/u,
