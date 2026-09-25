@@ -2594,6 +2594,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_bot ON contatos (user_id) WHERE bot_detectado = true`);
     // Qual versão da mensagem (0=A, 1=B...) cada contato recebeu — base do teste A/B. Nulo = campanha de versão única.
     await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS variante_idx SMALLINT`);
+    // Quando o worker puxou a linha para envio ('sending'). Serve para devolver à fila as que ficaram presas.
+    await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS sending_desde TIMESTAMPTZ`);
 
     // Grupos importados: papel do contato no grupo e medição de quantos participantes têm telefone visível
     // (o resto é LID e não dá para disparar). Histórico por importação; nada existente é alterado.

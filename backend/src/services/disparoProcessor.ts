@@ -299,6 +299,17 @@ export async function processarDisparos(pool: Pool) {
     await pool.query('SELECT promover_disparos_agendados()')
       .catch(err => log.warn('DISPARO', 'Falha ao promover campanhas agendadas', { err: err?.message }));
 
+    // Auto-recuperação: linha que ficou em 'sending' por mais de 10 min (processo reiniciado no meio do lote,
+    // exceção antes do requeue, chamada pendurada) volta para 'pending'. Sem isso ela nunca mais seria pega,
+    // porque get_next_disparo_batch só lê 'pending'. Nunca toca em quem já tem enviado_at (mensagem já saiu).
+    const presas = await pool.query(
+      `UPDATE disparo_logs SET status = 'pending', sending_desde = NULL
+        WHERE status = 'sending' AND enviado_at IS NULL
+          AND COALESCE(sending_desde, created_at) < NOW() - INTERVAL '10 minutes'
+        RETURNING id`,
+    ).catch(err => { log.warn('DISPARO', 'Falha ao recuperar logs presos em sending', { err: err?.message }); return { rows: [] as any[] }; });
+    if (presas.rows.length) log.warn('DISPARO', 'Logs presos em sending devolvidos à fila', { quantidade: presas.rows.length });
+
     // 1. Buscar lote de mensagens pendentes usando a função SQL atômica.
     // [AUDITORIA] FIX APLICADO (Sprint Fila Por Campanha, 2026-09-11 — ver nota grande no topo do
     // arquivo): tamanho do lote subiu de 5 pra 40 — não pra processar 40 mensagens em sequência
@@ -319,6 +330,10 @@ export async function processarDisparos(pool: Pool) {
     const batch = await pool.query(`SELECT * FROM public.get_next_disparo_batch(${TAMANHO_LOTE})`);
 
     if (!batch.rows.length) return;
+
+    // Marca quando cada linha foi puxada (base da auto-recuperação acima).
+    await pool.query(`UPDATE disparo_logs SET sending_desde = NOW() WHERE id = ANY($1::uuid[])`, [batch.rows.map((r: any) => r.log_id)])
+      .catch(err => log.warn('DISPARO', 'Falha ao marcar sending_desde', { err: err?.message }));
 
     // [AUDITORIA] LÓGICA (Sprint Fila Por Campanha, 2026-09-11): agrupa o lote por `disparo_id` —
     // só a mensagem MAIS ANTIGA (lote já vem ordenado por `created_at ASC`) de cada campanha é

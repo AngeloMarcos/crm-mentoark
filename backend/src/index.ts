@@ -637,10 +637,21 @@ app.listen(PORT, '0.0.0.0', () => {
   // Motor de disparos: verifica mensagens pendentes a cada 2 segundos
   // Singleflight: se o batch anterior ainda não terminou, pula o tick
   let disparosRunning = false;
+  let disparosInicio = 0;
+  // Watchdog: se um tick passar de 5 min (chamada pendurada que nunca resolve), a trava é solta à força e o
+  // motor volta a girar. Antes, um único await sem fim parava TODOS os disparos em silêncio.
+  const TICK_MAX_MS = 5 * 60_000;
   setInterval(async () => {
-    if (disparosRunning) return;
+    if (disparosRunning) {
+      if (Date.now() - disparosInicio > TICK_MAX_MS) {
+        log.error('DISPARO', 'Tick do motor de disparos travado — liberando a trava à força', { minutos: Math.round((Date.now() - disparosInicio) / 60000) });
+        disparosRunning = false;
+      } else return;
+    }
     disparosRunning = true;
+    disparosInicio = Date.now();
     try { await processarDisparos(pool); }
+    catch (err: any) { log.error('DISPARO', 'Exceção no motor de disparos (o loop continua)', { err: err?.message, stack: err?.stack }); }
     finally { disparosRunning = false; }
   }, 2000);
 
