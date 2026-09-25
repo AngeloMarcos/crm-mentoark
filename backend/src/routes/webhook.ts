@@ -73,6 +73,8 @@ import { analisarImagem } from '../utils/vision';
 import { registrarUsoIA, estimarCustoUsd, estimarCustoWhisperUsd, orcamentoDiarioExcedido } from '../utils/aiCusto';
 import { log } from '../logger';
 import { registrarRespostaDeDisparo } from '../services/respostas';
+import { garantirDonoDaInstancia } from '../services/tenantInstancia';
+import { resolverOwnerId as resolverContaRaiz } from '../services/subscription';
 import { registrarLogoutEvent, verificarLoopDeLogout } from '../services/logoutCircuitBreaker';
 
 const MIDIA_TIPOS = new Set(['image', 'audio', 'video', 'document', 'sticker']);
@@ -888,6 +890,25 @@ export default function webhookRouter(pool: Pool): Router {
           log.info('WEBHOOK', 'USERID via integracoes_config', { traceId, userId });
         } else {
           log.info('WEBHOOK', 'integracoes_config: nenhum resultado', { traceId, instancia });
+        }
+      }
+
+      // ISOLAMENTO ENTRE CONTAS: o nome da instância (crm_<id do dono>) prova quem é o dono. Se agentes/integracoes_config
+      // apontaram para outra conta, a mensagem NÃO é gravada lá: vai para o dono real e o evento fica registrado.
+      // (Causa de 5.602 mensagens da conta gmail terem caído na Mentoark entre jun e set/2026.)
+      if (userId) {
+        try {
+          const iso = await garantirDonoDaInstancia(pool, instancia, userId, id => resolverContaRaiz(pool, id));
+          if (iso.corrigido) {
+            log.error('TENANT_MISMATCH', 'mensagem redirecionada ao dono real da instância (config apontava para outra conta)', {
+              traceId, instancia, resolvidoPor: userId, donoReal: iso.userId,
+            });
+            userId = iso.userId;
+            palavraReativar = 'atendimento finalizado';
+            n8nWebhookUrl = null;
+          }
+        } catch (err: any) {
+          log.warn('TENANT_MISMATCH', 'falha ao checar dono da instância (segue com a resolução normal)', { traceId, err: err?.message });
         }
       }
 

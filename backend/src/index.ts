@@ -84,6 +84,7 @@ import { runMigrations } from './migrations';
 import { processarDisparos } from './services/disparoProcessor';
 import { processarFilaHigienizacao } from './services/higienizacao';
 import radarRouter from './routes/radar';
+import { exigirInstanciaPropria } from './services/exigirInstanciaPropria';
 import { iniciarFilaRadar } from './radar/fila';
 import higienizacaoRouter from './routes/higienizacao';
 
@@ -286,6 +287,10 @@ app.use('/api', authMiddleware);
 app.use('/api', tenantContextMiddleware);
 // [AUDITORIA] Fase 2 do trial: no-op enquanto TRIAL_ENFORCEMENT !== 'on' (ver middleware.ts).
 app.use('/api', assinaturaGuard);
+
+// Isolamento entre contas: agente/integração não pode apontar para a instância de outra conta (nome crm_<id do dono>).
+app.use('/api/agentes', exigirInstanciaPropria(pool, ['evolution_instancia']));
+app.use('/api/integracoes_config', exigirInstanciaPropria(pool, ['instancia']));
 
 // Standard CRUD tables (generic factory)
 const SIMPLE_TABLES = [
