@@ -42,126 +42,21 @@
  */
 import { Pool } from 'pg';
 import { log } from '../logger';
+import { calcularScoreSaude, ItemScore, invalidarCacheSaude } from './saudeNumero';
 
-export interface ScoreFatores {
-  volume_diario: number;
-  taxa_resposta: number;
-  reclamacoes: number;
-  tempo_conta: number;
-}
+// [AUDITORIA] BUG CORRIGIDO (Etapa A — Saúde de Instâncias, 2026-10-05): os 4 fatores acima
+// (volume, resposta, reclamações, tempo) ignoravam histórico de ban, quedas forçadas e idade real
+// do NÚMERO — um número com 2 bans aparecia como "80 — Saudável" e ficava liberado pra disparo.
+// [AUDITORIA] FIX APLICADO: o cálculo passou a ser o de `saudeNumero.calcularScoreSaude` (começa
+// em 100 e desconta ban, ban recente, quedas 401/402/403/406, quedas comuns, idade do número,
+// opt-out, resposta baixa e falha de envio; +5 perfil completo). `score_fatores` agora guarda
+// `{ versao: 2, rotulo, itens: [{ fator, pontos, info }] }` — a tela mostra cada desconto. O
+// comentário de topo descreve a versão 1, mantido como histórico.
 
 export interface ScoreResultado {
   total: number;
-  fatores: ScoreFatores;
-  // Dado bruto usado no cálculo — devolvido pra debug/teste, não persistido.
-  bruto: {
-    volume_diario: number;
-    taxa_resposta: number | null; // null = sem dado suficiente (0 mensagens enviadas na janela)
-    reclamacoes: number;
-    tempo_dias: number;
-  };
-}
-
-// [AUDITORIA] BUG CORRIGIDO (Maturador v2, 2026-10-04): o tráfego do Maturador de Números entrava
-// aqui como volume — a 100 msg/dia o fator caía de 25 pra 15, ou seja, o maturador derrubava o
-// próprio score que existe pra melhorar. O fator "volume" mede envio em massa pra terceiros.
-// [AUDITORIA] FIX APLICADO: exclui mensagens registradas em `maturador_mensagens` (mesmo
-// message_id). Elas continuam contando na taxa de resposta (é troca real nos 2 sentidos).
-async function calcularVolumeDiario(pool: Pool, userId: string, instancia: string): Promise<number> {
-  const r = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM whatsapp_messages w
-     WHERE w.user_id = $1 AND w.instance_name = $2 AND w.from_me = true
-       AND w.created_at >= NOW() - INTERVAL '24 hours'
-       AND NOT EXISTS (SELECT 1 FROM maturador_mensagens mm WHERE mm.message_id = w.message_id)`,
-    [userId, instancia]
-  );
-  return r.rows[0]?.total ?? 0;
-}
-
-async function calcularTaxaResposta(pool: Pool, userId: string, instancia: string): Promise<number | null> {
-  const r = await pool.query(
-    `WITH enviados AS (
-       SELECT DISTINCT remote_jid FROM whatsapp_messages
-       WHERE user_id = $1 AND instance_name = $2 AND from_me = true
-         AND created_at >= NOW() - INTERVAL '7 days'
-     ), respondidos AS (
-       SELECT DISTINCT m.remote_jid FROM whatsapp_messages m
-       JOIN enviados e ON e.remote_jid = m.remote_jid
-       WHERE m.user_id = $1 AND m.instance_name = $2 AND m.from_me = false
-         AND m.created_at >= NOW() - INTERVAL '7 days'
-     )
-     SELECT (SELECT COUNT(*) FROM enviados)::int AS total_enviados,
-            (SELECT COUNT(*) FROM respondidos)::int AS total_respondidos`,
-    [userId, instancia]
-  );
-  const { total_enviados, total_respondidos } = r.rows[0] || { total_enviados: 0, total_respondidos: 0 };
-  if (!total_enviados) return null; // sem envio na janela — não dá pra medir resposta, não é "ruim"
-  return (total_respondidos / total_enviados) * 100;
-}
-
-async function calcularReclamacoes(pool: Pool, userId: string, instancia: string): Promise<number> {
-  // [AUDITORIA] LÓGICA: subquery correlacionada pega o disparo_logs.instancia do envio MAIS
-  // RECENTE (status='sent', enviado_at <= data do opt-out) pra aquele telefone — evita atribuir
-  // erroneamente o opt-out a QUALQUER instância que já tenha mandado campanha pro contato algum
-  // dia (um EXISTS simples faria isso, se o contato tivesse recebido de 2+ instâncias antes de
-  // sair). Comparação por RIGHT(telefone,11) — mesmo padrão já usado em disparoProcessor.ts pra
-  // telefone não normalizado no mesmo formato em todo lugar do sistema.
-  const r = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM disparo_optouts oo
-     WHERE oo.user_id = $1
-       AND oo.created_at >= NOW() - INTERVAL '30 days'
-       AND (
-         SELECT dl.instancia FROM disparo_logs dl
-         WHERE dl.user_id = oo.user_id
-           AND RIGHT(dl.telefone, 11) = RIGHT(oo.telefone, 11)
-           AND dl.status = 'sent'
-           AND dl.enviado_at <= oo.created_at
-         ORDER BY dl.enviado_at DESC
-         LIMIT 1
-       ) = $2`,
-    [userId, instancia]
-  );
-  return r.rows[0]?.total ?? 0;
-}
-
-function calcularTempoDias(evolutionConectadoEm: string | Date | null): number {
-  if (!evolutionConectadoEm) return 0;
-  const conectadoEm = new Date(evolutionConectadoEm).getTime();
-  return Math.max(0, Math.floor((Date.now() - conectadoEm) / (1000 * 60 * 60 * 24)));
-}
-
-/**
- * Calcula o score real de UMA instância — não persiste, só calcula. `agente` precisa ter pelo
- * menos `user_id`, `evolution_instancia`, `evolution_conectado_em`/`created_at`.
- */
-export async function calcularScoreInstancia(
-  pool: Pool,
-  agente: { user_id: string; evolution_instancia: string; evolution_conectado_em?: string | Date | null; created_at?: string | Date | null }
-): Promise<ScoreResultado> {
-  const { user_id, evolution_instancia } = agente;
-  const [volumeDiario, taxaResposta, reclamacoes] = await Promise.all([
-    calcularVolumeDiario(pool, user_id, evolution_instancia),
-    calcularTaxaResposta(pool, user_id, evolution_instancia),
-    calcularReclamacoes(pool, user_id, evolution_instancia),
-  ]);
-  const tempoDias = calcularTempoDias(agente.evolution_conectado_em ?? agente.created_at ?? null);
-
-  // Mesmas faixas do mock antigo (preservadas — ver comentário de topo do arquivo).
-  const v_score = volumeDiario < 50 ? 25 : volumeDiario <= 150 ? 15 : 5;
-  // taxaResposta === null (sem envio na janela de 7d): fator neutro (15, "Atenção") — não é
-  // "saudável" por padrão (esse era exatamente o bug original, fallback otimista sem dado real),
-  // mas também não é justo penalizar como "crítico" uma instância nova/pouco usada sem sinal
-  // nenhum de problema real.
-  const r_score = taxaResposta === null ? 15 : taxaResposta > 30 ? 25 : taxaResposta >= 10 ? 15 : 5;
-  const b_score = reclamacoes === 0 ? 25 : reclamacoes <= 3 ? 10 : 0;
-  const m_score = tempoDias > 90 ? 25 : tempoDias >= 30 ? 15 : 5;
-
-  const total = v_score + r_score + b_score + m_score;
-  return {
-    total,
-    fatores: { volume_diario: v_score, taxa_resposta: r_score, reclamacoes: b_score, tempo_conta: m_score },
-    bruto: { volume_diario: volumeDiario, taxa_resposta: taxaResposta, reclamacoes, tempo_dias: tempoDias },
-  };
+  rotulo: string;
+  itens: ItemScore[];
 }
 
 /** Calcula e persiste o score de UMA instância (`agentes.id`). Usado pela rota on-demand. */
@@ -170,24 +65,23 @@ export async function recalcularScoreAgente(pool: Pool, agenteId: string, userId
   let where = `id = $1`;
   if (userId) { where += ` AND user_id = $2`; params.push(userId); }
   const r = await pool.query(
-    `SELECT id, user_id, evolution_instancia, evolution_conectado_em, created_at
-     FROM agentes WHERE ${where} AND evolution_instancia IS NOT NULL LIMIT 1`,
+    `SELECT id, evolution_instancia, numero_conectado FROM agentes
+     WHERE ${where} AND evolution_instancia IS NOT NULL LIMIT 1`,
     params
   );
   if (!r.rows.length) return null;
   const agente = r.rows[0];
-  const resultado = await calcularScoreInstancia(pool, agente);
+  const s = await calcularScoreSaude(pool, agente.evolution_instancia, agente.numero_conectado);
   await pool.query(
     `UPDATE agentes SET whatsapp_score = $1, score_fatores = $2, score_updated_at = NOW() WHERE id = $3`,
-    [resultado.total, JSON.stringify(resultado.fatores), agenteId]
+    [s.total, JSON.stringify({ versao: 2, rotulo: s.rotulo, itens: s.itens }), agenteId]
   );
-  return resultado;
+  return { total: s.total, rotulo: s.rotulo, itens: s.itens };
 }
 
 /**
  * Recalcula o score de TODAS as instâncias conectadas (todas as contas) — usado pelo cron
- * (`cron.ts`, a cada 15min, mesmo espírito de `reconciliarInstanciasEvolution`). Erros por
- * instância são isolados (uma falha não derruba o lote inteiro).
+ * (`cron.ts`, a cada 15min). Erros por instância são isolados.
  */
 export async function recalcularTodosScores(pool: Pool): Promise<{ atualizados: number; falhas: number }> {
   const r = await pool.query(
@@ -204,5 +98,6 @@ export async function recalcularTodosScores(pool: Pool): Promise<{ atualizados: 
       log.warn('SCORE_INSTANCIA', 'Falha ao recalcular score', { agenteId: row.id, err: err?.message });
     }
   }
+  invalidarCacheSaude();
   return { atualizados, falhas };
 }

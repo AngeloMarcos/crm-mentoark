@@ -1,67 +1,51 @@
+/**
+ * ScoreInstancia.tsx — Score de Saúde da instância (card em WhatsApp → Instâncias).
+ *
+ * [AUDITORIA] LÓGICA (Etapa A — Saúde de Instâncias, 2026-10-05): o score deixou de ser a soma de
+ * 4 fatores de 0-25 e passou a começar em 100 e descontar sinais de risco do NÚMERO (histórico de
+ * ban, quedas, idade, opt-out, resposta, falhas — ver backend/src/services/saudeNumero.ts). Os
+ * descontos vêm em `fatores.itens` (`score_fatores.versao = 2`) e aparecem no detalhe. Faixas:
+ * 85+ Saudável, 65-84 Atenção, 40-64 Risco, 0-39 Crítico (Crítico bloqueia disparo). Linhas ainda
+ * no formato antigo (antes do 1º recálculo) mostram só o número, com aviso.
+ *
+ * Desconectado / ainda não calculado continuam com tela própria (nunca "Saudável" sem dado real).
+ */
 import { useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import { Progress } from "@/components/ui/progress";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Info, AlertTriangle, CheckCircle2, History, MessageSquare, BarChart3, Ban } from "lucide-react";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Info, Ban, CheckCircle2, AlertTriangle } from "lucide-react";
 
-interface ScoreFatores {
-  volume_diario: number;
-  taxa_resposta: number;
-  reclamacoes: number;
-  tempo_conta: number;
+interface ItemScore {
+  fator: string;
+  pontos: number;
+  info: string;
 }
 
 interface ScoreInstanciaProps {
   score: number;
-  fatores: ScoreFatores;
+  // v2: { versao: 2, rotulo, itens }; v1 (legado): { volume_diario, taxa_resposta, ... }
+  fatores: unknown;
   onRefresh?: () => void;
-  // [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): override crítico do achado
-  // original — uma instância desconectada/banida (`state !== 'open'` em
-  // `InstanceManagementPanel.tsx`, dado real e fresco, poll a cada 30s direto na Evolution) NUNCA
-  // pode mostrar "Saudável", independente do que os 4 fatores calculariam. `desconectado=true`
-  // troca a exibição inteira por um aviso vermelho — o número por baixo continua existindo (não é
-  // zerado), só deixa de ser a fonte da verdade visual enquanto a instância não está `open`.
   desconectado?: boolean;
-  // `whatsapp_score`/`score_fatores` nunca foram calculados de verdade pra esta instância ainda
-  // (`agentes.score_updated_at IS NULL` — cron de 15min ainda não passou por ela, ou é uma
-  // conexão nova). Antes desta sprint, esse caso caía no fallback `?? 100` e mostrava "Saudável"
-  // sem nenhum dado real — a raiz do bug reportado. Agora mostra "Ainda não calculado" em vez de
-  // inventar um número.
   naoCalculado?: boolean;
 }
 
+function faixaScore(s: number): { rotulo: string; cor: string; barra: string } {
+  if (s >= 85) return { rotulo: "Saudável", cor: "text-emerald-600", barra: "bg-emerald-500" };
+  if (s >= 65) return { rotulo: "Atenção", cor: "text-yellow-600", barra: "bg-yellow-500" };
+  if (s >= 40) return { rotulo: "Risco", cor: "text-orange-600", barra: "bg-orange-500" };
+  return { rotulo: "Crítico", cor: "text-red-600", barra: "bg-red-500" };
+}
+
+const FAIXAS = [
+  { faixa: "85-100", rotulo: "Saudável", regra: "Disparo conforme a fase do número" },
+  { faixa: "65-84", rotulo: "Atenção", regra: "Metade do limite da fase" },
+  { faixa: "40-64", rotulo: "Risco", regra: "Só contatos que já conversaram com o número" },
+  { faixa: "0-39", rotulo: "Crítico", regra: "Disparo bloqueado" },
+];
+
 export function ScoreInstancia({ score, fatores, desconectado, naoCalculado }: ScoreInstanciaProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [aberto, setAberto] = useState(false);
 
-  const getScoreColor = (s: number) => {
-    if (s <= 40) return "bg-red-500";
-    if (s <= 70) return "bg-yellow-500";
-    return "bg-green-500";
-  };
-
-  const getScoreText = (s: number) => {
-    if (s <= 40) return "Risco Alto";
-    if (s <= 70) return "Atenção";
-    return "Saudável";
-  };
-
-  // [AUDITORIA] FIX APLICADO (Sprint Score Real + Maturador, 2026-08-09): override renderizado
-  // ANTES de qualquer cálculo baseado em `score` — desconexão/banimento é sempre a informação
-  // mais importante e mais fresca disponível, tem prioridade sobre um score que pode estar
-  // desatualizado em até 15min (cadência do cron, ver `cron.ts`).
   if (desconectado) {
     return (
       <div className="space-y-2 py-2">
@@ -77,22 +61,6 @@ export function ScoreInstancia({ score, fatores, desconectado, naoCalculado }: S
     );
   }
 
-  const getFactorColor = (val: number) => {
-    if (val >= 20) return "text-green-500";
-    if (val >= 10) return "text-yellow-500";
-    return "text-red-500";
-  };
-
-  const getFactorIcon = (val: number) => {
-    if (val >= 20) return <CheckCircle2 className="h-4 w-4 text-green-500" />;
-    if (val >= 10) return <AlertTriangle className="h-4 w-4 text-yellow-500" />;
-    return <Ban className="h-4 w-4 text-red-500" />;
-  };
-
-  // [AUDITORIA] FIX APLICADO (Sprint Score Real + Maturador, 2026-08-09): a causa raiz do achado
-  // original — `whatsapp_score ?? 100` no componente pai mostrava "Saudável" sem NENHUM cálculo
-  // ter rodado. Agora o pai passa `naoCalculado=true` explicitamente nesse caso, em vez de
-  // inventar um valor — mostra um estado neutro (cinza, sem nota), não "Saudável" nem "Risco".
   if (naoCalculado) {
     return (
       <div className="space-y-2 py-2">
@@ -107,169 +75,85 @@ export function ScoreInstancia({ score, fatores, desconectado, naoCalculado }: S
     );
   }
 
+  const v2 = (fatores as { versao?: number })?.versao === 2;
+  const itens: ItemScore[] = v2 ? ((fatores as { itens?: ItemScore[] }).itens ?? []) : [];
+  const f = faixaScore(score);
+  const descontos = itens.filter(i => i.pontos < 0);
+
   return (
-    <TooltipProvider>
-      <div 
-        className="space-y-3 cursor-pointer group"
-        onClick={() => setIsOpen(true)}
-      >
-        <div className="flex flex-col items-center justify-center py-2">
-          <span className={`text-4xl font-black ${getFactorColor(score / 4)}`}>
-            {score}
-          </span>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-            <span>Score de Saúde</span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Info className="h-3 w-3 opacity-50 group-hover:opacity-100 transition-opacity" />
-              </TooltipTrigger>
-              <TooltipContent>
-                Score calculado com base em volume de disparos, taxa de resposta e histórico de bloqueios
-              </TooltipContent>
-            </Tooltip>
-          </div>
+    <>
+      <button type="button" className="w-full space-y-2 text-left group" onClick={() => setAberto(true)}>
+        <div className="flex flex-col items-center justify-center py-1">
+          <span className={`text-4xl font-black ${f.cor}`}>{score}</span>
+          <span className={`text-[11px] font-bold uppercase tracking-wide ${f.cor}`}>{f.rotulo}</span>
         </div>
-
-        <div className="space-y-1.5">
-          <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-            <div
-              className={`h-full ${getScoreColor(score)} transition-all duration-500`}
-              style={{ width: `${score}%` }}
-            />
-          </div>
-          <div className="flex justify-between items-center text-[10px] font-medium uppercase tracking-wider">
-            <span className={getFactorColor(score / 4)}>{getScoreText(score)}</span>
-            <span className="text-muted-foreground">{score}/100</span>
-          </div>
+        <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+          <div className={`h-full ${f.barra} transition-all duration-500`} style={{ width: `${score}%` }} />
         </div>
+        {v2 ? (
+          descontos.length > 0 ? (
+            <ul className="space-y-0.5">
+              {descontos.slice(0, 3).map((i, k) => (
+                <li key={k} className="text-[10px] text-muted-foreground flex justify-between gap-2">
+                  <span className="truncate">{i.fator}</span>
+                  <span className="font-bold text-red-600 shrink-0">{i.pontos}</span>
+                </li>
+              ))}
+              {descontos.length > 3 && (
+                <li className="text-[10px] text-muted-foreground">+{descontos.length - 3} outro(s) — clique para ver</li>
+              )}
+            </ul>
+          ) : (
+            <p className="text-[10px] text-center text-muted-foreground">Nenhum sinal de risco encontrado</p>
+          )
+        ) : (
+          <p className="text-[10px] text-center text-muted-foreground">Recalculando com o novo critério…</p>
+        )}
+      </button>
 
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
-          <DialogContent className="sm:max-w-[600px]">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <BarChart3 className="h-5 w-5 text-primary" />
-                Detalhes do Score de Saúde
-              </DialogTitle>
-              <DialogDescription>
-                Análise detalhada dos fatores que compõem a saúde anti-ban da sua instância.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="grid grid-cols-2 gap-4 py-4">
-              <Card className="p-4 space-y-2 border-l-4 border-l-blue-500">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-semibold">Volume Diário</span>
-                  </div>
-                  <span className={`text-sm font-bold ${getFactorColor(fatores.volume_diario)}`}>
-                    {fatores.volume_diario}/25
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  Quantidade de mensagens enviadas por dia. Manter abaixo de 150 é recomendado.
+      <Dialog open={aberto} onOpenChange={setAberto}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Score de Saúde: {score} ({f.rotulo})</DialogTitle>
+            <DialogDescription>
+              Começa em 100 e desconta cada sinal de risco do número. É uma estimativa do CRM, não uma
+              métrica oficial do WhatsApp.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {itens.length === 0 ? (
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Nenhum desconto aplicado.
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {itens.map((i, k) => (
+                  <li key={k} className="flex items-start justify-between gap-3 text-sm border-b pb-1.5 last:border-0">
+                    <div>
+                      <p className="font-medium flex items-center gap-1.5">
+                        {i.pontos < 0 ? <AlertTriangle className="h-3.5 w-3.5 text-orange-500" /> : <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}
+                        {i.fator}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{i.info}</p>
+                    </div>
+                    <span className={`font-bold shrink-0 ${i.pontos < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                      {i.pontos > 0 ? `+${i.pontos}` : i.pontos}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="rounded-md bg-muted/50 p-2 space-y-1">
+              {FAIXAS.map(x => (
+                <p key={x.faixa} className="text-[11px] flex justify-between gap-2">
+                  <span><b>{x.faixa}</b> {x.rotulo}</span>
+                  <span className="text-muted-foreground text-right">{x.regra}</span>
                 </p>
-                {getFactorIcon(fatores.volume_diario)}
-              </Card>
-
-              <Card className="p-4 space-y-2 border-l-4 border-l-purple-500">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <BarChart3 className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-semibold">Taxa de Resposta</span>
-                  </div>
-                  <span className={`text-sm font-bold ${getFactorColor(fatores.taxa_resposta)}`}>
-                    {fatores.taxa_resposta}/25
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  % de destinatários que responderam. Altas taxas diminuem risco de ban.
-                </p>
-                {getFactorIcon(fatores.taxa_resposta)}
-              </Card>
-
-              <Card className="p-4 space-y-2 border-l-4 border-l-red-500">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Ban className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-semibold">Reclamações</span>
-                  </div>
-                  <span className={`text-sm font-bold ${getFactorColor(fatores.reclamacoes)}`}>
-                    {fatores.reclamacoes}/25
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  Pessoas que bloquearam ou reportaram o número recentemente.
-                </p>
-                {getFactorIcon(fatores.reclamacoes)}
-              </Card>
-
-              <Card className="p-4 space-y-2 border-l-4 border-l-green-500">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <History className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-semibold">Maturidade</span>
-                  </div>
-                  <span className={`text-sm font-bold ${getFactorColor(fatores.tempo_conta)}`}>
-                    {fatores.tempo_conta}/25
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  Tempo de uso e histórico de atividade da conta conectada.
-                </p>
-                {getFactorIcon(fatores.tempo_conta)}
-              </Card>
+              ))}
             </div>
-
-            <div className="space-y-3">
-              <h4 className="text-sm font-bold flex items-center gap-2">
-                <Info className="h-4 w-4 text-primary" />
-                Recomendações
-              </h4>
-              <div className="space-y-2">
-                {fatores.volume_diario < 15 && (
-                  <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-xs flex gap-3">
-                    <AlertTriangle className="h-4 w-4 text-yellow-500 shrink-0" />
-                    <p>
-                      <strong>Volume alto:</strong> Reduza o volume diário para menos de 100 mensagens e use delays de 15-45 segundos entre envios.
-                    </p>
-                  </div>
-                )}
-                {fatores.taxa_resposta < 15 && (
-                  <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-xs flex gap-3">
-                    <AlertTriangle className="h-4 w-4 text-yellow-500 shrink-0" />
-                    <p>
-                      <strong>Taxa de resposta baixa:</strong> Mensagens sem resposta aumentam o risco de ban. Melhore a segmentação da lista e personalize o conteúdo.
-                    </p>
-                  </div>
-                )}
-                {fatores.reclamacoes < 15 && (
-                  <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-xs flex gap-3">
-                    <Ban className="h-4 w-4 text-red-500 shrink-0" />
-                    <p>
-                      <strong>Reclamações detectadas:</strong> Número com reclamações detectadas. Pause os disparos por 48h e revise a lista de contatos.
-                    </p>
-                  </div>
-                )}
-                {fatores.tempo_conta < 15 && (
-                  <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs flex gap-3">
-                    <History className="h-4 w-4 text-blue-500 shrink-0" />
-                    <p>
-                      <strong>Conta nova:</strong> Faça aquecimento gradual: Semana 1: max 20 msg/dia, Semana 2: max 50 msg/dia, Semana 3: max 100 msg/dia.
-                    </p>
-                  </div>
-                )}
-                {score >= 90 && (
-                  <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg text-xs flex gap-3">
-                    <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-                    <p>Sua instância está operando em condições ideais de segurança.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
-    </TooltipProvider>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

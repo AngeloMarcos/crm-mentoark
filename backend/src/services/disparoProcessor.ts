@@ -8,7 +8,7 @@ import { withTenantContext } from '../db';
 import { resolverOwnerId } from './subscription';
 import { log } from '../logger';
 import { avaliarElegibilidade } from '../utils/elegibilidade';
-import { instanciasEmProtecao } from './protecaoNumero';
+import { saudePorInstancia, contatoJaConversou, MAX_ENVIOS_HORA } from './saudeNumero';
 
 // [AUDITORIA] BUG GRAVÍSSIMO CORRIGIDO (achado real do usuário, 2026-09-11 — conta
 // cotinedeborah@gmail.com com 2 campanhas em 0/2661 enviados, 0% por mais de 1h; usuário: "cada
@@ -449,26 +449,49 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
             const contagemPorInstancia = new Map<string, number>(
               contagemRes.rows.map((r: any) => [r.instancia, Number(r.total)])
             );
-            // [AUDITORIA] LÓGICA (Proteção de número, 2026-10-04): número em Modo Número Novo
-            // (primeiros 14 dias, `services/protecaoNumero.ts`) não entra em campanha — disparo em
-            // número recém-conectado é o gatilho clássico de banimento. Se TODAS as instâncias da
-            // campanha estiverem protegidas, pausa com aviso próprio (abaixo).
-            const protegidas = await instanciasEmProtecao(pool);
-            const semProtecao = candidatos.filter(c => !protegidas.has(c.instancia));
-            if (candidatos.length && !semProtecao.length) {
-              const aviso = 'Todas as instâncias desta campanha estão em Modo Número Novo (primeiros 14 dias do número). Use outro número já maturado, ou libere o número em WhatsApp → Instâncias assumindo o risco.';
-              log.warn('DISPARO', 'Campanha pausada: só há instâncias em Modo Número Novo', { disparo_id, instancias: nomesInstancias });
+            // [AUDITORIA] LÓGICA (Etapa A — Saúde de Instâncias, 2026-10-05; substitui o Modo Número
+            // Novo de 14 dias): cada instância só dispara o que a FASE do número e o SCORE permitem
+            // (`saudeNumero.limiteDisparo`) — número em perfil/aquecimento 1/quarentena/banida não
+            // dispara; aquecimento 2 até 20/dia só pra contatos conhecidos; aquecimento 3 até 50;
+            // pré-oficial 100; madura 200; score Atenção corta à metade, Risco só conhecidos,
+            // Crítico bloqueia. Teto de 30 envios/hora por número (disparo + Maturador).
+            const saude = await saudePorInstancia(pool);
+            const motivosBloqueio: string[] = [];
+            let bloqueioSoPorHora = true;
+            const liberadas = candidatos.filter(c => {
+              const s = saude.get(c.instancia);
+              if (!s) return true; // instância padrão sem registro de saúde — segue só as regras antigas
+              if (s.limite.limite <= 0) {
+                motivosBloqueio.push(`${c.instancia}: ${s.limite.motivo}`);
+                bloqueioSoPorHora = false;
+                return false;
+              }
+              if (s.enviados_hoje >= s.limite.limite) {
+                motivosBloqueio.push(`${c.instancia}: limite de ${s.limite.limite}/dia da fase ${s.fase_rotulo} atingido`);
+                bloqueioSoPorHora = false;
+                return false;
+              }
+              if (s.envios_ultima_hora >= MAX_ENVIOS_HORA) return false;
+              return true;
+            });
+            if (candidatos.length && !liberadas.length) {
+              await requeuePendentes(pool, [{ log_id }]);
+              if (bloqueioSoPorHora) return; // só o teto de 30/hora — volta sozinho na próxima hora
+              const soLimiteDoDia = motivosBloqueio.every(m => m.includes('/dia da fase'));
+              const aviso = soLimiteDoDia
+                ? `Limite diário pela fase dos números atingido. Retomando automaticamente amanhã. (${motivosBloqueio.join(' | ')})`
+                : `Pausada pela saúde dos números: ${motivosBloqueio.join(' | ')}`;
+              log.warn('DISPARO', 'Campanha pausada pela saúde dos números', { disparo_id, motivos: motivosBloqueio });
               await pool.query(
                 `UPDATE disparos
-                 SET status = 'pausado', aviso = $2, pausado_em = NOW(), pausado_motivo = 'numero_novo', updated_at = NOW()
+                 SET status = 'pausado', aviso = $2, pausado_em = NOW(), pausado_motivo = $3, updated_at = NOW()
                  WHERE id = $1`,
-                [disparo_id, aviso]
+                [disparo_id, aviso, soLimiteDoDia ? 'limite_diario' : 'saude_numero']
               );
-              await requeuePendentes(pool, [{ log_id }]);
               return;
             }
 
-            const disponiveisHoje = semProtecao.filter(c => (contagemPorInstancia.get(c.instancia) || 0) < limiteDiario);
+            const disponiveisHoje = liberadas.filter(c => (contagemPorInstancia.get(c.instancia) || 0) < limiteDiario);
             instanciasDisponiveisHojeCache.set(disparo_id, { disponiveis: disponiveisHoje, proximoIndex: 0 });
 
             if (!disponiveisHoje.length) {
@@ -623,7 +646,29 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         //    já foi calculada no bloco de transição de campanha acima — candidatos elegíveis
         //    (seleção manual da tela, ou fallback integracoes_config/agentes/env) MENOS os que já
         //    estouraram o próprio teto diário. Round-robin roda só sobre essa lista filtrada.
-        const config: InstanciaElegivel | null = proximaInstanciaDisponivel(disparo_id);
+        let config: InstanciaElegivel | null = proximaInstanciaDisponivel(disparo_id);
+
+        // [AUDITORIA] LÓGICA (Etapa A, 2026-10-05): instância em aquecimento 2 ou com score Risco só
+        // fala com quem já conversou com ela. Contato novo → tenta as outras instâncias da campanha;
+        // se nenhuma puder, o envio é pulado (não conta como falha de envio no score).
+        if (config) {
+          const saudeMapa = await saudePorInstancia(pool);
+          const total = instanciasDisponiveisHojeCache.get(disparo_id)?.disponiveis.length || 1;
+          let permitido = false;
+          for (let t = 0; t < total && config; t++) {
+            const s = saudeMapa.get(config.instancia);
+            if (!s?.limite.somenteConhecidos || await contatoJaConversou(pool, config.instancia, telefone)) { permitido = true; break; }
+            if (t + 1 < total) config = proximaInstanciaDisponivel(disparo_id);
+          }
+          if (!permitido) {
+            await pool.query(
+              `UPDATE disparo_logs SET status = 'failed', erro = 'bloqueado_saude:contato_novo' WHERE id = $1`,
+              [log_id]
+            ).catch(err => log.error('DISPARO', 'Falha ao marcar log bloqueado pela saúde', { err: err?.message }));
+            log.info('DISPARO', 'Mensagem pulada — número em aquecimento/risco só fala com contatos conhecidos', { disparo_id, telefone });
+            return;
+          }
+        }
 
         // [AUDITORIA] FIX PENDENTE (motivo: decisão de produto sobre robustez vs. simplicidade
         // — Sprint Disparos/Multi-instância, 2026-07-25): se a instância escolhida pelo

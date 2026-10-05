@@ -18,6 +18,8 @@ import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { SELECT_PARES_COM_CREDENCIAIS, instanciaConectada, resolverNumerosPar } from '../services/maturadorProcessor';
 import { invalidarNumerosMaturador } from '../services/maturadorFiltro';
+import { registrarEvento, mudarFase, normalizar as normalizarNumeroSaude } from '../services/saudeNumero';
+import { recalcularScoreAgente } from '../services/instanceScore';
 
 export default function maturadorRouter(pool: Pool): Router {
   const router = Router();
@@ -185,15 +187,20 @@ export default function maturadorRouter(pool: Pool): Router {
       `UPDATE maturador_pares SET ativo = false, banido_em = NOW(), banido_agente_id = $1, updated_at = NOW() WHERE id = $2`,
       [agente_id, req.params.id]
     );
-    // Força o score da instância marcada pra refletir o achado real AGORA, sem esperar o cron.
-    await pool.query(
-      `UPDATE agentes SET whatsapp_score = 0,
-              score_fatores = '{"volume_diario":0,"taxa_resposta":0,"reclamacoes":0,"tempo_conta":0}'::jsonb,
-              score_updated_at = NOW()
-       WHERE id = $1 AND user_id = $2`,
+    // [AUDITORIA] LÓGICA (Etapa A, 2026-10-05): a marcação manual entra no histórico REAL do número
+    // (antes só forçava score 0 no formato antigo) — evento `ban_suspeito` + quarentena; se o número
+    // não reconectar em 24h, `avaliarFases` confirma o ban (bans_total+1). Score recalculado na hora.
+    const ag = await pool.query(
+      `SELECT evolution_instancia, numero_conectado FROM agentes WHERE id = $1 AND user_id = $2`,
       [agente_id, userId]
     );
-    log.info('MATURADOR', 'Instância marcada como banida/caída pelo operador — score forçado a 0', { agenteId: agente_id });
+    const numero = normalizarNumeroSaude(ag.rows[0]?.numero_conectado);
+    if (numero) {
+      await registrarEvento(pool, numero, ag.rows[0].evolution_instancia, 'ban_suspeito', null, { motivo: 'marcado manualmente no Maturador' });
+      await mudarFase(pool, numero, 'quarentena', 'marcado como caído/banido pelo operador', ag.rows[0].evolution_instancia);
+    }
+    await recalcularScoreAgente(pool, agente_id, userId).catch(() => null);
+    log.info('MATURADOR', 'Instância marcada como banida/caída pelo operador — quarentena aplicada', { agenteId: agente_id, numero });
     return res.json({ ok: true });
   });
 

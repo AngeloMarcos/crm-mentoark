@@ -68,6 +68,7 @@ import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
 import { ehTrafegoMaturador } from '../services/maturadorFiltro';
 import { aoConectarInstancia, aoDesconectarInstancia, instanciasEmProtecao } from '../services/protecaoNumero';
+import { aoQuedaSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
 import { withTenantContext } from '../db';
 import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
@@ -156,7 +157,8 @@ interface EvolutionPayload {
 
 // [AUDITORIA] LÓGICA: Dicionário em Set para busca O(1) de palavras-chave que disparam a desativação da automação (opt-out).
 const OPT_OUT_KEYWORDS = new Set([
-  'sair', 'stop', 'parar', 'cancelar', 'remover', 'não quero', 'nao quero',
+  'sair', 'stop', 'parar', 'pare', 'cancelar', 'remover', 'não quero', 'nao quero',
+  'spam', 'descadastrar', 'me tira da lista', 'não quero mais', 'nao quero mais',
 ]);
 
 // [AUDITORIA] LÓGICA: Dicionário em Set para busca rápida de comandos que reativam o bot de inteligência artificial.
@@ -690,6 +692,8 @@ export default function webhookRouter(pool: Pool): Router {
         // Freio de reconexão: 440/403 ou quedas em série → desconecta pra parar a reconexão
         // automática da Evolution (ver services/protecaoNumero.ts).
         void aoDesconectarInstancia(pool, payload.instance, statusReason);
+        // Saúde do número: 401/402/403/406 não planejado → quarentena (pausa campanhas e Maturador).
+        void aoQuedaSaude(pool, payload.instance, statusReason);
         const loopStatus = await verificarLoopDeLogout(pool, payload.instance);
         if (loopStatus.emLoop) {
           const userIdLoop = await resolverUserIdPorInstancia(payload.instance).catch(() => null);
@@ -1815,6 +1819,8 @@ export default function webhookRouter(pool: Pool): Router {
             `INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`,
             [userId, telefone, textoNorm]
           ).catch(() => {});
+          // Saúde do número: opt-out entra na linha do tempo da instância que recebeu.
+          void registrarEventoSaude(pool, null, instancia, 'optout_recebido', null, { telefone: telefone.slice(-4) });
           // Enviar confirmação via Evolution (busca config do agente)
           try {
             const cfgOptOut = await pool.query(

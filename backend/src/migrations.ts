@@ -2109,6 +2109,55 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS protecao_alerta_em TIMESTAMPTZ`).catch(() => {});
   log.info('MIGRATIONS', 'Proteção de número (whatsapp_numeros) OK');
 
+  // ── Saúde do número: fases de maturação, bans e eventos (Etapa A, 2026-10-05) ───────────────
+  // [AUDITORIA] LÓGICA: estado de saúde fica no NÚMERO (`whatsapp_numeros`), não na instância —
+  // instâncias são recriadas e trocam de número; o histórico de ban precisa seguir o chip. Fases:
+  // perfil → aquecimento_1 → aquecimento_2 → aquecimento_3 → pre_oficial → madura, mais
+  // quarentena (queda suspeita de ban) e banida. Avançam por SINAIS (sem queda, sem opt-out,
+  // taxa de resposta), não só pelo calendário — ver services/saudeNumero.ts.
+  await pool.query(`
+    ALTER TABLE whatsapp_numeros
+      ADD COLUMN IF NOT EXISTS fase              TEXT,
+      ADD COLUMN IF NOT EXISTS fase_desde        TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS bans_total        INTEGER     NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS ultimo_ban_em     TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS perfil_completo   BOOLEAN     NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS apto_api_oficial  BOOLEAN     NOT NULL DEFAULT false
+  `).catch(() => {});
+  await pool.query(`ALTER TABLE whatsapp_numeros DROP CONSTRAINT IF EXISTS chk_whatsapp_numeros_fase`).catch(() => {});
+  await pool.query(`
+    ALTER TABLE whatsapp_numeros ADD CONSTRAINT chk_whatsapp_numeros_fase CHECK (fase IS NULL OR fase IN
+      ('perfil','aquecimento_1','aquecimento_2','aquecimento_3','pre_oficial','madura','quarentena','banida'))
+  `).catch(() => {});
+  // Backfill (decisão do usuário no deploy da Proteção de número): número que já existia entra
+  // como `madura`; só quem ainda estava em Modo Número Novo começa em `perfil`.
+  await pool.query(`
+    UPDATE whatsapp_numeros
+       SET fase = CASE WHEN protecao_ate > NOW() AND protecao_liberada_em IS NULL THEN 'perfil' ELSE 'madura' END,
+           fase_desde = COALESCE(primeira_conexao_em, NOW())
+     WHERE fase IS NULL
+  `).catch(() => {});
+
+  // Linha do tempo de saúde (aba Diagnóstico + cálculo do score). Tipos: conectou, desconectou
+  // (queda comum), logout (desconexão feita pelo próprio CRM/usuário), ban_suspeito (401/402/403/406
+  // não planejado), ban_confirmado, mudanca_fase, optout_recebido, falha_envio.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_eventos_saude (
+      id            BIGSERIAL   PRIMARY KEY,
+      numero        TEXT,
+      instancia     TEXT,
+      tipo          TEXT        NOT NULL,
+      status_reason INTEGER,
+      detalhe       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+      criado_em     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_eventos_saude_numero ON whatsapp_eventos_saude(numero, criado_em DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_eventos_saude_instancia ON whatsapp_eventos_saude(instancia, criado_em DESC)`).catch(() => {});
+  // Contagens por instância (score, limite diário, teto por hora) filtram disparo_logs por instância.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_disparo_logs_instancia_enviado ON disparo_logs(instancia, enviado_at) WHERE status = 'sent'`).catch(() => {});
+  log.info('MIGRATIONS', 'Saúde do número (fases/bans/eventos) OK');
+
   // ── Circuit-breaker de loop de LOGOUT (Sprint 2026-08-10, continuação Serenovlogs067) ────────
   // [AUDITORIA] BUG GRAVE (2 incidentes reais confirmados — Serenovlogs067 em 10/08 e outro
   // usuário no mesmo dia, ambos com número derrubado/banido pelo WhatsApp): reconectar

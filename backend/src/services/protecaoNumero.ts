@@ -23,6 +23,7 @@
 import { Pool } from 'pg';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
+import { aoConectarSaude, marcarLogoutPlanejado } from './saudeNumero';
 
 export const DIAS_PROTECAO = 14;
 
@@ -107,6 +108,8 @@ function descreverOnde(d: InstanciaRemota[]): string {
 }
 
 async function desconectarInstancia(url: string, apiKey: string, instancia: string): Promise<boolean> {
+  // Desconexão feita pelo próprio CRM — o 401 que a Evolution devolve em seguida não é ban.
+  marcarLogoutPlanejado(instancia);
   try {
     const r = await evolutionFetch(`${sanitizeEvolutionUrl(url)}/instance/logout/${encodeURIComponent(instancia)}`, {
       method: 'DELETE', headers: { apikey: apiKey }, maxRetries: 0,
@@ -137,17 +140,21 @@ async function credenciaisInstancia(pool: Pool, instancia: string): Promise<{ ur
   return x ? { url: x.url, apiKey: x.api_key, userId: x.user_id, autoRead: x.auto_read, rejectCalls: x.reject_calls } : null;
 }
 
-async function numeroDaInstancia(url: string, apiKey: string, instancia: string): Promise<string> {
+/** Número da instância + se o perfil está completo (nome e foto) — `null` quando não deu pra saber. */
+async function numeroDaInstancia(url: string, apiKey: string, instancia: string): Promise<{ numero: string; perfilCompleto: boolean | null }> {
   try {
     const r = await evolutionFetch(`${sanitizeEvolutionUrl(url)}/instance/fetchInstances?instanceName=${encodeURIComponent(instancia)}`, {
       headers: { apikey: apiKey },
     });
-    if (!r.ok) return '';
+    if (!r.ok) return { numero: '', perfilCompleto: null };
     const data: any = await r.json().catch(() => null);
     const info = Array.isArray(data) ? data[0] : null;
-    return normalizarNumero(info?.ownerJid);
+    return {
+      numero: normalizarNumero(info?.ownerJid),
+      perfilCompleto: info ? !!(String(info.profileName || '').trim() && info.profilePicUrl) : null,
+    };
   } catch {
-    return '';
+    return { numero: '', perfilCompleto: null };
   }
 }
 
@@ -199,7 +206,7 @@ export async function aoConectarInstancia(pool: Pool, instancia: string): Promis
   try {
     const cred = await credenciaisInstancia(pool, instancia);
     if (!cred) return;
-    const numero = await numeroDaInstancia(cred.url, cred.apiKey, instancia);
+    const { numero, perfilCompleto } = await numeroDaInstancia(cred.url, cred.apiKey, instancia);
     if (!numero) return;
 
     await pool.query(
@@ -218,7 +225,12 @@ export async function aoConectarInstancia(pool: Pool, instancia: string): Promis
       return;
     }
 
-    const { emProtecao } = await registrarNumero(pool, numero);
+    await registrarNumero(pool, numero);
+    // Saúde do número: evento de conexão, fase inicial (perfil) ou volta pra perfil após quarentena.
+    await aoConectarSaude(pool, instancia, numero, perfilCompleto);
+    // Em aquecimento (qualquer fase antes de pré-oficial/madura), sem leitura automática.
+    const fr = await pool.query(`SELECT fase FROM whatsapp_numeros WHERE numero = $1`, [numero]).catch(() => ({ rows: [] as any[] }));
+    const emProtecao = !['pre_oficial', 'madura'].includes(fr.rows[0]?.fase ?? 'madura');
     await aplicarConfiguracoes(cred.url, cred.apiKey, instancia, emProtecao, cred.autoRead, cred.rejectCalls);
     await gravarAlerta(pool, instancia, null);
     invalidarCacheProtecao();
@@ -270,14 +282,18 @@ export async function aoDesconectarInstancia(pool: Pool, instancia: string, stat
 let cacheProtegidas: { em: number; instancias: Set<string> } | null = null;
 export function invalidarCacheProtecao(): void { cacheProtegidas = null; }
 
-/** Nomes de instância cujo número está em Modo Número Novo agora (cache de 60s). */
+/**
+ * Nomes de instância cujo número ainda está em aquecimento/quarentena (cache de 60s). Desde a
+ * Etapa A (2026-10-05) segue a FASE do número (`saudeNumero.ts`) em vez do prazo fixo de 14 dias
+ * (`protecao_ate`, mantido só como histórico).
+ */
 export async function instanciasEmProtecao(pool: Pool): Promise<Set<string>> {
   if (cacheProtegidas && Date.now() - cacheProtegidas.em < 60_000) return cacheProtegidas.instancias;
   const r = await pool.query(
     `SELECT DISTINCT a.evolution_instancia FROM agentes a
      JOIN whatsapp_numeros w ON w.numero = regexp_replace(a.numero_conectado, '\\D', '', 'g')
      WHERE a.evolution_instancia IS NOT NULL
-       AND w.protecao_ate > NOW() AND w.protecao_liberada_em IS NULL`
+       AND w.fase IN ('perfil','aquecimento_1','aquecimento_2','aquecimento_3','quarentena','banida')`
   ).catch(() => ({ rows: [] as any[] }));
   const instancias = new Set<string>(r.rows.map((x: any) => x.evolution_instancia));
   cacheProtegidas = { em: Date.now(), instancias };

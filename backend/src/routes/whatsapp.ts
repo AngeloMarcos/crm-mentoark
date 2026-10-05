@@ -23,6 +23,7 @@ import { buscarPreviewLink } from '../utils/linkPreview';
 import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
 import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
 import { buscarConexoesDuplicadas, normalizarNumero, invalidarCacheProtecao, DIAS_PROTECAO } from '../services/protecaoNumero';
+import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE } from '../services/saudeNumero';
 import { log } from '../logger';
 import { normalizarTelefone as normalizarTel } from '../utils/telefone';
 import { resolverNome as resolverNomeLimpo } from '../utils/nomes';
@@ -1761,9 +1762,9 @@ export default function whatsappRouter(pool: Pool): Router {
     return res.json({ dias_protecao: DIAS_PROTECAO, instancias: r.rows });
   });
 
-  // POST /protecao/:agenteId/liberar — usuário libera campanhas antes do fim do Modo Número Novo,
-  // assumindo o risco (fica registrado com data). As demais proteções (sem "sempre online",
-  // número duplicado, freio de reconexão) continuam valendo.
+  // POST /protecao/:agenteId/liberar — usuário pula o aquecimento assumindo o risco: o número vai
+  // direto pra fase `madura` (registrado na linha do tempo). Score continua valendo — número com
+  // score Crítico segue bloqueado pra disparo. Quarentena/banida não podem ser liberadas aqui.
   router.post('/protecao/:agenteId/liberar', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     const r = await pool.query(
@@ -1771,13 +1772,55 @@ export default function whatsappRouter(pool: Pool): Router {
        FROM agentes a
        WHERE a.id = $1 AND a.user_id = $2 AND a.numero_conectado IS NOT NULL
          AND w.numero = regexp_replace(a.numero_conectado, '\\D', '', 'g')
-       RETURNING w.numero`,
+       RETURNING w.numero, w.fase, a.evolution_instancia`,
       [req.params.agenteId, userId]
     );
     if (!r.rows.length) return res.status(404).json({ message: 'Instância sem número registrado' });
+    const { numero, fase, evolution_instancia } = r.rows[0];
+    if (fase === 'quarentena' || fase === 'banida') {
+      return res.status(409).json({ message: `Número em ${ROTULO_FASE[fase as 'quarentena']} — não pode ser liberado manualmente.` });
+    }
+    await mudarFase(pool, numero, 'madura', 'liberado manualmente pelo usuário (assumiu o risco)', evolution_instancia);
     invalidarCacheProtecao();
-    log.warn('PROTECAO_NUMERO', 'Modo Número Novo liberado manualmente pelo usuário', { userId, numero: r.rows[0].numero });
+    log.warn('PROTECAO_NUMERO', 'Aquecimento pulado manualmente pelo usuário', { userId, numero });
     return res.json({ ok: true });
+  });
+
+  // GET /saude — fase, score (com explicação), bans e limite de disparo de cada instância do
+  // usuário. Usado pelo card da instância e pelo passo "Instâncias" do Novo Disparo.
+  router.get('/saude', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const lista = await saudeDoUsuario(pool, userId);
+    const extras = await pool.query(
+      `SELECT id, score_fatores, protecao_alerta, protecao_alerta_em FROM agentes WHERE user_id = $1`,
+      [userId]
+    );
+    const porId = new Map(extras.rows.map((x: any) => [x.id, x]));
+    return res.json({
+      instancias: lista.map(s => {
+        const e: any = porId.get(s.agente_id) || {};
+        const v2 = e.score_fatores?.versao === 2 ? e.score_fatores : null;
+        return { ...s, score_itens: v2?.itens ?? [], alerta: e.protecao_alerta ?? null, alerta_em: e.protecao_alerta_em ?? null };
+      }),
+    });
+  });
+
+  // GET /saude/:agenteId/eventos — linha do tempo de saúde do número/instância (aba Diagnóstico).
+  router.get('/saude/:agenteId/eventos', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const ag = await pool.query(
+      `SELECT evolution_instancia, numero_conectado FROM agentes WHERE id = $1 AND user_id = $2`,
+      [req.params.agenteId, userId]
+    );
+    if (!ag.rows.length) return res.status(404).json({ message: 'Instância não encontrada' });
+    const numero = normalizarSaude(ag.rows[0].numero_conectado);
+    const r = await pool.query(
+      `SELECT tipo, status_reason, detalhe, criado_em, instancia FROM whatsapp_eventos_saude
+       WHERE (numero = $1 AND $1 <> '') OR (numero IS NULL AND instancia = $2)
+       ORDER BY criado_em DESC LIMIT 100`,
+      [numero, ag.rows[0].evolution_instancia]
+    );
+    return res.json(r.rows);
   });
 
   router.post('/connect', async (req: AuthRequest, res: Response) => {
@@ -1950,6 +1993,7 @@ export default function whatsappRouter(pool: Pool): Router {
       const forceReconnect = req.body?.force_reconnect === true;
       if (forceReconnect) {
         log.info('WHATSAPP', 'Forçando reconexão - deletando instância antiga', { instancia: cfg.stableInstancia });
+        marcarLogoutPlanejado(cfg.stableInstancia); // desconexão pelo CRM — o 401 seguinte não é ban
         await evolutionFetch(`${base}/instance/delete/${cfg.stableInstancia}`, {
           method: 'DELETE',
           headers: { apikey: cfg.api_key },
@@ -1978,6 +2022,7 @@ export default function whatsappRouter(pool: Pool): Router {
             if (name && name.includes(tenantIdShort) && name !== cfg.stableInstancia && !conhecidas.has(name)) {
               log.info('WHATSAPP', 'Removendo instância órfã (sem linha de config)', { name });
               await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
+              marcarLogoutPlanejado(name); // desconexão pelo CRM — o 401 seguinte não é ban
               await evolutionFetch(`${base}/instance/delete/${name}`, {
                 method: 'DELETE',
                 headers: { apikey: cfg.api_key },
@@ -2250,11 +2295,13 @@ export default function whatsappRouter(pool: Pool): Router {
 
       await registrarWebhook(base, cfg.api_key, instancia, false).catch(() => {});
 
+      marcarLogoutPlanejado(instancia); // desconexão pelo CRM — o 401 seguinte não é ban
       await evolutionFetch(`${base}/instance/logout/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(err => log.warn('WHATSAPP', 'Erro no logout', { instancia, err: err.message }));
 
+      marcarLogoutPlanejado(instancia); // desconexão pelo CRM — o 401 seguinte não é ban
       const deleteRes = await evolutionFetch(`${base}/instance/delete/${instancia}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
@@ -2733,11 +2780,13 @@ export default function whatsappRouter(pool: Pool): Router {
 
       await registrarWebhook(base, cfg.api_key, name, false).catch(() => {});
 
+      marcarLogoutPlanejado(name); // desconexão pelo CRM — o 401 seguinte não é ban
       await evolutionFetch(`${base}/instance/logout/${name}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 
+      marcarLogoutPlanejado(name); // desconexão pelo CRM — o 401 seguinte não é ban
       await evolutionFetch(`${base}/instance/delete/${name}`, {
         method: 'DELETE',
         headers: { apikey: cfg.api_key },

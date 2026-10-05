@@ -4,6 +4,7 @@ import { log } from './logger';
 import { reconciliarInstanciasEvolution } from './services/evolutionReconciliation';
 import { retentarMidiaPendente } from './services/mediaRetry';
 import { recalcularTodosScores } from './services/instanceScore';
+import { avaliarFases } from './services/saudeNumero';
 import { processarMaturador } from './services/maturadorProcessor';
 import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
 import { enfileirarBusca, enfileirarLinkPublico } from './radar/fila';
@@ -228,6 +229,20 @@ export function initCronJobs() {
       }
     } catch (err: any) {
       log.error('CRON', 'Erro ao recalcular Score de Saúde', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // [AUDITORIA] LÓGICA (Etapa A — Saúde de Instâncias, 2026-10-05): de hora em hora, avança a
+  // fase de maturação dos números que cumpriram tempo mínimo + sinais limpos, e confirma ban de
+  // quem ficou 24h em quarentena sem reconectar (services/saudeNumero.ts).
+  cron.schedule('5 * * * *', async () => {
+    try {
+      const { avancos, bansConfirmados } = await avaliarFases(pool);
+      if (avancos > 0 || bansConfirmados > 0) {
+        log.info('CRON', 'Fases de maturação avaliadas', { avancos, bansConfirmados });
+      }
+    } catch (err: any) {
+      log.error('CRON', 'Erro ao avaliar fases de maturação', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 

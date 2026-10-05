@@ -28,6 +28,7 @@ import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
 import { TEMAS, REACOES, aplicarVariacao, sortearTema } from './maturadorDialogos';
 import { registrarIdMaturador, invalidarNumerosMaturador } from './maturadorFiltro';
+import { saudePorInstancia, MAX_ENVIOS_HORA } from './saudeNumero';
 
 const TZ = 'America/Sao_Paulo';
 const MAX_FALHAS = 5;
@@ -200,6 +201,12 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
           [de.id, hoje]
         );
         if (enviadosHoje >= limite) continue;
+
+        // Etapa A (2026-10-05): teto de 30 envios/hora por número somando disparo + Maturador, e
+        // nada sai de número em quarentena/banido (services/saudeNumero.ts).
+        const saudeRemetente = (await saudePorInstancia(pool)).get(de.instancia);
+        if (saudeRemetente && (saudeRemetente.envios_ultima_hora >= MAX_ENVIOS_HORA
+          || saudeRemetente.fase === 'quarentena' || saudeRemetente.fase === 'banida')) continue;
 
         const [deOk, paraOk] = await Promise.all([
           instanciaConectada(de.url, de.key, de.instancia),

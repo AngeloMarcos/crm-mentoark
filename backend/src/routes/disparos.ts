@@ -7,6 +7,7 @@ import { evolutionFetch } from '../utils/resilientFetch';
 import { criarProvider, OpenAIProvider } from '../services/providers';
 import { resolverOwnerId } from '../services/subscription';
 import { resolverTetoDiarioDisparo } from '../services/disparoProcessor';
+import { saudeDoUsuario } from '../services/saudeNumero';
 
 // ── Rate limiting persistente via banco ──────────────────────────────────────
 async function checkRateLimit(pool: Pool, userId: string): Promise<boolean> {
@@ -391,9 +392,41 @@ REGRAS ESTRITAS:
   // Cria campanha (POST '/') cai direto no CRUD genérico (`base`, abaixo) — intercepta só pra
   // aplicar o teto diário (configurável por tenant) antes do INSERT.
   const clamparLimiteDiario = makeClamparLimiteDiario(pool);
-  router.post('/', clamparLimiteDiario);
 
-  router.put('/:id', clamparLimiteDiario, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  // [AUDITORIA] LÓGICA (Etapa A — trava do Novo Disparo, 2026-10-05): ao criar uma campanha ou
+  // retomá-la (status → em_andamento/agendado), recusa se NENHUMA das instâncias escolhidas pode
+  // disparar agora pela fase/score do número (`saudeNumero.limiteDisparo`). Se só algumas estão
+  // bloqueadas, segue — o processador usa só as liberadas. Mesma regra aplicada no envio
+  // (disparoProcessor.ts), aqui é o aviso antecipado com o motivo.
+  const validarSaudeCampanha = async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const status = req.body?.status;
+      const ativando = req.method === 'POST' || status === 'em_andamento' || status === 'agendado';
+      if (!ativando || !req.userId) return next();
+      let ids: string[] = Array.isArray(req.body?.instancias_ids) ? req.body.instancias_ids : [];
+      if (!ids.length && req.method === 'PUT') {
+        const r = await pool.query(`SELECT instancias_ids FROM disparos WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+        ids = r.rows[0]?.instancias_ids || [];
+      }
+      if (!ids.length) return next();
+      const saude = new Map((await saudeDoUsuario(pool, req.userId)).map(s => [s.agente_id, s]));
+      const avaliadas = ids.map(id => saude.get(id)).filter(Boolean) as Awaited<ReturnType<typeof saudeDoUsuario>>;
+      if (avaliadas.length && avaliadas.length === ids.length && avaliadas.every(s => s.limite.limite <= 0)) {
+        return res.status(409).json({
+          code: 'SAUDE_NUMERO',
+          message: `Nenhuma instância selecionada pode disparar agora. ${avaliadas.map(s => `${s.instancia}: ${s.limite.motivo}`).join(' ')}`,
+        });
+      }
+      return next();
+    } catch (err: any) {
+      log.warn('DISPARO', 'Falha ao validar saúde das instâncias da campanha — seguindo (processador aplica a regra no envio)', { err: err?.message });
+      return next();
+    }
+  };
+
+  router.post('/', clamparLimiteDiario, validarSaudeCampanha);
+
+  router.put('/:id', clamparLimiteDiario, validarSaudeCampanha, async (req: AuthRequest, res: Response, next: NextFunction) => {
     const novoStatus = req.body?.status;
     if (novoStatus === 'pausado' || novoStatus === 'cancelado') {
       // [AUDITORIA] BUG DE SEGURANÇA CORRIGIDO (achado 2026-09-04, revisão pós-Sprint Grupos/

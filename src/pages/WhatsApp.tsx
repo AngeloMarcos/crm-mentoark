@@ -14,6 +14,7 @@ import { CRMLayout } from "@/components/CRMLayout";
 import { WhatsAppInterface } from "@/components/WhatsAppInterface";
 import { InstanceManagementPanel } from "@/components/whatsapp/InstanceManagementPanel";
 import { TesteInstancias } from "@/components/whatsapp/TesteInstancias";
+import { LinhaTempoSaude } from "@/components/whatsapp/LinhaTempoSaude";
 import { MaturadorNumeros } from "@/components/whatsapp/MaturadorNumeros";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Inbox, MessageSquare, Smartphone, FlaskConical, MessageCircleHeart } from "lucide-react";
@@ -68,6 +69,7 @@ export default function WhatsAppPage() {
           <MaturadorNumeros />
         </TabsContent>
         <TabsContent value="diagnostico" className="m-0">
+          <LinhaTempoSaude />
           <TesteInstancias />
         </TabsContent>
       </Tabs>

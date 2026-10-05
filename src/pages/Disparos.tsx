@@ -2636,6 +2636,7 @@ function StepAntiBan({ form, setForm }: any) {
   // ligado ao toggle, usado tanto para filtrar a lista abaixo quanto para decidir o limiar do
   // "Selecionar todas" (uniformizado: >70 quando o toggle está ativo, >=40 caso contrário).
   const [apenasSaudaveis, setApenasSaudaveis] = useState(false);
+  const [saudeInst, setSaudeInst] = useState<Record<string, any>>({});
   const LIMIAR_SAUDAVEL = 70;
   const LIMIAR_PADRAO = 40;
   // [AUDITORIA] BUG CORRIGIDO (achado 2026-08-10 — usuário reportou disparo bloqueado por
@@ -2672,9 +2673,30 @@ function StepAntiBan({ form, setForm }: any) {
       const { data } = await api.from("agentes").select("*");
       setInstancias((data || []).filter((i: any) => !!i.evolution_instancia));
       setLoading(false);
+      // Saúde de cada número (fase + score → limite de hoje). Mesma regra que o backend aplica
+      // na criação (routes/disparos.ts) e no envio (disparoProcessor.ts) — aqui é só o aviso.
+      try {
+        const token = await getFreshToken();
+        const r = await fetch(`${API_BASE}/api/whatsapp/saude`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        if (r.ok) {
+          const j = await r.json();
+          const mapa: Record<string, any> = {};
+          for (const s of j?.instancias ?? []) mapa[s.agente_id] = s;
+          setSaudeInst(mapa);
+        }
+      } catch { /* informativo */ }
     };
     fetchInstancias();
   }, []);
+
+  // [AUDITORIA] LÓGICA (Etapa A — trava do Novo Disparo, 2026-10-05): bloqueio passa a vir da
+  // saúde do número (fase de maturação + score, `saudeNumero.limiteDisparo` no backend) em vez do
+  // limiar fixo de score. Sem dado de saúde (instância antiga sem número registrado), segue a regra
+  // de score de antes.
+  const bloqueadaPorSaude = (i: any) => {
+    const s = saudeInst[i.id];
+    return s ? s.limite.limite <= 0 : (scoreCalculado(i) && scoreDe(i) < LIMIAR_PADRAO);
+  };
 
   const instanciasVisiveis = apenasSaudaveis
     ? instancias.filter(i => scoreCalculado(i) && scoreDe(i) > LIMIAR_SAUDAVEL)
@@ -2713,9 +2735,7 @@ function StepAntiBan({ form, setForm }: any) {
               className="h-7 text-xs"
               onClick={() => {
                 const available = instancias
-                  .filter(i => apenasSaudaveis
-                    ? (scoreCalculado(i) && scoreDe(i) > LIMIAR_SAUDAVEL)
-                    : (!scoreCalculado(i) || scoreDe(i) >= LIMIAR_PADRAO))
+                  .filter(i => !bloqueadaPorSaude(i) && (!apenasSaudaveis || (scoreCalculado(i) && scoreDe(i) > LIMIAR_SAUDAVEL)))
                   .map(i => i.id);
                 const allSelected = available.length > 0 && available.every(id => form.instancias_ids.includes(id));
                 setForm({ ...form, instancias_ids: allSelected ? [] : available });
@@ -2731,7 +2751,8 @@ function StepAntiBan({ form, setForm }: any) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           {instanciasVisiveis.map(inst => {
-            const isBlocked = scoreCalculado(inst) && scoreDe(inst) < LIMIAR_PADRAO;
+            const isBlocked = bloqueadaPorSaude(inst);
+            const s = saudeInst[inst.id];
             return (
               <div key={inst.id} className={`flex items-center justify-between p-3 border rounded-lg ${isBlocked ? 'bg-red-50/50 dark:bg-red-950/10 border-red-200' : ''}`}>
                 <div className="flex items-center gap-3">
@@ -2750,6 +2771,13 @@ function StepAntiBan({ form, setForm }: any) {
                   <div>
                     <p className="text-sm font-bold">{inst.nome}</p>
                     <p className="text-[10px] text-muted-foreground font-mono">{inst.evolution_instancia}</p>
+                    {s && (
+                      <p className={`text-[10px] mt-0.5 ${isBlocked ? "text-red-600" : "text-muted-foreground"}`}>
+                        {isBlocked
+                          ? s.limite.motivo
+                          : `${s.fase_rotulo} · hoje ${s.enviados_hoje}/${s.limite.limite}${s.limite.somenteConhecidos ? " · só contatos conhecidos" : ""}`}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">

@@ -118,17 +118,24 @@ interface Profile {
   display_name: string | null;
 }
 
-// Proteção de número (2026-10-04) — ver backend/src/services/protecaoNumero.ts.
-interface ProtecaoInfo {
+// Saúde do número (Etapa A, 2026-10-05) — ver backend/src/services/saudeNumero.ts.
+interface SaudeInfo {
   agente_id: string;
-  numero_conectado: string | null;
-  protecao_alerta: string | null;
-  protecao_alerta_em: string | null;
-  primeira_conexao_em: string | null;
-  protecao_ate: string | null;
-  protecao_liberada_em: string | null;
-  em_protecao: boolean | null;
+  numero: string | null;
+  fase: string | null;
+  fase_rotulo: string;
+  fase_desde: string | null;
+  bans_total: number;
+  apto_api_oficial: boolean;
+  enviados_hoje: number;
+  limite: { limite: number; somenteConhecidos: boolean; motivo: string | null; liberaEm: string | null };
+  alerta: string | null;
 }
+
+const FASES_AQUECIMENTO = ["perfil", "aquecimento_1", "aquecimento_2", "aquecimento_3"];
+// Dia do aquecimento em que cada fase começa (perfil 1 + aq1 4 + aq2 5 + aq3 5 + pré-oficial 7 = 22 dias).
+const DIA_INICIO_FASE: Record<string, number> = { perfil: 0, aquecimento_1: 1, aquecimento_2: 5, aquecimento_3: 10, pre_oficial: 15 };
+const TOTAL_DIAS_AQUECIMENTO = 22;
 
 type ConnState = "open" | "close" | "connecting" | "unauthorized";
 
@@ -157,7 +164,7 @@ export function InstanceManagementPanel() {
   const [editing, setEditing] = useState<Agente | null>(null);
   const [saving, setSaving] = useState(false);
   const [calculating, setCalculating] = useState<string | null>(null);
-  const [protecao, setProtecao] = useState<Record<string, ProtecaoInfo>>({});
+  const [saude, setSaude] = useState<Record<string, SaudeInfo>>({});
 
   // ─── Renomear instância (inline, sem abrir a modal de configuração inteira) ───
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -664,17 +671,17 @@ export function InstanceManagementPanel() {
     try {
       const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
       const t = getAuthToken();
-      const res = await fetch(`${API_BASE}/api/whatsapp/protecao`, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+      const res = await fetch(`${API_BASE}/api/whatsapp/saude`, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
       if (!res.ok) return;
       const json = await res.json();
-      const map: Record<string, ProtecaoInfo> = {};
-      for (const p of (json?.instancias ?? []) as ProtecaoInfo[]) map[p.agente_id] = p;
-      setProtecao(map);
+      const map: Record<string, SaudeInfo> = {};
+      for (const p of (json?.instancias ?? []) as SaudeInfo[]) map[p.agente_id] = p;
+      setSaude(map);
     } catch { /* informativo — não bloqueia a tela */ }
   };
 
   const liberarProtecao = async (a: Agente) => {
-    if (!confirm(`Liberar campanhas no número de "${a.nome}" antes do fim do Modo Número Novo?
+    if (!confirm(`Pular o aquecimento do número de "${a.nome}" e liberar campanhas agora?
 
 Disparo em número recém-conectado é a causa mais comum de banimento. Só faça isso se o número já tem uso real no celular há semanas.`)) return;
     try {
@@ -849,6 +856,12 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
             // ao componente ScoreInstancia.
             const desconectada = state !== "open";
             const isCritical = desconectada || (!naoCalculado && score < 40);
+            const sd = saude[a.id];
+            const emAquecimento = !!sd?.fase && FASES_AQUECIMENTO.includes(sd.fase);
+            const diaAquecimento = sd?.fase && sd.fase_desde && sd.fase in DIA_INICIO_FASE
+              ? DIA_INICIO_FASE[sd.fase] + Math.floor((Date.now() - new Date(sd.fase_desde).getTime()) / 86_400_000) + 1
+              : null;
+            const disparoBloqueado = desconectada || (!!sd && sd.limite.limite <= 0);
 
             return (
               <Card key={a.id} className={`p-5 space-y-4 hover:shadow-lg transition-all border-2 ${isCritical ? 'border-red-500/50 bg-red-50/30' : 'border-transparent'}`}>
@@ -996,28 +1009,52 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                   )}
                 </div>
 
-                {/* Proteção de número (2026-10-04): alerta do último bloqueio de segurança
-                    (número duplicado / freio de reconexão) e Modo Número Novo. */}
-                {protecao[a.id]?.protecao_alerta && (
+                {/* Saúde do número (Etapa A, 2026-10-05): alerta do último bloqueio de segurança,
+                    fase de maturação, histórico de ban e limite de disparo de hoje. */}
+                {sd?.alerta && (
                   <div className="flex items-start gap-2 p-2 rounded-md bg-red-500/10 border border-red-500/30 text-[11px] text-red-700 dark:text-red-400">
                     <AlertOctagon className="h-3.5 w-3.5 shrink-0 mt-px" />
-                    <span>{protecao[a.id].protecao_alerta}</span>
+                    <span>{sd.alerta}</span>
                   </div>
                 )}
-                {protecao[a.id]?.em_protecao && protecao[a.id]?.protecao_ate && (
-                  <div className="p-2 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-[11px] space-y-1.5">
-                    <p className="flex items-center gap-1.5 font-semibold text-emerald-700 dark:text-emerald-400">
-                      <ShieldCheck className="h-3.5 w-3.5" />
-                      Modo Número Novo até {new Date(protecao[a.id].protecao_ate!).toLocaleDateString("pt-BR")}
-                    </p>
+                {sd?.fase && (
+                  <div className={`p-2 rounded-md border text-[11px] space-y-1.5 ${
+                    sd.fase === "quarentena" || sd.fase === "banida"
+                      ? "bg-red-500/10 border-red-500/30"
+                      : emAquecimento ? "bg-amber-500/10 border-amber-500/30" : "bg-emerald-500/10 border-emerald-500/30"
+                  }`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="flex items-center gap-1.5 font-semibold">
+                        <ShieldCheck className="h-3.5 w-3.5" /> Fase: {sd.fase_rotulo}
+                      </p>
+                      {diaAquecimento !== null && (
+                        <span className="text-muted-foreground">dia {Math.min(diaAquecimento, TOTAL_DIAS_AQUECIMENTO)} de {TOTAL_DIAS_AQUECIMENTO}</span>
+                      )}
+                    </div>
                     <p className="text-muted-foreground">
-                      Sem campanhas, sem "sempre online" e sem leitura automática. Use o Maturador
-                      para aquecer o número nesse período.
+                      {sd.limite.limite > 0
+                        ? `Disparo hoje: ${sd.enviados_hoje}/${sd.limite.limite}${sd.limite.somenteConhecidos ? " (só contatos que já conversaram)" : ""}.`
+                        : sd.limite.motivo}
+                      {sd.limite.limite > 0 && sd.limite.motivo && !sd.limite.somenteConhecidos ? ` ${sd.limite.motivo}` : ""}
                     </p>
-                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => liberarProtecao(a)}>
-                      Liberar campanhas (assumo o risco)
-                    </Button>
+                    {emAquecimento && (
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => liberarProtecao(a)}>
+                        Pular aquecimento (assumo o risco)
+                      </Button>
+                    )}
                   </div>
+                )}
+                {!!sd?.bans_total && (
+                  <div className="flex items-start gap-2 p-2 rounded-md bg-red-500/10 border border-red-500/30 text-[11px] text-red-700 dark:text-red-400">
+                    <AlertOctagon className="h-3.5 w-3.5 shrink-0 mt-px" />
+                    <span>
+                      {sd.bans_total} ban(s) anterior(es) neste número
+                      {sd.bans_total >= 2 ? " — não recomendado para API oficial; prefira um chip novo." : "."}
+                    </span>
+                  </div>
+                )}
+                {sd?.apto_api_oficial && (
+                  <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-700">Apto para API oficial</Badge>
                 )}
 
                 {/* [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): texto
@@ -1056,12 +1093,17 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                   )}
                 </div>
                 
-                <Button 
-                  className="w-full h-8 text-xs" 
-                  variant={isCritical ? "secondary" : "default"}
-                  disabled={isCritical}
+                {/* [AUDITORIA] BUG CORRIGIDO (Etapa A, 2026-10-05): o botão não tinha onClick — não
+                    fazia nada. Agora leva pra tela de Disparos e fica desabilitado quando a fase/score
+                    do número não permite disparo (mesma regra do backend, `saudeNumero.limiteDisparo`). */}
+                <Button
+                  className="w-full h-8 text-xs"
+                  variant={disparoBloqueado ? "secondary" : "default"}
+                  disabled={disparoBloqueado}
+                  title={disparoBloqueado ? (desconectada ? "Instância desconectada" : sd?.limite.motivo ?? "") : ""}
+                  onClick={() => { window.location.href = "/disparos"; }}
                 >
-                  {isCritical ? "Disparos Desabilitados" : "Novo Disparo"}
+                  {disparoBloqueado ? "Disparos Desabilitados" : "Novo Disparo"}
                 </Button>
               </Card>
             );
