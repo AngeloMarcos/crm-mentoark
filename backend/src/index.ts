@@ -70,6 +70,7 @@ import conversasRouter from './routes/conversas';
 import { testarAgentePlayground } from './services/agentEngine';
 import metaOficialRouter from './routes/metaOficial';
 import metaWebhookRouter from './routes/metaWebhook';
+import smartLinksRouter, { smartLinkPublico } from './routes/smartLinks';
 import aiProvidersRouter from './routes/ai-providers';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
@@ -175,6 +176,8 @@ app.use('/webhook', webhookRouter(pool));
 // acima — a Meta chama esta URL diretamente, sem JWT nosso; segurança real é o handshake de
 // verificação (GET) + assinatura HMAC (POST), ver routes/metaWebhook.ts.
 app.use('/webhook/meta', metaWebhookRouter(pool));
+// Sprint 3 / H7: Smart Link público (sem auth) — conta o clique e redireciona pro WhatsApp.
+app.get('/l/:codigo', smartLinkPublico(pool));
 // ── MCP com CORS específico para n8n Cloud ─────────────────────────────────
 app.use('/mcp', (req, res, next) => {
   const mcpOrigins = (process.env.MCP_ALLOWED_ORIGINS || 'https://fierceparrot-n8n.cloudfy.live')
@@ -492,6 +495,7 @@ app.use('/api/funis', funisRouter(pool));
 app.use('/api/conversas', conversasRouter(pool));
 app.use('/api/ai-providers', aiProvidersRouter(pool));
 app.use('/api/meta-oficial', metaOficialRouter(pool));
+app.use('/api/smart-links', smartLinksRouter(pool));
 app.use('/api/ai', aiUsoRouter(pool));
 app.use('/api/integracoes_config', integracoesRouter(pool));
 app.use('/api/cargos', cargosRouter(pool));

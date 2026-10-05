@@ -471,7 +471,7 @@ export default function DisparosPage() {
   const [targetContacts, setTargetContacts] = useState<any[]>([]);
   const [loadingCount, setLoadingCount] = useState(false);
   const [recorte, setRecorte] = useState<RecorteAudiencia | null>(null);
-  const [opcoesRecorte, setOpcoesRecorte] = useState<OpcoesRecorte>({ excluirRobos: true, excluirSemNome: false });
+  const [opcoesRecorte, setOpcoesRecorte] = useState<OpcoesRecorte>({ excluirRobos: true, excluirSemNome: false, somenteConhecidos: false });
   // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): `modo` substitui a lógica antiga
   // de "sempre abre no wizard" — tela padrão agora é a lista de campanhas (`CampanhasList`),
   // wizard só aparece sob ação explícita ("+ Nova Campanha"). Campanha aberta pra
@@ -732,10 +732,11 @@ export default function DisparosPage() {
           contato_ids: unique.map((c: any) => c.id),
           excluir_robos: opcoesRecorte.excluirRobos,
           excluir_sem_nome: opcoesRecorte.excluirSemNome,
+          somente_conhecidos: opcoesRecorte.somenteConhecidos === true,
         });
         const porId = new Map(unique.map((c: any) => [c.id, c] as [string, any]));
         const ordenados = (pre.elegiveis as string[]).map(id => porId.get(id)).filter(Boolean);
-        setRecorte({ selecionados: unique.length, elegiveis: ordenados.length, excluidos: pre.excluidos ?? {}, rotulos: pre.rotulos ?? {}, comPropensao: pre.com_propensao ?? 0 });
+        setRecorte({ selecionados: unique.length, elegiveis: ordenados.length, excluidos: pre.excluidos ?? {}, rotulos: pre.rotulos ?? {}, comPropensao: pre.com_propensao ?? 0, frios: pre.frios ?? 0 });
         setTargetContacts(ordenados);
       } catch {
         setRecorte(null);
@@ -744,7 +745,7 @@ export default function DisparosPage() {
       setLoadingCount(false);
     };
     fetchCount();
-  }, [form.tags_selecionadas, form.estagios_selecionados, form.listas_selecionadas, opcoesRecorte.excluirRobos, opcoesRecorte.excluirSemNome]);
+  }, [form.tags_selecionadas, form.estagios_selecionados, form.listas_selecionadas, opcoesRecorte.excluirRobos, opcoesRecorte.excluirSemNome, opcoesRecorte.somenteConhecidos]);
 
   // Validação por etapa — habilita "Próximo" só quando OK
   const stepValid = useMemo(() => {

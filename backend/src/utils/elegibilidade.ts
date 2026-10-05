@@ -16,6 +16,9 @@ export interface ContatoParaChecagem {
   ultimo_disparo_em: string | Date | null;
   nome_confiavel: boolean | null;
   propensao: number | string | null;
+  // Sprint 3 / H7: já conversou com a empresa (respondeu, veio de Smart Link/anúncio ou mandou
+  // mensagem primeiro). undefined = não avaliado (regra "só conhecidos" não se aplica).
+  conhecido?: boolean;
 }
 
 export interface OpcoesElegibilidade {
@@ -24,11 +27,12 @@ export interface OpcoesElegibilidade {
   excluirRobos?: boolean;          // padrão true
   excluirSemNome?: boolean;        // padrão false (80% dos contatos de grupo não têm nome)
   diasSuprimirNegativa?: number;   // padrão 90
+  somenteConhecidos?: boolean;     // padrão false — Sprint 3 / H7 (inbound primeiro)
 }
 
 export type MotivoExclusao =
   | 'sem_telefone' | 'telefone_invalido' | 'grupo_ou_lid' | 'opt_out' | 'resposta_negativa'
-  | 'robo' | 'sem_whatsapp' | 'cooldown' | 'sem_nome';
+  | 'robo' | 'sem_whatsapp' | 'cooldown' | 'sem_nome' | 'contato_frio';
 
 export const ROTULOS_EXCLUSAO: Record<MotivoExclusao, string> = {
   sem_telefone: 'sem telefone',
@@ -40,6 +44,7 @@ export const ROTULOS_EXCLUSAO: Record<MotivoExclusao, string> = {
   sem_whatsapp: 'sem WhatsApp',
   cooldown: 'em cooldown',
   sem_nome: 'sem nome',
+  contato_frio: 'nunca conversou com a empresa',
 };
 
 const ms = (d: string | Date | null): number => (d ? new Date(d).getTime() : NaN);
@@ -51,6 +56,10 @@ export function avaliarElegibilidade(c: ContatoParaChecagem, o: OpcoesElegibilid
   if (!digitos) return 'sem_telefone';
   if (c.tipo_telefone === 'invalido' || c.tipo_telefone === 'fixo') return 'telefone_invalido';
   if (digitos.length > 15) return 'grupo_ou_lid';
+  // Sprint 3 / H1 (2026-10-05): contato que só tem LID (sem telefone conhecido) é marcado
+  // `tipo_telefone='lid'` pelo webhook. LID tem 14-15 dígitos e passava pela regra acima — o
+  // disparo mandava pra um "telefone" que não existe. Só responde dentro da conversa.
+  if (c.tipo_telefone === 'lid') return 'grupo_ou_lid';
   if (c.opt_out === true) return 'opt_out';
 
   const cat = c.resposta_categoria;
@@ -69,6 +78,7 @@ export function avaliarElegibilidade(c: ContatoParaChecagem, o: OpcoesElegibilid
     if (Number.isFinite(ultimo) && agora - ultimo < cooldown) return 'cooldown';
   }
   if (o.excluirSemNome === true && c.nome_confiavel !== true) return 'sem_nome';
+  if (o.somenteConhecidos && c.conhecido === false) return 'contato_frio';
   return null;
 }
 

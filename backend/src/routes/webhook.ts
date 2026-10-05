@@ -69,6 +69,8 @@ import { processarComDebounce, botMessageIds, botSentTexts } from '../services/a
 import { ehTrafegoMaturador } from '../services/maturadorFiltro';
 import { aoConectarInstancia, aoDesconectarInstancia, instanciasEmProtecao } from '../services/protecaoNumero';
 import { aoQuedaSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
+import { extrairIdentidades, resolverTelefone, registrarIdentidades, lembrarDestinoLid, marcarContatoSoLid } from '../services/identidadeContato';
+import { registrarOrigemInbound } from './smartLinks';
 import { withTenantContext } from '../db';
 import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
@@ -801,7 +803,7 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // [AUDITORIA] LÓGICA: Valida e sanitiza o remetente JID (remoteJid).
-      const remoteJid = payload.data?.key?.remoteJid || '';
+      let remoteJid = payload.data?.key?.remoteJid || '';
       log.info('WEBHOOK', 'remoteJid resolvido', { traceId, remoteJid });
       if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio instance=${payload.instance}`); return; }
       if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}" instance=${payload.instance}`); return; }
@@ -819,7 +821,7 @@ export default function webhookRouter(pool: Pool): Router {
       if (!messageId) return;
 
       const instancia  = payload.instance;
-      const telefone   = remoteJid.split('@')[0]; // phone ou groupId
+      let telefone   = remoteJid.split('@')[0]; // phone ou groupId (ou LID — ver identidade abaixo)
       // Em grupos o remetente real fica em key.participant
       const participant = payload.data?.key?.participant;
       const senderJid  = isGroup ? (participant || '') : remoteJid;
@@ -949,6 +951,28 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       log.info('WEBHOOK', 'Resolução final', { traceId, userId, fromMe, isGroup });
+      // [AUDITORIA] LÓGICA (Sprint 3 / H1 — identidade por múltiplos IDs, 2026-10-05): conversa 1:1
+      // que chega por `@lid` (Linked ID, sem telefone) passa a usar o TELEFONE real quando ele é
+      // conhecido — veio junto (`remoteJidAlt`/`senderPn`) ou foi aprendido antes pra esse LID. Daqui
+      // pra baixo `telefone`/`remoteJid` já são os do telefone: contato único, resposta ao disparo
+      // casada, inbox numa conversa só e IA respondendo pro número certo. LID sem telefone conhecido:
+      // contato marcado "só LID" e a IA responde pro JID @lid. Ver services/identidadeContato.ts.
+      if (!isGroup && remoteJid) {
+        const identidades = extrairIdentidades(payload.data?.key);
+        const telefoneReal = await resolverTelefone(pool, userId, identidades).catch(() => null);
+        if (remoteJid.endsWith('@lid')) {
+          if (telefoneReal) {
+            telefone = telefoneReal;
+            remoteJid = `${telefoneReal}@s.whatsapp.net`;
+          } else if (identidades.lid) {
+            lembrarDestinoLid(identidades.lid, remoteJid);
+            const lidJid = remoteJid;
+            // Depois do upsert antecipado do contato (abaixo, sem await) — marca "só LID".
+            setTimeout(() => { void marcarContatoSoLid(pool, userId as string, identidades.lid as string, lidJid); }, 2000);
+          }
+        }
+        void registrarIdentidades(pool, userId, { telefone: telefoneReal ?? identidades.telefone, lid: identidades.lid }, instancia);
+      }
 
       // [AUDITORIA] LÓGICA (Maturador v2, 2026-10-04): mensagem trocada pelo Maturador de Números
       // entre 2 instâncias do próprio usuário NUNCA segue o fluxo normal — sem contato/lead, sem
@@ -1560,6 +1584,10 @@ export default function webhookRouter(pool: Pool): Router {
         log.info('WEBHOOK', 'INSERT RESULT (0=duplicata, 1=novo, -1=erro)', {
           traceId, rowCount: (insertResult as any).rowCount,
         });
+
+        // Sprint 3 / H7: 1ª mensagem com código de Smart Link ou vinda de anúncio clique-para-WhatsApp
+        // marca a origem inbound do contato (primeiro toque vence). Ver routes/smartLinks.ts.
+        if (!isGroup && !fromMe) void registrarOrigemInbound(pool, userId, telefone, texto, payload.data);
 
         // Resposta a disparo (robô, recusa, interesse, opt-out): só mensagem nova de conversa individual.
         if ((insertResult as any).rowCount === 1 && !isGroup && texto) {

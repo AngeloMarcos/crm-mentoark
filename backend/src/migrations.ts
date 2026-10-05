@@ -2158,6 +2158,82 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_disparo_logs_instancia_enviado ON disparo_logs(instancia, enviado_at) WHERE status = 'sent'`).catch(() => {});
   log.info('MIGRATIONS', 'Saúde do número (fases/bans/eventos) OK');
 
+  // ── Identidade de contato por múltiplos IDs (Sprint 3 / H1, 2026-10-05) ──────────────────────
+  // [AUDITORIA] LÓGICA: o telefone deixou de ser identificador único — Baileys 7 entrega conversas
+  // por LID (`@lid`, ~metade do tráfego 1:1 em produção) e a API oficial passa a mandar BSUID/
+  // username sem telefone. Cada ID visto é uma linha aqui, por usuário (multi-tenant). Para `lid`,
+  // `telefone` guarda o telefone real quando a Evolution o informou junto (`remoteJidAlt`) — é o
+  // que permite reconhecer mensagens seguintes que chegam só com o LID. Ver
+  // services/identidadeContato.ts. Reversível: DROP TABLE contato_identidades.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contato_identidades (
+      id            BIGSERIAL   PRIMARY KEY,
+      user_id       UUID        NOT NULL,
+      tipo          TEXT        NOT NULL CHECK (tipo IN ('telefone','wa_id','lid','bsuid','parent_bsuid','username')),
+      valor         TEXT        NOT NULL,
+      telefone      TEXT,
+      contato_id    UUID        REFERENCES contatos(id) ON DELETE SET NULL,
+      instancia     TEXT,
+      waba_id       TEXT,
+      criado_em     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT uq_contato_identidade UNIQUE (user_id, tipo, valor)
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_contato_identidades_contato ON contato_identidades(contato_id)`).catch(() => {});
+  // Contatos "fantasma" já existentes: o "telefone" é na verdade um LID. Só marca quando há
+  // conversa registrada com esse mesmo valor como JID `@lid` (prova de que é LID, não um telefone
+  // internacional longo) — elegibilidade de disparo passa a excluí-los (utils/elegibilidade.ts).
+  await pool.query(`
+    UPDATE contatos c
+       SET tipo_telefone = 'lid', whatsapp_jid = regexp_replace(c.telefone, '\\D', '', 'g') || '@lid'
+     WHERE c.telefone IS NOT NULL
+       AND length(regexp_replace(c.telefone, '\\D', '', 'g')) BETWEEN 12 AND 16
+       AND c.tipo_telefone IS DISTINCT FROM 'lid'
+       AND EXISTS (SELECT 1 FROM whatsapp_messages m
+                   WHERE m.user_id = c.user_id
+                     AND m.remote_jid = regexp_replace(c.telefone, '\\D', '', 'g') || '@lid')
+  `).catch(err => log.warn('MIGRATIONS', 'Marcação de contatos só-LID falhou', { err: err?.message }));
+  log.info('MIGRATIONS', 'Identidade de contato (contato_identidades) OK');
+
+  // ── Conformidade da IA com a política da Meta (Sprint 3 / H9, 2026-10-05) ───────────────────
+  // `escopo_ia`: tema único que o agente atende (ex.: "atendimento imobiliário") — vira restrição
+  // no prompt; obrigatório pra canal oficial. `empresa_nome`: usado na identificação da 1ª
+  // resposta ("Sou o assistente virtual da {empresa}"). Reversível: DROP COLUMN.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS escopo_ia TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS empresa_nome TEXT`).catch(() => {});
+  log.info('MIGRATIONS', 'Conformidade da IA (escopo/empresa no agente) OK');
+
+  // ── Inbound primeiro: Smart Links + origem do contato (Sprint 3 / H7, 2026-10-05) ───────────
+  // [AUDITORIA] LÓGICA: contato que chama primeiro é o tráfego mais seguro pro número (não conta
+  // como disparo frio). Smart Link = link curto público (/l/:codigo) que abre o WhatsApp da
+  // instância com mensagem pré-preenchida contendo o código; a 1ª mensagem com o código marca o
+  // contato com a origem (campanha/anúncio/bio/QR). Anúncio clique-para-WhatsApp (CTWA) é
+  // detectado pelo `externalAdReply` da mensagem. Reversível: DROP TABLE smart_links + DROP COLUMN.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS smart_links (
+      id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id          UUID        NOT NULL,
+      codigo           TEXT        NOT NULL UNIQUE,
+      nome             TEXT        NOT NULL,
+      agente_id        UUID        REFERENCES agentes(id) ON DELETE SET NULL,
+      numero           TEXT        NOT NULL,
+      mensagem         TEXT        NOT NULL,
+      origem           TEXT        NOT NULL DEFAULT 'outro' CHECK (origem IN ('campanha','anuncio','bio','qr','outro')),
+      campanha         TEXT,
+      cliques          INTEGER     NOT NULL DEFAULT 0,
+      ultimo_clique_em TIMESTAMPTZ,
+      leads            INTEGER     NOT NULL DEFAULT 0,
+      ativo            BOOLEAN     NOT NULL DEFAULT true,
+      criado_em        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_smart_links_user ON smart_links(user_id)`).catch(() => {});
+  for (const col of ['origem_inbound_em TIMESTAMPTZ', 'origem_inbound_tipo TEXT', 'origem_inbound_link_id UUID', 'origem_inbound_campanha TEXT']) {
+    await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  log.info('MIGRATIONS', 'Smart Links / origem inbound OK');
+
   // ── Circuit-breaker de loop de LOGOUT (Sprint 2026-08-10, continuação Serenovlogs067) ────────
   // [AUDITORIA] BUG GRAVE (2 incidentes reais confirmados — Serenovlogs067 em 10/08 e outro
   // usuário no mesmo dia, ambos com número derrubado/banido pelo WhatsApp): reconectar

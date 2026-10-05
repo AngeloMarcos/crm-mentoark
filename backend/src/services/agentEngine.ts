@@ -27,6 +27,7 @@ import { registrarUsoIA, estimarCustoUsd, estimarCustoWhisperUsd } from '../util
 import { analisarImagem } from '../utils/vision';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
+import { destinoEnvio, jidConversa } from './identidadeContato';
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
@@ -253,7 +254,7 @@ async function enviarResposta(
   const r = await evolutionFetch(`${base}/message/sendText/${instancia}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: apiKey },
-    body: JSON.stringify({ number: telefone, text: texto, delay: 1200 }),
+    body: JSON.stringify({ number: destinoEnvio(telefone), text: texto, delay: 1200 }),
   });
   if (!r.ok) throw new Error(`Evolution: ${r.status} ${await r.text()}`);
   // Registra o ID real do WhatsApp para o webhook não pausar a IA
@@ -315,7 +316,7 @@ async function enviarRespostaVoz(
     const r = await evolutionFetch(`${base}/message/sendWhatsAppAudio/${instancia}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
-      body: JSON.stringify({ number: telefone, audio: audioUrl }),
+      body: JSON.stringify({ number: destinoEnvio(telefone), audio: audioUrl }),
     });
     if (!r.ok) {
       log.warn('ENGINE VOZ', 'Evolution recusou o envio de áudio — caindo pro texto', {
@@ -441,6 +442,83 @@ async function upsertContato(
 // de propósito — não deve reativar sozinha depois de N minutos como a pausa "IA decidiu
 // encerrar" normal, porque o motivo aqui é uma falha real (chave sem crédito, rate limit, erro
 // de rede) que só um humano deve resolver e reativar manualmente.
+// ── Passagem para humano (Sprint 3 / H9, 2026-10-05) ─────────────────────────────────────────
+// [AUDITORIA] LÓGICA: a política da Meta para IA no WhatsApp (2026) permite bots de tarefa
+// específica desde que exista saída para atendente humano. Antes, pedir "atendente" só gerava
+// mais uma resposta da IA. Agora: frase curta e explícita pedindo pessoa → IA pausa pra este
+// contato, cliente é avisado, fica registrado (ia_pausa_log + linha do tempo) e a equipe recebe
+// card de alta prioridade no Kanban (mesmo canal já usado pela pausa por falha de LLM).
+const PEDIDO_HUMANO = [
+  /\b(falar|conversar|atendimento)\s+(com\s+)?(um|uma|o|a)?\s*(atendente|humano|pessoa|vendedor|vendedora|consultor|consultora|corretor|corretora)\b/i,
+  /^\s*(atendente|humano|pessoa real|quero um humano|quero atendente|me passa pra um atendente)\s*[.!?]*\s*$/i,
+  // \b do JS não reconhece letra acentuada ("robô" termina em ô) — fronteira via \p{L} com flag u.
+  /(?<!\p{L})n[aã]o quero (falar com )?(rob[oô]|bot|ia|m[aá]quina)(?!\p{L})/iu,
+];
+export function pediuAtendenteHumano(texto: string | null): boolean {
+  const t = String(texto || '').trim();
+  if (!t || t.length > 160) return false; // mensagem longa: é conversa, não pedido de transferência
+  return PEDIDO_HUMANO.some(r => r.test(t));
+}
+
+async function transferirParaHumano(
+  pool: Pool, userId: string, entrada: MensagemEntrada, agente: any, contatoId: string,
+): Promise<void> {
+  const sufixo = `%${entrada.telefone.slice(-11)}`;
+  await pool.query(`UPDATE contatos SET atendente_pausou_ia = true, updated_at = NOW() WHERE user_id = $1 AND telefone ILIKE $2`, [userId, sufixo]).catch(() => {});
+  await pool.query(
+    `INSERT INTO dados_cliente (user_id, telefone, atendimento_ia, pausa_timestamp) VALUES ($1, $2, 'pause', NOW())
+     ON CONFLICT (user_id, telefone) DO UPDATE SET atendimento_ia = 'pause', pausa_timestamp = NOW()`,
+    [userId, entrada.telefone]
+  ).catch(() => {});
+  await pool.query(
+    `INSERT INTO ia_pausa_log (user_id, telefone, acao, observacao, contato_id) VALUES ($1, $2, 'pause', $3, $4)`,
+    [userId, entrada.telefone, `Cliente pediu atendente humano: "${String(entrada.texto || '').slice(0, 120)}"`, contatoId]
+  ).catch(() => pool.query(
+    `INSERT INTO ia_pausa_log (user_id, telefone, acao, observacao) VALUES ($1, $2, 'pause', $3)`,
+    [userId, entrada.telefone, `Cliente pediu atendente humano: "${String(entrada.texto || '').slice(0, 120)}"`]
+  ).catch(() => {}));
+  await pool.query(
+    `INSERT INTO timeline_eventos (contato_id, user_id, tipo, titulo, descricao) VALUES ($1, $2, 'sistema', $3, $4)`,
+    [contatoId, userId, 'Pediu atendente humano', `IA pausada para este contato. Mensagem: "${String(entrada.texto || '').slice(0, 200)}"`]
+  ).catch(() => {});
+
+  if (agente?.evolution_server_url && agente?.evolution_api_key) {
+    const aviso = 'Certo! Vou chamar uma pessoa da nossa equipe para continuar o seu atendimento. É só aguardar um instante. 🙂';
+    const instanciaEnvio = agente.evolution_instancia || entrada.instancia;
+    try {
+      await enviarResposta(userId, agente.evolution_server_url, agente.evolution_api_key, instanciaEnvio, entrada.telefone, aviso);
+      // Mesmo registro das respostas normais da IA (prefixo resp_ = mensagem do bot), pra aparecer na inbox.
+      await withTenantContext({ userId, isAdmin: false }, client => client.query(
+        `INSERT INTO whatsapp_messages (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
+         VALUES ($1, $2, $3, $4, true, 'text', $5, 'sent', NOW())
+         ON CONFLICT (message_id, instance_name) DO NOTHING`,
+        [userId, instanciaEnvio, jidConversa(entrada.telefone), `resp_humano_${entrada.messageId}`, aviso]
+      )).catch(() => {});
+    } catch (err: any) {
+      log.warn('ENGINE', 'Falha ao avisar transferência para humano', { err: err?.message });
+    }
+  }
+
+  const backendUrl = process.env.BACKEND_URL || 'https://api.mentoark.com.br';
+  const kanbanSecret = process.env.N8N_WEBHOOK_SECRET || 'mentoark-kanban-secret-2025';
+  fetch(`${backendUrl}/api/kanban/webhook/n8n`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-webhook-secret': kanbanSecret },
+    body: JSON.stringify({
+      user_id: userId,
+      titulo: `🙋 Pediu atendente: ${entrada.pushName} (${entrada.telefone})`,
+      resumo: `O cliente pediu para falar com uma pessoa. A IA foi pausada para este contato. Mensagem: "${String(entrada.texto || '').slice(0, 300)}"`,
+      contato_nome: entrada.pushName,
+      contato_telefone: entrada.telefone,
+      remote_jid: `${entrada.telefone}@s.whatsapp.net`,
+      instance_name: entrada.instancia,
+      prioridade: 'alta',
+    }),
+  }).catch(err => log.warn('ENGINE', 'Falha ao criar card Kanban de pedido de atendente', { err: err?.message }));
+
+  log.info('ENGINE', 'Cliente pediu atendente humano — IA pausada', { userId, telefone: entrada.telefone });
+}
+
 async function pausarPorFalhaLLM(
   pool: Pool, userId: string, entrada: MensagemEntrada, motivo: string,
 ): Promise<void> {
@@ -630,6 +708,14 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     return;
   }
 
+  // 3.6. Passagem para humano (Sprint 3 / H9 — política de IA da Meta exige saída para atendente):
+  // pedido explícito de pessoa ("falar com atendente", "humano"...) pausa a IA pra este contato,
+  // avisa o cliente, registra na linha do tempo e cria card de alta prioridade pra equipe.
+  if (pediuAtendenteHumano(entrada.texto)) {
+    await transferirParaHumano(pool, userIdFinal, entrada, agente, contato.id);
+    return;
+  }
+
   // 4. Criar provider ANTES de resolver mídia (a apiKey é necessária para Whisper/Vision)
   const providerInfo = await criarProvider(pool, userIdFinal, agente.provider_id ?? null);
   if (!providerInfo) {
@@ -793,9 +879,18 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       `Assim que ela responder com o nome, chame a ferramenta criar_ou_atualizar_contato com o nome (mesmo telefone, campo nome preenchido).`
     : '';
 
+  // Sprint 3 / H9 (2026-10-05): escopo declarado do agente. A política da Meta (2026) proíbe
+  // assistente de uso geral — com escopo preenchido, a IA fica restrita a ele e oferece atendente
+  // humano fora disso. Sem escopo, comportamento de antes (compatibilidade).
+  const instrucaoEscopo = String(agente.escopo_ia || '').trim()
+    ? `\n\nESCOPO OBRIGATÓRIO: você atende exclusivamente sobre: ${String(agente.escopo_ia).trim()}. ` +
+      `Para qualquer assunto fora disso, diga educadamente que não pode ajudar com esse tema e ofereça ` +
+      `falar com um atendente (o cliente pode escrever "atendente"). Nunca atue como assistente de uso geral.`
+    : '';
+
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
-    instrucaoNome;
+    instrucaoNome + instrucaoEscopo;
 
   // [AUDITORIA] LÓGICA (Sprint 7, 2026-07-23 — verificação de ordem do histórico enviado à
   // LLM, pedida pelo usuário): `ORDER BY created_at DESC` abaixo busca as 20 mais recentes
@@ -1038,7 +1133,10 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   if (!pausaAtivada && parserMessages.length) {
     // Correção 1 — Validar telefone antes de enviar
     const telefoneDigitos = entrada.telefone.replace(/\D/g, '');
-    if (telefoneDigitos.length < 10 || telefoneDigitos.length > 13) {
+    // Sprint 3 / H1: contato só-LID (sem telefone conhecido) responde pelo JID @lid
+    // (`destinoEnvio`) — o "telefone" dele tem 14-15 dígitos e cairia nesta trava.
+    const respondePorLid = destinoEnvio(entrada.telefone).endsWith('@lid');
+    if (!respondePorLid && (telefoneDigitos.length < 10 || telefoneDigitos.length > 13)) {
       log.warn('ENGINE', 'Telefone inválido, abortando envio', { telefone: entrada.telefone });
       return;
     }
@@ -1053,6 +1151,20 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       log.error('ENGINE', 'Agente sem Evolution configurado — não enviando resposta');
       log.error('ENGINE', 'Configure evolution_server_url e evolution_api_key no agente');
       return;
+    }
+
+    // Sprint 3 / H9 (2026-10-05): na PRIMEIRA resposta da IA a este contato (sem histórico de
+    // assistente), identifica que é um assistente virtual e mostra como chegar num humano —
+    // exigência da política de IA da Meta e boa prática de transparência.
+    if (!historico.some(h => h.role === 'assistant')) {
+      const empresa = String(agente.empresa_nome || '').trim();
+      await enviarResposta(
+        userIdFinal, agente.evolution_server_url, agente.evolution_api_key,
+        agente.evolution_instancia || entrada.instancia, entrada.telefone,
+        `Olá! Sou ${nomeAgente}, o assistente virtual${empresa ? ` da ${empresa}` : ''}. ` +
+        `Se preferir falar com uma pessoa da equipe, é só escrever *atendente*.`
+      ).catch(err => log.warn('ENGINE', 'Falha ao enviar identificação da IA', { err: err?.message }));
+      await new Promise(r => setTimeout(r, 1500));
     }
 
     // [AUDITORIA] LÓGICA (Sprint TTS): resposta em voz é opt-in por agente
@@ -1112,7 +1224,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
        VALUES ($1,$2,$3,$4,true,$5,$6,$7,$8,'sent',to_timestamp($9), $10)
        ON CONFLICT (message_id, instance_name) DO NOTHING`,
       [userIdFinal, agente.evolution_instancia || entrada.instancia,
-       `${entrada.telefone}@s.whatsapp.net`,
+       jidConversa(entrada.telefone), // contato só-LID: a conversa na inbox é a do JID @lid
        // [AUDITORIA] LÓGICA: prefixo "resp_" é o sinal que webhook.ts usa (checagem
        // messageId.startsWith('resp_')) para reconhecer que esta mensagem veio do próprio bot e
        // não deve disparar a lógica de "atendente assumiu, pausar IA" — acoplamento implícito

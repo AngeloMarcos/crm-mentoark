@@ -308,12 +308,16 @@ export default function higienizacaoRouter(pool: Pool): Router {
         excluirRobos: req.body?.excluir_robos !== false,
         excluirSemNome: req.body?.excluir_sem_nome === true,
         diasSuprimirNegativa: Math.max(0, Number(req.body?.dias_suprimir_negativa) || 90),
+        somenteConhecidos: req.body?.somente_conhecidos === true,
       };
       const contatos: any[] = [];
       for (let i = 0; i < ids.length; i += 5000) {
         const q = await pool.query(
           `SELECT id, telefone, telefone_normalizado, tipo_telefone, whatsapp_status, opt_out, bot_detectado,
-                  resposta_categoria, resposta_em, ultimo_disparo_em, nome_confiavel, propensao
+                  resposta_categoria, resposta_em, ultimo_disparo_em, nome_confiavel, propensao,
+                  -- Sprint 3 / H7: já conversou = respondeu, veio de Smart Link/anúncio, ou o contato
+                  -- nasceu de mensagem recebida no WhatsApp (webhook cria com origem 'WhatsApp').
+                  (resposta_em IS NOT NULL OR origem_inbound_em IS NOT NULL OR origem = 'WhatsApp') AS conhecido
              FROM contatos WHERE user_id = $1 AND id = ANY($2::uuid[])`, [tenantId, ids.slice(i, i + 5000)]);
         contatos.push(...q.rows);
       }
@@ -324,6 +328,8 @@ export default function higienizacaoRouter(pool: Pool): Router {
         excluidos: recorte.excluidos,
         rotulos: ROTULOS_EXCLUSAO,
         com_propensao: recorte.elegiveis.filter(c => c.propensao !== null).length,
+        // Sprint 3 / H7: quantos da seleção nunca conversaram com a empresa (aviso acima de 30%).
+        frios: contatos.filter(c => c.conhecido === false).length,
       });
     } catch (err: any) {
       log.error('HIGIENIZACAO', 'Erro em POST /precheck', { err: err?.message });

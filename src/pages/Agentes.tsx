@@ -105,6 +105,8 @@ interface Agente {
   // Config unificada (Sprint 1 — antes vivia em agent_configs, tabela hoje aposentada)
   prompt_sistema?: string | null;
   saudacao_inicial?: string | null;
+  escopo_ia?: string | null;
+  empresa_nome?: string | null;
   bloco_qualificacao?: string | null;
   mensagem_encaminhamento?: string | null;
   mensagem_encerramento?: string | null;
@@ -289,6 +291,8 @@ const formInicial = {
   // Config unificada (Sprint 1)
   prompt_sistema: "",
   saudacao_inicial: "",
+  escopo_ia: "",
+  empresa_nome: "",
   bloco_qualificacao: "",
   mensagem_encaminhamento: "",
   mensagem_encerramento: "",
@@ -402,6 +406,8 @@ export default function AgentesPage() {
       mcp_tools: a.mcp_tools ?? MCP_TOOLS_DEFAULT,
       prompt_sistema: a.prompt_sistema ?? "",
       saudacao_inicial: a.saudacao_inicial ?? "",
+      escopo_ia: a.escopo_ia ?? "",
+      empresa_nome: a.empresa_nome ?? "",
       bloco_qualificacao: a.bloco_qualificacao ?? "",
       mensagem_encaminhamento: a.mensagem_encaminhamento ?? "",
       mensagem_encerramento: a.mensagem_encerramento ?? "",
@@ -467,6 +473,8 @@ export default function AgentesPage() {
       // Config unificada (Sprint 1 — antes vivia em agent_configs)
       prompt_sistema: form.prompt_sistema.trim() || null,
       saudacao_inicial: form.saudacao_inicial.trim() || null,
+      escopo_ia: form.escopo_ia.trim() || null,
+      empresa_nome: form.empresa_nome.trim() || null,
       bloco_qualificacao: form.bloco_qualificacao.trim() || null,
       mensagem_encaminhamento: form.mensagem_encaminhamento.trim() || null,
       mensagem_encerramento: form.mensagem_encerramento.trim() || null,
@@ -1312,6 +1320,28 @@ export default function AgentesPage() {
             </TabsContent>
 
             <TabsContent value="comportamento" className="space-y-4 pt-4">
+              {/* Sprint 3 / H9 (2026-10-05): política de IA da Meta — agente de tarefa específica,
+                  identificado na 1ª resposta e com saída para atendente humano ("atendente"). */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Nome da empresa</Label>
+                  <Input
+                    value={form.empresa_nome}
+                    onChange={(e) => setForm({ ...form, empresa_nome: e.target.value })}
+                    placeholder="Ex: Mentoark"
+                  />
+                  <p className="text-[11px] text-muted-foreground">Usado na 1ª resposta: "Sou o assistente virtual da …".</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Escopo do agente</Label>
+                  <Input
+                    value={form.escopo_ia}
+                    onChange={(e) => setForm({ ...form, escopo_ia: e.target.value })}
+                    placeholder="Ex: atendimento imobiliário e agendamento de visitas"
+                  />
+                  <p className="text-[11px] text-muted-foreground">A IA só fala desse tema e oferece atendente fora dele. Obrigatório para a API oficial.</p>
+                </div>
+              </div>
               <div className="space-y-1.5">
                 <Label>Saudação Inicial</Label>
                 <Textarea
