@@ -2,52 +2,45 @@
  * routes/maturador.ts — CRUD do Maturador de Números (Sprint Score Real + Maturador, 2026-08-09,
  * item 2): listar pares, criar par, ativar/desativar, marcar como banido, excluir.
  *
- * [AUDITORIA] BUG EVITADO (achado por leitura de `agentEngine.ts` ANTES de implementar, não
- * assumido): `processarMensagem()` resolve o agente pela instância que recebeu a mensagem
- * (`WHERE evolution_instancia=X AND user_id=Y AND ativo=true`) mas, se essa busca não achar NADA
- * (instância sem `agentes.ativo=true` PRÓPRIO — ativo=false, ou linha inexistente), cai num
- * FALLBACK que pega QUALQUER agente `ativo=true` DA MESMA CONTA (`WHERE user_id=$1 AND ativo=true
- * ORDER BY updated_at DESC LIMIT 1`). Ou seja: checar só se as DUAS instâncias do par têm
- * `ativo=false` não é suficiente — se NENHUMA das duas tiver sua PRÓPRIA linha `ativo=true`, o
- * fallback pode pegar a mensagem do maturador e entregar pra QUALQUER OUTRA instância com IA
- * ativa da conta, gerando uma chamada real de IA (custo de token real, quebrando a promessa de
- * "zero IA" desta feature).
- *
- * [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-13 — "não é verdade" que a conta tem
- * IA ativa): a 1ª versão deste guard-rail (visão de conta inteira) tinha 2 imprecisões, achadas ao
- * ler `agentEngine.ts` de novo em detalhe: (1) `ativo=true` sozinho não basta nem quando o agente
- * É o resolvido diretamente — `agentEngine.ts` (linha ~752) se recusa a responder sem
- * `prompt_sistema` PRÓPRIO ou `agent_prompts` (legado, por CONTA) reais, nem cai numa persona
- * genérica. (2) o fallback pra "qualquer outro agente ativo da conta" só é alcançado quando a
- * busca pela instância específica (`evolution_instancia=X AND ativo=true`) não encontra NADA —
- * se a própria instância JÁ tem uma linha `ativo=true` (mesmo sem prompt), `agentEngine.ts` para
- * ali, nunca chega no fallback de conta. Confirmado no banco: a conta do usuário tinha as 2
- * instâncias do par (Comercial/Pessoal) com `ativo=true` mas SEM prompt — cada uma resolve
- * direto pra si mesma e desiste por falta de prompt, nunca alcançando um 3º agente ("Stella") que
- * tinha prompt real mas nenhuma relação com este par. A versão anterior deste guard-rail
- * (checagem de conta inteira) via "Stella" e recusava ativar um par que, na prática, corria risco
- * ZERO — falso positivo puro.
- * [AUDITORIA] FIX APLICADO: `parTemRiscoDeIaResponder` reproduz a mesma árvore de decisão de
- * `agentEngine.ts` pras 2 instâncias do par especificamente — só bloqueia quando (a) uma das 2
- * tem `ativo=true` E prompt efetivo (próprio ou legado da conta) real, ou (b) NENHUMA das 2 tem
- * sua própria linha `ativo=true` (o que abre o fallback de conta) E existe outro agente
- * `ativo=true`+prompt efetivo em algum lugar da conta.
+ * [AUDITORIA] HISTÓRICO: as versões de 2026-08-09 e 2026-09-13 protegiam contra a IA responder
+ * uma mensagem do maturador recusando ATIVAR o par se a conta tivesse agente/prompt capaz de
+ * responder (inclusive o prompt legado `agent_prompts`). Achado real do usuário (2026-10-04):
+ * isso obrigava a desligar a IA da conta inteira pra usar o maturador, e não protegia contra uma
+ * IA ligada DEPOIS da ativação.
+ * [AUDITORIA] FIX APLICADO (Maturador v2): a proteção saiu da ativação e foi pra ORIGEM — o
+ * webhook reconhece tráfego do maturador (`services/maturadorFiltro.ts`) e nunca o entrega pra
+ * IA/contatos/leads. A ativação agora exige o que esse filtro precisa pra funcionar: as 2
+ * instâncias conectadas e com o número real identificado.
  */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
+import { SELECT_PARES_COM_CREDENCIAIS, instanciaConectada, resolverNumerosPar } from '../services/maturadorProcessor';
+import { invalidarNumerosMaturador } from '../services/maturadorFiltro';
 
 export default function maturadorRouter(pool: Pool): Router {
   const router = Router();
 
-  // GET / — lista pares do usuário, com nome/instância das 2 pontas já resolvidos (evita N+1 no frontend)
+  // GET / — lista pares do usuário, com nome/instância/score das 2 pontas, quanto cada ponta já
+  // mandou hoje (teto é por instância) e as últimas mensagens trocadas (evita N+1 no frontend).
   router.get('/', async (req: AuthRequest, res: Response) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
     const r = await pool.query(
-      `SELECT mp.*, a.nome AS agente_a_nome, a.evolution_instancia AS agente_a_instancia,
-              b.nome AS agente_b_nome, b.evolution_instancia AS agente_b_instancia
+      `SELECT mp.id, mp.agente_a_id, mp.agente_b_id, mp.ativo, mp.data_inicio, mp.contador_dia,
+              mp.banido_em, mp.banido_agente_id, mp.ultima_mensagem_em, mp.proxima_mensagem_em,
+              mp.hora_inicio, mp.hora_fim, mp.pausado_motivo, mp.numero_a, mp.numero_b,
+              a.nome AS agente_a_nome, a.evolution_instancia AS agente_a_instancia, a.whatsapp_score AS agente_a_score,
+              b.nome AS agente_b_nome, b.evolution_instancia AS agente_b_instancia, b.whatsapp_score AS agente_b_score,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.de_agente_id = mp.agente_a_id AND m.tipo = 'texto'
+                 AND (m.created_at AT TIME ZONE 'America/Sao_Paulo')::date = (NOW() AT TIME ZONE 'America/Sao_Paulo')::date) AS enviados_hoje_a,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.de_agente_id = mp.agente_b_id AND m.tipo = 'texto'
+                 AND (m.created_at AT TIME ZONE 'America/Sao_Paulo')::date = (NOW() AT TIME ZONE 'America/Sao_Paulo')::date) AS enviados_hoje_b,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.par_id = mp.id AND m.tipo = 'texto') AS total_mensagens,
+              COALESCE((SELECT json_agg(u ORDER BY u.created_at DESC) FROM (
+                 SELECT m.de_agente_id, m.tipo, m.texto, m.created_at FROM maturador_mensagens m
+                 WHERE m.par_id = mp.id ORDER BY m.created_at DESC LIMIT 6) u), '[]'::json) AS ultimas_mensagens
        FROM maturador_pares mp
        JOIN agentes a ON a.id = mp.agente_a_id
        JOIN agentes b ON b.id = mp.agente_b_id
@@ -58,48 +51,31 @@ export default function maturadorRouter(pool: Pool): Router {
     return res.json(r.rows);
   });
 
-  // [AUDITORIA] LÓGICA: checagem compartilhada por criação E ativação — a conta pode ligar um
-  // agente de IA DEPOIS de já ter criado/ativado um par, então a validação tem que rodar de novo
-  // em toda ativação, não só na criação. Ver nota grande no topo do arquivo pra árvore de decisão
-  // completa (mesma de `agentEngine.ts`) e o achado real que motivou reescrever isto 2x.
-  async function parTemRiscoDeIaResponder(userId: string, agenteAId: string, agenteBId: string): Promise<boolean> {
-    // "Prompt efetivo da conta" — mesmo fallback legado que agentEngine.ts consulta quando
-    // `agente.prompt_sistema` do agente resolvido vier vazio (linha ~746, `agent_prompts`).
-    const legadoRes = await pool.query(
-      `SELECT 1 FROM agent_prompts WHERE user_id = $1 AND ativo = true
-         AND conteudo IS NOT NULL AND trim(conteudo) <> '' LIMIT 1`,
-      [userId]
-    );
-    const temPromptLegado = legadoRes.rows.length > 0;
-
-    const parRes = await pool.query(
-      `SELECT id, ativo, (prompt_sistema IS NOT NULL AND trim(prompt_sistema) <> '') AS tem_prompt_proprio
-       FROM agentes WHERE id = ANY($1::uuid[]) AND user_id = $2`,
-      [[agenteAId, agenteBId], userId]
-    );
-
-    // (a) Risco direto: uma das 2 instâncias do par tem `ativo=true` E vai encontrar um prompt de
-    // verdade quando `agentEngine.ts` resolvê-la (própria, ou o legado da conta como fallback) —
-    // ela mesma responde, sem precisar de fallback de conta nenhum.
-    const riscoDireto = parRes.rows.some(r => r.ativo && (r.tem_prompt_proprio || temPromptLegado));
-    if (riscoDireto) return true;
-
-    // (b) Risco por fallback de conta: só existe se NENHUMA das 2 instâncias tiver sua própria
-    // linha `ativo=true` — só nesse caso a busca por instância de `agentEngine.ts` vem vazia e
-    // cai no fallback "qualquer agente ativo=true da conta". Se QUALQUER uma das 2 já tem
-    // `ativo=true` (mesmo sem prompt), `agentEngine.ts` para nela e desiste ali — nunca alcança
-    // um 3º agente não relacionado a este par, então o fallback de conta é irrelevante aqui.
-    const nenhumaTemAtivoProprio = parRes.rows.length < 2 || parRes.rows.every(r => !r.ativo);
-    if (!nenhumaTemAtivoProprio) return false;
-
-    const outroRes = await pool.query(
-      `SELECT 1 FROM agentes
-       WHERE user_id = $1 AND ativo = true
-         AND (prompt_sistema IS NOT NULL AND trim(prompt_sistema) <> '' OR $2)
-       LIMIT 1`,
-      [userId, temPromptLegado]
-    );
-    return outroRes.rows.length > 0;
+  // Pré-requisito pra ligar um par: as 2 pontas conectadas e com número identificado (o filtro
+  // do webhook depende do número pra reconhecer o tráfego do maturador). Devolve o motivo da
+  // recusa, ou null se estiver tudo certo.
+  async function motivoParaNaoAtivar(parId: string, userId: string): Promise<string | null> {
+    const r = await pool.query(`${SELECT_PARES_COM_CREDENCIAIS} WHERE mp.id = $1 AND mp.user_id = $2`, [parId, userId]);
+    const par = r.rows[0];
+    if (!par) return 'Par não encontrado';
+    if (!par.a_url || !par.a_instancia || !par.b_url || !par.b_instancia) {
+      return 'Uma das instâncias do par está sem conexão configurada com o WhatsApp.';
+    }
+    const [aOk, bOk] = await Promise.all([
+      instanciaConectada(par.a_url, par.a_key, par.a_instancia),
+      instanciaConectada(par.b_url, par.b_key, par.b_instancia),
+    ]);
+    if (!aOk || !bOk) {
+      return `A instância "${!aOk ? par.a_instancia : par.b_instancia}" não está conectada. Conecte as 2 instâncias antes de ligar o Maturador.`;
+    }
+    const { numeroA, numeroB } = await resolverNumerosPar(pool, par);
+    if (!numeroA || !numeroB) {
+      return 'Não foi possível descobrir o número de uma das instâncias. Tente de novo em alguns segundos.';
+    }
+    if (numeroA.slice(-8) === numeroB.slice(-8)) {
+      return 'As 2 instâncias estão conectadas no MESMO número de WhatsApp — o par precisa de 2 números diferentes.';
+    }
+    return null;
   }
 
   // POST / — cria par novo (sempre nasce ativo=false, ver migrations.ts)
@@ -126,6 +102,7 @@ export default function maturadorRouter(pool: Pool): Router {
         `INSERT INTO maturador_pares (user_id, agente_a_id, agente_b_id) VALUES ($1, $2, $3) RETURNING *`,
         [userId, agente_a_id, agente_b_id]
       );
+      invalidarNumerosMaturador(userId);
       return res.status(201).json(r.rows[0]);
     } catch (err: any) {
       if (err?.code === '23505') { // unique violation — par já existe
@@ -136,7 +113,7 @@ export default function maturadorRouter(pool: Pool): Router {
     }
   });
 
-  // PATCH /:id/ativo — liga/desliga um par (guard-rail de IA checado aqui, não só na criação)
+  // PATCH /:id/ativo — liga/desliga um par (pré-requisitos checados a cada ativação)
   router.patch('/:id/ativo', async (req: AuthRequest, res: Response) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
@@ -144,21 +121,41 @@ export default function maturadorRouter(pool: Pool): Router {
     if (typeof ativo !== 'boolean') return res.status(400).json({ message: '"ativo" precisa ser true/false' });
 
     if (ativo) {
-      const par = await pool.query(
-        `SELECT agente_a_id, agente_b_id FROM maturador_pares WHERE id = $1 AND user_id = $2`,
-        [req.params.id, userId]
-      );
-      if (!par.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
-      if (await parTemRiscoDeIaResponder(userId, par.rows[0].agente_a_id, par.rows[0].agente_b_id)) {
-        return res.status(409).json({
-          message: 'Uma das instâncias deste par (ou o fallback de IA da conta) tem um agente com prompt configurado. Ativar o Maturador arrisca a mensagem cair na IA de verdade (custo real de token) — desative esse agente antes de ligar o Maturador.',
-        });
-      }
+      const motivo = await motivoParaNaoAtivar(req.params.id, userId);
+      if (motivo === 'Par não encontrado') return res.status(404).json({ message: motivo });
+      if (motivo) return res.status(409).json({ message: motivo });
+      invalidarNumerosMaturador(userId);
     }
 
+    // Ligar zera o estado de falha/pausa automática e libera a 1ª troca na hora.
     const r = await pool.query(
-      `UPDATE maturador_pares SET ativo = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3 RETURNING *`,
+      `UPDATE maturador_pares
+       SET ativo = $1, updated_at = NOW(),
+           falhas_consecutivas = CASE WHEN $1 THEN 0 ELSE falhas_consecutivas END,
+           pausado_motivo      = CASE WHEN $1 THEN NULL ELSE pausado_motivo END,
+           proxima_mensagem_em = CASE WHEN $1 THEN NOW() ELSE proxima_mensagem_em END,
+           msgs_restantes_sessao = CASE WHEN $1 THEN 0 ELSE msgs_restantes_sessao END
+       WHERE id = $2 AND user_id = $3 RETURNING id, ativo`,
       [ativo, req.params.id, userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
+    return res.json(r.rows[0]);
+  });
+
+  // PATCH /:id/config — janela de horário em que o par conversa (horário de Brasília)
+  router.patch('/:id/config', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId;
+    if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
+    const inicio = Number(req.body?.hora_inicio);
+    const fim = Number(req.body?.hora_fim);
+    const valida = (h: number) => Number.isInteger(h) && h >= 0 && h <= 23;
+    if (!valida(inicio) || !valida(fim) || inicio === fim) {
+      return res.status(400).json({ message: 'Horário inválido — use horas inteiras de 0 a 23, início diferente do fim' });
+    }
+    const r = await pool.query(
+      `UPDATE maturador_pares SET hora_inicio = $1, hora_fim = $2, updated_at = NOW()
+       WHERE id = $3 AND user_id = $4 RETURNING id, hora_inicio, hora_fim`,
+      [inicio, fim, req.params.id, userId]
     );
     if (!r.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
     return res.json(r.rows[0]);
@@ -232,6 +229,7 @@ export default function maturadorRouter(pool: Pool): Router {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
     await pool.query(`DELETE FROM maturador_pares WHERE id = $1 AND user_id = $2`, [req.params.id, userId]);
+    invalidarNumerosMaturador(userId);
     return res.status(204).send();
   });
 

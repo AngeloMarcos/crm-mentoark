@@ -62,11 +62,17 @@ export interface ScoreResultado {
   };
 }
 
+// [AUDITORIA] BUG CORRIGIDO (Maturador v2, 2026-10-04): o tráfego do Maturador de Números entrava
+// aqui como volume — a 100 msg/dia o fator caía de 25 pra 15, ou seja, o maturador derrubava o
+// próprio score que existe pra melhorar. O fator "volume" mede envio em massa pra terceiros.
+// [AUDITORIA] FIX APLICADO: exclui mensagens registradas em `maturador_mensagens` (mesmo
+// message_id). Elas continuam contando na taxa de resposta (é troca real nos 2 sentidos).
 async function calcularVolumeDiario(pool: Pool, userId: string, instancia: string): Promise<number> {
   const r = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM whatsapp_messages
-     WHERE user_id = $1 AND instance_name = $2 AND from_me = true
-       AND created_at >= NOW() - INTERVAL '24 hours'`,
+    `SELECT COUNT(*)::int AS total FROM whatsapp_messages w
+     WHERE w.user_id = $1 AND w.instance_name = $2 AND w.from_me = true
+       AND w.created_at >= NOW() - INTERVAL '24 hours'
+       AND NOT EXISTS (SELECT 1 FROM maturador_mensagens mm WHERE mm.message_id = w.message_id)`,
     [userId, instancia]
   );
   return r.rows[0]?.total ?? 0;

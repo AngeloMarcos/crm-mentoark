@@ -1,16 +1,15 @@
 /**
  * MaturadorNumeros.tsx — aba "Maturador" de /whatsapp (Sprint Score Real + Maturador,
- * 2026-08-09, item 2). Ferramenta pra "esquentar" números novos/recém-conectados trocando
- * mensagem pré-escrita entre 2+ instâncias da própria conta — zero IA/token externo (banco de
- * diálogo determinístico, `backend/src/services/maturadorDialogos.ts`). Motor real roda no
- * backend (`maturadorProcessor.ts`, cron de 1min) — esta tela só cria/ativa/desativa pares e
- * mostra a contagem do dia.
+ * 2026-08-09; v2 em 2026-10-04). Ferramenta pra "esquentar" números novos/recém-conectados
+ * trocando mensagem pré-escrita entre 2 instâncias da própria conta — zero IA/token externo
+ * (banco por tema, `backend/src/services/maturadorDialogos.ts`). Motor real roda no backend
+ * (`maturadorProcessor.ts`, cron de 1min) — esta tela cria/liga/desliga pares, ajusta a janela de
+ * horário e mostra o progresso (fase, envios do dia por ponta, score, últimas trocas).
  *
- * [AUDITORIA] LÓGICA: "ativar" pode ser recusado pelo backend (409) se a conta tiver qualquer
- * instância com IA ativa (`agentes.ativo=true`) — guard-rail contra a mensagem do maturador cair
- * no fallback de IA da conta (`agentEngine.ts`, ver comentário completo em
- * `backend/src/routes/maturador.ts`) e gerar custo real de token. A mensagem de erro do backend
- * já explica o motivo — só repassada aqui via toast, sem reescrever a lógica no frontend.
+ * [AUDITORIA] LÓGICA (v2): a IA não precisa mais estar desligada pra usar o maturador — o
+ * webhook reconhece o tráfego do maturador e nunca o entrega pra IA (`maturadorFiltro.ts`).
+ * "Ligar" ainda pode ser recusado (409) se uma ponta estiver desconectada ou sem número
+ * identificado; a mensagem do backend já explica o motivo e é só repassada via toast.
  */
 import { useEffect, useState } from "react";
 import { getAuthToken } from "@/lib/api-token";
@@ -20,8 +19,11 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Users2, Plus, Trash2, AlertOctagon, Info, MessageCircleHeart } from "lucide-react";
+import {
+  Loader2, Users2, Plus, Trash2, AlertOctagon, Info, MessageCircleHeart, Clock, PauseCircle, ShieldCheck,
+} from "lucide-react";
 import { toast } from "sonner";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
@@ -32,17 +34,36 @@ interface Agente {
   evolution_instancia: string | null;
 }
 
+interface MensagemMaturador {
+  de_agente_id: string;
+  tipo: "texto" | "reacao";
+  texto: string;
+  created_at: string;
+}
+
 interface ParMaturador {
   id: string;
   agente_a_id: string;
   agente_b_id: string;
   agente_a_nome: string;
   agente_b_nome: string;
+  agente_a_score: number | null;
+  agente_b_score: number | null;
+  numero_a: string | null;
+  numero_b: string | null;
   ativo: boolean;
   data_inicio: string;
-  contador_dia: number;
   banido_em: string | null;
   banido_agente_id: string | null;
+  ultima_mensagem_em: string | null;
+  proxima_mensagem_em: string | null;
+  hora_inicio: number;
+  hora_fim: number;
+  pausado_motivo: string | null;
+  enviados_hoje_a: number;
+  enviados_hoje_b: number;
+  total_mensagens: number;
+  ultimas_mensagens: MensagemMaturador[];
 }
 
 async function apiFetch(path: string, options: RequestInit = {}) {
@@ -51,19 +72,46 @@ async function apiFetch(path: string, options: RequestInit = {}) {
     ...options,
     headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}), ...(options.headers || {}) },
   });
+  if (res.status === 204) return null;
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.message || `Falha na requisição (${res.status})`);
   return json;
 }
 
-// Mesma progressão documentada em `maturadorProcessor.ts`/`ScoreInstancia.tsx` — só pra exibir
-// "X/limite" na tela, o teto real de verdade é aplicado no backend.
-function limiteHojeExibicao(dataInicio: string): number {
-  const dias = Math.max(0, Math.floor((Date.now() - new Date(dataInicio).getTime()) / (1000 * 60 * 60 * 24)));
-  if (dias < 7) return 20;
-  if (dias < 14) return 50;
-  return 100;
+// Mesma progressão de `limiteDiarioPorIdade` em `maturadorProcessor.ts` — só pra exibir, o teto
+// real é aplicado no backend (por instância remetente).
+function faseMaturacao(dataInicio: string): { dias: number; limite: number; fase: string } {
+  const dias = Math.max(0, Math.floor((Date.now() - new Date(dataInicio).getTime()) / 86_400_000));
+  if (dias < 7) return { dias, limite: 20, fase: "Semana 1" };
+  if (dias < 14) return { dias, limite: 50, fase: "Semana 2" };
+  return { dias, limite: 100, fase: "Maturado" };
 }
+
+function corScore(score: number | null): string {
+  if (score == null) return "bg-muted text-muted-foreground";
+  if (score >= 75) return "bg-emerald-500/15 text-emerald-600 border-emerald-500/30";
+  if (score >= 50) return "bg-amber-500/15 text-amber-600 border-amber-500/30";
+  return "bg-red-500/15 text-red-600 border-red-500/30";
+}
+
+function hora(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function proximaTexto(par: ParMaturador): string {
+  if (!par.ativo) return "desligado";
+  const agora = new Date();
+  const h = Number(agora.toLocaleString("en-US", { hour: "numeric", hourCycle: "h23", timeZone: "America/Sao_Paulo" }));
+  const dentro = par.hora_inicio <= par.hora_fim
+    ? h >= par.hora_inicio && h < par.hora_fim
+    : h >= par.hora_inicio || h < par.hora_fim;
+  if (!dentro) return `fora do horário — volta às ${String(par.hora_inicio).padStart(2, "0")}h`;
+  if (!par.proxima_mensagem_em || new Date(par.proxima_mensagem_em) <= agora) return "a qualquer momento";
+  return `por volta de ${hora(par.proxima_mensagem_em)}`;
+}
+
+const HORAS = Array.from({ length: 24 }, (_, i) => i);
 
 export function MaturadorNumeros() {
   const { user } = useAuth();
@@ -75,9 +123,9 @@ export function MaturadorNumeros() {
   const [selB, setSelB] = useState("");
   const [processandoId, setProcessandoId] = useState<string | null>(null);
 
-  const carregar = async () => {
+  const carregar = async (silencioso = false) => {
     if (!user) return;
-    setLoading(true);
+    if (!silencioso) setLoading(true);
     try {
       const [{ data: agData }, paresData] = await Promise.all([
         api.from("agentes").select("id,nome,evolution_instancia").eq("user_id", user.id),
@@ -86,13 +134,22 @@ export function MaturadorNumeros() {
       setAgentes(((agData ?? []) as Agente[]).filter(a => !!a.evolution_instancia));
       setPares(paresData);
     } catch (err: any) {
-      toast.error(`Erro ao carregar Maturador: ${err.message}`);
+      if (!silencioso) toast.error(`Erro ao carregar Maturador: ${err.message}`);
     } finally {
-      setLoading(false);
+      if (!silencioso) setLoading(false);
     }
   };
 
   useEffect(() => { carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [user?.id]);
+
+  // Atualiza o progresso a cada 60s enquanto houver par ligado (o motor roda a cada 1 min).
+  const algumAtivo = pares.some(p => p.ativo);
+  useEffect(() => {
+    if (!algumAtivo) return;
+    const t = setInterval(() => carregar(true), 60_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [algumAtivo, user?.id]);
 
   const criarPar = async () => {
     if (!selA || !selB) { toast.error("Selecione as 2 instâncias do par"); return; }
@@ -100,7 +157,7 @@ export function MaturadorNumeros() {
     setCriando(true);
     try {
       await apiFetch("/api/maturador", { method: "POST", body: JSON.stringify({ agente_a_id: selA, agente_b_id: selB }) });
-      toast.success("Par criado — ainda desligado, ative quando quiser começar.");
+      toast.success("Par criado — ainda desligado, ligue quando quiser começar.");
       setSelA(""); setSelB("");
       carregar();
     } catch (err: any) {
@@ -114,10 +171,23 @@ export function MaturadorNumeros() {
     setProcessandoId(par.id);
     try {
       await apiFetch(`/api/maturador/${par.id}/ativo`, { method: "PATCH", body: JSON.stringify({ ativo }) });
-      toast.success(ativo ? "Maturação ativada para este par" : "Maturação pausada para este par");
-      carregar();
+      toast.success(ativo ? "Maturação ligada — a 1ª troca sai no próximo minuto" : "Maturação pausada para este par");
+      carregar(true);
     } catch (err: any) {
       toast.error(err.message, { duration: 8000 });
+    } finally {
+      setProcessandoId(null);
+    }
+  };
+
+  const salvarJanela = async (par: ParMaturador, hora_inicio: number, hora_fim: number) => {
+    if (hora_inicio === hora_fim) { toast.error("Início e fim precisam ser diferentes"); return; }
+    setProcessandoId(par.id);
+    try {
+      await apiFetch(`/api/maturador/${par.id}/config`, { method: "PATCH", body: JSON.stringify({ hora_inicio, hora_fim }) });
+      setPares(ps => ps.map(p => p.id === par.id ? { ...p, hora_inicio, hora_fim } : p));
+    } catch (err: any) {
+      toast.error(err.message);
     } finally {
       setProcessandoId(null);
     }
@@ -129,7 +199,7 @@ export function MaturadorNumeros() {
     try {
       await apiFetch(`/api/maturador/${par.id}/banido`, { method: "POST", body: JSON.stringify({ agente_id: agenteId }) });
       toast.success(`"${nome}" marcado como caído/banido — score atualizado.`);
-      carregar();
+      carregar(true);
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -137,17 +207,14 @@ export function MaturadorNumeros() {
     }
   };
 
-  // [AUDITORIA] BUG CORRIGIDO (achado real do usuário, 2026-09-13: "não consigo usar o
-  // maturador" — par marcado como banido/caído ficava preso pra sempre, sem nenhuma ação além de
-  // excluir e recriar o par do zero, perdendo a progressão de dias 20→50→100/dia). Reativa via
-  // POST /:id/reativar (routes/maturador.ts) — só limpa a marca, o par volta desligado (mesma
-  // regra de "nasce sempre desligado"), usuário liga de novo quando quiser.
+  // Reativa um par marcado como banido/caído (POST /:id/reativar) — volta desligado, sem perder
+  // a progressão de dias.
   const reativarPar = async (par: ParMaturador) => {
     setProcessandoId(par.id);
     try {
       await apiFetch(`/api/maturador/${par.id}/reativar`, { method: "POST" });
       toast.success("Par reativado — ligue o switch quando quiser voltar a mandar mensagem.");
-      carregar();
+      carregar(true);
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -160,7 +227,7 @@ export function MaturadorNumeros() {
     try {
       await apiFetch(`/api/maturador/${par.id}`, { method: "DELETE" });
       toast.success("Par removido");
-      carregar();
+      carregar(true);
     } catch (err: any) {
       toast.error(err.message);
     }
@@ -173,19 +240,25 @@ export function MaturadorNumeros() {
           <MessageCircleHeart className="h-5 w-5 text-primary" /> Maturador de Números
         </h2>
         <p className="text-sm text-muted-foreground">
-          Aquece número novo/recém-conectado trocando mensagem pré-escrita com outra instância da
-          sua conta — zero IA, zero custo de token, ritmo gradual (20/dia na 1ª semana, 50 na 2ª, 100 da 3ª em diante).
+          Aquece número novo trocando conversas naturais com outra instância da sua conta: em
+          sessões curtas com pausas, só no horário escolhido, com "digitando…", leitura e reações.
+          Ritmo gradual de 20/dia na 1ª semana, 50 na 2ª e 100 a partir da 3ª. Zero IA, zero custo de token.
         </p>
       </div>
 
-      <Card className="p-3 bg-blue-500/5 border-blue-500/20 flex gap-2 items-start">
-        <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
-        <p className="text-xs text-muted-foreground">
-          Estimativa baseada em dado real do CRM, não é uma métrica oficial da Meta/WhatsApp (que
-          não existe pra API não-oficial). Ativar um par exige que NENHUMA instância da conta
-          tenha IA ativa — evita que a mensagem do maturador seja respondida pela IA de verdade e
-          gere custo de token.
-        </p>
+      <Card className="p-3 bg-emerald-500/5 border-emerald-500/20 flex gap-2 items-start">
+        <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+        <div className="text-xs text-muted-foreground space-y-1">
+          <p>
+            As mensagens do Maturador nunca chegam na IA, não viram contato nem lead. Pode manter
+            sua IA ligada normalmente.
+          </p>
+          <p>
+            Para o número ganhar score: use chip com WhatsApp ativo no celular, evite reconectar
+            o QR várias vezes seguidas, nunca conecte o mesmo número em duas instâncias e só
+            comece campanhas depois da fase "Maturado".
+          </p>
+        </div>
       </Card>
 
       <Card className="p-4 space-y-3">
@@ -224,13 +297,23 @@ export function MaturadorNumeros() {
         </Card>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {pares.map(par => {
-          const limite = limiteHojeExibicao(par.data_inicio);
+          const { dias, limite, fase } = faseMaturacao(par.data_inicio);
+          const pontas = [
+            { id: par.agente_a_id, nome: par.agente_a_nome, score: par.agente_a_score, numero: par.numero_a, enviados: par.enviados_hoje_a },
+            { id: par.agente_b_id, nome: par.agente_b_nome, score: par.agente_b_score, numero: par.numero_b, enviados: par.enviados_hoje_b },
+          ];
+          const nomePorId = (id: string) => (id === par.agente_a_id ? par.agente_a_nome : par.agente_b_nome);
           return (
-            <Card key={par.id} className={`p-4 space-y-3 ${par.banido_em ? 'border-red-500/50 bg-red-50/30' : ''}`}>
+            <Card key={par.id} className={`p-4 space-y-3 ${par.banido_em ? "border-red-500/50 bg-red-50/30" : ""}`}>
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-bold truncate">{par.agente_a_nome} ↔ {par.agente_b_nome}</p>
+                <div className="min-w-0">
+                  <p className="text-sm font-bold truncate">{par.agente_a_nome} ↔ {par.agente_b_nome}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {fase} · dia {dias + 1} · {par.total_mensagens} mensagens trocadas no total
+                  </p>
+                </div>
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 shrink-0" onClick={() => excluirPar(par)} title="Excluir par">
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
@@ -252,43 +335,87 @@ export function MaturadorNumeros() {
                   </Button>
                 </div>
               ) : (
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">
-                    {par.contador_dia}/{limite} mensagens hoje
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs">{par.ativo ? "Ativo" : "Desligado"}</span>
-                    <Switch
-                      checked={par.ativo}
-                      disabled={processandoId === par.id}
-                      onCheckedChange={(v) => alternarAtivo(par, v)}
-                    />
-                  </div>
-                </div>
-              )}
+                <>
+                  {par.pausado_motivo && !par.ativo && (
+                    <div className="flex items-start gap-2 p-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-400">
+                      <PauseCircle className="h-3.5 w-3.5 shrink-0 mt-px" />
+                      <span><b>Pausado automaticamente:</b> {par.pausado_motivo}. Resolva e ligue de novo.</span>
+                    </div>
+                  )}
 
-              {!par.banido_em && (
-                <div className="flex gap-2 pt-1">
-                  <Button
-                    size="sm" variant="outline" className="flex-1 h-7 text-[10px]"
-                    disabled={processandoId === par.id}
-                    onClick={() => marcarBanido(par, par.agente_a_id, par.agente_a_nome)}
-                  >
-                    "{par.agente_a_nome}" caiu/baniu
-                  </Button>
-                  <Button
-                    size="sm" variant="outline" className="flex-1 h-7 text-[10px]"
-                    disabled={processandoId === par.id}
-                    onClick={() => marcarBanido(par, par.agente_b_id, par.agente_b_nome)}
-                  >
-                    "{par.agente_b_nome}" caiu/baniu
-                  </Button>
-                </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Clock className="h-3 w-3" /> Próxima: {proximaTexto(par)}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs">{par.ativo ? "Ligado" : "Desligado"}</span>
+                      <Switch
+                        checked={par.ativo}
+                        disabled={processandoId === par.id}
+                        onCheckedChange={(v) => alternarAtivo(par, v)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {pontas.map(p => (
+                      <div key={p.id} className="rounded-md border p-2 space-y-1.5">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-semibold truncate">{p.nome}</span>
+                          <Badge variant="outline" className={`text-[10px] px-1.5 ${corScore(p.score)}`} title="Score de Saúde">
+                            {p.score ?? "—"}
+                          </Badge>
+                        </div>
+                        {p.numero && <p className="text-[10px] text-muted-foreground">+{p.numero}</p>}
+                        <Progress value={Math.min(100, (p.enviados / limite) * 100)} className="h-1.5" />
+                        <p className="text-[10px] text-muted-foreground">{p.enviados}/{limite} enviadas hoje</p>
+                        <Button
+                          size="sm" variant="ghost" className="w-full h-6 text-[10px] text-red-600"
+                          disabled={processandoId === par.id}
+                          onClick={() => marcarBanido(par, p.id, p.nome)}
+                        >
+                          Caiu/baniu
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">Conversar das</span>
+                    <Select value={String(par.hora_inicio)} onValueChange={(v) => salvarJanela(par, Number(v), par.hora_fim)}>
+                      <SelectTrigger className="h-7 w-[72px] text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>{HORAS.map(h => <SelectItem key={h} value={String(h)}>{String(h).padStart(2, "0")}h</SelectItem>)}</SelectContent>
+                    </Select>
+                    <span className="text-muted-foreground">às</span>
+                    <Select value={String(par.hora_fim)} onValueChange={(v) => salvarJanela(par, par.hora_inicio, Number(v))}>
+                      <SelectTrigger className="h-7 w-[72px] text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>{HORAS.map(h => <SelectItem key={h} value={String(h)}>{String(h).padStart(2, "0")}h</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+
+                  {par.ultimas_mensagens.length > 0 && (
+                    <div className="rounded-md bg-muted/40 p-2 space-y-1">
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Últimas trocas</p>
+                      {par.ultimas_mensagens.map((m, i) => (
+                        <p key={i} className="text-[11px] truncate">
+                          <span className="text-muted-foreground">{hora(m.created_at)} · {nomePorId(m.de_agente_id)}:</span>{" "}
+                          {m.tipo === "reacao" ? <span title="Reação">reagiu {m.texto}</span> : m.texto}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </Card>
           );
         })}
       </div>
+
+      {pares.length > 0 && (
+        <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+          <Info className="h-3 w-3" /> O Score de Saúde é recalculado a cada 15 minutos.
+        </p>
+      )}
     </div>
   );
 }

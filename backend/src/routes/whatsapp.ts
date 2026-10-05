@@ -22,6 +22,7 @@ import { resolverCaminhoLocal, salvarFotoPerfilLocal, resolverCaminhoLocalFoto, 
 import { buscarPreviewLink } from '../utils/linkPreview';
 import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
 import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
+import { buscarConexoesDuplicadas, normalizarNumero, invalidarCacheProtecao, DIAS_PROTECAO } from '../services/protecaoNumero';
 import { log } from '../logger';
 import { normalizarTelefone as normalizarTel } from '../utils/telefone';
 import { resolverNome as resolverNomeLimpo } from '../utils/nomes';
@@ -1744,6 +1745,41 @@ export default function whatsappRouter(pool: Pool): Router {
   });
 
   // POST /api/whatsapp/connect — cria instância e retorna QR code
+  // GET /protecao — estado da Proteção de número de cada instância do usuário (Modo Número Novo +
+  // alerta do último bloqueio de segurança). Ver services/protecaoNumero.ts.
+  router.get('/protecao', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const r = await pool.query(
+      `SELECT a.id AS agente_id, a.evolution_instancia, a.numero_conectado, a.protecao_alerta, a.protecao_alerta_em,
+              w.primeira_conexao_em, w.protecao_ate, w.protecao_liberada_em, w.conexoes,
+              (w.protecao_ate > NOW() AND w.protecao_liberada_em IS NULL) AS em_protecao
+       FROM agentes a
+       LEFT JOIN whatsapp_numeros w ON w.numero = regexp_replace(a.numero_conectado, '\\D', '', 'g')
+       WHERE a.user_id = $1 AND a.evolution_instancia IS NOT NULL`,
+      [userId]
+    );
+    return res.json({ dias_protecao: DIAS_PROTECAO, instancias: r.rows });
+  });
+
+  // POST /protecao/:agenteId/liberar — usuário libera campanhas antes do fim do Modo Número Novo,
+  // assumindo o risco (fica registrado com data). As demais proteções (sem "sempre online",
+  // número duplicado, freio de reconexão) continuam valendo.
+  router.post('/protecao/:agenteId/liberar', async (req: AuthRequest, res: Response) => {
+    const userId = req.userId!;
+    const r = await pool.query(
+      `UPDATE whatsapp_numeros w SET protecao_liberada_em = NOW()
+       FROM agentes a
+       WHERE a.id = $1 AND a.user_id = $2 AND a.numero_conectado IS NOT NULL
+         AND w.numero = regexp_replace(a.numero_conectado, '\\D', '', 'g')
+       RETURNING w.numero`,
+      [req.params.agenteId, userId]
+    );
+    if (!r.rows.length) return res.status(404).json({ message: 'Instância sem número registrado' });
+    invalidarCacheProtecao();
+    log.warn('PROTECAO_NUMERO', 'Modo Número Novo liberado manualmente pelo usuário', { userId, numero: r.rows[0].numero });
+    return res.json({ ok: true });
+  });
+
   router.post('/connect', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     const lockKey = `connect:${userId}`;
@@ -1894,6 +1930,23 @@ export default function whatsappRouter(pool: Pool): Router {
       // o force_reconnect apagava a instância errada e a instância realmente travada continuava
       // intacta na Evolution. Corrigido para deletar cfg.stableInstancia, o mesmo nome usado por
       // /instance/create logo abaixo.
+      // [AUDITORIA] LÓGICA (Proteção de número, 2026-10-04): com o telefone informado, recusa ANTES
+      // de gerar o QR se o número já estiver conectado em outra instância/conta/ambiente — evita
+      // até o pareamento. Sem telefone, a mesma checagem roda logo após conectar
+      // (`aoConectarInstancia`, webhook) e desconecta a instância nova.
+      const telefoneInformado = normalizarNumero(req.body?.phoneNumber as string | undefined);
+      if (telefoneInformado.length >= 10) {
+        const duplicadas = await buscarConexoesDuplicadas(pool, telefoneInformado, { servidor: base, nome: cfg.stableInstancia });
+        if (duplicadas.length) {
+          log.warn('PROTECAO_NUMERO', 'Conexão recusada: número já conectado em outro lugar', { userId, numero: telefoneInformado, outras: duplicadas.map(d => d.nome) });
+          return res.status(409).json({
+            error: true,
+            code: 'NUMERO_DUPLICADO',
+            message: `Este número já está conectado em "${duplicadas.map(d => d.nome).join('", "')}". Desconecte lá antes de conectar aqui — o mesmo número em 2 instâncias gera conflito de sessão e é um dos principais gatilhos de banimento.`,
+          });
+        }
+      }
+
       const forceReconnect = req.body?.force_reconnect === true;
       if (forceReconnect) {
         log.info('WHATSAPP', 'Forçando reconexão - deletando instância antiga', { instancia: cfg.stableInstancia });
@@ -1996,7 +2049,10 @@ export default function whatsappRouter(pool: Pool): Router {
         // `if (isGroup) return` em webhook.ts — ver diagnosticos/AUDITORIA_LOG.md), então habilitar
         // a entrega do evento não reabre esse risco.
         groupsIgnore: false,
-        alwaysOnline: true,
+        // [AUDITORIA] FIX APLICADO (Proteção de número, 2026-10-04): era alwaysOnline=true —
+        // presença "online" 24h é padrão de robô (risco de banimento) e ainda silencia as
+        // notificações no celular do dono. Ver services/protecaoNumero.ts.
+        alwaysOnline: false,
         readMessages: true,
         readStatus: false,
         ...(phoneNumber ? { number: phoneNumber } : {}),
@@ -2835,7 +2891,7 @@ export default function whatsappRouter(pool: Pool): Router {
           // [AUDITORIA] FIX APLICADO (2026-07-22): ver comentário completo no outro
           // /instance/create acima (mesmo arquivo) — groupsIgnore=true bloqueava a entrega do
           // webhook de mensagem de grupo na origem (Evolution), não era filtro nosso.
-          groupsIgnore: false, alwaysOnline: true, readMessages: true,
+          groupsIgnore: false, alwaysOnline: false, readMessages: true,
           webhook: webhookInner(),
         }),
       });

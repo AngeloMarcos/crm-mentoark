@@ -8,6 +8,7 @@ import { withTenantContext } from '../db';
 import { resolverOwnerId } from './subscription';
 import { log } from '../logger';
 import { avaliarElegibilidade } from '../utils/elegibilidade';
+import { instanciasEmProtecao } from './protecaoNumero';
 
 // [AUDITORIA] BUG GRAVÍSSIMO CORRIGIDO (achado real do usuário, 2026-09-11 — conta
 // cotinedeborah@gmail.com com 2 campanhas em 0/2661 enviados, 0% por mais de 1h; usuário: "cada
@@ -448,7 +449,26 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
             const contagemPorInstancia = new Map<string, number>(
               contagemRes.rows.map((r: any) => [r.instancia, Number(r.total)])
             );
-            const disponiveisHoje = candidatos.filter(c => (contagemPorInstancia.get(c.instancia) || 0) < limiteDiario);
+            // [AUDITORIA] LÓGICA (Proteção de número, 2026-10-04): número em Modo Número Novo
+            // (primeiros 14 dias, `services/protecaoNumero.ts`) não entra em campanha — disparo em
+            // número recém-conectado é o gatilho clássico de banimento. Se TODAS as instâncias da
+            // campanha estiverem protegidas, pausa com aviso próprio (abaixo).
+            const protegidas = await instanciasEmProtecao(pool);
+            const semProtecao = candidatos.filter(c => !protegidas.has(c.instancia));
+            if (candidatos.length && !semProtecao.length) {
+              const aviso = 'Todas as instâncias desta campanha estão em Modo Número Novo (primeiros 14 dias do número). Use outro número já maturado, ou libere o número em WhatsApp → Instâncias assumindo o risco.';
+              log.warn('DISPARO', 'Campanha pausada: só há instâncias em Modo Número Novo', { disparo_id, instancias: nomesInstancias });
+              await pool.query(
+                `UPDATE disparos
+                 SET status = 'pausado', aviso = $2, pausado_em = NOW(), pausado_motivo = 'numero_novo', updated_at = NOW()
+                 WHERE id = $1`,
+                [disparo_id, aviso]
+              );
+              await requeuePendentes(pool, [{ log_id }]);
+              return;
+            }
+
+            const disponiveisHoje = semProtecao.filter(c => (contagemPorInstancia.get(c.instancia) || 0) < limiteDiario);
             instanciasDisponiveisHojeCache.set(disparo_id, { disponiveis: disponiveisHoje, proximoIndex: 0 });
 
             if (!disponiveisHoje.length) {

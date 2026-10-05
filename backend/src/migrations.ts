@@ -2022,7 +2022,92 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_pares_user ON maturador_pares(user_id)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_pares_ativo ON maturador_pares(ativo) WHERE ativo = true`).catch(() => {});
 
+  // ── Maturador v2 (2026-10-04): motor "humano" + isolamento da IA na origem ──────────────────
+  // [AUDITORIA] LÓGICA: `numero_a`/`numero_b` = número real de cada ponta (resolvido pelo motor
+  // via Evolution), usado pelo webhook pra reconhecer tráfego do maturador mesmo sem o message_id.
+  // `hora_inicio`/`hora_fim` = janela (horário de Brasília) em que o par conversa. `tema_atual` +
+  // `linha_atual` = posição no banco de diálogo por tema. `msgs_restantes_sessao` = quantas trocas
+  // faltam na "sessão" atual antes de uma pausa longa. `proxima_mensagem_em` = quando a próxima
+  // troca fica liberada (antes era re-sorteado a cada tick, viciando o intervalo pra baixo).
+  // `falhas_consecutivas`/`pausado_motivo` = auto-pausa quando uma ponta cai/desconecta.
+  // `ultima_msg_id` = id da última mensagem recebida pela próxima remetente (pra marcar como lida).
+  await pool.query(`
+    ALTER TABLE maturador_pares
+      ADD COLUMN IF NOT EXISTS numero_a              TEXT,
+      ADD COLUMN IF NOT EXISTS numero_b              TEXT,
+      ADD COLUMN IF NOT EXISTS hora_inicio           SMALLINT    NOT NULL DEFAULT 8,
+      ADD COLUMN IF NOT EXISTS hora_fim              SMALLINT    NOT NULL DEFAULT 21,
+      ADD COLUMN IF NOT EXISTS tema_atual            INTEGER,
+      ADD COLUMN IF NOT EXISTS msgs_restantes_sessao INTEGER     NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS proxima_mensagem_em   TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS falhas_consecutivas   INTEGER     NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS pausado_motivo        TEXT,
+      ADD COLUMN IF NOT EXISTS ultima_msg_id         TEXT
+  `).catch(() => {});
+
+  // [AUDITORIA] LÓGICA: log de cada mensagem trocada pelo maturador. Serve a 3 coisas: (1) o
+  // webhook reconhece a mensagem pelo `message_id` (o id do WhatsApp é o MESMO no remetente e no
+  // destinatário) e não entrega pra IA/contatos/leads — funciona até com endereçamento @lid, onde
+  // o telefone não vem no remoteJid; (2) teto diário POR INSTÂNCIA (uma instância em 2 pares não
+  // dobra o volume); (3) histórico exibido na tela do Maturador.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_mensagens (
+      id              BIGSERIAL   PRIMARY KEY,
+      par_id          UUID        NOT NULL REFERENCES maturador_pares(id) ON DELETE CASCADE,
+      user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      de_agente_id    UUID        NOT NULL REFERENCES agentes(id) ON DELETE CASCADE,
+      para_agente_id  UUID        NOT NULL REFERENCES agentes(id) ON DELETE CASCADE,
+      message_id      TEXT,
+      tipo            TEXT        NOT NULL DEFAULT 'texto',
+      texto           TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_msgs_par ON maturador_mensagens(par_id, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_msgs_de ON maturador_mensagens(de_agente_id, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_msgs_mid ON maturador_mensagens(message_id) WHERE message_id IS NOT NULL`).catch(() => {});
+
   log.info('MIGRATIONS', 'Maturador de Números (schema) OK');
+
+  // ── Proteção de número (2026-10-04) ──────────────────────────────────────────────────────────
+  // [AUDITORIA] LÓGICA: achado real — 2 números perdidos "só logando no sistema". Causa vista nos
+  // dados: o MESMO número conectado em 2+ instâncias ao mesmo tempo (produção + homologação + outra
+  // conta), as sessões se derrubando (440 connectionReplaced) e a Evolution reconectando sozinha
+  // ~229x numa hora, seguido de 403 (restrição do WhatsApp). `whatsapp_numeros` é o registro por
+  // NÚMERO (não por instância — instâncias são recriadas e trocam de número): quando foi visto
+  // pela 1ª vez (define o "Modo Número Novo"), quantas vezes conectou, e se o usuário liberou
+  // campanhas antes do fim da proteção assumindo o risco. Ver services/protecaoNumero.ts.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_numeros (
+      numero                TEXT        PRIMARY KEY,
+      primeira_conexao_em   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ultima_conexao_em     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      conexoes              INTEGER     NOT NULL DEFAULT 1,
+      protecao_ate          TIMESTAMPTZ,
+      protecao_liberada_em  TIMESTAMPTZ
+    )
+  `).catch(() => {});
+  // Backfill: números já conhecidos entram com a data REAL da 1ª conexão e SEM proteção
+  // (`protecao_ate = primeira`, já vencida) — decisão do usuário no deploy de produção
+  // (2026-10-04): o Modo Número Novo vale só pra número conectado a partir daqui; não pausa
+  // campanha em andamento de cliente que já tinha o número conectado antes desta feature.
+  await pool.query(`
+    INSERT INTO whatsapp_numeros (numero, primeira_conexao_em, ultima_conexao_em, protecao_ate)
+    SELECT n.numero, n.primeira, n.primeira, n.primeira
+    FROM (
+      SELECT regexp_replace(numero_conectado, '\\D', '', 'g') AS numero,
+             MIN(COALESCE(evolution_conectado_em, created_at)) AS primeira
+      FROM agentes WHERE numero_conectado IS NOT NULL AND numero_conectado <> ''
+      GROUP BY 1
+    ) n
+    WHERE length(n.numero) >= 10
+    ON CONFLICT (numero) DO NOTHING
+  `).catch(() => {});
+  // Alerta exibido no card da instância (ex: "número já conectado em outra instância — desconectamos
+  // esta pra proteger o número"). Limpo na próxima conexão bem-sucedida.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS protecao_alerta TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS protecao_alerta_em TIMESTAMPTZ`).catch(() => {});
+  log.info('MIGRATIONS', 'Proteção de número (whatsapp_numeros) OK');
 
   // ── Circuit-breaker de loop de LOGOUT (Sprint 2026-08-10, continuação Serenovlogs067) ────────
   // [AUDITORIA] BUG GRAVE (2 incidentes reais confirmados — Serenovlogs067 em 10/08 e outro

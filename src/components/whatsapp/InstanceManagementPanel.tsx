@@ -68,6 +68,7 @@ import {
   Check,
   X,
   Phone,
+  ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
@@ -117,6 +118,18 @@ interface Profile {
   display_name: string | null;
 }
 
+// Proteção de número (2026-10-04) — ver backend/src/services/protecaoNumero.ts.
+interface ProtecaoInfo {
+  agente_id: string;
+  numero_conectado: string | null;
+  protecao_alerta: string | null;
+  protecao_alerta_em: string | null;
+  primeira_conexao_em: string | null;
+  protecao_ate: string | null;
+  protecao_liberada_em: string | null;
+  em_protecao: boolean | null;
+}
+
 type ConnState = "open" | "close" | "connecting" | "unauthorized";
 
 function StatusChip({ state }: { state: ConnState }) {
@@ -144,6 +157,7 @@ export function InstanceManagementPanel() {
   const [editing, setEditing] = useState<Agente | null>(null);
   const [saving, setSaving] = useState(false);
   const [calculating, setCalculating] = useState<string | null>(null);
+  const [protecao, setProtecao] = useState<Record<string, ProtecaoInfo>>({});
 
   // ─── Renomear instância (inline, sem abrir a modal de configuração inteira) ───
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -637,12 +651,45 @@ export function InstanceManagementPanel() {
     if (error) toast.error(`Erro ao carregar instâncias: ${error.message}`);
     else setAgentes(((data ?? []) as Agente[]).filter(a => a.user_id === user.id));
     setLoading(false);
+    carregarProtecao();
 
     // profiles (pode falhar se não-admin) — silencioso
     try {
       const { data: pdata } = await api.from("profiles").select("user_id,email,display_name");
       if (pdata) setProfiles(pdata as Profile[]);
     } catch {}
+  };
+
+  const carregarProtecao = async () => {
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/protecao`, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+      if (!res.ok) return;
+      const json = await res.json();
+      const map: Record<string, ProtecaoInfo> = {};
+      for (const p of (json?.instancias ?? []) as ProtecaoInfo[]) map[p.agente_id] = p;
+      setProtecao(map);
+    } catch { /* informativo — não bloqueia a tela */ }
+  };
+
+  const liberarProtecao = async (a: Agente) => {
+    if (!confirm(`Liberar campanhas no número de "${a.nome}" antes do fim do Modo Número Novo?
+
+Disparo em número recém-conectado é a causa mais comum de banimento. Só faça isso se o número já tem uso real no celular há semanas.`)) return;
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/protecao/${a.id}/liberar`, {
+        method: "POST", headers: t ? { Authorization: `Bearer ${t}` } : {},
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.message || "Falha ao liberar");
+      toast.success("Campanhas liberadas para este número.");
+      carregarProtecao();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
   };
 
   // [AUDITORIA] FIX APLICADO (Sprint 2 — multi-instância, 2026-07-23): antes buscava o status
@@ -949,6 +996,30 @@ export function InstanceManagementPanel() {
                   )}
                 </div>
 
+                {/* Proteção de número (2026-10-04): alerta do último bloqueio de segurança
+                    (número duplicado / freio de reconexão) e Modo Número Novo. */}
+                {protecao[a.id]?.protecao_alerta && (
+                  <div className="flex items-start gap-2 p-2 rounded-md bg-red-500/10 border border-red-500/30 text-[11px] text-red-700 dark:text-red-400">
+                    <AlertOctagon className="h-3.5 w-3.5 shrink-0 mt-px" />
+                    <span>{protecao[a.id].protecao_alerta}</span>
+                  </div>
+                )}
+                {protecao[a.id]?.em_protecao && protecao[a.id]?.protecao_ate && (
+                  <div className="p-2 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-[11px] space-y-1.5">
+                    <p className="flex items-center gap-1.5 font-semibold text-emerald-700 dark:text-emerald-400">
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      Modo Número Novo até {new Date(protecao[a.id].protecao_ate!).toLocaleDateString("pt-BR")}
+                    </p>
+                    <p className="text-muted-foreground">
+                      Sem campanhas, sem "sempre online" e sem leitura automática. Use o Maturador
+                      para aquecer o número nesse período.
+                    </p>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => liberarProtecao(a)}>
+                      Liberar campanhas (assumo o risco)
+                    </Button>
+                  </div>
+                )}
+
                 {/* [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): texto
                     diferenciado — "desconectada" e "score crítico" são achados diferentes, não
                     faz sentido usar a mesma frase pros dois. Nenhum dos dois casos realmente
@@ -1207,8 +1278,21 @@ export function InstanceManagementPanel() {
                   onChange={(e) => setNewInstancePhone(e.target.value)}
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  Se informar, você pode conectar por código de pareamento em vez do QR Code.
+                  Se informar, você pode conectar por código de pareamento em vez do QR Code — e o
+                  sistema confere antes se o número já não está conectado em outro lugar.
                 </p>
+              </div>
+
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] space-y-1">
+                <p className="font-semibold flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+                  <ShieldCheck className="h-3.5 w-3.5" /> Antes de conectar um número novo
+                </p>
+                <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
+                  <li>Use o chip no celular por alguns dias antes: foto, nome, conversas reais.</li>
+                  <li>Conecte o número em <b>um lugar só</b>. Nunca no CRM de teste e no de produção ao mesmo tempo.</li>
+                  <li>Leia o QR uma vez, com o celular na internet estável. Se falhar, espere antes de tentar de novo.</li>
+                  <li>Nos primeiros 14 dias o número fica protegido: sem campanhas, só conversa e Maturador.</li>
+                </ul>
               </div>
             </div>
 

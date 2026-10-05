@@ -13,11 +13,9 @@
  * duplicações pontuais do projeto) — se um dia isso crescer a ponto de valer a pena, a extração
  * pra um pacote compartilhado é candidata a sprint própria, não algo pra fazer de passagem aqui.
  *
- * `DIALOGO`: array de trocas curtas — cada item é UMA mensagem (não um par pergunta/resposta
- * rígido), na ORDEM em que soam naturais em sequência. O motor avança por este array por par de
- * instâncias (`maturador_pares.linha_atual`), alternando remetente a cada linha, e cicla de volta
- * ao início ao chegar no fim — parece uma conversa contínua real ao longo dos dias, não mensagens
- * soltas repetidas sempre na mesma ordem.
+ * `TEMAS`: conversas curtas por assunto (ver comentário logo acima de `TEMAS` abaixo). O motor
+ * avança linha a linha dentro do tema do par (`maturador_pares.tema_atual`/`linha_atual`),
+ * alternando remetente, e sorteia outro tema ao terminar.
  */
 
 interface EntradaVariacao {
@@ -81,33 +79,115 @@ export function aplicarVariacao(linha: string): string {
   return aplicarVariacaoDicionario(resolverSpintax(linha));
 }
 
-// [AUDITORIA] LÓGICA: 20 linhas, tom casual/neutro de propósito (não menciona nome de empresa,
-// produto ou qualquer coisa específica do negócio do usuário — é só "parecer duas pessoas
-// conversando"), com pelo menos 1 bloco de spintax manual em boa parte das linhas pra somar mais
-// variação em cima do dicionário de sinônimos. Nunca usa `{{placeholder}}` (não faz sentido aqui,
-// não há "contato" — são as duas próprias instâncias conversando).
-export const DIALOGO: string[] = [
-  "Oi! {Tudo bem|Tudo certo|Tudo joia}?",
-  "Tudo certo sim, {e você|e aí, tudo bem}?",
-  "Tudo bem também! {Que bom|Ótimo}, {rolou|aconteceu} alguma coisa {hoje|nova}?",
-  "Nada de mais não, {dia corrido|dia tranquilo} por aqui. E aí, {como tá|como anda} as coisas?",
-  "Também {corrido|tranquilo} por aqui, mas {tá tudo certo|tá tudo bem}.",
-  "{Que bom|Boa}! Vi que {você|vc} {tava|estava} meio sumido esses dias.",
-  "{Verdade|Pois é}, andei {ocupado|meio enrolado} com umas coisas, mas {já voltei|tô de volta}.",
-  "{Entendo|Saquei}. Qualquer coisa {me chama|me avisa} viu.",
-  "{Combinado|Pode deixar}! {Obrigado|Valeu} por lembrar de mim.",
-  "{Imagina|De nada}, {sempre por aqui|tamo junto}.",
-  "{E aí|Oi}, {conseguiu resolver aquilo|deu tudo certo com aquele assunto}?",
-  "{Consegui sim|Deu certo sim}, {obrigado por perguntar|valeu por lembrar}.",
-  "{Que ótimo|Fico feliz em saber}! {Sabia que ia dar certo|Tinha fé que ia resolver}.",
-  "{Haha|Rs}, {também achei que ia dar|também tava na torcida}.",
-  "{Bom|Então}, vou {indo|nessa} por agora, {falo com você|te chamo} {depois|mais tarde}.",
-  "{Beleza|Fechado}, {até mais|até logo}!",
-  "{Oi de novo|E aí de novo}! {Lembrei de você agora|Passando aqui rapidinho}.",
-  "{Oi|Opa}! {Que bom|Legal} {te ver|receber mensagem sua} de novo.",
-  "{É|Pois é}, {sempre bom|sempre gostoso} dar um oi de vez em quando, né?",
-  "{Com certeza|Concordo}! {Um abraço|Fica bem}, {até mais|falo contigo em breve}.",
+// [AUDITORIA] BUG CORRIGIDO (Maturador v2, 2026-10-04): a v1 tinha UM diálogo linear de 20
+// linhas, ciclado em ordem. A 100 msg/dia o par repetia a MESMA conversa 5x por dia, na mesma
+// sequência — padrão trivial de detectar (e o oposto de "parecer orgânico").
+// [AUDITORIA] FIX APLICADO: banco por TEMA. Cada tema é uma conversa curta e completa (abre,
+// desenvolve, fecha); o motor sorteia um tema novo ao terminar o anterior (nunca o mesmo duas
+// vezes seguidas) e cada linha ainda passa por spintax + sinônimos. Tom casual/neutro de
+// propósito: não cita empresa, produto nem nada do negócio do usuário, e nunca usa
+// `{{placeholder}}` (não há "contato" aqui, são as duas instâncias do próprio usuário).
+export const TEMAS: string[][] = [
+  [ // saudação / como foi o dia
+    "Oi! {Tudo bem|Tudo certo|Tudo joia}?",
+    "Tudo certo sim, {e você|e aí, tudo bem}?",
+    "Tudo bem também! {Rolou|Aconteceu} alguma coisa {hoje|de novo}?",
+    "Nada de mais, {dia corrido|dia tranquilo} por aqui. E aí, {como tão|como andam} as coisas?",
+    "Também {corrido|tranquilo}, mas {tá tudo certo|tá tudo bem} 🙏",
+    "{Que bom|Boa}! {Bom resto de dia|Bom trabalho aí} pra você",
+    "{Valeu|Obrigado}, {pra você também|igualmente}!",
+  ],
+  [ // almoço
+    "{Já almoçou|Almoçou já}?",
+    "{Ainda não|Não ainda}, {tô terminando umas coisas|daqui a pouco vou}. E você?",
+    "{Acabei de almoçar|Já fui}, {comi muito|tô cheio} {kkk|haha}",
+    "{Kkk|Haha} {o que você comeu|comeu o quê}?",
+    "{Arroz, feijão e frango|Um PF caprichado|Uma marmita}, {nada de especial|o básico}",
+    "O básico {nunca falha|é o melhor} {kkkk|rs}",
+    "{Verdade|Pois é}! {Bom almoço aí|Vai lá comer} 😄",
+  ],
+  [ // fim de semana
+    "{E o fim de semana|E aí, o fds}, {como foi|foi bom}?",
+    "{Foi tranquilo|Foi bom}, {fiquei em casa descansando|saí um pouco com a família}. E o seu?",
+    "{Também foi tranquilo|O meu foi corrido}, {mas deu pra descansar|mas valeu a pena}",
+    "{Que bom|Boa}, {às vezes é bom|faz falta} {dar uma pausa|desligar um pouco} né",
+    "{Com certeza|Demais}, {a semana vai ser puxada|essa semana promete} {kkk|haha}",
+    "{Força|Vamos que vamos} 💪",
+  ],
+  [ // tempo / clima
+    "{Que calor hoje|Que frio hoje|Que tempo doido hoje}, {hein|né}?",
+    "{Nem fala|Demais}! {Aqui tá assim desde cedo|Aqui também tá assim}",
+    "{Disseram que|Vi que} {vai chover mais tarde|vai mudar amanhã}",
+    "{Tomara|Seria bom}, {pelo menos refresca|aí melhora um pouco}",
+    "{Verdade|Pois é}. {Vou fechar as janelas aqui|Vou pegar um casaco} {kkk|rs}",
+    "{Kkk|Haha} {faz bem|bem pensado}",
+  ],
+  [ // combinar ligação
+    "{Oi|Opa}, {consegue falar mais tarde|tem um tempinho mais tarde}?",
+    "{Consigo sim|Consigo}, {depois das 17h|no fim da tarde} {fica bom|pode ser}?",
+    "{Fica ótimo|Perfeito}, {te ligo|te chamo} {então|aí}",
+    "{Combinado|Fechado}! {Qualquer coisa me avisa|Se mudar algo me fala}",
+    "{Pode deixar|Beleza} 👍",
+  ],
+  [ // resolver pendência
+    "{E aí|Oi}, {conseguiu resolver aquilo|deu tudo certo com aquele assunto}?",
+    "{Consegui sim|Deu certo sim}, {obrigado por perguntar|valeu por lembrar}",
+    "{Que ótimo|Fico feliz}! {Sabia que ia dar certo|Tava na torcida}",
+    "{Deu um trabalhinho|Demorou um pouco} mas {foi|resolveu}",
+    "{O importante é que resolveu|Faz parte} {kkk|haha}",
+    "{Verdade|Exatamente}! {Valeu mesmo|Obrigado pela força}",
+    "{Imagina|Tamo junto} 🤝",
+  ],
+  [ // série / filme
+    "{Começou a ver alguma série nova|Tá assistindo alguma coisa boa}?",
+    "{Comecei uma ontem|Tô vendo uma}, {mas ainda tô no começo|tô gostando até agora}",
+    "{Me indica depois|Depois me fala se vale a pena}, {tô sem nada pra ver|acabei a que eu via}",
+    "{Indico sim|Pode deixar}, {se continuar boa|quando terminar} te {falo|aviso}",
+    "{Fechado|Beleza}! {Valeu|Obrigado}",
+  ],
+  [ // café / manhã
+    "Bom dia! {Já tomou café|Café tomado}? ☕",
+    "Bom dia! {Já sim|Tô tomando agora}, {sem café não funciono|preciso disso pra acordar} {kkk|haha}",
+    "{Igual eu|Somos dois} {kkkk|rs}",
+    "{Bora|Vamos} {começar o dia|pra luta} então",
+    "{Bora|Vamos}! {Bom dia de trabalho|Ótimo dia} pra você",
+  ],
+  [ // academia / saúde
+    "{Foi na academia hoje|Conseguiu treinar hoje}?",
+    "{Fui sim|Ainda não}, {cedinho|vou mais tarde}. {E você|Você foi}?",
+    "{Fui ontem|Hoje não deu}, {tô todo dolorido|amanhã eu vou} {kkk|haha}",
+    "{Faz parte|Normal} {kkk|rs}, {o importante é não parar|constância é tudo}",
+    "{Verdade|Total}! {Bora manter|Vamos que vamos} 💪",
+  ],
+  [ // recado rápido
+    "{Oi|Opa}, {passando só pra|só pra} {dar um oi|saber se tá tudo bem}",
+    "{Oi|Opa}! {Tudo certo sim|Tudo bem por aqui}, {e com você|e aí}?",
+    "{Tudo ótimo|Tudo tranquilo}, {graças a Deus|na correria de sempre}",
+    "{Que bom|Bom saber}! {Qualquer coisa me chama|Tô por aqui}",
+    "{Valeu|Combinado}, {você também|igualmente} 😉",
+  ],
+  [ // compras / mercado
+    "{Vou passar no mercado|Tô indo no mercado} {mais tarde|daqui a pouco}, {precisa de algo|quer alguma coisa}?",
+    "{Não precisa não|Tô de boa}, {obrigado|valeu}! {Comprei ontem|Fui ontem}",
+    "{Beleza|Ok}! {Só confirmando|Só pra saber} mesmo",
+    "{Obrigado por lembrar|Valeu pela lembrança} 😊",
+  ],
+  [ // trânsito
+    "{Que trânsito hoje|O trânsito tá parado}, {nossa|meu Deus}",
+    "{Nem me fala|Sério}? {Aqui tá tranquilo|Peguei um pouco também}",
+    "{Uma hora pra fazer 10 minutos|Tá tudo travado} {kkk|haha}",
+    "{Paciência|Calma} {kkk|rs}, {coloca uma música|aproveita pra ouvir um podcast}",
+    "{Boa ideia|É o jeito} {kkk|haha}",
+  ],
 ];
 
-/** Só pra referência/relatório — tamanho real do banco de diálogo. */
-export const TAMANHO_DIALOGO = DIALOGO.length;
+/** Reações usadas de vez em quando (em vez de texto) — sinal orgânico de engajamento. */
+export const REACOES = ['👍', '❤️', '😂', '🙏', '😄', '👏'];
+
+/** Sorteia um tema diferente do atual (nunca repete o mesmo duas vezes seguidas). */
+export function sortearTema(temaAtual: number | null): number {
+  if (TEMAS.length <= 1) return 0;
+  let t = Math.floor(Math.random() * TEMAS.length);
+  if (t === temaAtual) t = (t + 1 + Math.floor(Math.random() * (TEMAS.length - 1))) % TEMAS.length;
+  return t;
+}

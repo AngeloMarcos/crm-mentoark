@@ -66,6 +66,8 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
+import { ehTrafegoMaturador } from '../services/maturadorFiltro';
+import { aoConectarInstancia, aoDesconectarInstancia, instanciasEmProtecao } from '../services/protecaoNumero';
 import { withTenantContext } from '../db';
 import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
@@ -649,6 +651,9 @@ export default function webhookRouter(pool: Pool): Router {
 
       if (connUpdateState === 'open') {
         log.info('WEBHOOK', 'Instância conectada — disparando sincronização automática de histórico', { traceId, instance: payload.instance });
+        // Proteção de número: checa duplicidade, registra o número e aplica as configurações
+        // seguras (Modo Número Novo). Em segundo plano — não atrasa o webhook.
+        if (payload.instance) void aoConectarInstancia(pool, payload.instance);
         const instanciaConectada = payload.instance;
         if (instanciaConectada) {
           const userIdSync = await resolverUserIdPorInstancia(instanciaConectada);
@@ -682,6 +687,9 @@ export default function webhookRouter(pool: Pool): Router {
           ? Number((payload.data as any).statusReason)
           : null;
         await registrarLogoutEvent(pool, payload.instance, statusReason);
+        // Freio de reconexão: 440/403 ou quedas em série → desconecta pra parar a reconexão
+        // automática da Evolution (ver services/protecaoNumero.ts).
+        void aoDesconectarInstancia(pool, payload.instance, statusReason);
         const loopStatus = await verificarLoopDeLogout(pool, payload.instance);
         if (loopStatus.emLoop) {
           const userIdLoop = await resolverUserIdPorInstancia(payload.instance).catch(() => null);
@@ -937,6 +945,26 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       log.info('WEBHOOK', 'Resolução final', { traceId, userId, fromMe, isGroup });
+
+      // [AUDITORIA] LÓGICA (Maturador v2, 2026-10-04): mensagem trocada pelo Maturador de Números
+      // entre 2 instâncias do próprio usuário NUNCA segue o fluxo normal — sem contato/lead, sem
+      // pausar IA, sem IA/n8n/Whisper/Vision. Só grava em whatsapp_messages (o Score de Saúde usa
+      // essa tabela pra volume e taxa de resposta) e encerra. Ver services/maturadorFiltro.ts.
+      if (!isGroup && await ehTrafegoMaturador(pool, userId, messageId, [
+        telefone, (payload.data?.key as any)?.senderPn, (payload.data?.key as any)?.remoteJidAlt,
+      ]).catch(() => false)) {
+        const tsMat = payload.data?.messageTimestamp || Math.floor(Date.now() / 1000);
+        await withTenantContext({ userId, isAdmin: false }, client => client.query(
+          `INSERT INTO whatsapp_messages
+             (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))
+           ON CONFLICT (message_id, instance_name) DO NOTHING`,
+          [userId, instancia, remoteJid, messageId, fromMe, extrairTipo(payload.data), extrairTexto(payload.data) || null,
+           fromMe ? 'sent' : 'received', tsMat > 1e10 ? Math.floor(tsMat / 1000) : tsMat]
+        )).catch(err => log.warn('WEBHOOK', 'Erro ao gravar mensagem do maturador', { traceId, err: err.message }));
+        wlog('WEBHOOK_MATURADOR', `Tráfego do maturador — ignorado pela IA/contatos mid=${messageId} inst=${instancia}`);
+        return;
+      }
 
       // ── UPSERT antecipado de contato — garante que contatos novos existam antes de qualquer branch ──
       // [AUDITORIA] LÓGICA: Garante a criação de registros mínimos na tabela de contatos de forma não-bloqueante (sem await).
@@ -1621,6 +1649,11 @@ export default function webhookRouter(pool: Pool): Router {
               } else if (upd.rows[0]?.profile_pic_url) {
                 return; // foto já salva — não chamar Evolution API
               }
+
+              // [AUDITORIA] LÓGICA (Proteção de número, 2026-10-04): número em Modo Número Novo não
+              // consulta foto de perfil — logo após parear chegam muitas mensagens de uma vez e cada
+              // contato novo virava 1-2 consultas ao WhatsApp em rajada. Ver services/protecaoNumero.ts.
+              if ((await instanciasEmProtecao(pool)).has(instancia)) return;
 
               // Foto de perfil via Evolution API — usa agentes como fonte (Sprint 1 unificação)
               const cfgEvo = await pool.query(
