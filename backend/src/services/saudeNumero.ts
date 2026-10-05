@@ -182,9 +182,13 @@ async function metricas7d(pool: Pool, instancia: string, numero: string): Promis
       [instancia]
     ),
     // Falha de ENVIO de verdade — ignora pulos por regra (opt-out, higienização, trava de saúde).
+    // Sprint 4 / H4: instância caída e número inválido não são sinal de risco do número (o
+    // primeiro é infraestrutura, o segundo é lista ruim) — só restrição/erro desconhecido contam.
     pool.query(
       `SELECT COUNT(*)::int AS falhas FROM disparo_logs
        WHERE instancia = $1 AND status = 'failed' AND created_at >= NOW() - INTERVAL '7 days'
+         AND COALESCE(tipo_falha, 'erro_desconhecido') IN ('restricao', 'erro_desconhecido')
+         AND COALESCE(erro, '') NOT ILIKE '%connection closed%'
          AND COALESCE(erro, '') NOT LIKE 'cancelado_pelo_cliente%'
          AND COALESCE(erro, '') NOT LIKE 'excluido_higienizacao%'
          AND COALESCE(erro, '') NOT LIKE 'bloqueado_saude%'`,

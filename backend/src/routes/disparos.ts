@@ -355,6 +355,62 @@ REGRAS ESTRITAS:
     }
   });
 
+  // ── Sprint 4 / H3: métricas reais por hora (enviados/entregues/lidos/respondidos/opt-outs) ──
+  router.get('/:id/metricas', async (req: AuthRequest, res: Response) => {
+    try {
+      const own = await pool.query(`SELECT 1 FROM disparos WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+      if (!own.rows.length) return res.status(404).json({ message: 'Campanha não encontrada' });
+      const tot = await pool.query(
+        `SELECT COUNT(*) FILTER (WHERE status = 'sent')::int AS enviados,
+                COUNT(*) FILTER (WHERE entregue_em IS NOT NULL)::int AS entregues,
+                COUNT(*) FILTER (WHERE lido_em IS NOT NULL)::int AS lidos,
+                COUNT(*) FILTER (WHERE respondido_em IS NOT NULL)::int AS respondidos,
+                COUNT(*) FILTER (WHERE optout_em IS NOT NULL)::int AS optouts,
+                COUNT(*) FILTER (WHERE status = 'failed')::int AS falhas,
+                COUNT(*) FILTER (WHERE status = 'failed' AND tipo_falha = 'instancia_caida')::int AS falhas_instancia_caida,
+                COUNT(*) FILTER (WHERE status = 'failed' AND tipo_falha = 'numero_invalido')::int AS falhas_numero_invalido,
+                COUNT(*) FILTER (WHERE status = 'failed' AND tipo_falha = 'restricao')::int AS falhas_restricao
+         FROM disparo_logs WHERE disparo_id = $1`,
+        [req.params.id]
+      );
+      const porHora = await pool.query(
+        `SELECT date_trunc('hour', enviado_at AT TIME ZONE 'America/Sao_Paulo') AS hora,
+                COUNT(*)::int AS enviados,
+                COUNT(*) FILTER (WHERE entregue_em IS NOT NULL)::int AS entregues,
+                COUNT(*) FILTER (WHERE lido_em IS NOT NULL)::int AS lidos,
+                COUNT(*) FILTER (WHERE respondido_em IS NOT NULL)::int AS respondidos
+         FROM disparo_logs WHERE disparo_id = $1 AND status = 'sent' AND enviado_at IS NOT NULL
+         GROUP BY 1 ORDER BY 1`,
+        [req.params.id]
+      );
+      return res.json({ ...tot.rows[0], por_hora: porHora.rows });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ── Sprint 4 / H4: reenviar falhas causadas por instância caída (não eram culpa do contato) ──
+  router.post('/:id/reenviar-falhas-instancia', async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `UPDATE disparo_logs dl SET status = 'pending', tentativas = 0, erro = NULL, tipo_falha = NULL
+         FROM disparos d
+         WHERE dl.disparo_id = d.id AND d.id = $1 AND d.user_id = $2 AND dl.status = 'failed'
+           AND (dl.tipo_falha = 'instancia_caida' OR dl.erro ILIKE '%connection closed%' OR dl.erro ILIKE '%not connected%')
+         RETURNING dl.id`,
+        [req.params.id, req.userId]
+      );
+      const n = r.rowCount ?? 0;
+      if (n > 0) {
+        await pool.query(`UPDATE disparos SET falhas = GREATEST(0, falhas - $2), updated_at = NOW() WHERE id = $1`, [req.params.id, n]);
+      }
+      log.info('DISPARO', 'Falhas por instância caída devolvidas à fila', { disparoId: req.params.id, n });
+      return res.json({ reenfileirados: n });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // ── GET /disparos/:id/logs ─────────────────────────────────────────────────
   router.get('/:id/logs', async (req: AuthRequest, res: Response) => {
     try {

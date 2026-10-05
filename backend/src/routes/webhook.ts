@@ -71,6 +71,7 @@ import { aoConectarInstancia, aoDesconectarInstancia, instanciasEmProtecao } fro
 import { aoQuedaSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
 import { extrairIdentidades, resolverTelefone, registrarIdentidades, lembrarDestinoLid, marcarContatoSoLid } from '../services/identidadeContato';
 import { registrarOrigemInbound } from './smartLinks';
+import { registrarAckDisparo, marcarRespostaNoEnvio } from '../services/metricasDisparo';
 import { withTenantContext } from '../db';
 import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
@@ -336,6 +337,8 @@ export default function webhookRouter(pool: Pool): Router {
            SET status = EXCLUDED.status, updated_at = NOW()`,
         [messageId, payload.instance, status]
       ).catch(() => {});
+      // Sprint 4 / H3: ACK de entrega/leitura vai pro envio da campanha com este message_id.
+      await registrarAckDisparo(pool, messageId, status);
 
       // [AUDITORIA] FIX APLICADO: espelha falha real de entrega em `whatsapp_messages.status`
       // (coluna que a UI do chat lê) — sem isso, uma mensagem que o WhatsApp rejeitou continuava
@@ -1082,7 +1085,8 @@ export default function webhookRouter(pool: Pool): Router {
               [userId, `%${telefone.slice(-11)}`]
             ).catch(() => {});
             await pool.query(
-              `UPDATE contatos SET atendente_pausou_ia = false, updated_at = NOW()
+              // Sprint 4 / H1: a equipe reativou a IA — vale a decisão humana, inclusive sobre a marca de robô.
+              `UPDATE contatos SET atendente_pausou_ia = false, bot_detectado = false, updated_at = NOW()
                WHERE user_id = $1 AND telefone ILIKE $2`,
               [userId, `%${telefone.slice(-11)}`]
             ).catch(() => {});
@@ -1593,6 +1597,8 @@ export default function webhookRouter(pool: Pool): Router {
         if ((insertResult as any).rowCount === 1 && !isGroup && texto) {
           void registrarRespostaDeDisparo(pool, { userId: userId as string, telefone, messageId, texto });
         }
+        // Sprint 4 / H3: qualquer mensagem do contato até 72h após o envio marca a campanha como respondida.
+        if ((insertResult as any).rowCount === 1 && !isGroup) void marcarRespostaNoEnvio(pool, userId as string, telefone, false);
 
         // ── Decriptografar e persistir mídia (áudio/imagem/vídeo/documento/figurinha) ─────
         // [AUDITORIA] LÓGICA: media_url gravado acima é a URL crua da Evolution, sempre
@@ -1849,6 +1855,7 @@ export default function webhookRouter(pool: Pool): Router {
           ).catch(() => {});
           // Saúde do número: opt-out entra na linha do tempo da instância que recebeu.
           void registrarEventoSaude(pool, null, instancia, 'optout_recebido', null, { telefone: telefone.slice(-4) });
+          void marcarRespostaNoEnvio(pool, userId, telefone, true); // Sprint 4 / H3: opt-out na métrica da campanha
           // Enviar confirmação via Evolution (busca config do agente)
           try {
             const cfgOptOut = await pool.query(

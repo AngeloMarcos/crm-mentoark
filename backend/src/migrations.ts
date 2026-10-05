@@ -2234,6 +2234,52 @@ export async function runMigrations(pool: Pool): Promise<void> {
   }
   log.info('MIGRATIONS', 'Smart Links / origem inbound OK');
 
+  // ── Métricas reais de campanha + fila resiliente a quedas (Sprint 4 / H3+H4, 2026-10-05) ────
+  // [AUDITORIA] BUG (achado em produção): campanha com 109 enviados mostrava 0 entregues e 0
+  // respondidos — `disparo_logs` nunca guardou o ID da mensagem enviada, então os ACKs da
+  // Evolution (MESSAGES_UPDATE, já gravados em whatsapp_message_status) não tinham com o que casar,
+  // e os contadores `disparos.entregues/respondidos` nunca foram incrementados por código nenhum.
+  // Também: 21 de 24 falhas de uma campanha eram "Connection Closed" (instância caída) marcadas
+  // como falha DO CONTATO. Colunas novas: `message_id` (key.id do envio), marcos de entrega/
+  // leitura/resposta/opt-out e `tipo_falha` (numero_invalido | instancia_caida | restricao |
+  // erro_desconhecido). Reversível: DROP COLUMN.
+  for (const col of ['message_id TEXT', 'tipo_falha TEXT', 'entregue_em TIMESTAMPTZ', 'lido_em TIMESTAMPTZ',
+                     'respondido_em TIMESTAMPTZ', 'optout_em TIMESTAMPTZ']) {
+    await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_disparo_logs_message_id ON disparo_logs(message_id) WHERE message_id IS NOT NULL`).catch(() => {});
+  // `entregues`/`respondidos` constam no CREATE TABLE de `disparos` lá em cima, mas a tabela real
+  // foi criada antes com outra estrutura (CREATE ... IF NOT EXISTS não altera tabela existente) —
+  // as colunas nunca existiram em produção/homologação, por isso a tela mostrava sempre 0.
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS entregues INTEGER DEFAULT 0`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS respondidos INTEGER DEFAULT 0`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS lidos INTEGER DEFAULT 0`).catch(() => {});
+  await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS optouts INTEGER DEFAULT 0`).catch(() => {});
+  log.info('MIGRATIONS', 'Métricas reais de campanha (disparo_logs ACK/resposta) OK');
+
+  // ── IA segura: identidade do agente e quem a IA não responde (Sprint 4 / H1+H2, 2026-10-05) ──
+  // `nome_exibicao`: assinatura das mensagens da IA (ex.: "Stella | MentoArk") — antes assinava
+  // com o nome da linha/instância ("Conexão WhatsApp") enquanto o texto dizia "Sou a Stella".
+  // Índice único: no máximo UM agente ativo por instância (dois ativos na mesma instância deixavam
+  // o roteamento ambíguo). `ia_contatos_ignorados`: contatos pessoais que a IA nunca responde.
+  // Reversível: DROP COLUMN / DROP INDEX / DROP TABLE.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS nome_exibicao TEXT`).catch(() => {});
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_agente_ativo_por_instancia
+      ON agentes (user_id, lower(evolution_instancia)) WHERE ativo = true AND evolution_instancia IS NOT NULL
+  `).catch(err => log.warn('MIGRATIONS', 'Índice de agente único por instância não criado (há duplicados?)', { err: err?.message }));
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ia_contatos_ignorados (
+      id        BIGSERIAL   PRIMARY KEY,
+      user_id   UUID        NOT NULL,
+      telefone  TEXT        NOT NULL,
+      nome      TEXT,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT uq_ia_contato_ignorado UNIQUE (user_id, telefone)
+    )
+  `).catch(() => {});
+  log.info('MIGRATIONS', 'IA segura (nome de exibição, agente único, contatos ignorados) OK');
+
   // ── Circuit-breaker de loop de LOGOUT (Sprint 2026-08-10, continuação Serenovlogs067) ────────
   // [AUDITORIA] BUG GRAVE (2 incidentes reais confirmados — Serenovlogs067 em 10/08 e outro
   // usuário no mesmo dia, ambos com número derrubado/banido pelo WhatsApp): reconectar

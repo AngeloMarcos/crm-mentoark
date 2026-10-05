@@ -5,6 +5,7 @@ import { reconciliarInstanciasEvolution } from './services/evolutionReconciliati
 import { retentarMidiaPendente } from './services/mediaRetry';
 import { recalcularTodosScores } from './services/instanceScore';
 import { avaliarFases } from './services/saudeNumero';
+import { retomarCampanhasInstanciaCaida, recalcularMetricasCampanhas } from './services/metricasDisparo';
 import { processarMaturador } from './services/maturadorProcessor';
 import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
 import { enfileirarBusca, enfileirarLinkPublico } from './radar/fila';
@@ -231,6 +232,19 @@ export function initCronJobs() {
       log.error('CRON', 'Erro ao recalcular Score de Saúde', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
+
+  // [AUDITORIA] LÓGICA (Sprint 4 / H3+H4, 2026-10-05): a cada minuto, retoma campanhas pausadas
+  // por instância caída quando ela reconecta, e atualiza entregues/lidos/respondidos/opt-outs
+  // das campanhas a partir dos logs (services/metricasDisparo.ts).
+  cron.schedule('*/1 * * * *', async () => {
+    try {
+      const retomadas = await retomarCampanhasInstanciaCaida(pool);
+      if (retomadas > 0) log.info('CRON', 'Campanhas retomadas após reconexão da instância', { retomadas });
+      await recalcularMetricasCampanhas(pool);
+    } catch (err: any) {
+      log.error('CRON', 'Erro em retomada/métricas de campanhas', { err: err.message });
+    }
+  });
 
   // [AUDITORIA] LÓGICA (Etapa A — Saúde de Instâncias, 2026-10-05): de hora em hora, avança a
   // fase de maturação dos números que cumpriram tempo mínimo + sinais limpos, e confirma ban de

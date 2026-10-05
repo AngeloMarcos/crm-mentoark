@@ -29,8 +29,10 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Play, Pause, Square, Settings2, Loader2, Trash2,
-  MessageSquare, Table as TableIcon, Send, XCircle, Activity, AlertCircle, CheckCircle2,
+  MessageSquare, Table as TableIcon, Send, XCircle, Activity, AlertCircle, CheckCircle2, Eye, UserX,
 } from "lucide-react";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { getAuthToken } from "@/lib/api-token";
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 
@@ -185,12 +187,56 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
     return () => clearInterval(timer);
   }, [campaign.id]);
 
+  // Sprint 4 / H3 (2026-10-05): métricas reais (entregue/lido por ACK, respondido/opt-out pela
+  // resposta até 72h) vindas de GET /api/disparos/:id/metricas — antes "Entregues"/"Respondidos"
+  // liam contadores que nenhum código incrementava (ficavam sempre 0).
+  const [metricas, setMetricas] = useState<any>(null);
+  const [reenviando, setReenviando] = useState(false);
+  useEffect(() => {
+    const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+    const buscar = async () => {
+      try {
+        const t = getAuthToken();
+        const r = await fetch(`${API_BASE}/api/disparos/${campaign.id}/metricas`, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+        if (r.ok) setMetricas(await r.json());
+      } catch { /* informativo */ }
+    };
+    buscar();
+    const timer = setInterval(buscar, 10000);
+    return () => clearInterval(timer);
+  }, [campaign.id]);
+
+  const reenviarFalhasInstancia = async () => {
+    setReenviando(true);
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const r = await fetch(`${API_BASE}/api/disparos/${campaign.id}/reenviar-falhas-instancia`, {
+        method: "POST", headers: t ? { Authorization: `Bearer ${t}` } : {},
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.message || "Falha ao reenviar");
+      toast.success(`${j.reenfileirados} contato(s) voltaram para a fila.`);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setReenviando(false);
+    }
+  };
+
+  const enviadosReais = metricas?.enviados ?? (currentCampaign.enviados || 0);
+  const pct = (v: number) => (enviadosReais > 0 ? `${((v / enviadosReais) * 100).toFixed(0)}% dos enviados` : null);
   const stats = [
-    { label: "Enviados", val: currentCampaign.enviados || 0, total: currentCampaign.total_leads || 0, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10" },
-    { label: "Entregues", val: currentCampaign.entregues || 0, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10" },
-    { label: "Respondidos", val: currentCampaign.respondidos || 0, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10" },
-    { label: "Falhas", val: currentCampaign.falhas || 0, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
+    { label: "Enviados", val: enviadosReais, total: currentCampaign.total_leads || 0, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10", sub: null },
+    { label: "Entregues", val: metricas?.entregues ?? 0, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10", sub: pct(metricas?.entregues ?? 0) },
+    { label: "Lidos", val: metricas?.lidos ?? 0, total: null, icon: Eye, color: "text-sky-500", bg: "bg-sky-500/10", sub: pct(metricas?.lidos ?? 0) },
+    { label: "Respondidos", val: metricas?.respondidos ?? 0, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10", sub: pct(metricas?.respondidos ?? 0) },
+    { label: "Opt-outs", val: metricas?.optouts ?? 0, total: null, icon: UserX, color: "text-orange-500", bg: "bg-orange-500/10", sub: pct(metricas?.optouts ?? 0) },
+    { label: "Falhas", val: currentCampaign.falhas || 0, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10", sub: null },
   ];
+  const porHora = (metricas?.por_hora ?? []).map((h: any) => ({
+    ...h, rotulo: new Date(h.hora).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit" }) + "h",
+  }));
 
   const failureRate = currentCampaign.enviados > 0 ? (currentCampaign.falhas / (currentCampaign.enviados + currentCampaign.falhas)) * 100 : 0;
 
@@ -271,7 +317,21 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
         </Alert>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {(metricas?.falhas_instancia_caida ?? 0) > 0 && (
+        <Alert className="border-amber-500/50 bg-amber-500/10">
+          <AlertCircle className="h-4 w-4 text-amber-600" />
+          <AlertTitle className="text-amber-700">{metricas.falhas_instancia_caida} falha(s) por instância caída</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-amber-700/90">
+            <span>Esses contatos não tiveram problema — a instância estava desconectada no momento do envio.</span>
+            <Button size="sm" variant="outline" disabled={reenviando} onClick={reenviarFalhasInstancia}>
+              {reenviando ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
+              Reenviar falhas por instância caída
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
         {stats.map(s => (
           <Card key={s.label} className="p-5 border-none shadow-sm overflow-hidden relative group">
             <div className={`absolute top-0 right-0 p-4 transition-transform group-hover:scale-110`}>
@@ -283,14 +343,40 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
               {s.total !== null && <span className="text-sm text-muted-foreground font-bold">/ {s.total}</span>}
             </div>
             {s.total !== null && <Progress value={(s.val/s.total)*100} className={`h-1.5 mt-3 ${s.bg}`} />}
-            {s.label === "Respondidos" && s.val > 0 && (
-              <p className="text-[10px] text-purple-600 font-bold mt-2">
-                Conversão: {((s.val / currentCampaign.enviados) * 100).toFixed(1)}%
-              </p>
-            )}
+            {s.sub && <p className="text-[10px] text-muted-foreground font-semibold mt-2">{s.sub}</p>}
           </Card>
         ))}
       </div>
+
+      {porHora.length > 0 && (
+        <Card className="p-4 border-none shadow-sm">
+          <p className="text-sm font-bold mb-2">Envios por hora</p>
+          <div className="h-40">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={porHora} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
+                <XAxis dataKey="rotulo" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
+                <Tooltip
+                  cursor={{ fill: "hsl(var(--muted))", opacity: 0.4 }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const h = payload[0].payload;
+                    return (
+                      <div className="rounded-md border bg-popover px-3 py-2 text-xs shadow-md space-y-0.5">
+                        <p className="font-semibold">{h.rotulo}</p>
+                        <p>Enviados: <b>{h.enviados}</b></p>
+                        <p className="text-muted-foreground">Entregues: {h.entregues} · Lidos: {h.lidos} · Respondidos: {h.respondidos}</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar dataKey="enviados" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
 
       <Card className="border-none shadow-sm overflow-hidden">
         <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
@@ -328,8 +414,18 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
                        log.status === 'cancelado' ? 'Removido' :
                        log.status === 'sending' ? 'Enviando...' : 'Pendente'}
                     </Badge>
+                    {log.status === 'sent' && (log.respondido_em || log.lido_em || log.entregue_em) && (
+                      <span className="ml-1.5 text-[10px] text-muted-foreground">
+                        {log.respondido_em ? '· respondeu' : log.lido_em ? '· lido' : '· entregue'}
+                      </span>
+                    )}
                   </td>
                   <td className="p-3 text-xs text-red-500 max-w-[200px] truncate" title={log.erro}>
+                    {log.tipo_falha && (
+                      <span className="mr-1 font-semibold">
+                        [{({ numero_invalido: 'número inválido', instancia_caida: 'instância caída', restricao: 'restrição', erro_desconhecido: 'erro' } as Record<string, string>)[log.tipo_falha] ?? log.tipo_falha}]
+                      </span>
+                    )}
                     {log.erro || "-"}
                   </td>
                   <td className="p-3 text-xs text-muted-foreground">

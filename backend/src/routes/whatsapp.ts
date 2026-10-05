@@ -1786,6 +1786,30 @@ export default function whatsappRouter(pool: Pool): Router {
     return res.json({ ok: true });
   });
 
+  // ── Sprint 4 / H1: contatos que a IA não responde (pessoais, família, fornecedores…) ──────────
+  router.get('/ia-ignorados', async (req: AuthRequest, res: Response) => {
+    const r = await pool.query(
+      `SELECT id, telefone, nome, criado_em FROM ia_contatos_ignorados WHERE user_id = $1 ORDER BY criado_em DESC`,
+      [req.userId]
+    );
+    return res.json(r.rows);
+  });
+  router.post('/ia-ignorados', async (req: AuthRequest, res: Response) => {
+    const telefone = String(req.body?.telefone || '').replace(/\D/g, '');
+    if (telefone.length < 10 || telefone.length > 15) return res.status(400).json({ message: 'Telefone inválido (use DDI + DDD + número)' });
+    const r = await pool.query(
+      `INSERT INTO ia_contatos_ignorados (user_id, telefone, nome) VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, telefone) DO UPDATE SET nome = COALESCE(EXCLUDED.nome, ia_contatos_ignorados.nome)
+       RETURNING id, telefone, nome, criado_em`,
+      [req.userId, telefone, String(req.body?.nome || '').trim().slice(0, 120) || null]
+    );
+    return res.status(201).json(r.rows[0]);
+  });
+  router.delete('/ia-ignorados/:id', async (req: AuthRequest, res: Response) => {
+    await pool.query(`DELETE FROM ia_contatos_ignorados WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+    return res.status(204).send();
+  });
+
   // GET /saude — fase, score (com explicação), bans e limite de disparo de cada instância do
   // usuário. Usado pelo card da instância e pelo passo "Instâncias" do Novo Disparo.
   router.get('/saude', async (req: AuthRequest, res: Response) => {

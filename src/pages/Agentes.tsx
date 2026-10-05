@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ContatosIgnoradosIA } from "@/components/agentes/ContatosIgnoradosIA";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -107,6 +108,7 @@ interface Agente {
   saudacao_inicial?: string | null;
   escopo_ia?: string | null;
   empresa_nome?: string | null;
+  nome_exibicao?: string | null;
   bloco_qualificacao?: string | null;
   mensagem_encaminhamento?: string | null;
   mensagem_encerramento?: string | null;
@@ -293,6 +295,7 @@ const formInicial = {
   saudacao_inicial: "",
   escopo_ia: "",
   empresa_nome: "",
+  nome_exibicao: "",
   bloco_qualificacao: "",
   mensagem_encaminhamento: "",
   mensagem_encerramento: "",
@@ -319,6 +322,14 @@ function formatarData(iso: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+// Sprint 4 / H2 (2026-10-05): o banco garante 1 agente ativo por instância (uq_agente_ativo_por_instancia).
+function msgErroAgente(msg: string, acao: string): string {
+  if (/uq_agente_ativo_por_instancia|duplicate key/i.test(msg)) {
+    return "Já existe outro agente ATIVO nesta instância. Desative o outro antes de ativar este — dois agentes na mesma instância deixam o roteamento ambíguo.";
+  }
+  return `Erro ao ${acao}: ${msg}`;
 }
 
 export default function AgentesPage() {
@@ -408,6 +419,7 @@ export default function AgentesPage() {
       saudacao_inicial: a.saudacao_inicial ?? "",
       escopo_ia: a.escopo_ia ?? "",
       empresa_nome: a.empresa_nome ?? "",
+      nome_exibicao: a.nome_exibicao ?? "",
       bloco_qualificacao: a.bloco_qualificacao ?? "",
       mensagem_encaminhamento: a.mensagem_encaminhamento ?? "",
       mensagem_encerramento: a.mensagem_encerramento ?? "",
@@ -475,6 +487,7 @@ export default function AgentesPage() {
       saudacao_inicial: form.saudacao_inicial.trim() || null,
       escopo_ia: form.escopo_ia.trim() || null,
       empresa_nome: form.empresa_nome.trim() || null,
+      nome_exibicao: form.nome_exibicao.trim() || null,
       bloco_qualificacao: form.bloco_qualificacao.trim() || null,
       mensagem_encaminhamento: form.mensagem_encaminhamento.trim() || null,
       mensagem_encerramento: form.mensagem_encerramento.trim() || null,
@@ -500,7 +513,7 @@ export default function AgentesPage() {
         .eq("id", editing.id);
       setSalvando(false);
       if (error) {
-        toast.error(`Erro ao salvar: ${error.message}`);
+        toast.error(msgErroAgente(error.message, "salvar"));
         return;
       }
       toast.success("✅ Agente salvo!");
@@ -510,7 +523,7 @@ export default function AgentesPage() {
         .insert([{ ...payload, user_id: user.id }]);
       setSalvando(false);
       if (error) {
-        toast.error(`Erro ao criar: ${error.message}`);
+        toast.error(msgErroAgente(error.message, "criar"));
         return;
       }
       toast.success("✅ Agente criado!");
@@ -649,6 +662,9 @@ export default function AgentesPage() {
             <Plus className="h-4 w-4" /> Novo Agente
           </Button>
         </div>
+
+        {/* Sprint 4 / H1: contatos pessoais que a IA nunca responde. */}
+        <ContatosIgnoradosIA />
 
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -1322,7 +1338,16 @@ export default function AgentesPage() {
             <TabsContent value="comportamento" className="space-y-4 pt-4">
               {/* Sprint 3 / H9 (2026-10-05): política de IA da Meta — agente de tarefa específica,
                   identificado na 1ª resposta e com saída para atendente humano ("atendente"). */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Nome de exibição</Label>
+                  <Input
+                    value={form.nome_exibicao}
+                    onChange={(e) => setForm({ ...form, nome_exibicao: e.target.value })}
+                    placeholder="Ex: Stella | MentoArk"
+                  />
+                  <p className="text-[11px] text-muted-foreground">Assinatura que o contato vê. Sem ele, mensagens saem sem assinatura.</p>
+                </div>
                 <div className="space-y-1.5">
                   <Label>Nome da empresa</Label>
                   <Input

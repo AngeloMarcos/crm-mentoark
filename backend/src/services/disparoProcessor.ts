@@ -9,6 +9,7 @@ import { resolverOwnerId } from './subscription';
 import { log } from '../logger';
 import { avaliarElegibilidade } from '../utils/elegibilidade';
 import { saudePorInstancia, contatoJaConversou, MAX_ENVIOS_HORA } from './saudeNumero';
+import { classificarFalha, instanciaAberta, pausarPorInstanciaCaida } from './metricasDisparo';
 
 // [AUDITORIA] BUG GRAVÍSSIMO CORRIGIDO (achado real do usuário, 2026-09-11 — conta
 // cotinedeborah@gmail.com com 2 campanhas em 0/2661 enviados, 0% por mais de 1h; usuário: "cada
@@ -397,6 +398,7 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
   // Preenchida quando esta chamada efetivamente reserva uma instância (ver `instanciasEmUso`
   // acima) — liberada no `finally` no fim da função, cobrindo todo caminho de saída.
   let instanciaLockKey: string | null = null;
+  let instanciaAtual: string | null = null; // Sprint 4 / H4: visível no catch pra pausar por instância caída
   try {
     // [AUDITORIA] FIX APLICADO (Sprint 5, 2026-07-23 — teto diário; revisado 2026-07-29 pra
     // ser POR INSTÂNCIA): antes de processar a mensagem desta campanha, resolve as
@@ -686,8 +688,17 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         const url = config?.url || process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br';
         const api_key = config?.api_key || process.env.EVOLUTION_API_KEY || 'mentoark2025evolutionkey';
         const instancia = config?.instancia || `crm_${String(user_id).slice(0, 8)}`;
+        instanciaAtual = instancia;
         
         const baseUrl = sanitizeEvolutionUrl(url);
+
+        // Sprint 4 / H4 (2026-10-05): instância fora do ar → o contato volta pra fila (NÃO é falha
+        // dele) e a campanha pausa até a instância reconectar (cron retoma sozinho). Antes, o envio
+        // tentava assim mesmo e "Connection Closed" marcava o contato como falha.
+        if (!(await instanciaAberta(url, api_key, instancia))) {
+          await pausarPorInstanciaCaida(pool, disparo_id, log_id, instancia, 'connectionState diferente de open');
+          return;
+        }
 
         // [AUDITORIA] FIX APLICADO: ver nota grande na declaração de `instanciasEmUso` acima —
         // instância já em uso por OUTRA campanha neste exato tick reenfileira e tenta de novo
@@ -947,8 +958,10 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
           log.error('DISPARO', 'Mídia do template indisponível no momento do envio — mensagem entregue só com texto', { disparo_id, log_id, tipo_midia, telefone: digits });
         }
         await pool.query(
-          `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW(), erro = $3, instancia = $2 WHERE id = $1`,
-          [log_id, instancia, midiaEsperadaMasIndisponivel ? 'Mídia indisponível no momento do envio — mensagem entregue só com o texto.' : null]
+          // Sprint 4 / H3: guarda o key.id — é por ele que os ACKs (entregue/lido) casam com o envio.
+          `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW(), erro = $3, instancia = $2, message_id = $4, tipo_falha = NULL WHERE id = $1`,
+          [log_id, instancia, midiaEsperadaMasIndisponivel ? 'Mídia indisponível no momento do envio — mensagem entregue só com o texto.' : null,
+           respData?.key?.id || null]
         );
         await pool.query(
           `UPDATE disparos SET enviados = enviados + 1 WHERE id = $1`,
@@ -980,6 +993,16 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         // da 3ª tentativa falha, vira 'failed' definitivo, igual ao comportamento anterior.
         const statusHttp: number | undefined = err?.status ?? err?.response?.status ?? err?.statusCode;
         const codigoRede: string | undefined = (err as NodeJS.ErrnoException)?.code;
+
+        // Sprint 4 / H4 (2026-10-05): classifica a falha. Instância caída ("Connection Closed",
+        // 5xx, rede) não é culpa do contato: volta pra fila, pausa a campanha e o cron retoma
+        // quando a instância reconectar — sem contar falha nem erro consecutivo.
+        const tipoFalha = classificarFalha(statusHttp, String(err?.message || ''), codigoRede);
+        if (tipoFalha === 'instancia_caida' && instanciaAtual) {
+          await pausarPorInstanciaCaida(pool, disparo_id, log_id, instanciaAtual, String(err?.message || ''));
+          return;
+        }
+
         const isErroTemporario =
           err?.name === 'AbortError' ||
           ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT'].includes(codigoRede || '') ||
@@ -993,10 +1016,10 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
             `UPDATE disparo_logs
              SET tentativas = tentativas + 1,
                  status = CASE WHEN tentativas + 1 >= $2 THEN 'failed' ELSE 'pending' END,
-                 erro = $1
+                 erro = $1, tipo_falha = $4
              WHERE id = $3
              RETURNING tentativas, status`,
-            [err.message, MAX_TENTATIVAS, log_id]
+            [err.message, MAX_TENTATIVAS, log_id, tipoFalha]
           ).catch((errUpd: any) => {
             log.error('DISPARO', 'Falha ao registrar retry do log', { logId: log_id, err: errUpd?.message });
             return { rows: [] as any[] };
@@ -1015,8 +1038,8 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
         } else {
           // Erro permanente (4xx, payload inválido, etc.) — falha direta, sem retry.
           await pool.query(
-            `UPDATE disparo_logs SET status = 'failed', erro = $1 WHERE id = $2`,
-            [err.message, log_id]
+            `UPDATE disparo_logs SET status = 'failed', erro = $1, tipo_falha = $3 WHERE id = $2`,
+            [err.message, log_id, tipoFalha]
           );
         }
 

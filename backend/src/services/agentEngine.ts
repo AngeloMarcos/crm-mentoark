@@ -519,6 +519,108 @@ async function transferirParaHumano(
   log.info('ENGINE', 'Cliente pediu atendente humano — IA pausada', { userId, telefone: entrada.telefone });
 }
 
+// ── Regras de quando a IA responde (Sprint 4 / H1, 2026-10-05) ───────────────────────────────
+// [AUDITORIA] LÓGICA: achados da inspeção de 04/10 — a IA conversava com respostas automáticas de
+// outras empresas (loop robô↔robô, volume artificial) e respondia contatos pessoais do dono do
+// número. Grupo já nunca chega aqui (webhook faz `if (isGroup) return` antes do motor).
+// Regras, nesta ordem:
+//   1. contato na lista "IA não responde" (ia_contatos_ignorados) → não responde;
+//   2. cara de robô: texto típico de resposta automática, mensagem chegando < 3s depois de um
+//      envio nosso, ou mais de 3 TURNOS de resposta da IA em 2 min → marca bot_detectado, pausa a
+//      IA (se a equipe reativar a IA, vale a decisão dela — `bot_detectado` sozinho não bloqueia);
+//   3. 15 respostas da IA sem nenhuma mensagem humana da empresa no meio → pausa e avisa a equipe.
+// Padrões de texto exigem a FORMULAÇÃO de robô — cliente perguntando "qual o horário de
+// atendimento?" não pode ser confundido com resposta automática.
+const TEXTO_ROBO = [
+  /mensagem autom[aá]tica|resposta autom[aá]tica|atendimento autom[aá]tico/i,
+  /agradece (o )?seu contato|obrigad[oa] por (entrar em )?contato/i,
+  /no momento n[aã]o (estou|estamos|podemos) (dispon[ií]ve|atender|responder)/i,
+  /fora do (nosso )?hor[aá]rio de (atendimento|funcionamento)|nosso hor[aá]rio de (atendimento|funcionamento) [ée]/i,
+  /(digite|escolha|selecione) (o n[uú]mero|uma das op[cç][oõ]es|a op[cç][aã]o)/i,
+  /em breve (retornaremos|responderemos|um de nossos)/i,
+];
+
+// Turnos de resposta da IA por contato (um por ciclo de resposta, não por pedaço de mensagem —
+// identificação + 2 partes contavam como 3 e faziam conversa humana rápida parecer robô).
+const turnosPorContato = new Map<string, number[]>();
+function registrarTurnoIA(userId: string, telefone: string): void {
+  const chave = `${userId}:${telefone}`;
+  const agora = Date.now();
+  turnosPorContato.set(chave, [...(turnosPorContato.get(chave) || []).filter(t => agora - t < 5 * 60_000), agora]);
+}
+function turnosIANaJanela(userId: string, telefone: string, janelaMs: number): number[] {
+  const agora = Date.now();
+  return (turnosPorContato.get(`${userId}:${telefone}`) || []).filter(t => agora - t < janelaMs);
+}
+export function textoDeRespostaAutomatica(texto: string | null): boolean {
+  const t = String(texto || '');
+  return t.length > 0 && TEXTO_ROBO.some(r => r.test(t));
+}
+
+function enviosBotNaJanela(userId: string, telefone: string, janelaMs: number): number[] {
+  const agora = Date.now();
+  return (enviosPorContato.get(`${userId}:${telefone}`) || []).filter(t => agora - t < janelaMs);
+}
+
+async function iaNaoDeveResponder(pool: Pool, userId: string, entrada: MensagemEntrada, contatoId: string): Promise<string | null> {
+  const dig = entrada.telefone.replace(/\D/g, '');
+  const ign = await pool.query(
+    `SELECT 1 FROM ia_contatos_ignorados WHERE user_id = $1 AND RIGHT(regexp_replace(telefone, '\\D', '', 'g'), 11) = RIGHT($2, 11) LIMIT 1`,
+    [userId, dig]
+  ).catch(() => ({ rows: [] as any[] }));
+  if (ign.rows.length) return 'contato na lista "IA não responde"';
+
+  // Sinais de robô na mensagem atual.
+  const recebidaEm = (entrada.timestamp > 1e10 ? entrada.timestamp : entrada.timestamp * 1000) || Date.now();
+  const envios3min = enviosBotNaJanela(userId, entrada.telefone, 3 * 60_000);
+  const ultimoEnvio = envios3min.length ? Math.max(...envios3min) : 0;
+  let motivoRobo: string | null = null;
+  if (textoDeRespostaAutomatica(entrada.texto)) motivoRobo = 'texto típico de resposta automática';
+  else if (ultimoEnvio && recebidaEm - ultimoEnvio >= 0 && recebidaEm - ultimoEnvio < 3000) motivoRobo = 'respondeu em menos de 3s após o nosso envio';
+  else if (turnosIANaJanela(userId, entrada.telefone, 2 * 60_000).length > 3) motivoRobo = 'mais de 3 trocas em 2 minutos';
+  if (motivoRobo) {
+    await pool.query(`UPDATE contatos SET bot_detectado = true, atendente_pausou_ia = true, updated_at = NOW() WHERE id = $1`, [contatoId]).catch(() => {});
+    await pool.query(
+      `INSERT INTO ia_pausa_log (user_id, telefone, acao, observacao, contato_id) VALUES ($1, $2, 'pause', $3, $4)`,
+      [userId, entrada.telefone, `Robô detectado (${motivoRobo}) — IA pausada para evitar conversa robô↔robô`, contatoId]
+    ).catch(() => {});
+    return `robô detectado: ${motivoRobo}`;
+  }
+
+  // Teto de respostas da IA sem intervenção humana da empresa (mensagem nossa que não é da IA).
+  const turnos = await withTenantContext({ userId, isAdmin: false }, client => client.query(
+    `SELECT COUNT(*)::int AS n FROM whatsapp_messages
+     WHERE user_id = $1 AND remote_jid = $2 AND from_me = true AND message_id LIKE 'resp\\_%'
+       AND created_at > COALESCE((SELECT MAX(created_at) FROM whatsapp_messages
+                                  WHERE user_id = $1 AND remote_jid = $2 AND from_me = true AND message_id NOT LIKE 'resp\\_%'),
+                                 NOW() - INTERVAL '7 days')`,
+    [userId, jidConversa(entrada.telefone)]
+  )).catch(() => ({ rows: [{ n: 0 }] } as any));
+  if ((turnos.rows[0]?.n ?? 0) >= MAX_TURNOS_SEM_HUMANO) {
+    await pool.query(`UPDATE contatos SET atendente_pausou_ia = true, updated_at = NOW() WHERE id = $1`, [contatoId]).catch(() => {});
+    await pool.query(
+      `INSERT INTO ia_pausa_log (user_id, telefone, acao, observacao, contato_id) VALUES ($1, $2, 'pause', $3, $4)`,
+      [userId, entrada.telefone, `IA chegou a ${MAX_TURNOS_SEM_HUMANO} respostas sem intervenção humana — pausada`, contatoId]
+    ).catch(() => {});
+    const backendUrl = process.env.BACKEND_URL || 'https://api.mentoark.com.br';
+    fetch(`${backendUrl}/api/kanban/webhook/n8n`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-webhook-secret': process.env.N8N_WEBHOOK_SECRET || 'mentoark-kanban-secret-2025' },
+      body: JSON.stringify({
+        user_id: userId,
+        titulo: `🔁 IA pausada após ${MAX_TURNOS_SEM_HUMANO} respostas: ${entrada.pushName} (${entrada.telefone})`,
+        resumo: `A conversa passou de ${MAX_TURNOS_SEM_HUMANO} respostas da IA sem nenhuma mensagem da equipe. A IA foi pausada — assuma a conversa ou reative a IA.`,
+        contato_nome: entrada.pushName, contato_telefone: entrada.telefone,
+        remote_jid: jidConversa(entrada.telefone), instance_name: entrada.instancia, prioridade: 'media',
+      }),
+    }).catch(() => {});
+    return `limite de ${MAX_TURNOS_SEM_HUMANO} respostas sem intervenção humana`;
+  }
+  return null;
+}
+const MAX_TURNOS_SEM_HUMANO = 15;
+const INTERVALO_MIN_RESPOSTA_MS = 20_000;
+
 async function pausarPorFalhaLLM(
   pool: Pool, userId: string, entrada: MensagemEntrada, motivo: string,
 ): Promise<void> {
@@ -716,6 +818,13 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     return;
   }
 
+  // 3.7. Regras de quando a IA responde (Sprint 4 / H1, 2026-10-05) — ver `iaNaoDeveResponder`.
+  const bloqueioIA = await iaNaoDeveResponder(pool, userIdFinal, entrada, contato.id);
+  if (bloqueioIA) {
+    log.info('ENGINE', 'IA não responde', { telefone: entrada.telefone, motivo: bloqueioIA });
+    return;
+  }
+
   // 4. Criar provider ANTES de resolver mídia (a apiKey é necessária para Whisper/Vision)
   const providerInfo = await criarProvider(pool, userIdFinal, agente.provider_id ?? null);
   if (!providerInfo) {
@@ -841,6 +950,12 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   }
 
   const nomeAgente = agente.nome || 'Assistente';
+  // Sprint 4 / H2 (2026-10-05): nome que o CONTATO vê (assinatura e identificação). Nunca o nome
+  // genérico da linha/instância criada automaticamente ("Conexão WhatsApp") — a inspeção viu
+  // mensagens assinadas "*Conexão WhatsApp*" com o texto dizendo "Sou a Stella". Sem nome de
+  // exibição configurado e com nome genérico, a mensagem sai sem assinatura.
+  const nomeExibicao = String(agente.nome_exibicao || '').trim()
+    || (/^conex[aã]o whatsapp$/i.test(String(agente.nome || '').trim()) ? '' : String(agente.nome || '').trim());
   const sinalPausa = agente.sinal_pausa || '251213';
 
   // MCP tools habilitadas por agente (Aba Motor, Agentes.tsx) — `agente.mcp_tools` é
@@ -1156,12 +1271,21 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     // Sprint 3 / H9 (2026-10-05): na PRIMEIRA resposta da IA a este contato (sem histórico de
     // assistente), identifica que é um assistente virtual e mostra como chegar num humano —
     // exigência da política de IA da Meta e boa prática de transparência.
+    // Sprint 4 / H1: no máximo 1 resposta a cada 20s por contato — espera o restante em vez de
+    // descartar (a mensagem do cliente é legítima). Registra o turno (detecção de robô por ritmo).
+    const enviosRecentes20s = enviosBotNaJanela(userIdFinal, entrada.telefone, INTERVALO_MIN_RESPOSTA_MS);
+    if (enviosRecentes20s.length) {
+      const espera = INTERVALO_MIN_RESPOSTA_MS - (Date.now() - Math.max(...enviosRecentes20s));
+      if (espera > 0) await new Promise(r => setTimeout(r, espera));
+    }
+    registrarTurnoIA(userIdFinal, entrada.telefone);
+
     if (!historico.some(h => h.role === 'assistant')) {
       const empresa = String(agente.empresa_nome || '').trim();
       await enviarResposta(
         userIdFinal, agente.evolution_server_url, agente.evolution_api_key,
         agente.evolution_instancia || entrada.instancia, entrada.telefone,
-        `Olá! Sou ${nomeAgente}, o assistente virtual${empresa ? ` da ${empresa}` : ''}. ` +
+        `Olá! Sou ${nomeExibicao || 'o assistente virtual'}${nomeExibicao ? ', o assistente virtual' : ''}${empresa ? ` da ${empresa}` : ''}. ` +
         `Se preferir falar com uma pessoa da equipe, é só escrever *atendente*.`
       ).catch(err => log.warn('ENGINE', 'Falha ao enviar identificação da IA', { err: err?.message }));
       await new Promise(r => setTimeout(r, 1500));
@@ -1198,7 +1322,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     if (!vozEnviada) {
       for (let i = 0; i < parserMessages.length; i++) {
         if (i > 0) await new Promise(r => setTimeout(r, 3000));
-        const textoFormatado = `*${nomeAgente}*\n${parserMessages[i]}`;
+        const textoFormatado = nomeExibicao ? `*${nomeExibicao}*\n${parserMessages[i]}` : parserMessages[i];
         await enviarResposta(
           userIdFinal,
           agente.evolution_server_url,
