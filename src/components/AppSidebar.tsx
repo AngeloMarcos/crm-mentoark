@@ -296,7 +296,9 @@ export function AppSidebar() {
         <div className="absolute bottom-0 left-3 right-3 h-px gradient-brand opacity-40" />
       </div>
 
-      <SidebarContent className="pt-1 overflow-y-auto">
+      {/* Menu rola sozinho (min-h-0) com o rodapé "Sair" fixo embaixo; o fade no fim indica que há
+          mais itens (antes "Comunicação" parecia cortada atrás do rodapé, sem pista de rolagem). */}
+      <SidebarContent className="pt-1 overflow-y-auto min-h-0 flex-1 pb-6">
         {navGroups.map((group) => (
           <NavGroupSection
             key={group.label}
@@ -306,6 +308,7 @@ export function AppSidebar() {
             location={location}
           />
         ))}
+        <div aria-hidden className="pointer-events-none sticky bottom-[-1.5rem] -mt-8 h-8 shrink-0 bg-gradient-to-t from-sidebar to-transparent" />
       </SidebarContent>
 
       <SidebarFooter className="relative border-t border-sidebar-border/50 p-3 before:content-[''] before:absolute before:top-0 before:left-3 before:right-3 before:h-px before:gradient-brand before:opacity-40">

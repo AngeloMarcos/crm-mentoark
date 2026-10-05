@@ -794,13 +794,14 @@ export default function webhookRouter(pool: Pool): Router {
       if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio instance=${payload.instance}`); return; }
       if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}" instance=${payload.instance}`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
-      // Política do produto: o CRM não interage com grupos — nada é salvo e nenhuma IA/tarefa/encaminhamento
-      // roda. Grupos eram 59% das mensagens em produção. Reativável só por env explícita, pensada para o
-      // futuro módulo de prospecção (instância dedicada).
-      if (isGroup && process.env.WEBHOOK_PROCESSAR_GRUPOS !== 'true') {
-        wlog('WEBHOOK_DROP', `grupo ignorado (política) instance=${payload.instance}`);
-        return;
-      }
+      // Política do produto: por padrão o CRM não interage com grupos — nada é salvo e a IA nunca
+      // roda. Grupos eram 59% das mensagens em produção. Exceção (2026-09-28, pedido explícito do
+      // usuário): a instância marcada papel='prospeccao' (Radar de Grupos, `entrar.ts`) entra em
+      // grupo de propósito — pra essa instância especificamente, a mensagem PASSA a ser salva (o
+      // grupo aparece na lista de conversas do CRM), mas a IA continua nunca respondendo em grupo
+      // em NENHUM caso — ver o `if (isGroup) return` na seção "Motor IA" mais abaixo, que é
+      // independente desta checagem aqui. Atendimento/disparo continuam descartando grupo como
+      // sempre. A decisão de salvar ou não depende do papel da instância, resolvido logo abaixo.
 
       const messageId = payload.data?.key?.id || '';
       if (!messageId) return;
@@ -823,10 +824,11 @@ export default function webhookRouter(pool: Pool): Router {
       let userId: string | null = null;
       let palavraReativar = 'atendimento finalizado';
       let n8nWebhookUrl: string | null = null;
+      let papelInstancia = 'atendimento';
 
       // 1. agentes
       const agtRes = await pool.query(
-        `SELECT user_id, palavra_reativar, n8n_webhook_url FROM agentes
+        `SELECT user_id, palavra_reativar, n8n_webhook_url, papel FROM agentes
          WHERE (LOWER(evolution_instancia) = LOWER($1) OR LOWER(nome) = LOWER($1))
            AND ativo = true AND user_id IS NOT NULL
          ORDER BY updated_at DESC LIMIT 1`,
@@ -837,9 +839,18 @@ export default function webhookRouter(pool: Pool): Router {
         userId = agtRes.rows[0].user_id;
         palavraReativar = (agtRes.rows[0].palavra_reativar || palavraReativar).toLowerCase();
         n8nWebhookUrl = agtRes.rows[0].n8n_webhook_url || null;
-        log.info('WEBHOOK', 'USERID via agentes', { traceId, userId, temN8n: !!n8nWebhookUrl });
+        papelInstancia = agtRes.rows[0].papel || 'atendimento';
+        log.info('WEBHOOK', 'USERID via agentes', { traceId, userId, temN8n: !!n8nWebhookUrl, papel: papelInstancia });
       } else {
         log.info('WEBHOOK', 'agentes: nenhum resultado', { traceId, instancia });
+      }
+
+      // Grupo só é salvo quando a instância é de prospecção (Radar de Grupos) — atendimento/disparo
+      // continuam descartando grupo, como sempre. IA nunca responde em grupo, independente disso
+      // (ver `if (isGroup) return` na seção "Motor IA").
+      if (isGroup && papelInstancia !== 'prospeccao' && process.env.WEBHOOK_PROCESSAR_GRUPOS !== 'true') {
+        wlog('WEBHOOK_DROP', `grupo ignorado (política, papel=${papelInstancia}) instance=${instancia}`);
+        return;
       }
 
       // Se a linha que resolveu o userId não tinha n8n_webhook_url, procura em outra linha do
@@ -1830,6 +1841,12 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // ── Motor IA (apenas para contatos individuais) ───────────────────────────
+      // Regra de ouro, independente de papel/política de salvar acima: IA NUNCA responde em grupo.
+      // Instância de prospecção pode ter a mensagem salva (aparece no CRM), mas nunca chega aqui.
+      if (isGroup) {
+        wlog('WEBHOOK_DROP', `IA nunca responde em grupo (mensagem já salva se prospecção) mid=${messageId}`);
+        return;
+      }
       if (!userId) {
         wlog('WEBHOOK_REJECT', `NENHUM userId para instância: "${instancia}" — mensagem descartada`);
         return;
@@ -1839,8 +1856,9 @@ export default function webhookRouter(pool: Pool): Router {
         return;
       }
 
-      // O CRM não encaminha mais para N8N (removido da infraestrutura) e grupos nunca chegam aqui
-      // (descartados no topo do handler, ver `WEBHOOK_PROCESSAR_GRUPOS`).
+      // O CRM não encaminha mais para N8N (removido da infraestrutura) e grupo nunca chega aqui —
+      // agora por dois motivos possíveis: descartado no topo (atendimento/disparo, política padrão)
+      // ou barrado pelo `if (isGroup) return` logo acima (prospecção, mensagem já foi salva mas IA não roda).
 
       // [AUDITORIA] LÓGICA: Whitelist de segurança da IA — só em homologação (2026-07-22).
       // DATABASE_URL_MIGRATIONS só existe no .env de homolog (piloto de RLS, ver

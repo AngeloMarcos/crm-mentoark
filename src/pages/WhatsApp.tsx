@@ -36,11 +36,15 @@ export default function WhatsAppPage() {
     setSearchParams(searchParams, { replace: true });
   };
 
+  // Aba Conversas ocupa exatamente a altura disponível (lista e mensagens rolam por conta
+  // própria, sem scroll da página inteira); as outras abas continuam rolando normalmente.
+  const isChat = activeTab === "conversas";
+
   return (
-    <CRMLayout>
-      <div className="surface-whatsapp">
-      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-        <TabsList className="mb-4">
+    <CRMLayout fullHeight={isChat}>
+      <div className={`surface-whatsapp ${isChat ? "flex flex-col flex-1 min-h-0" : ""}`}>
+      <Tabs value={activeTab} onValueChange={handleTabChange} className={`w-full ${isChat ? "flex flex-col flex-1 min-h-0" : ""}`}>
+        <TabsList className="mb-3 self-start shrink-0">
           <TabsTrigger value="conversas" className="gap-2">
             <MessageSquare className="h-4 w-4" /> Conversas
           </TabsTrigger>
@@ -54,7 +58,7 @@ export default function WhatsAppPage() {
             <FlaskConical className="h-4 w-4" /> 🔬 Diagnóstico
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="conversas" className="m-0">
+        <TabsContent value="conversas" className="m-0 flex-1 min-h-0 data-[state=inactive]:hidden">
           <WhatsAppInterface />
         </TabsContent>
         <TabsContent value="instancias" className="m-0">

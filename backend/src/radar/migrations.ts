@@ -115,6 +115,36 @@ export async function migrarRadar(pool: Pool): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
+    // Etapa 3: entrar no grupo pelo sistema (sem link externo). Estados novos vivem no mesmo campo
+    // `status` que já existe (descoberto/aprovado/rejeitado/invalido) — só soma valores novos:
+    // na_fila -> entrou | aguardando_aprovacao | cheio. Nenhuma migration de CHECK: `status` sempre
+    // foi TEXT livre.
+    for (const c of [
+      'entrada_tentativas INTEGER NOT NULL DEFAULT 0', 'entrada_erro TEXT', 'entrada_agente_id UUID',
+      'entrada_tentativa_em TIMESTAMPTZ', 'entrou_em TIMESTAMPTZ', 'extracao_agendada_para TIMESTAMPTZ', 'extraido_em TIMESTAMPTZ',
+    ]) {
+      await pool.query(`ALTER TABLE radar_grupos ADD COLUMN IF NOT EXISTS ${c}`);
+    }
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS radar_entrada_config (
+        user_id              UUID        PRIMARY KEY,
+        agente_id            UUID        REFERENCES agentes(id) ON DELETE SET NULL,
+        limite_dia           INTEGER     NOT NULL DEFAULT 5,
+        pausa_min_seg        INTEGER     NOT NULL DEFAULT 180,
+        pausa_max_seg        INTEGER     NOT NULL DEFAULT 480,
+        janela_inicio        TIME        NOT NULL DEFAULT '09:00',
+        janela_fim           TIME        NOT NULL DEFAULT '18:00',
+        corte_score          INTEGER     NOT NULL DEFAULT 40,
+        corte_membros        INTEGER     NOT NULL DEFAULT 50,
+        corte_dias_conectado INTEGER     NOT NULL DEFAULT 15,
+        corte_health_score   INTEGER     NOT NULL DEFAULT 70,
+        extracao_apos_horas  INTEGER     NOT NULL DEFAULT 24,
+        sair_apos_extrair    BOOLEAN     NOT NULL DEFAULT false,
+        updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    log.info('MIGRATIONS', 'radar entrar em grupo (radar_grupos.entrada_*, radar_entrada_config) OK');
+
     log.info('MIGRATIONS', 'radar (radar_nichos, radar_buscas, radar_grupos, radar_score_config, radar_pausas) OK');
   } catch (err: any) {
     log.error('MIGRATIONS', 'Falha na migration do radar', { err: err?.message, stack: err?.stack });

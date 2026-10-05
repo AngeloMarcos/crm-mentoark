@@ -1,0 +1,26 @@
+services:
+  crm-homolog:
+    build:
+      context: .
+      args:
+        VITE_API_URL: https://api-homolog.mentoark.com.br
+    container_name: crm-homolog
+    restart: unless-stopped
+    expose:
+    - '80'
+    networks:
+    - proxy
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: proxy
+      traefik.http.routers.crm-homolog.rule: Host(`homolog.mentoark.com.br`)
+      traefik.http.routers.crm-homolog.entrypoints: websecure
+      traefik.http.routers.crm-homolog.tls.certresolver: letsencrypt
+      traefik.http.services.crm-homolog.loadbalancer.server.port: '80'
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+networks:
+  proxy:
+    external: true

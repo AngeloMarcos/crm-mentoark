@@ -1,0 +1,60 @@
+version: '3.8'
+services:
+  crm-api-homolog:
+    build: .
+    container_name: crm-api-homolog
+    restart: unless-stopped
+    env_file:
+    - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://mentoark:Mentoark@2025@147.93.9.172:5432/crm_hml}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+      REFRESH_TOKEN_EXPIRES_IN: ${REFRESH_TOKEN_EXPIRES_IN:-30d}
+      PORT: 3000
+      NODE_ENV: production
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://homolog.mentoark.com.br}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-https://disparo.mentoark.com.br}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-mentoark2025evolutionkey}
+      EVOLUTION_WEBHOOK_URL: ${EVOLUTION_WEBHOOK_URL:-https://api.mentoark.com.br/webhook/evolution}
+      REDIS_URL: ${REDIS_URL}
+      RADAR_SEARCH_PROVIDER: ${RADAR_SEARCH_PROVIDER:-serper}
+      RADAR_QUEUE_PREFIX: ${RADAR_QUEUE_PREFIX:-crm}
+      SERPER_API_KEY: ${SERPER_API_KEY}
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET}
+      MCP_SECRET: ${MCP_SECRET:-mentoark2025mcpsecretkey}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://api-homolog.mentoark.com.br/auth/callback/google}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GOOGLE_PLACES_KEY: ${GOOGLE_PLACES_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      BACKEND_URL: ${BACKEND_URL:-https://api-homolog.mentoark.com.br}
+      API_BASE_URL: ${API_BASE_URL:-https://api-homolog.mentoark.com.br}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-mentoark-kanban-secret-2025}
+      MASTER_EMAILS: ${MASTER_EMAILS:-angelobispofilho@gmail.com,mentoark@gmail.com}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-Mentoark@2025}
+    volumes:
+    - ./wa-media:/app/wa-media
+    - ./uploads:/app/uploads
+    expose:
+    - '3000'
+    networks:
+    - proxy
+    - crm_internal
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: proxy
+      traefik.http.routers.crm-api-homolog.rule: Host(`api-homolog.mentoark.com.br`)
+      traefik.http.routers.crm-api-homolog.entrypoints: websecure
+      traefik.http.routers.crm-api-homolog.tls.certresolver: letsencrypt
+      traefik.http.services.crm-api-homolog.loadbalancer.server.port: '3000'
+    deploy:
+      resources:
+        limits:
+          memory: 320m
+networks:
+  proxy:
+    external: true
+  crm_internal:
+    external: true

@@ -22,7 +22,7 @@ export default function RadarGruposPage() {
         <div className="flex flex-col gap-1">
           <h1 className="text-3xl font-bold tracking-tight">Radar de Grupos</h1>
           <p className="text-muted-foreground">
-            Encontre e avalie grupos de WhatsApp por nicho. Nesta etapa o Radar só pesquisa e lê convites: não entra em grupos.
+            Encontre, avalie e entre em grupos de WhatsApp por nicho — só a instância marcada "Prospecção" entra de verdade.
           </p>
         </div>
 

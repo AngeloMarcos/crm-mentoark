@@ -1159,6 +1159,7 @@ export default function whatsappRouter(pool: Pool): Router {
              m.from_me,
              m.created_at,
              m.message_id,
+             m.message_type,
              m.remote_jid LIKE '%@g.us' AS is_group,
              m.push_name AS last_sender,
              COUNT(*) OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS total,
@@ -1210,6 +1211,7 @@ export default function whatsappRouter(pool: Pool): Router {
            r.created_at AS ultima_atividade,
            r.total::int AS total,
            r.content AS ultima_mensagem,
+           r.message_type AS ultimo_tipo,
            r.is_group,
            r.last_sender,
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
@@ -1265,6 +1267,8 @@ export default function whatsappRouter(pool: Pool): Router {
           profile_pic_url: (isGroup ? row.grupo_pic : row.profile_pic_url) || null,
           ultima_atividade: row.ultima_atividade,
           ultima_mensagem: row.ultima_mensagem || '',
+          // Aditivo: tipo da última mensagem, pro preview "📷 Foto"/"🎤 Áudio" na lista do chat
+          ultimo_tipo: row.ultimo_tipo || null,
           ultimo_role: row.ultimo_role,
           total: Number(row.total),
           is_pinned: row.is_pinned || false,
@@ -2360,19 +2364,24 @@ export default function whatsappRouter(pool: Pool): Router {
     log.info('DEBUG SEND', 'userId', { userId });
     try {
       const {
-        phone, text, instancia: instanciaSolicitada,
+        phone, text, instancia: instanciaSolicitada, isGroup,
         mediaUrl, mediaType, mediaCaption, mediaFilename,
       } = req.body as {
-        phone: string; text?: string; instancia?: string;
+        phone: string; text?: string; instancia?: string; isGroup?: boolean;
         mediaUrl?: string; mediaType?: 'image' | 'audio' | 'video' | 'document';
         mediaCaption?: string; mediaFilename?: string;
       };
 
       const phoneClean = (phone || '').replace(/\D/g, '');
-      if (!phoneClean || phoneClean.length < 8 || phoneClean.length > 15) {
-        log.warn('DEBUG SEND', 'telefone inválido', { phone });
+      // JID de grupo (@g.us) é bem mais longo que um telefone real (18-21 dígitos vs. até 15 do
+      // E.164) — a checagem de tamanho só faz sentido pra contato individual.
+      if (!phoneClean || phoneClean.length < 8 || (!isGroup && phoneClean.length > 15)) {
+        log.warn('DEBUG SEND', 'telefone inválido', { phone, isGroup });
         return res.status(400).json({ message: `Número de telefone inválido: "${phone}"` });
       }
+      // A Evolution/Baileys precisa do JID completo (@g.us) pra rotear como grupo — só os dígitos,
+      // como já era feito, sempre virava mensagem pra contato individual (nunca funcionava em grupo).
+      const numeroDestino = isGroup ? `${phoneClean}@g.us` : phoneClean;
       if (!text && !mediaUrl) {
         return res.status(400).json({ message: 'text ou mediaUrl são obrigatórios' });
       }
@@ -2464,8 +2473,8 @@ export default function whatsappRouter(pool: Pool): Router {
         const isAudio = mediaType === 'audio';
         const endpoint = isAudio ? 'sendWhatsAppAudio' : 'sendMedia';
         const mediaPayload: any = isAudio
-          ? { number: phoneClean, audio: mediaUrlFinal }
-          : { number: phoneClean, mediatype: mediaType, media: mediaUrlFinal };
+          ? { number: numeroDestino, audio: mediaUrlFinal }
+          : { number: numeroDestino, mediatype: mediaType, media: mediaUrlFinal };
         if (!isAudio && mediaCaption) mediaPayload.caption = mediaCaption;
         if (!isAudio && mediaFilename) mediaPayload.fileName = mediaFilename;
 
@@ -2518,7 +2527,7 @@ export default function whatsappRouter(pool: Pool): Router {
           evoRes = await evolutionFetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-            body: JSON.stringify({ number: phoneClean, text }),
+            body: JSON.stringify({ number: numeroDestino, text }),
           });
         } catch (err: any) {
           log.info('DEBUG SEND', 'Erro cru ao chamar Evolution API (texto)', { err: err.message });
@@ -2540,7 +2549,7 @@ export default function whatsappRouter(pool: Pool): Router {
             const retry = await evolutionFetch(targetUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
-              body: JSON.stringify({ number: phoneClean, text }),
+              body: JSON.stringify({ number: numeroDestino, text }),
             }).catch(() => null);
             if (!retry?.ok) {
               return res.status(503).json({ message: 'WhatsApp ainda inicializando. Tente novamente em alguns segundos.' });
@@ -2595,7 +2604,7 @@ export default function whatsappRouter(pool: Pool): Router {
             content, media_url, media_mimetype, status, timestamp_wa)
          VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, 'sent', NOW())
          ON CONFLICT (message_id, instance_name) DO NOTHING`,
-        [tenantId, userId, instancia, `${phoneClean}@s.whatsapp.net`,
+        [tenantId, userId, instancia, isGroup ? numeroDestino : `${phoneClean}@s.whatsapp.net`,
          messageId, msgType, content, mediaUrlFinal || null, mediaMimetype]
       ).catch(err => log.warn('SEND', 'Falha ao salvar', { err: err.message }));
 

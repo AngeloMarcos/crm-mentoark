@@ -196,6 +196,24 @@ app.use('/api/marketing', marketing.public); // Public part of marketing (callba
 // ── Rotas n8n (x-n8n-secret, sem JWT) ─────────────────────────────────────
 app.use('/api/n8n', n8nRouter(pool));
 
+// ── Telemetria de erro do frontend (ErrorBoundary) — pública, sem JWT de propósito: o crash
+// pode acontecer antes do login terminar, ou com assinatura expirada (o assinaturaGuard abaixo
+// bloqueia POST autenticado de conta em modo somente leitura, e é exatamente esse cenário que
+// interessa capturar). Só loga no logger de sempre (docker logs) — sem tabela nova; existe pra dar
+// visibilidade real de crash de cliente em vez de descobrir só por print (achado real, 2026-09-30).
+app.post('/api/client-error', (req, res) => {
+  const b = req.body ?? {};
+  const cortar = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
+  log.error('CLIENT_ERROR', cortar(b.message, 300) || 'erro sem mensagem', {
+    stack: cortar(b.stack, 2000),
+    componentStack: cortar(b.componentStack, 2000),
+    url: cortar(b.url, 300),
+    userAgent: cortar(b.userAgent, 300),
+    boundary: cortar(b.boundary, 100),
+  });
+  res.status(204).end();
+});
+
 // Webhook público do Kanban (sem JWT, autenticado por x-webhook-secret)
 app.post('/api/kanban/webhook/n8n', kanbanWebhookN8n(pool));
 

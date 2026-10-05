@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ClipboardCopy, ExternalLink, Eye, Link2, Loader2, RefreshCw, X } from "lucide-react";
+import { Check, ClipboardCopy, ExternalLink, Eye, Link2, Loader2, LogIn, RefreshCw, X } from "lucide-react";
 import { api } from "@/integrations/database/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
   const [ader, setAder] = useState(TODOS);
   const [imp, setImp] = useState(TODOS);
   const [pagina, setPagina] = useState(0);
+  const [ordem, setOrdem] = useState<"score" | "membros">("score");
 
   useEffect(() => {
     const t = setTimeout(() => { setQAplicado(q); setPagina(0); }, 400);
@@ -41,7 +42,7 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
     queryFn: async () => (await api.get("/api/radar/nichos")).data as Nicho[],
   });
 
-  const params = new URLSearchParams({ order: "score", limit: String(POR_PAGINA), offset: String(pagina * POR_PAGINA) });
+  const params = new URLSearchParams({ order: ordem, limit: String(POR_PAGINA), offset: String(pagina * POR_PAGINA) });
   if (qAplicado) params.set("q", qAplicado);
   if (minScore) params.set("min_score", minScore);
   if (st !== TODOS) params.set("status", st);
@@ -81,6 +82,16 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
     onError: (e: any) => toast.error(e?.message ?? "Não foi possível enfileirar a verificação"),
   });
 
+  const entrar = useMutation({
+    mutationFn: async (ids?: string[]) => (await api.post("/api/radar/grupos/entrar", ids ? { ids } : {})).data,
+    onSuccess: (r: any) => {
+      if (r.enfileirados) toast.success(`${r.enfileirados} entrada(s) na fila${r.recusados ? ` (${r.recusados} recusado(s) pelos cortes/limite)` : ""}`);
+      else toast.warning(r.recusados ? `Nenhum grupo elegível (${r.recusados} recusado(s) pelos cortes/limite)` : "Nenhum grupo aprovado pronto para entrar");
+      qc.invalidateQueries({ queryKey: ["radar-grupos"] });
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Não foi possível enfileirar a entrada"),
+  });
+
   const copiarLista = useMutation({
     mutationFn: async () => {
       const p = new URLSearchParams({ order: "score", limit: "200" });
@@ -118,7 +129,7 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
             <SelectTrigger><SelectValue placeholder="Situação" /></SelectTrigger>
             <SelectContent>
               <SelectItem value={TODOS}>Todas as situações</SelectItem>
-              {["descoberto", "aprovado", "rejeitado", "invalido"].map(s => <SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>)}
+              {["descoberto", "aprovado", "rejeitado", "invalido", "na_fila", "aguardando_aprovacao", "entrou", "cheio"].map(s => <SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={ader} onValueChange={v => { setAder(v); setPagina(0); }}>
@@ -164,6 +175,11 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
             {validar.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
             Ler participantes (20)
           </Button>
+          <Button variant="outline" size="sm" disabled={entrar.isPending} onClick={() => entrar.mutate(undefined)}
+            title="Entra pela instância de prospecção nos grupos aprovados, respeitando nota, nº de membros e o limite diário (Configurações → Entrada em grupo)">
+            {entrar.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogIn className="mr-2 h-4 w-4" />}
+            Entrar nos aprovados
+          </Button>
         </div>
       </div>
 
@@ -174,7 +190,12 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
               <TableRow>
                 <TableHead className="min-w-[260px]">Grupo</TableHead>
                 <TableHead>Origem</TableHead>
-                <TableHead className="text-right">Particip.</TableHead>
+                <TableHead className="text-right">
+                  <button type="button" className="hover:underline" onClick={() => { setOrdem(o => o === "membros" ? "score" : "membros"); setPagina(0); }}
+                    title="Ordenar pelo nº de membros">
+                    Membros{ordem === "membros" ? " ↓" : ""}
+                  </button>
+                </TableHead>
                 <TableHead className="min-w-[280px]">Score, aderência e motivos</TableHead>
                 <TableHead>Situação</TableHead>
                 <TableHead className="text-right">Ações</TableHead>
@@ -227,7 +248,12 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={g.status === "invalido" || g.status === "rejeitado" ? "destructive" : g.status === "aprovado" ? "default" : "secondary"}>
+                    <Badge variant={
+                      ["invalido", "rejeitado"].includes(g.status) ? "destructive"
+                      : ["aprovado", "entrou"].includes(g.status) ? "default"
+                      : "secondary"
+                    } className={g.status === "cheio" ? "border-amber-500/40 text-amber-600" : g.status === "aguardando_aprovacao" ? "border-sky-500/40 text-sky-600" : undefined}
+                      title={g.entrada_erro ?? undefined}>
                       {statusLabel(g.status)}
                     </Badge>
                   </TableCell>
@@ -236,9 +262,13 @@ export function AbaCatalogo({ status }: { status?: StatusRadar }) {
                       <Button size="icon" variant="ghost" title="Verificar link e nome (sem entrar)" disabled={verificar.isPending}
                         onClick={() => verificar.mutate([g.id])}><Eye className="h-4 w-4" /></Button>
                     )}
-                    <Button size="icon" variant="ghost" title="Aprovar" disabled={g.status === "invalido" || g.status === "aprovado"}
+                    {g.status === "aprovado" && (
+                      <Button size="icon" variant="ghost" title="Entrar neste grupo agora (pela instância de prospecção)" disabled={entrar.isPending}
+                        onClick={() => entrar.mutate([g.id])}><LogIn className="h-4 w-4 text-sky-600" /></Button>
+                    )}
+                    <Button size="icon" variant="ghost" title="Aprovar" disabled={g.status !== "descoberto"}
                       onClick={() => decidir.mutate({ id: g.id, status: "aprovado" })}><Check className="h-4 w-4 text-emerald-600" /></Button>
-                    <Button size="icon" variant="ghost" title="Rejeitar" disabled={g.status === "invalido" || g.status === "rejeitado"}
+                    <Button size="icon" variant="ghost" title="Rejeitar" disabled={!["descoberto", "aprovado", "cheio", "aguardando_aprovacao"].includes(g.status)}
                       onClick={() => decidir.mutate({ id: g.id, status: "rejeitado" })}><X className="h-4 w-4 text-red-600" /></Button>
                   </TableCell>
                 </TableRow>

@@ -4,15 +4,18 @@ import IORedis from 'ioredis';
 import { log } from '../logger';
 import { executarBusca } from './busca';
 import { pausaAtiva, validarGrupo, verificarLinkPublico, ValidacaoIndisponivel } from './validacao';
+import { entrarNoGrupo, EntradaIndisponivel } from './entrar';
 
 const FILA_BUSCA = 'radar-busca';
 const FILA_VALIDAR = 'radar-validar';
 const FILA_LINK = 'radar-link';
+const FILA_ENTRAR = 'radar-entrar';
 // Homolog e produção dividem o mesmo Redis: sem prefixo próprio um ambiente consumiria os jobs do outro.
 const PREFIXO = () => process.env.RADAR_QUEUE_PREFIX || 'crm';
 let filaBusca: Queue | null = null;
 let filaValidar: Queue | null = null;
 let filaLink: Queue | null = null;
+let filaEntrar: Queue | null = null;
 const workers: Worker[] = [];
 let poolRef: Pool | null = null;
 let infoClient: IORedis | null = null;
@@ -38,7 +41,7 @@ export function redisConfigurado(): boolean { return !!process.env.REDIS_URL; }
 export function iniciarFilaRadar(pool: Pool): void {
   poolRef = pool;
   try { iniciarInterno(pool); } catch (err: any) {
-    filaBusca = null; filaValidar = null; filaLink = null;
+    filaBusca = null; filaValidar = null; filaLink = null; filaEntrar = null;
     log.error('RADAR', 'fila indisponível — buscas rodarão inline', { err: err?.message });
   }
 }
@@ -87,9 +90,30 @@ function iniciarInterno(pool: Pool): void {
   }, { connection: c, prefix: PREFIXO(), concurrency: 1, limiter: { max: 1, duration: intervaloLink } });
   workers.push(wLink);
 
+  // Entrar em grupo: ritmo bem mais lento que os outros (ação real no WhatsApp, não só leitura) —
+  // a pausa aleatória fina (3-8min configurável) já acontece DENTRO de entrarNoGrupo; o limiter
+  // aqui é só um piso de segurança pra nunca disparar dois jobs de entrada em paralelo.
+  const intervaloEntrar = Number(process.env.RADAR_ENTRAR_INTERVALO_MS) || 30_000;
+  filaEntrar = new Queue(FILA_ENTRAR, {
+    prefix: PREFIXO(), connection: c,
+    defaultJobOptions: { attempts: 1, ...limpeza }, // entrar é uma ação real: nunca repetir sozinho
+  });
+  const wEntrar: Worker = new Worker(FILA_ENTRAR, async job => {
+    try { await entrarNoGrupo(pool, job.data.grupoId); }
+    catch (err) {
+      if (err instanceof EntradaIndisponivel) {
+        const p = await pausaAtiva(pool, 'entrada');
+        if (p) { await wEntrar.rateLimit(Math.max(1000, p.ate.getTime() - Date.now())); throw Worker.RateLimitError(); }
+        throw new Error(err.message);
+      }
+      throw err;
+    }
+  }, { connection: c, prefix: PREFIXO(), concurrency: 1, limiter: { max: 1, duration: intervaloEntrar } });
+  workers.push(wEntrar);
+
   for (const w of workers) w.on('failed', (job, err) => log.warn('RADAR', 'job falhou', { fila: w.name, jobId: job?.id, tentativa: job?.attemptsMade, err: err.message }));
-  for (const q of [filaBusca, filaValidar, filaLink]) q.on('error', err => log.error('RADAR', 'erro na fila', { err: err.message }));
-  log.info('RADAR', 'filas radar-busca, radar-validar e radar-link iniciadas');
+  for (const q of [filaBusca, filaValidar, filaLink, filaEntrar]) q.on('error', err => log.error('RADAR', 'erro na fila', { err: err.message }));
+  log.info('RADAR', 'filas radar-busca, radar-validar, radar-link e radar-entrar iniciadas');
 }
 
 /** Enfileira a busca. jobId = id da busca (que já é único por request_id): BullMQ ignora duplicatas. */
@@ -136,6 +160,26 @@ export async function enfileirarValidacao(grupoIds: string[]): Promise<'fila' | 
       for (const id of grupoIds) {
         try { await validarGrupo(pool, id); } catch (err: any) { log.warn('RADAR', 'validação inline falhou', { id, err: err?.message }); }
         await new Promise(r => setTimeout(r, intervalo));
+      }
+    })().catch(() => {});
+  }
+  return 'inline';
+}
+
+/** Enfileira a entrada em cada grupo. jobId por grupo+dia: reclicar não empilha tentativas duplicadas no mesmo dia. */
+export async function enfileirarEntrada(grupoIds: string[]): Promise<'fila' | 'inline'> {
+  if (!grupoIds.length) return 'fila';
+  if (filaEntrar) {
+    const dia = new Date().toISOString().slice(0, 10);
+    await filaEntrar.addBulk(grupoIds.map(id => ({ name: 'entrar', data: { grupoId: id }, opts: { jobId: `ent-${id}-${dia}` } })));
+    return 'fila';
+  }
+  const pool = poolRef;
+  if (pool) {
+    (async () => {
+      for (const id of grupoIds) {
+        try { await entrarNoGrupo(pool, id); }
+        catch (err: any) { log.warn('RADAR', 'entrada inline falhou', { id, err: err?.message }); if (err instanceof EntradaIndisponivel) break; }
       }
     })().catch(() => {});
   }

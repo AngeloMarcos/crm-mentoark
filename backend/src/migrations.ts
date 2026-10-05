@@ -2623,6 +2623,19 @@ export async function runMigrations(pool: Pool): Promise<void> {
     log.error('MIGRATIONS', 'Falha na migration de respostas de disparo', { err: err?.message, stack: err?.stack });
   }
 
+  // ── Papel da instância (Radar de Grupos, Etapa 3 — entrar em grupo pelo sistema) ────────────────
+  // Só a instância marcada `prospeccao` pode entrar em grupo (ver `backend/src/radar/entrar.ts`);
+  // todas as instâncias já existentes nascem `atendimento` (comportamento de hoje, não muda nada
+  // sozinho) — quem quiser usar uma instância para prospecção escolhe isso explicitamente na tela.
+  try {
+    await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS papel TEXT NOT NULL DEFAULT 'atendimento'`).catch(() => {});
+    await pool.query(`ALTER TABLE agentes DROP CONSTRAINT IF EXISTS chk_agentes_papel`).catch(() => {});
+    await pool.query(`ALTER TABLE agentes ADD CONSTRAINT chk_agentes_papel CHECK (papel IN ('atendimento','disparo','prospeccao'))`).catch(() => {});
+    log.info('MIGRATIONS', 'agentes.papel (atendimento/disparo/prospeccao) OK');
+  } catch (err: any) {
+    log.error('MIGRATIONS', 'Falha na migration de agentes.papel', { err: err?.message, stack: err?.stack });
+  }
+
   await migrarRadar(pool);
 
   log.info('MIGRATIONS', 'OK');

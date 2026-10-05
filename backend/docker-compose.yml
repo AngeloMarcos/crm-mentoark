@@ -1,12 +1,11 @@
-version: "3.8"
-
+version: '3.8'
 services:
   crm-api:
     build: .
     container_name: crm-api
     restart: unless-stopped
     env_file:
-      - .env
+    - .env
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://mentoark:Mentoark@2025@147.93.9.172:5432/crm}
       JWT_SECRET: ${JWT_SECRET:-mentoark2025jwtsecretkey32chars!!}
@@ -18,43 +17,43 @@ services:
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-https://disparo.mentoark.com.br}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-mentoark2025evolutionkey}
       MCP_SECRET: ${MCP_SECRET:-mentoark2025mcpsecretkey}
-      # Google OAuth
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://api.mentoark.com.br/auth/callback/google}
-      # Integrações
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       GOOGLE_PLACES_KEY: ${GOOGLE_PLACES_KEY}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
-      # Config adicional
       BACKEND_URL: ${BACKEND_URL:-https://api.mentoark.com.br}
+      API_BASE_URL: ${API_BASE_URL:-https://api.mentoark.com.br}
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-mentoark-kanban-secret-2025}
       MASTER_EMAILS: ${MASTER_EMAILS:-angelobispofilho@gmail.com,mentoark@gmail.com}
+      REDIS_URL: ${REDIS_URL}
+      RADAR_SEARCH_PROVIDER: ${RADAR_SEARCH_PROVIDER:-serper}
+      RADAR_QUEUE_PREFIX: ${RADAR_QUEUE_PREFIX:-crm}
+      SERPER_API_KEY: ${SERPER_API_KEY}
       EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-Mentoark@2025}
     volumes:
-      - ./wa-media:/app/wa-media
-      # [AUDITORIA] BUG (achado 2026-08-04 — "imagens da Galeria aparecem quebradas"): /app/uploads
-      # (onde galeria.ts salva upload manual via multer, UPLOADS_DIR) nunca teve volume montado —
-      # só /app/wa-media (mídia de chat/fotos de perfil, whatsappMediaStorage.ts) tinha. Todo
-      # arquivo em /app/uploads era apagado a cada rebuild de imagem (camada gravável do
-      # container, sem persistência), mesmo com a URL absoluta correta gravada em
-      # galeria_midias.url — confirmado ao vivo: /app/uploads vazio logo após deploy, sem
-      # contrapartida em /opt/crm/backend/uploads no host. [AUDITORIA] FIX APLICADO: mesmo padrão
-      # já usado por wa-media — bind mount simples, sobrevive a rebuild/restart do container.
-      - ./uploads:/app/uploads
+    - ./wa-media:/app/wa-media
+    - ./uploads:/app/uploads
     expose:
-      - "3000"
+    - '3000'
     networks:
-      - proxy
+    - proxy
+    - crm_internal
     labels:
-      traefik.enable: "true"
-      traefik.docker.network: "proxy"
-      traefik.http.routers.crm-api.rule: "Host(`api.mentoark.com.br`)"
-      traefik.http.routers.crm-api.entrypoints: "websecure"
-      traefik.http.routers.crm-api.tls.certresolver: "letsencrypt"
-      traefik.http.services.crm-api.loadbalancer.server.port: "3000"
-
+      traefik.enable: 'true'
+      traefik.docker.network: proxy
+      traefik.http.routers.crm-api.rule: Host(`api.mentoark.com.br`)
+      traefik.http.routers.crm-api.entrypoints: websecure
+      traefik.http.routers.crm-api.tls.certresolver: letsencrypt
+      traefik.http.services.crm-api.loadbalancer.server.port: '3000'
+    deploy:
+      resources:
+        limits:
+          memory: 320m
 networks:
   proxy:
+    external: true
+  crm_internal:
     external: true

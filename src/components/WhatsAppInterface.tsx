@@ -34,7 +34,7 @@ import {
   Copy, Video, FileText, Trash2, Forward, Star, Play,
   AlertCircle, Activity, ArrowLeft, Users,
   Download, FileSpreadsheet, UserSearch, LogOut,
-  Link as LinkIcon,
+  Link as LinkIcon, User as UserIcon,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -55,6 +55,16 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { getAuthToken } from "@/lib/api-token";
 import { getFreshToken } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -67,6 +77,11 @@ import { TagStatusEnvio } from "@/components/TagStatusEnvio";
 // o texto canônico cru no composer. Baixo risco: é só o texto que entra no campo de digitação, o
 // atendente ainda revisa/edita antes de enviar de verdade.
 import { personalizarMensagem } from "@/lib/motorTexto";
+import {
+  renderWhatsAppText, stripWhatsAppMarkup, formatWaPhone, resolveDisplayName, cleanPushName,
+  participantColorClass, instanceColorClass, formatListTimestamp, normalizeMessageType, mediaLabel,
+  snippetAround, type CanonicalMessageType,
+} from "@/lib/whatsappFormat";
 import * as XLSX from "xlsx";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000';
@@ -117,7 +132,12 @@ function formatRecordingTime(totalSeconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-type ChatTab = "todos" | "fila" | "meus" | "arquivadas";
+// O Viewport do Radix ScrollArea embrulha o conteúdo num <div style="display:table; min-width:100%">
+// — tabela cresce até caber o conteúdo mais largo, então `truncate`/`max-w-[%]` dos filhos nunca
+// limitavam nada (preview sem "…", bolha com overflow horizontal, painel vazando pra direita).
+const SCROLL_VIEWPORT_BLOCK = "[&>[data-radix-scroll-area-viewport]>div]:!block";
+
+type ChatTab = "todos" | "fila" | "arquivadas";
 
 type DeliveryStatus = "sent" | "SERVER_ACK" | "DELIVERY_ACK" | "READ" | "PLAYED" | "received" | string;
 
@@ -149,18 +169,25 @@ interface Message {
 // Compartilhado entre fetchMensagens (janela recente) e loadOlderMessages (scroll-up) — mesmo
 // mapeamento de linha da API pra Message, pra não divergir entre os dois pontos de carga.
 function mapRowsToMessages(rows: any[], chatName: string): Message[] {
-  return rows.map((m, i) => ({
+  return rows.map((m, i) => {
+    const role = (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant';
+    // [UI/UX chat, fase 1.2] GET /conversas/:phone não devolve `from_me`, só `role` — a checagem
+    // antiga por `m.from_me` era sempre falsa, então toda mensagem ENVIADA ganhava o push_name
+    // (ou o nome do contato) como autor. Agora: enviada → nome do atendente (`sender_name`,
+    // vem de sent_by_user_id) ou nada; nunca o nome do contato.
+    const senderName = role === 'assistant'
+      ? (m.sender_name || undefined)
+      : (cleanPushName(m.push_name) || chatName);
+    return {
     id: String(m.id || `msg-${i}`),
     message_id: m.message_id,
-    role: (m.role || (m.from_me ? 'assistant' : 'user')) as 'user' | 'assistant',
+    role,
     content: m.content || m.conteudo || '',
     timestamp: formatTime(m.timestamp_wa || m.created_at),
     rawTimestamp: m.timestamp_wa || m.created_at || new Date().toISOString(),
-    // sender_name: nome de quem enviou (humano ou IA); push_name: nome do contato recebido
-    senderName: m.from_me
-      ? (m.sender_name || 'IA')
-      : (m.push_name || chatName),
-    tipo: m.tipo || 'text',
+    senderName,
+    // Sync de histórico grava o messageType cru da Evolution ("imageMessage", "protocolMessage"...)
+    tipo: normalizeMessageType(m.tipo),
     midia_url: m.midia_url,
     midia_mime: m.midia_mime,
     midia_nome: m.midia_nome,
@@ -170,10 +197,21 @@ function mapRowsToMessages(rows: any[], chatName: string): Message[] {
     reply_to: m.reply_to_message_id ? {
       message_id: m.reply_to_message_id,
       content: m.reply_to_content || 'Mensagem original',
-      senderName: m.reply_to_sender === 'assistant' ? 'Você' : (m.push_name || chatName),
+      senderName: m.reply_to_sender === 'assistant' ? 'Você' : (cleanPushName(m.push_name) || chatName),
       role: (m.reply_to_sender || 'user') as 'user' | 'assistant'
     } : undefined
-  }));
+  };
+  });
+}
+
+// Mensagem com algo pra mostrar? Tipos técnicos (protocolMessage etc.), reações (o payload não
+// traz a mensagem-alvo, então não há onde ancorá-las) e texto vazio não viram bolha.
+function isRenderableMessage(m: Message): boolean {
+  if (m.role === 'note') return true;
+  const t = m.tipo as CanonicalMessageType | undefined;
+  if (t === 'hidden' || t === 'reaction') return false;
+  if ((!t || t === 'text') && !m.content.trim()) return false;
+  return true;
 }
 
 interface Chat {
@@ -200,6 +238,12 @@ interface Chat {
   // grupo) precisam do instance_name atual de verdade, não do número.
   numero?: string;
   push_name?: string;
+  /** Nome é fallback (telefone formatado / "Contato sem nome"), não um nome real. */
+  nameIsFallback?: boolean;
+  /** Última mensagem veio do cliente (conversa aguardando resposta) — base da aba "Fila". */
+  lastFromClient?: boolean;
+  /** Tipo da última mensagem (`ultimo_tipo` de GET /conversas), pro preview de mídia. */
+  lastType?: string;
   messages: Message[];
   notes?: string;
   profile_pic?: string;
@@ -286,7 +330,9 @@ function ChatAvatar({
   const [failed, setFailed] = useState(false);
   const resolvedUrl = useAuthedMediaUrl(url);
   const color = getAvatarColor(name);
-  const initial = (name[0] || '?').toUpperCase();
+  // Inicial só de letra de verdade — telefone/"Contato sem nome"/"." viram ícone de usuário.
+  const firstLetter = name.match(/\p{L}/u)?.[0];
+  const hasRealName = !!firstLetter && !/^\+?[\d\s()-]+$/.test(name) && name !== 'Contato sem nome';
   // [AUDITORIA] FIX APLICADO (achado 2026-07-28 — "sistema todo muito grande"): 'md' reduzido de
   // 48px pra 40px — usado na linha da lista de conversas e no cabeçalho do chat, os dois pontos
   // mais repetidos na tela; 4px a menos por avatar some rápido quando multiplicado pela lista
@@ -298,7 +344,9 @@ function ChatAvatar({
       className={`${sizeClass} rounded-${rounded} overflow-hidden flex items-center justify-center font-black text-white shrink-0 relative ${className}`}
       style={{ backgroundColor: color }}
     >
-      <span className="select-none">{initial}</span>
+      {hasRealName
+        ? <span className="select-none">{firstLetter!.toUpperCase()}</span>
+        : <UserIcon className="w-1/2 h-1/2 opacity-90" />}
       {resolvedUrl && !failed && (
         <img
           src={resolvedUrl}
@@ -725,13 +773,13 @@ function LinkPreviewCard({ url, isOut }: { url: string; isOut: boolean }) {
     <a
       href={url}
       target="_blank" rel="noreferrer"
-      className={`flex items-center gap-2.5 mb-1.5 p-2.5 rounded-xl border overflow-hidden ${isOut ? 'bg-primary-foreground/10 border-primary-foreground/20' : 'bg-muted/40 border-border/50'} hover:opacity-80 transition-opacity`}
+      className={`flex items-center gap-2.5 mb-1.5 p-2.5 rounded-xl border overflow-hidden ${isOut ? 'bg-black/5 border-black/10 dark:bg-white/10 dark:border-white/15' : 'bg-muted/40 border-border/50'} hover:opacity-80 transition-opacity`}
     >
       {dados.imagemUrl ? (
         <img src={dados.imagemUrl} alt="" className="h-14 w-14 rounded-lg object-cover shrink-0" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
       ) : (
-        <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-primary-foreground/15' : 'bg-primary/10'}`}>
-          <LinkIcon className={`h-4 w-4 ${isOut ? 'text-primary-foreground' : 'text-primary'}`} />
+        <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-black/10 dark:bg-white/15' : 'bg-primary/10'}`}>
+          <LinkIcon className={`h-4 w-4 ${isOut ? 'text-current' : 'text-primary'}`} />
         </div>
       )}
       <div className="min-w-0 flex-1">
@@ -869,6 +917,7 @@ export function WhatsAppInterface() {
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const loadingOlderRef = useRef(false);
   const hasMoreOlderRef = useRef(true);
+  const [noMoreOlder, setNoMoreOlder] = useState(false);
   const [replyTo, setReplyTo] = useState<{ message_id: string; content: string; senderName: string; role: "user" | "assistant" } | null>(null);
   
   // Estados para busca na conversa
@@ -914,6 +963,27 @@ export function WhatsAppInterface() {
       } catch { /* silencioso — filtro/seletor de instância só some da UI */ }
     })();
   }, []);
+  // [UI/UX chat, fase 3.5] Badge de instância só faz sentido com 2+ números conectados, e com o
+  // nome amigável (agente), não o instance_name cru ("crm_435ee4720fc3").
+  const instanceLabel = (chat: Pick<Chat, 'source' | 'numero'>): string | null => {
+    if (instanciasDisponiveis.length < 2) return null;
+    const inst = instanciasDisponiveis.find(i => i.evolution_instancia === chat.source)
+      || instanciasDisponiveis.find(i => i.numero === chat.numero);
+    return inst?.nome || null;
+  };
+
+  // [UI/UX chat, fases 2.1/3.6] Preview em texto plano (sem *_~) e rótulo de mídia quando a
+  // última mensagem não tem texto.
+  const chatPreview = (chat: Chat): string => {
+    const texto = stripWhatsAppMarkup((chat.lastMessage || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''));
+    if (texto && !/^\[(Mídia - Imagem|Áudio Transcrito):/.test(texto)) return texto;
+    const label = mediaLabel(chat.lastType);
+    if (label) return label;
+    if (/^\[Áudio Transcrito:/.test(texto)) return '🎤 Áudio';
+    if (/^\[Mídia - Imagem:/.test(texto)) return '📷 Foto';
+    return chat.lastType && normalizeMessageType(chat.lastType) === 'text' ? 'Mensagem sem texto' : '📎 Mídia';
+  };
+
   // Filtro ativo da lista de conversas (número real, ver Chat.numero) — "" = todos os números
   const [instanciaFiltro, setInstanciaFiltro] = useState("");
   // Filtro "somente grupos" (pedido do usuário) — usa o `is_group` que já vem de GET /conversas.
@@ -949,6 +1019,19 @@ export function WhatsAppInterface() {
     );
   }, [respostasRapidas, qrSearch]);
 
+  const [qrIndex, setQrIndex] = useState(0);
+  useEffect(() => { setQrIndex(0); }, [qrSearch, showQR]);
+
+  // Textarea do composer cresce com o texto até ~6 linhas (max-h-[152px]) e depois rola.
+  const noteTextareaRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    for (const el of [textareaRef.current, noteTextareaRef.current]) {
+      if (!el) continue;
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, 152)}px`;
+    }
+  }, [messageInput, noteInput, inputMode]);
+
   const fetchRespostasRapidas = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/respostas_rapidas`, { headers: await apiHeaders() });
@@ -982,7 +1065,7 @@ export function WhatsAppInterface() {
   // antes de enviar) pra não justificar mais um controle na UI do chat.
   const aplicarRespostaRapida = (r: RespostaRapida) => {
     const contatoConversa = activeChat
-      ? { nome: activeChat.is_group ? undefined : activeChat.name, telefone: activeChat.phone }
+      ? { nome: activeChat.is_group || activeChat.nameIsFallback ? undefined : activeChat.name, telefone: activeChat.phone }
       : {};
     setMessageInput(personalizarMensagem(r.mensagem, contatoConversa, true));
     setShowQR(false);
@@ -1074,7 +1157,15 @@ export function WhatsAppInterface() {
       if (pic || name) {
         setChats(prev => prev.map(c =>
           c.id === phone
-            ? { ...c, profile_pic: pic || c.profile_pic, name: c.name !== phone ? c.name : (name || c.name) }
+            ? {
+                ...c,
+                profile_pic: pic || c.profile_pic,
+                ...(c.nameIsFallback && !c.is_group && name
+                  ? resolveDisplayName({ pushName: name, sessionId: c.phone }).isFallback
+                    ? {}
+                    : { name: cleanPushName(name), nameIsFallback: false }
+                  : {}),
+              }
             : c
         ));
       }
@@ -1275,9 +1366,11 @@ export function WhatsAppInterface() {
   // igual iniciarResolucaoNomes acima — confirmação nativa antes de uma ação irreversível-na-hora
   // (sair de um grupo real do WhatsApp; entrar de novo depende de alguém mandar outro convite).
   const [saindoDoGrupo, setSaindoDoGrupo] = useState(false);
+  // Confirmação agora é um AlertDialog (ver fim do componente) em vez do confirm() nativo.
+  const [showSairGrupoDialog, setShowSairGrupoDialog] = useState(false);
+  const [sobreExpandido, setSobreExpandido] = useState(false);
   const sairDoGrupo = async () => {
     if (!activeChatId || !activeChat?.is_group) return;
-    if (!confirm(`Sair de "${activeChat.name}"?\n\nVocê para de receber mensagens novas deste grupo. O histórico já trocado continua salvo aqui — só quem administra o grupo pode te adicionar de volta.`)) return;
     setSaindoDoGrupo(true);
     try {
       const qsInstancia = activeChat?.source ? `?instancia=${encodeURIComponent(activeChat.source)}` : '';
@@ -1363,7 +1456,7 @@ export function WhatsAppInterface() {
       });
       if (res.ok) {
         setChats(prev => prev.map(c =>
-          c.id === activeChatId ? { ...c, name: nameInput.trim() } : c
+          c.id === activeChatId ? { ...c, name: nameInput.trim(), nameIsFallback: false } : c
         ));
         toast.success('Nome atualizado!');
         setEditingName(false);
@@ -1394,6 +1487,7 @@ export function WhatsAppInterface() {
   // Nenhum bug de render encontrado; se a Camada 1-4 entregam o dado atualizado em `chats`, a
   // tela reflete sem necessidade de refresh manual.
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
+  const visibleMessages = useMemo(() => (activeChat?.messages ?? []).filter(isRenderableMessage), [activeChat?.messages]);
 
   // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): mesma tag "Já enviado
   // (campanha, data)"/"Nunca enviado" já usada em StepContacts (Disparos.tsx) e ContatoDetalhe.tsx —
@@ -1420,10 +1514,14 @@ export function WhatsAppInterface() {
     // e "fila" — pequeno, isolado, e estritamente melhor que o comportamento anterior (misturar
     // arquivados). Implementar o filtro real por agente responsável fica como melhoria futura,
     // fora do escopo desta auditoria (exigiria coluna nova no banco).
-    if (activeTab === "todos" || activeTab === "fila" || activeTab === "meus") {
-      list = list.filter(c => !c.is_archived);
-    } else if (activeTab === "arquivadas") {
+    // [UI/UX chat, fase 6.1] "Meus" saiu — o modelo não tem atendente responsável por conversa,
+    // então a aba só repetia "Todos". "Fila" agora filtra de verdade: conversas cuja última
+    // mensagem é do cliente (aguardando resposta), que é o que dá pra saber sem coluna nova.
+    if (activeTab === "arquivadas") {
       list = list.filter(c => c.is_archived);
+    } else {
+      list = list.filter(c => !c.is_archived);
+      if (activeTab === "fila") list = list.filter(c => c.lastFromClient);
     }
 
     // [AUDITORIA] LÓGICA (multi-número — filtro por instância, 2026-08-07): filtro por número.
@@ -1501,9 +1599,15 @@ export function WhatsAppInterface() {
           const hasUnread = row.ultimo_role === 'user'
             && new Date(row.ultima_atividade) > new Date(lastOpened);
 
+          const display = resolveDisplayName({
+            name: row.nome, pushName: row.push_name, sessionId: row.session_id, isGroup: row.is_group,
+          });
           return {
             id: row.session_id,
-            name: row.nome || row.session_id,
+            name: display.name,
+            nameIsFallback: display.isFallback,
+            lastFromClient: row.ultimo_role === 'user',
+            lastType: row.ultimo_tipo || undefined,
             phone: row.session_id,
             is_group: row.is_group || false,
             source: row.instancia || undefined,
@@ -1602,17 +1706,21 @@ export function WhatsAppInterface() {
           setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 80);
         }
 
-        const now = new Date().toISOString();
+        // Horário da última mensagem de verdade — antes usava "agora" a cada mudança (até uma
+        // simples atualização de status ✓✓), o que empurrava a conversa aberta pro topo da lista.
+        const lastTs = msgs.at(-1)?.rawTimestamp;
+        const last = msgs.at(-1);
         return prev.map(c => c.id === phone
           ? {
               ...c,
               messages: merged,
-              rawTimestamp: now,
-              timestamp: formatTime(now),
-              lastMessage: msgs.at(-1)?.content ?? c.lastMessage
+              rawTimestamp: lastTs && lastTs > (c.rawTimestamp || '') ? lastTs : c.rawTimestamp,
+              timestamp: lastTs && lastTs > (c.rawTimestamp || '') ? formatTime(lastTs) : c.timestamp,
+              lastMessage: last?.content ?? c.lastMessage,
+              lastType: last?.tipo ?? c.lastType,
             }
           : c
-        ).sort((a, b) => b.rawTimestamp.localeCompare(a.rawTimestamp));
+        ).sort((a, b) => (b.rawTimestamp || '').localeCompare(a.rawTimestamp || ''));
       });
     } catch {}
     finally { if (showLoading) setLoadingMessages(false); }
@@ -1640,8 +1748,8 @@ export function WhatsAppInterface() {
       );
       if (!res.ok) return;
       const rows: any[] = await res.json();
-      if (rows.length === 0) { hasMoreOlderRef.current = false; return; }
-      if (rows.length < 50) hasMoreOlderRef.current = false;
+      if (rows.length === 0) { hasMoreOlderRef.current = false; setNoMoreOlder(true); return; }
+      if (rows.length < 50) { hasMoreOlderRef.current = false; setNoMoreOlder(true); }
 
       const older = mapRowsToMessages(rows, activeChatNameRef.current);
       setChats(prev => prev.map(c =>
@@ -1897,7 +2005,10 @@ export function WhatsAppInterface() {
 
     viewport.addEventListener('scroll', onViewportScroll, { passive: true });
     return () => viewport.removeEventListener('scroll', onViewportScroll);
-  }, [activeChatId]);
+    // `!!activeChat`: se a conversa ainda não estava na lista quando activeChatId mudou (ex:
+    // aberta pela busca global), o ScrollArea não existia e o listener nunca era ligado.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatId, !!activeChat]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1936,6 +2047,7 @@ export function WhatsAppInterface() {
   // áudio de A pro contato B, porque enviarMidia()/sendRecording() leem o activeChatId ATUAL).
   useEffect(() => {
     setEditingName(false);
+    setSobreExpandido(false);
     setReplyTo(null);
     setIsSelectMode(false);
     setSelectedMessageIds(new Set());
@@ -1951,6 +2063,7 @@ export function WhatsAppInterface() {
     // Nova conversa = nova janela de paginação; "sem mais mensagens antigas" da conversa anterior
     // não vale pra esta.
     hasMoreOlderRef.current = true;
+    setNoMoreOlder(false);
     loadingOlderRef.current = false;
     setLoadingOlderMessages(false);
 
@@ -2058,10 +2171,11 @@ export function WhatsAppInterface() {
 
     try {
       const chat = chats.find(c => c.id === activeChatId);
-      const payload = { 
-        phone: activeChatId, 
-        text, 
+      const payload = {
+        phone: activeChatId,
+        text,
         instancia: chat?.source,
+        isGroup: chat?.is_group,
         replyToMessageId: currentReplyTo?.message_id
       };
       
@@ -2188,6 +2302,7 @@ export function WhatsAppInterface() {
           mediaFilename: filename,
           mediaCaption: legendaFinal || undefined,
           instancia: chat?.source,
+          isGroup: chat?.is_group,
         }),
       });
 
@@ -2386,7 +2501,8 @@ export function WhatsAppInterface() {
       // quando há mais de uma instância conectada).
       const newChat: Chat = {
         id: cleanPhone,
-        name: nomeOverride || rawPhone,
+        name: nomeOverride || formatWaPhone(cleanPhone) || rawPhone,
+        nameIsFallback: !nomeOverride,
         phone: cleanPhone,
         source: novaConversaInstancia || undefined,
         lastMessage: '',
@@ -2604,7 +2720,7 @@ export function WhatsAppInterface() {
     }
   };
 
-  const handleForwardMessages = async (targetPhone: string, targetSource?: string) => {
+  const handleForwardMessages = async (targetPhone: string, targetSource?: string, targetIsGroup?: boolean) => {
     if (!activeChat || selectedMessageIds.size === 0) return;
     
     setIsActionLoading(true);
@@ -2616,10 +2732,11 @@ export function WhatsAppInterface() {
         await fetch(`${API_BASE}/api/whatsapp/send`, {
           method: 'POST',
           headers: await apiHeaders(),
-          body: JSON.stringify({ 
-            phone: targetPhone, 
-            text: msg.content, 
+          body: JSON.stringify({
+            phone: targetPhone,
+            text: msg.content,
             instancia: targetSource,
+            isGroup: targetIsGroup,
             mediaUrl: msg.midia_url,
             mediaType: ['image', 'video', 'audio', 'document'].includes(msg.tipo || '') ? msg.tipo as any : undefined
           }),
@@ -2779,7 +2896,7 @@ export function WhatsAppInterface() {
       <>
         {parts.map((part, i) => 
           part.toLowerCase() === term.toLowerCase() ? (
-            <mark key={i} className="bg-yellow-300 text-black px-0.5 rounded-sm animate-pulse font-bold">
+            <mark key={i} className="bg-yellow-300 text-black px-0.5 rounded-sm font-semibold">
               {part}
             </mark>
           ) : part
@@ -2788,27 +2905,70 @@ export function WhatsAppInterface() {
     );
   };
 
-  const handleGlobalSearch = async (term: string) => {
+  // [UI/UX chat, fase 6.5] Debounce de 300ms + descarte de resposta antiga: antes cada tecla
+  // disparava uma busca e a resposta de um termo anterior (ex: "sh") podia chegar DEPOIS da do
+  // termo final e sobrescrever os resultados — daí itens "sem o termo buscado".
+  const globalSearchSeqRef = useRef(0);
+  const globalSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleGlobalSearch = (term: string) => {
     setGlobalSearchTerm(term);
-    if (!term.trim() || term.length < 2) {
+    if (globalSearchTimerRef.current) clearTimeout(globalSearchTimerRef.current);
+    const seq = ++globalSearchSeqRef.current;
+    if (!term.trim() || term.trim().length < 2) {
       setGlobalSearchResults([]);
       setShowGlobalSearchResults(false);
+      setIsGlobalSearching(false);
       return;
     }
 
     setIsGlobalSearching(true);
     setShowGlobalSearchResults(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/search?q=${encodeURIComponent(term)}`, { headers: await apiHeaders() });
-      if (res.ok) {
-        setGlobalSearchResults(await res.json());
+    globalSearchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/whatsapp/search?q=${encodeURIComponent(term.trim())}`, { headers: await apiHeaders() });
+        if (seq !== globalSearchSeqRef.current) return;
+        if (res.ok) {
+          const rows: any[] = await res.json();
+          if (seq !== globalSearchSeqRef.current) return;
+          const t = term.trim().toLowerCase();
+          setGlobalSearchResults(rows.filter(r => (r.content || '').toLowerCase().includes(t)));
+        }
+      } catch {
+        if (seq === globalSearchSeqRef.current) toast.error("Erro na busca global");
+      } finally {
+        if (seq === globalSearchSeqRef.current) setIsGlobalSearching(false);
       }
-    } catch {
-      toast.error("Erro na busca global");
-    } finally {
-      setIsGlobalSearching(false);
-    }
+    }, 300);
   };
+
+  // Abrir resultado da busca global rolando até a mensagem: se ela ainda não está carregada
+  // (fora da janela recente de 100), pagina pra trás até achar — com limite de tentativas.
+  const [pendingScrollMsgId, setPendingScrollMsgId] = useState<string | null>(null);
+  const [flashMsgId, setFlashMsgId] = useState<string | null>(null);
+  const pendingScrollAttemptsRef = useRef(0);
+  useEffect(() => {
+    if (!pendingScrollMsgId || !activeChat || loadingMessages || loadingOlderMessages) return;
+    const found = activeChat.messages.some(m => m.id === pendingScrollMsgId);
+    if (found) {
+      const id = pendingScrollMsgId;
+      setPendingScrollMsgId(null);
+      requestAnimationFrame(() => {
+        messageRefs.current.get(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setFlashMsgId(id);
+        setTimeout(() => setFlashMsgId(cur => (cur === id ? null : cur)), 2500);
+      });
+      return;
+    }
+    if (activeChat.messages.length === 0) return; // ainda carregando a janela inicial
+    if (!hasMoreOlderRef.current || pendingScrollAttemptsRef.current >= 10) {
+      setPendingScrollMsgId(null);
+      toast.info("Mensagem muito antiga — role a conversa para cima para encontrá-la.");
+      return;
+    }
+    pendingScrollAttemptsRef.current += 1;
+    loadOlderMessages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingScrollMsgId, activeChat?.messages, loadingMessages, loadingOlderMessages]);
 
 
 
@@ -2928,7 +3088,7 @@ export function WhatsAppInterface() {
   // Nenhuma das opções é "trocar uma classe" — todas mudam comportamento de navegação percebido
   // pelo usuário, por isso não implementadas sem confirmação.
   return (
-    <div className="wa-panel flex h-[calc(100vh-5rem)] overflow-hidden rounded-2xl border bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
+    <div className="wa-panel flex h-full min-h-0 overflow-hidden rounded-2xl border bg-background/60 backdrop-blur-xl animate-in fade-in duration-500">
 
       {/* ── LEFT: Conversation List ── */}
       {/* [AUDITORIA] FIX APLICADO (Achado 3 — responsividade, achado 2026-07-27, implementado
@@ -2958,7 +3118,7 @@ export function WhatsAppInterface() {
                 <Button 
                   variant="ghost" 
                   size="icon" 
-                  className="h-8 w-8 text-orange-500 hover:bg-orange-50 animate-pulse" 
+                  className="h-8 w-8 text-orange-500 hover:bg-orange-500/10 animate-pulse" 
                   onClick={() => setShowConnectModal(true)} 
                   title="Reconectar WhatsApp"
                 >
@@ -2968,7 +3128,7 @@ export function WhatsAppInterface() {
                 <Button 
                   variant="ghost" 
                   size="icon" 
-                  className="h-8 w-8 text-amber-500 hover:bg-amber-50" 
+                  className="h-8 w-8 text-amber-500 hover:bg-amber-500/10" 
                   onClick={() => setShowConnectModal(true)} 
                   title="Conectar WhatsApp"
                 >
@@ -3063,63 +3223,101 @@ export function WhatsAppInterface() {
               filtro próprio aqui de propósito — o filtro por etiqueta que existe de verdade fica
               dentro do painel de detalhes de cada contato, decisão de produto ainda pendente
               sobre se cabe também aqui na lista. */}
-          {/* Filter chip */}
-          <div className="flex gap-2 flex-wrap">
+          {/* Filtros — chip ativo com fundo sólido e "×"; linha "Limpar" quando há filtro ativo
+              (antes o chip "Grupos" ficava ligado de forma discreta e a lista vazia sem motivo aparente). */}
+          <div className="flex gap-2 flex-wrap items-center">
             {instanciaFiltro && (
-              <div
-                className="flex items-center gap-1.5 bg-primary/5 hover:bg-primary/10 border border-primary/10 rounded-full px-3 py-1 text-[11px] font-semibold text-primary cursor-pointer transition-all active:scale-95"
+              <button
+                type="button"
+                className="flex items-center gap-1.5 bg-primary text-primary-foreground rounded-full px-3 py-1 text-[11px] font-semibold transition-all active:scale-95 max-w-full"
                 onClick={() => setInstanciaFiltro("")}
                 title="Remover filtro de número"
               >
-                <Phone className="h-3 w-3" />
-                {instanciasDisponiveis.find(i => i.numero === instanciaFiltro)?.nome || instanciaFiltro}
-                <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />
-              </div>
+                <Phone className="h-3 w-3 shrink-0" />
+                <span className="truncate">{instanciasDisponiveis.find(i => i.numero === instanciaFiltro)?.nome || instanciaFiltro}</span>
+                <X className="h-3 w-3 shrink-0" />
+              </button>
             )}
-            <div
-              className={`flex items-center gap-1.5 border rounded-full px-3 py-1 text-[11px] font-semibold cursor-pointer transition-all active:scale-95 ${
+            <button
+              type="button"
+              className={`flex items-center gap-1.5 border rounded-full px-3 py-1 text-[11px] font-semibold transition-all active:scale-95 ${
                 apenasGrupos
-                  ? "bg-primary/5 hover:bg-primary/10 border-primary/10 text-primary"
+                  ? "bg-primary text-primary-foreground border-primary"
                   : "bg-muted/50 hover:bg-muted border-transparent text-muted-foreground"
               }`}
               onClick={() => setApenasGrupos(v => !v)}
+              aria-pressed={apenasGrupos}
               title={apenasGrupos ? "Mostrando só grupos — clique para ver todos" : "Mostrar só grupos"}
             >
               <Users className="h-3 w-3" />
               Grupos
-              {apenasGrupos && <X className="h-3 w-3 ml-1 opacity-60 hover:opacity-100" />}
-            </div>
-            <div className="flex items-center gap-1.5 bg-muted/50 hover:bg-muted border border-transparent rounded-full px-3 py-1 text-[11px] font-semibold text-muted-foreground cursor-pointer transition-all active:scale-95">
-              Etiqueta
-              <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
-            </div>
+              {apenasGrupos && <X className="h-3 w-3" />}
+            </button>
+            {/* [UI/UX chat, fase 6.4] Era um <div> sem ação nenhuma. Conversas ainda não carregam
+                etiquetas (GET /conversas não devolve tags), então por ora o menu só explica e leva
+                pra onde as etiquetas são gerenciadas — filtrar por etiqueta exige backend. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 bg-muted/50 hover:bg-muted border border-transparent rounded-full px-3 py-1 text-[11px] font-semibold text-muted-foreground transition-all active:scale-95"
+                >
+                  <Tag className="h-3 w-3" />
+                  Etiqueta
+                  <ChevronDown className="h-3 w-3 opacity-60" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuItem disabled className="text-xs leading-snug opacity-100 text-muted-foreground">
+                  Filtro por etiqueta ainda não disponível na lista de conversas.
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/tags-funil")} className="cursor-pointer text-xs">
+                  Gerenciar etiquetas em Tags e Funil
+                  <ChevronRight className="h-3.5 w-3.5 ml-auto" />
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
+          {(apenasGrupos || instanciaFiltro) && (
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground -mt-1">
+              <span>Filtros ativos</span>
+              <button
+                type="button"
+                className="font-semibold text-primary hover:underline"
+                onClick={() => { setApenasGrupos(false); setInstanciaFiltro(""); }}
+              >
+                Limpar
+              </button>
+            </div>
+          )}
 
           {/* Tabs */}
-          <div className="flex gap-1 p-1 bg-muted/40 rounded-lg overflow-x-auto no-scrollbar scroll-smooth">
-            {(["Meus", "Fila", "Todos", "Arquivadas"] as const).map(t => {
-              const key = t.toLowerCase() as ChatTab;
+          <div className="flex gap-1 p-1 bg-muted/40 rounded-lg">
+            {([["fila", "Fila"], ["todos", "Todos"], ["arquivadas", "Arquivadas"]] as const).map(([key, t]) => {
               const isActive = activeTab === key;
-              const hasUnreadInTab = (key === "todos" || key === "arquivadas") && chats.some(c => (key === "arquivadas" ? c.is_archived : !c.is_archived) && (c.unread || 0) > 0);
-
-
-
-
-
+              const count = key === "fila" ? chats.filter(c => !c.is_archived && c.lastFromClient).length : null;
+              const hasUnreadInTab = key !== "fila" && chats.some(c => (key === "arquivadas" ? c.is_archived : !c.is_archived) && (c.unread || 0) > 0);
               return (
                 <button
-                  key={t}
+                  key={key}
                   onClick={() => {
                     setActiveTab(key);
                     fetchConversas(key === "arquivadas");
                   }}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap relative ${
+                  title={key === "fila" ? "Conversas aguardando resposta (última mensagem do cliente)" : undefined}
+                  className={`flex-1 min-w-0 px-2 py-1.5 text-xs font-semibold rounded-md transition-all whitespace-nowrap relative inline-flex items-center justify-center gap-1.5 ${
                     isActive
-                      ? "bg-white shadow-sm text-primary ring-1 ring-black/5"
-                      : "text-muted-foreground hover:text-foreground hover:bg-white/50"
+                      ? "bg-background shadow-sm text-foreground ring-1 ring-border"
+                      : "text-muted-foreground hover:text-foreground hover:bg-background/50"
                   }`}
                 >
                   {t}
+                  {count !== null && count > 0 && (
+                    <span className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold inline-flex items-center justify-center ${isActive ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                      {count > 99 ? "99+" : count}
+                    </span>
+                  )}
                   {hasUnreadInTab && <span className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full border border-background shadow-sm" />}
 
                 </button>
@@ -3177,28 +3375,38 @@ export function WhatsAppInterface() {
                   // parada clara contra `hasMoreOlderRef`; não implementado sem poder testar
                   // ponta-a-ponta num navegador real primeiro, pra não introduzir um loop que
                   // nunca termina).
+                  (() => {
+                    const nomeRes = chats.find(c => c.id === res.phone)?.name
+                      || resolveDisplayName({ name: res.contact_name, sessionId: res.phone }).name;
+                    return (
                   <div
                     key={res.id}
                     onClick={() => {
+                      pendingScrollAttemptsRef.current = 0;
+                      setPendingScrollMsgId(String(res.id));
                       setActiveChatId(res.phone);
+                      lastOpenedRef.current.set(res.phone, new Date().toISOString());
                       setShowGlobalSearchResults(false);
                       setGlobalSearchTerm("");
                     }}
-                    className="p-4 hover:bg-primary/[0.04] cursor-pointer border-b border-border/30 last:border-0 group transition-colors"
+                    className="p-3 hover:bg-primary/[0.04] cursor-pointer border-b border-border/30 last:border-0 group transition-colors"
                   >
-                    <div className="flex items-center gap-3 mb-1.5">
-                      <ChatAvatar name={res.contact_name} url={res.profile_pic} size="sm" />
+                    <div className="flex items-center gap-3 mb-1.5 min-w-0">
+                      <ChatAvatar name={nomeRes} url={res.profile_pic} size="sm" />
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold truncate group-hover:text-primary transition-colors">{res.contact_name}</p>
-                        <p className="text-[9px] text-muted-foreground font-medium uppercase tracking-tighter">
+                        <p className="text-xs font-bold truncate group-hover:text-primary transition-colors" title={nomeRes}>{nomeRes}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {res.from_me ? 'Você · ' : ''}
                           {new Date(res.timestamp_wa || res.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                         </p>
                       </div>
                     </div>
-                    <p className="text-xs text-foreground/80 line-clamp-2 pl-11 italic border-l-2 border-primary/10">
-                      {highlightText(res.content, globalSearchTerm)}
+                    <p className="text-xs text-foreground/80 line-clamp-2 pl-11 break-words [overflow-wrap:anywhere]">
+                      {highlightText(snippetAround(res.content || '', globalSearchTerm.trim()), globalSearchTerm.trim())}
                     </p>
                   </div>
+                    );
+                  })()
                 ))
               )}
             </div>
@@ -3207,18 +3415,31 @@ export function WhatsAppInterface() {
 
 
         {/* Chat list */}
-        <ScrollArea className="flex-1">
+        <ScrollArea className={`flex-1 min-h-0 ${SCROLL_VIEWPORT_BLOCK}`}>
           {loadingChats && (
             <div className="flex items-center justify-center py-12 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin mr-2" /> Carregando...
             </div>
           )}
           {!loadingChats && filteredChats.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12 px-6 text-center text-muted-foreground text-sm">
-              <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
-              {globalSearchTerm 
-                ? "Nenhum chat correspondente."
-                : "Nenhuma mensagem recebida ainda."}
+            <div className="flex flex-col items-center justify-center py-12 px-6 text-center text-muted-foreground text-sm gap-2">
+              <MessageSquare className="h-8 w-8 opacity-30" />
+              <span>
+                {globalSearchTerm
+                  ? "Nenhuma conversa com esse nome ou número."
+                  : (apenasGrupos || instanciaFiltro)
+                    ? "Nenhuma conversa com esses filtros."
+                    : activeTab === "arquivadas"
+                      ? "Nenhuma conversa arquivada."
+                      : activeTab === "fila"
+                        ? "Fila vazia 🎉 — nenhuma conversa aguardando resposta."
+                        : "Nenhuma mensagem recebida ainda."}
+              </span>
+              {!globalSearchTerm && (apenasGrupos || instanciaFiltro) && (
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setApenasGrupos(false); setInstanciaFiltro(""); }}>
+                  Limpar filtros
+                </Button>
+              )}
             </div>
           )}
 
@@ -3227,7 +3448,7 @@ export function WhatsAppInterface() {
               const isActive = activeChatId === chat.id;
               return (
                 <ContextMenu key={chat.id}>
-                  <ContextMenuTrigger>
+                  <ContextMenuTrigger asChild>
                     <div
                       onClick={() => {
                         setActiveChatId(chat.id);
@@ -3253,33 +3474,40 @@ export function WhatsAppInterface() {
                         )}
                       </div>
                       <div className="flex-1 min-w-0 py-0.5">
-                        <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center justify-between gap-2 mb-0.5">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={`text-sm font-bold truncate ${isActive ? "text-primary" : chat.unread ? "text-primary" : "text-foreground"}`}>
+                            <span
+                              className={`text-sm truncate ${chat.unread ? "font-bold text-foreground" : "font-semibold"} ${isActive ? "text-primary" : ""}`}
+                              title={chat.nameIsFallback && !chat.is_group ? `${chat.name} · ID ${chat.phone}` : chat.name}
+                            >
                               {chat.name}
                             </span>
                             {chat.is_pinned && <Pin className="h-3 w-3 text-muted-foreground rotate-45 shrink-0" />}
                             {chat.is_muted && <BellOff className="h-3 w-3 text-muted-foreground shrink-0" />}
                           </div>
-                          <span className="text-[10px] font-medium text-muted-foreground shrink-0 ml-2">{chat.timestamp || '...'}</span>
+                          <span className={`text-[11px] shrink-0 tabular-nums ${chat.unread ? "text-green-600 dark:text-green-400 font-semibold" : "text-muted-foreground"}`}>
+                            {formatListTimestamp(chat.rawTimestamp)}
+                          </span>
                         </div>
-                        <div className="flex items-center gap-1.5 mb-1.5">
-                          {chat.is_group && (
-                            <span className="text-[9px] px-1.5 py-0.5 bg-primary/12 text-primary border border-primary/20 font-bold rounded tracking-tight uppercase">Grupo</span>
-                          )}
-                          {chat.source && (
-                            <span className="text-[9px] px-1.5 py-0.5 bg-muted font-bold text-muted-foreground rounded tracking-tight uppercase">{chat.source}</span>
-                          )}
-                          {chat.tag && (
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>{chat.tag}</span>
-                          )}
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <p className={`text-xs truncate flex-1 ${isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>
-                            {chat.lastMessage.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')}
+                        {(chat.is_group || chat.tag || instanceLabel(chat)) && (
+                          <div className="flex items-center gap-1.5 mb-0.5 min-w-0">
+                            {chat.is_group && (
+                              <span className="text-[9px] px-1.5 py-0.5 bg-primary/10 text-primary border border-primary/20 font-bold rounded tracking-tight uppercase shrink-0">Grupo</span>
+                            )}
+                            {instanceLabel(chat) && (
+                              <span className={`text-[10px] px-1.5 py-0.5 font-semibold rounded truncate ${instanceColorClass(chat.numero || chat.source || '')}`}>{instanceLabel(chat)}</span>
+                            )}
+                            {chat.tag && (
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shadow-sm shrink-0 ${TAG_COLORS[chat.tag] ?? "bg-gray-100 text-gray-600"}`}>{chat.tag}</span>
+                            )}
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                          <p className={`text-xs truncate flex-1 min-w-0 ${chat.unread ? "text-foreground font-medium" : "text-muted-foreground"}`}>
+                            {chatPreview(chat)}
                           </p>
                           {chat.unread ? (
-                            <span className="min-w-[18px] h-[18px] px-1 bg-primary text-primary-foreground text-[10px] font-black rounded-full flex items-center justify-center shadow-sm shrink-0">
+                            <span className="min-w-[20px] h-5 px-1.5 bg-green-600 text-white text-[11px] font-bold rounded-full flex items-center justify-center shrink-0">
                               {chat.unread}
                             </span>
                           ) : null}
@@ -3724,36 +3952,52 @@ export function WhatsAppInterface() {
                       [AUDITORIA] FIX APLICADO: grupo mostra o mesmo badge "Grupo" da lista lateral
                       em vez do JID cru; contato individual mantém o telefone como antes. `truncate`
                       adicionado nos dois casos para nunca estourar o cabeçalho. */}
-                  <p className="text-[11px] font-medium text-muted-foreground truncate max-w-[280px]">
-                    <span className="text-primary font-bold">✓ {activeChat.source ?? "CRM"}</span>
-                    {activeChat.is_group ? (
-                      <span className="ml-1.5 text-[9px] px-1.5 py-0.5 bg-violet-100 text-violet-700 font-bold rounded tracking-tight uppercase align-middle">Grupo</span>
-                    ) : (
-                      <> · {activeChat.phone}</>
+                  {/* [UI/UX chat, fase 4.1] Telefone formatado (ou "N participantes" em grupo) e
+                      instância pelo nome amigável só quando há mais de um número conectado. */}
+                  <p className="text-xs text-muted-foreground truncate">
+                    {instanceLabel(activeChat) && (
+                      <span className="text-primary font-semibold">{instanceLabel(activeChat)} · </span>
                     )}
+                    {activeChat.is_group
+                      ? (grupoInfoExtra?.size ? `Grupo · ${grupoInfoExtra.size} participantes` : 'Grupo')
+                      : (formatWaPhone(activeChat.phone) || 'Número oculto pelo WhatsApp')}
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                <button
-                  onClick={toggleIA}
-                  disabled={togglingIA}
-                  title={iaPausada ? "IA pausada — clique para reativar" : "IA ativa — clique para pausar"}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-bold border transition-all active:scale-95 ${
-                    iaPausada
-                      ? "bg-warning/15 border-warning/40 text-warning hover:bg-warning/25"
-                      : "bg-success/15 border-success/40 text-success hover:bg-success/25"
-                  }`}
-                >
-                  {togglingIA ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : iaPausada ? (
+                {/* IA nunca responde em grupo (regra do backend, sem exceção) — mostrar o toggle
+                    "IA Ativa"/"Pausada" aqui sugeriria um controle que não existe de verdade. */}
+                {activeChat.is_group ? (
+                  <span
+                    title="A IA nunca responde em grupos, nesta ou em nenhuma conta."
+                    className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-bold border bg-muted/40 border-border/50 text-muted-foreground"
+                  >
                     <BotOff className="h-3.5 w-3.5" />
-                  ) : (
-                    <Bot className="h-3.5 w-3.5" />
-                  )}
-                  <span className="hidden sm:inline">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
-                </button>
+                    <span className="hidden sm:inline">IA não entra em grupo</span>
+                  </span>
+                ) : (
+                  <button
+                    onClick={toggleIA}
+                    disabled={togglingIA}
+                    title={iaPausada ? "IA pausada nesta conversa — clique para reativar" : "IA ativa nesta conversa — clique para pausar"}
+                    aria-label={iaPausada ? "Reativar IA nesta conversa" : "Pausar IA nesta conversa"}
+                    aria-pressed={!iaPausada}
+                    className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-bold border transition-all active:scale-95 ${
+                      iaPausada
+                        ? "bg-warning/15 border-warning/40 text-warning hover:bg-warning/25"
+                        : "bg-success/15 border-success/40 text-success hover:bg-success/25"
+                    }`}
+                  >
+                    {togglingIA ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : iaPausada ? (
+                      <BotOff className="h-3.5 w-3.5" />
+                    ) : (
+                      <Bot className="h-3.5 w-3.5" />
+                    )}
+                    <span className="hidden sm:inline">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
+                  </button>
+                )}
 
                 {/* [AUDITORIA] FIX APLICADO: escondido abaixo de `md` (achado 2026-07-28, chat
                     "apertado" em tablet/mobile) — cabeçalho já concorre com botão de voltar,
@@ -3763,6 +4007,8 @@ export function WhatsAppInterface() {
                   variant="outline"
                   className="hidden md:flex h-9 rounded-xl gap-2 text-primary border-primary/20 hover:bg-primary/5"
                   onClick={() => handleCriarTarefaIA(activeChat.id)}
+                  title="Criar tarefa no Kanban com resumo da conversa"
+                  aria-label="Criar tarefa"
                 >
                   <Sparkles className="h-4 w-4" />
                   <span className="hidden lg:inline">Criar Tarefa</span>
@@ -3782,6 +4028,8 @@ export function WhatsAppInterface() {
                       setCurrentSearchIndex(-1);
                     }
                   }}
+                  title="Buscar nesta conversa"
+                  aria-label="Buscar nesta conversa"
                 >
                   <Search className="h-4.5 w-4.5" />
                 </Button>
@@ -3800,6 +4048,7 @@ export function WhatsAppInterface() {
                   className="hidden md:flex h-9 w-9 rounded-xl text-muted-foreground hover:bg-muted transition-colors"
                   onClick={runUITests}
                   title="Executar Testes de UI"
+                  aria-label="Executar testes de UI"
                 >
                   <Activity className="h-4.5 w-4.5" />
                 </Button>
@@ -3808,7 +4057,8 @@ export function WhatsAppInterface() {
                   size="icon"
                   className={`h-9 w-9 rounded-xl transition-colors ${showContactPanel ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
                   onClick={() => setShowContactPanel(v => !v)}
-                  title={showContactPanel ? 'Ocultar detalhes do contato' : 'Mostrar detalhes do contato'}
+                  title={showContactPanel ? 'Ocultar detalhes' : (activeChat.is_group ? 'Detalhes do grupo' : 'Detalhes do contato')}
+                  aria-label={activeChat.is_group ? 'Detalhes do grupo' : 'Detalhes do contato'}
                 >
                   <Info className="h-4.5 w-4.5" />
                 </Button>
@@ -3817,10 +4067,12 @@ export function WhatsAppInterface() {
 
 
 
-            {/* Painel de Busca */}
+            {/* Painel de Busca — [UI/UX chat, fase 6.6] faixa normal da coluna do chat, logo abaixo
+                do header; antes era `absolute` sem ancestral posicionado e cobria o card inteiro
+                (lista + header do chat). */}
             {isSearchingInChat && (
-              <div className="absolute top-0 left-0 right-0 z-30 bg-background/95 backdrop-blur-md border-b shadow-sm animate-in slide-in-from-top duration-300">
-                <div className="px-6 py-3 flex items-center gap-4">
+              <div className="shrink-0 bg-background/95 backdrop-blur-md border-b shadow-sm animate-in slide-in-from-top-2 duration-200">
+                <div className="px-3 sm:px-6 py-2 flex items-center gap-2 sm:gap-4">
                   <div className="flex-1 relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
@@ -3846,15 +4098,19 @@ export function WhatsAppInterface() {
                         <>
                           <span>{chatSearchResults.length - currentSearchIndex} de {chatSearchResults.length}</span>
                           <div className="flex items-center border-l ml-2 pl-2 gap-1">
-                            <button 
+                            <button
                               onClick={() => navigateSearch('prev')}
                               className="p-1 hover:bg-background rounded-md transition-colors"
+                              title="Anterior (Shift+Enter)"
+                              aria-label="Resultado anterior"
                             >
                               <ChevronUp className="h-4 w-4" />
                             </button>
-                            <button 
+                            <button
                               onClick={() => navigateSearch('next')}
                               className="p-1 hover:bg-background rounded-md transition-colors"
+                              title="Próximo (Enter)"
+                              aria-label="Próximo resultado"
                             >
                               <ChevronDown className="h-4 w-4" />
                             </button>
@@ -3919,7 +4175,7 @@ export function WhatsAppInterface() {
 
             {/* Messages */}
             <ScrollArea
-              className="flex-1 bg-muted/10 relative"
+              className={`flex-1 min-h-0 bg-muted/10 relative ${SCROLL_VIEWPORT_BLOCK}`}
               ref={scrollAreaRef}
             >
               {/* Barra de Ferramentas Suspensa (Seleção) */}
@@ -3951,7 +4207,7 @@ export function WhatsAppInterface() {
                       variant="ghost" 
                       onClick={handleToggleStar}
                       disabled={isActionLoading}
-                      className="h-9 px-3 gap-2 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-all text-xs font-bold uppercase tracking-tight"
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-amber-500/10 hover:text-amber-600 transition-all text-xs font-bold uppercase tracking-tight"
                     >
                       <Star className="h-4 w-4" />
                       Favoritar
@@ -3970,7 +4226,7 @@ export function WhatsAppInterface() {
                       variant="ghost"
                       onClick={() => setShowForwardModal(true)}
                       disabled={isActionLoading}
-                      className="h-9 px-3 gap-2 rounded-xl hover:bg-blue-50 hover:text-blue-600 transition-all text-xs font-bold uppercase tracking-tight"
+                      className="h-9 px-3 gap-2 rounded-xl hover:bg-blue-500/10 hover:text-blue-600 transition-all text-xs font-bold uppercase tracking-tight"
                     >
                       <Forward className="h-4 w-4" />
                       Encaminhar
@@ -4018,10 +4274,15 @@ export function WhatsAppInterface() {
                     <Loader2 className="h-4 w-4 animate-spin mr-2" /> Carregando mensagens antigas...
                   </div>
                 )}
-                {activeChat.messages.map((m, i) => {
+                {!loadingMessages && noMoreOlder && visibleMessages.length > 0 && (
+                  <div className="flex justify-center py-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Início da conversa</span>
+                  </div>
+                )}
+                {visibleMessages.map((m, i) => {
                   const isOut = m.role === "assistant";
                   const isNote = m.role === "note";
-                  const prevMsg = i > 0 ? activeChat.messages[i - 1] : null;
+                  const prevMsg = i > 0 ? visibleMessages[i - 1] : null;
                   const prevRole = prevMsg?.role ?? null;
                   
                   // Lógica de separador de data
@@ -4070,9 +4331,16 @@ export function WhatsAppInterface() {
                     }
                   }
 
-                  // Mostra nome quando muda de remetente
-                  const showNameIn  = !isOut && !isNote && prevRole !== "user";
-                  const showNameOut = isOut && !isNote && (prevRole !== "assistant" || prevMsg?.senderName !== m.senderName);
+                  // [UI/UX chat, fases 1.2/1.3] Remetente: em conversa 1:1 as recebidas não levam
+                  // nome (é sempre o contato); em grupo levam o participante, com cor fixa por
+                  // pessoa, só na primeira de uma sequência. Enviadas levam o atendente (ou nada).
+                  const sameSenderAsPrev = !!prevMsg && !isDifferentDay && prevRole === m.role && prevMsg.senderName === m.senderName;
+                  const groupSender = activeChat.is_group && !isOut && !isNote
+                    ? (m.senderName && /^\d{8,}$/.test(m.senderName) ? (formatWaPhone(m.senderName) || m.senderName) : m.senderName)
+                    : undefined;
+                  const showNameIn  = !!groupSender && !sameSenderAsPrev;
+                  const showNameOut = isOut && !!m.senderName && !sameSenderAsPrev;
+                  const tipo = (m.tipo || 'text') as CanonicalMessageType;
 
                   return (
                     <div 
@@ -4090,14 +4358,17 @@ export function WhatsAppInterface() {
                         </div>
                       )}
 
-                      <div className="flex items-center gap-4 w-full">
-                        {/* Checkbox (Visível em modo seleção ou hover) */}
+                      <div className="flex items-start w-full min-w-0">
+                        {/* Checkbox — só em modo seleção ou no hover da linha; fora disso não ocupa
+                            largura (antes ficava invisível mas reservando espaço, "solto" à esquerda). */}
                         {!isNote && (
-                          <div 
-                            className={`shrink-0 cursor-pointer transition-all duration-300 ${
-                              isSelectMode 
-                                ? "opacity-100 translate-x-0" 
-                                : "opacity-0 -translate-x-2 group-hover/row:opacity-100 group-hover/row:translate-x-0"
+                          <div
+                            className={`shrink-0 cursor-pointer self-start overflow-hidden transition-all duration-200 ${
+                              showNameIn || showNameOut ? "mt-7" : "mt-2.5"
+                            } ${
+                              isSelectMode
+                                ? "w-7 opacity-100"
+                                : "w-0 opacity-0 group-hover/row:w-7 group-hover/row:opacity-100"
                             }`}
                             onClick={() => toggleMessageSelection(m.id)}
                           >
@@ -4111,20 +4382,24 @@ export function WhatsAppInterface() {
                           </div>
                         )}
                         
-                        <div 
-                          className={`flex-1 flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${i > 0 && !isDifferentDay && activeChat.messages[i-1].role === m.role ? "mt-0.5" : "mt-4"}`}
+                        <div
+                          className={`flex-1 min-w-0 flex ${isOut ? "justify-end" : isNote ? "justify-center px-4" : "justify-start"} ${sameSenderAsPrev ? "mt-0.5" : "mt-3"}`}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             if (!isNote) toggleMessageSelection(m.id);
                           }}
                         >
-                          <div className={`max-w-[88%] sm:max-w-[85%] rounded-2xl px-3.5 sm:px-4 py-2.5 relative animate-in slide-in-from-bottom-2 duration-300 group ${
+                          {/* [UI/UX chat, fases 1.5/2.3/2.4/6.10] Paleta do WhatsApp (verde claro com
+                              texto escuro / verde-petróleo com texto claro no tema escuro) em vez de
+                              bg-primary com texto branco (contraste ~2,3:1). Largura menor em telas
+                              largas; quebra de palavra em qualquer ponto para URL longa. */}
+                          <div className={`min-w-0 max-w-[85%] md:max-w-[75%] lg:max-w-[65%] rounded-2xl px-3 sm:px-3.5 py-2 relative animate-in slide-in-from-bottom-2 duration-300 group ${
                             isOut
-                              ? "bg-primary text-primary-foreground rounded-tr-md shadow-[0_6px_18px_-8px_hsl(var(--primary)/0.55)]"
+                              ? "bg-[#d9fdd3] text-[#111b21] dark:bg-[#005c4b] dark:text-[#e9edef] rounded-tr-md shadow-sm"
                               : isNote
-                                ? "bg-warning/15 border border-warning/30 text-warning-foreground dark:text-warning w-full text-center rounded-xl shadow-none"
-                                : "bg-card rounded-tl-md border border-border/60 shadow-[0_4px_14px_-8px_rgb(0_0_0/0.35)]"
-                          } ${selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10 brightness-95 scale-[0.98] origin-center transition-all" : ""}`}>
+                                ? "bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 w-full text-center rounded-xl shadow-none"
+                                : "bg-card text-card-foreground rounded-tl-md border border-border/60 shadow-sm"
+                          } ${selectedMessageIds.has(m.id) ? "ring-2 ring-primary ring-offset-2 ring-offset-muted/10 brightness-95 scale-[0.98] origin-center transition-all" : ""} ${flashMsgId === m.id ? "ring-2 ring-yellow-400 ring-offset-2 ring-offset-background" : ""}`}>
                             
                             {/* Ícone de Favorito (Star) */}
                             {starredMessageIds.has(m.id) && (
@@ -4165,41 +4440,51 @@ export function WhatsAppInterface() {
                               m.reply_to.role === "assistant" ? "border-primary" : "border-green-500"
                             }`}>
                               <p className={`font-black uppercase tracking-widest text-[9px] ${
-                                m.reply_to.role === "assistant" ? (isOut ? "text-primary-foreground/80" : "text-primary") : "text-green-600"
+                                m.reply_to.role === "assistant" ? "text-primary" : "text-green-700 dark:text-green-400"
                               }`}>
                                 {m.reply_to.senderName}
                               </p>
-                              <p className={`line-clamp-2 italic ${isOut ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                              <p className="line-clamp-2 italic opacity-70">
                                 {m.reply_to.content}
                               </p>
                             </div>
                           )}
 
-                          {showNameIn && (
-                            <p className="text-[11px] font-black text-primary mb-1 uppercase tracking-wider">{m.senderName ?? activeChat.name}</p>
+                          {showNameIn && groupSender && (
+                            <p className={`text-xs font-semibold mb-0.5 truncate ${participantColorClass(groupSender)}`}>{groupSender}</p>
                           )}
-                          {showNameOut && m.senderName && (
-                            <p className="text-[10px] font-bold text-primary-foreground/70 mb-1 text-right">{m.senderName}</p>
+                          {showNameOut && (
+                            <p className="text-[11px] font-semibold opacity-60 mb-0.5 text-right truncate">{m.senderName}</p>
                           )}
                           {isNote && (
                             <div className="flex items-center justify-center gap-1.5 mb-1 text-[10px] font-black uppercase tracking-widest text-amber-600/80">
                               <Info className="h-3 w-3" /> Nota Privada
                             </div>
                           )}
-                          {m.tipo === 'image' && m.midia_url ? (
-                            <AuthedImg src={m.midia_url} alt="imagem" className="rounded max-w-[220px] mb-1" onClick={() => m.midia_url && setPhotoModal(m.midia_url)} />
-                          ) : m.tipo === 'audio' ? (
+                          {/* [UI/UX chat, fase 1.1] Um caso por tipo — mídia sem arquivo baixado e tipos
+                              sem renderização própria viram um chip, nunca uma bolha vazia só com horário. */}
+                          {tipo === 'image' && m.midia_url ? (
+                            <AuthedImg src={m.midia_url} alt="imagem" className="rounded max-w-full sm:max-w-[260px] mb-1 cursor-zoom-in" onClick={() => m.midia_url && setPhotoModal(m.midia_url)} />
+                          ) : tipo === 'audio' ? (
                             m.midia_url
                               ? <AudioPlayer src={m.midia_url} />
-                              : <div className="flex items-center gap-2 text-xs text-muted-foreground py-1" title="A mídia deste áudio ainda não foi baixada — o servidor tenta recuperar automaticamente."><Mic className="h-4 w-4" /> Áudio (mídia indisponível)</div>
-                          ) : m.tipo === 'video' && m.midia_url ? (
-                            <AuthedVideo src={m.midia_url} mime={m.midia_mime} className="rounded max-w-[260px] mb-1" />
-                          ) : m.tipo === 'document' && m.midia_url ? (
+                              : <div className="flex items-center gap-2 text-xs opacity-70 py-1" title="A mídia deste áudio ainda não foi baixada — o servidor tenta recuperar automaticamente."><Mic className="h-4 w-4" /> Áudio (mídia indisponível)</div>
+                          ) : tipo === 'video' && m.midia_url ? (
+                            <AuthedVideo src={m.midia_url} mime={m.midia_mime} className="rounded max-w-full sm:max-w-[260px] mb-1" />
+                          ) : tipo === 'document' && m.midia_url ? (
                             <DocumentLink url={m.midia_url} nome={m.midia_nome} mime={m.midia_mime} />
-                          ) : m.tipo === 'sticker' && m.midia_url ? (
+                          ) : tipo === 'sticker' && m.midia_url ? (
                             <AuthedImg src={m.midia_url} alt="sticker" className="w-24 h-24 object-contain mb-1" />
+                          ) : ['image', 'video', 'document', 'sticker', 'location', 'contact', 'poll'].includes(tipo) ? (
+                            <p className="text-xs opacity-70 py-0.5">
+                              {mediaLabel(tipo)}{['image', 'video', 'document', 'sticker'].includes(tipo) ? ' (mídia indisponível)' : ''}
+                            </p>
+                          ) : tipo === 'unknown' && !m.content ? (
+                            <p className="text-xs opacity-60 py-0.5 flex items-center gap-1.5">
+                              <Paperclip className="h-3 w-3" /> Mensagem não suportada
+                            </p>
                           ) : null}
-                          {m.tipo === 'deleted' ? (
+                          {tipo === 'deleted' ? (
                             <p className="text-sm italic text-muted-foreground/60 flex items-center gap-1.5 py-1">
                               <ShieldAlert className="h-3.5 w-3.5 opacity-50" /> Mensagem apagada
                             </p>
@@ -4229,10 +4514,10 @@ export function WhatsAppInterface() {
                                 <a
                                   href={extrairLinkConviteGrupo(m.content)!}
                                   target="_blank" rel="noreferrer"
-                                  className={`flex items-center gap-2.5 mb-1.5 p-2.5 rounded-xl border ${isOut ? 'bg-primary-foreground/10 border-primary-foreground/20' : 'bg-muted/40 border-border/50'} hover:opacity-80 transition-opacity`}
+                                  className={`flex items-center gap-2.5 mb-1.5 p-2.5 rounded-xl border ${isOut ? 'bg-black/5 border-black/10 dark:bg-white/10 dark:border-white/15' : 'bg-muted/40 border-border/50'} hover:opacity-80 transition-opacity`}
                                 >
-                                  <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-primary-foreground/15' : 'bg-primary/10'}`}>
-                                    <Users className={`h-4 w-4 ${isOut ? 'text-primary-foreground' : 'text-primary'}`} />
+                                  <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-black/10 dark:bg-white/15' : 'bg-primary/10'}`}>
+                                    <Users className={`h-4 w-4 ${isOut ? 'text-current' : 'text-primary'}`} />
                                   </div>
                                   <div className="min-w-0 flex-1">
                                     <p className="text-xs font-bold">Convite para grupo do WhatsApp</p>
@@ -4250,13 +4535,13 @@ export function WhatsAppInterface() {
                               {extrairLinkGenerico(m.content) && (
                                 <LinkPreviewCard url={extrairLinkGenerico(m.content)!} isOut={isOut} />
                               )}
-                              <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">
-                                {highlightText(m.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''), chatSearchTerm)}
-                              </p>
+                              <div className="text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] font-normal">
+                                {renderWhatsAppText(m.content, chatSearchTerm)}
+                              </div>
                             </>
                           )}
 
-                          <div className={`flex items-center justify-end gap-1.5 mt-1.5 ${isOut ? "text-primary-foreground/70" : isNote ? "text-amber-700/60" : "text-muted-foreground/60"}`}>
+                          <div className={`flex items-center justify-end gap-1.5 mt-1 ${isOut ? "opacity-60" : isNote ? "text-amber-700/70 dark:text-amber-300/70" : "text-muted-foreground"}`}>
                             {/* [AUDITORIA] BUG: m.timestamp já vem pré-formatado (ex: "13:57") de
                                 formatTime(m.timestamp_wa||m.created_at) em fetchMensagens (linha ~608)
                                 ou de new Date().toLocaleTimeString() no envio otimista (linha ~942).
@@ -4267,15 +4552,15 @@ export function WhatsAppInterface() {
                                 toda mensagem enviada.
                                 [AUDITORIA] FIX APLICADO: renderizar m.timestamp direto, sem
                                 reformatar — já é a string de exibição pronta. */}
-                            <span className="text-[10px] font-bold">{m.timestamp}</span>
+                            <span className="text-[10px] tabular-nums">{m.timestamp}</span>
                             {isOut && (
                               <span title={m.status || 'sent'}>
                                 {m.status === 'READ' || m.status === 'PLAYED' ? (
-                                  <span className="text-sky-300 text-[10px] font-bold">✓✓</span>
+                                  <span className="text-sky-600 dark:text-sky-300 text-[10px] font-bold">✓✓</span>
                                 ) : m.status === 'DELIVERY_ACK' ? (
-                                  <span className="text-primary-foreground/60 text-[10px] font-bold">✓✓</span>
+                                  <span className="text-[10px] font-bold">✓✓</span>
                                 ) : m.status === 'SERVER_ACK' ? (
-                                  <span className="text-primary-foreground/50 text-[10px] font-bold">✓</span>
+                                  <span className="text-[10px] font-bold">✓</span>
                                 ) : (
                                   <Check className="h-3 w-3 opacity-50" />
                                 )}
@@ -4313,8 +4598,8 @@ export function WhatsAppInterface() {
                 (tabs + barra "Enviando como Agente..." + textarea de 80px mínimos somavam bem
                 mais que o necessário pra uma única linha de texto). `max-h-[200px]` continua
                 igual — ainda cresce normalmente conforme o usuário digita mais. */}
-            <div className="border-t bg-background/50 backdrop-blur-lg shrink-0 p-2 sm:p-3 lg:p-4">
-              <div className="flex gap-2 sm:gap-4 p-1 bg-muted/40 rounded-xl mb-2 sm:mb-3 w-fit">
+            <div className={`border-t backdrop-blur-lg shrink-0 p-2 sm:p-3 transition-colors ${inputMode === "nota" ? "bg-amber-500/10" : "bg-background/50"}`}>
+              <div className="flex gap-2 sm:gap-4 p-1 bg-muted/40 rounded-xl mb-2 w-fit">
                 <button
                   onClick={() => setInputMode("responder")}
                   className={`px-3 sm:px-4 py-1 sm:py-1.5 text-xs font-bold rounded-lg transition-all ${inputMode === "responder" ? "bg-background shadow-sm text-primary ring-1 ring-black/5" : "text-muted-foreground hover:text-foreground"}`}
@@ -4329,22 +4614,36 @@ export function WhatsAppInterface() {
                 </button>
               </div>
 
-              <div className="bg-background rounded-2xl border border-border/50 shadow-sm overflow-hidden focus-within:ring-2 focus-within:ring-primary/20 transition-all">
-                <div className="px-3 sm:px-4 py-1.5 sm:py-2 bg-muted/20 border-b border-border/30 flex items-center justify-between">
-                  <p className="text-[11px] font-bold text-muted-foreground/70 uppercase tracking-widest">
-                    {isAiProcessing ? "IA Processando resposta..." : (inputMode === "nota" ? "Anotando privadamente..." : "Enviando como Agente...")}
+              {/* [UI/UX chat, fase 4.2] Nome real de quem envia; nota privada com fundo âmbar e
+                  aviso explícito, pra não mandar ao cliente por engano. */}
+              <div className={`rounded-2xl border shadow-sm overflow-hidden focus-within:ring-2 transition-all ${
+                inputMode === "nota"
+                  ? "bg-amber-50 dark:bg-amber-500/10 border-amber-400/60 focus-within:ring-amber-400/30"
+                  : "bg-background border-border/50 focus-within:ring-primary/20"
+              }`}>
+                <div className={`px-3 sm:px-4 py-1.5 border-b flex items-center justify-between gap-2 ${
+                  inputMode === "nota" ? "bg-amber-500/15 border-amber-400/40" : "bg-muted/20 border-border/30"
+                }`}>
+                  <p className={`text-xs truncate ${inputMode === "nota" ? "text-amber-800 dark:text-amber-300 font-semibold" : "text-muted-foreground"}`}>
+                    {isAiProcessing
+                      ? "IA processando resposta…"
+                      : inputMode === "nota"
+                        ? "🔒 Nota privada — visível só para a equipe"
+                        : <>Enviando como <strong className="font-semibold text-foreground">{currentUserName}</strong></>}
                   </p>
-                  <p className="hidden sm:block text-[10px] font-medium text-muted-foreground/50 italic">
-                    Shift + Enter para nova linha
+                  <p className="hidden sm:block text-[10px] text-muted-foreground/70 shrink-0">
+                    Enter envia · Shift+Enter quebra linha
                   </p>
                 </div>
 
                 <div className="p-2 flex items-end gap-2">
-                  <div className="flex-1 relative">
+                  <div className="flex-1 min-w-0 relative">
                     {inputMode === "nota" ? (
                       <textarea
+                        ref={noteTextareaRef}
+                        rows={1}
                         placeholder="Adicione uma nota privada sobre esta conversa..."
-                        className="w-full min-h-[44px] sm:min-h-[56px] lg:min-h-[72px] max-h-[200px] p-3 text-sm bg-amber-50/50 border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
+                        className="w-full min-h-[44px] max-h-[152px] p-3 text-sm bg-transparent text-foreground border-none focus:ring-0 focus:outline-none resize-none placeholder:text-muted-foreground/60"
                         value={noteInput}
                         onChange={e => setNoteInput(e.target.value)}
                         onKeyDown={e => {
@@ -4358,7 +4657,7 @@ export function WhatsAppInterface() {
                       /* [AUDITORIA] FIX APLICADO (Achado A): indicador de gravação em andamento
                          substitui a textarea — duração ao vivo, cancelar (X) ou enviar (Send) no
                          mesmo lugar dos botões de sempre, ver coluna de botões abaixo. */
-                      <div className="w-full min-h-[44px] sm:min-h-[56px] lg:min-h-[72px] flex items-center gap-3 px-4">
+                      <div className="w-full min-h-[44px] flex items-center gap-3 px-4">
                         <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
                         <span className="text-sm font-bold text-red-600">
                           Gravando áudio... {formatRecordingTime(recordingSeconds)}
@@ -4398,17 +4697,36 @@ export function WhatsAppInterface() {
                         )}
 
                         {/* Popup de Respostas Rápidas */}
-                        {showQR && qrFiltradas.length > 0 && (
-
-                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-xl shadow-lg z-50 max-h-52 overflow-y-auto">
+                        {/* [UI/UX chat, fase 6.7] Abria só quando havia resultados — sem nenhuma
+                            resposta cadastrada (ou sem match) digitar "/" parecia não fazer nada.
+                            Agora sempre abre, com estado vazio, e navega por ↑↓/Enter/Esc. */}
+                        {showQR && (
+                          <div className="absolute bottom-full left-0 right-0 mb-1 bg-popover text-popover-foreground border border-border rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto" role="listbox" aria-label="Respostas rápidas">
                             <div className="px-3 py-2 border-b flex items-center gap-2">
                               <Zap className="h-3.5 w-3.5 text-amber-500" />
                               <span className="text-xs font-bold text-muted-foreground">Respostas Rápidas</span>
+                              <span className="ml-auto text-[10px] text-muted-foreground/70">↑↓ Enter · Esc fecha</span>
                             </div>
-                            {qrFiltradas.map(r => (
+                            {qrFiltradas.length === 0 && (
+                              <div className="px-3 py-4 text-xs text-muted-foreground text-center space-y-1">
+                                <p>{respostasRapidas.length === 0 ? "Nenhuma resposta rápida cadastrada." : `Nenhuma resposta para "/${qrSearch}".`}</p>
+                                <button
+                                  type="button"
+                                  className="text-primary font-semibold hover:underline"
+                                  onMouseDown={e => { e.preventDefault(); navigate("/respostas-rapidas"); }}
+                                >
+                                  Gerenciar respostas rápidas
+                                </button>
+                              </div>
+                            )}
+                            {qrFiltradas.map((r, idx) => (
                               <button
                                 key={r.id}
-                                className="w-full text-left px-3 py-2.5 hover:bg-muted/50 transition-colors flex items-start gap-2.5 border-b border-border/30 last:border-0"
+                                role="option"
+                                aria-selected={idx === qrIndex}
+                                ref={el => { if (idx === qrIndex) el?.scrollIntoView({ block: 'nearest' }); }}
+                                className={`w-full text-left px-3 py-2.5 transition-colors flex items-start gap-2.5 border-b border-border/30 last:border-0 ${idx === qrIndex ? "bg-muted" : "hover:bg-muted/50"}`}
+                                onMouseEnter={() => setQrIndex(idx)}
                                 onMouseDown={e => { e.preventDefault(); aplicarRespostaRapida(r); }}
                               >
                                 <div className="min-w-0 flex-1">
@@ -4422,14 +4740,25 @@ export function WhatsAppInterface() {
                         )}
                         <textarea
                           ref={textareaRef}
-                          placeholder="Escreva sua mensagem aqui... (/ para respostas rápidas)"
-                          className="w-full min-h-[44px] sm:min-h-[56px] lg:min-h-[72px] max-h-[200px] p-3 text-sm bg-transparent border-none focus:ring-0 resize-none font-medium placeholder:text-muted-foreground/40"
+                          rows={1}
+                          placeholder="Escreva sua mensagem… (/ para respostas rápidas)"
+                          className="w-full min-h-[44px] max-h-[152px] p-3 text-sm bg-transparent border-none focus:ring-0 focus:outline-none resize-none placeholder:text-muted-foreground/60"
                           value={messageInput}
                           onChange={e => handleInputChange(e.target.value)}
                           onPaste={handlePasteImage}
                           onKeyDown={e => {
-                            if (e.key === 'Escape') { setShowQR(false); return; }
-                            if (e.key === 'Enter' && !e.shiftKey && !showQR) {
+                            if (showQR) {
+                              if (e.key === 'Escape') { e.preventDefault(); setShowQR(false); return; }
+                              if (e.key === 'ArrowDown' && qrFiltradas.length) { e.preventDefault(); setQrIndex(i => (i + 1) % qrFiltradas.length); return; }
+                              if (e.key === 'ArrowUp' && qrFiltradas.length) { e.preventDefault(); setQrIndex(i => (i - 1 + qrFiltradas.length) % qrFiltradas.length); return; }
+                              if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey && qrFiltradas[qrIndex]) {
+                                e.preventDefault();
+                                aplicarRespostaRapida(qrFiltradas[qrIndex]);
+                                return;
+                              }
+                              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); return; }
+                            }
+                            if (e.key === 'Enter' && !e.shiftKey) {
                               e.preventDefault();
                               handleSendMessage();
                             }
@@ -4464,8 +4793,9 @@ export function WhatsAppInterface() {
                   <div className="grid grid-cols-2 gap-1 p-0.5">
                     <Button
                       variant="ghost" size="icon"
-                      className="h-9 w-9 rounded-xl hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                      className="h-9 w-9 rounded-xl hover:bg-amber-500/10 hover:text-amber-600 transition-colors"
                       title="Respostas Rápidas (/)"
+                      aria-label="Respostas rápidas"
                       onClick={() => { setMessageInput('/'); setShowQR(true); setQrSearch(''); textareaRef.current?.focus(); }}
                       disabled={inputMode === "nota" || isRecording || attachedFiles.length > 0}
                     >
@@ -4473,8 +4803,9 @@ export function WhatsAppInterface() {
                     </Button>
                     <Button
                       variant="ghost" size="icon"
-                      className="h-9 w-9 rounded-xl hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                      className="h-9 w-9 rounded-xl hover:bg-blue-500/10 hover:text-blue-600 transition-colors"
                       title="Anexar arquivo"
+                      aria-label="Anexar arquivo"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={inputMode === "nota" || isRecording || attachedFiles.length > 0 || sendingMedia}
                     >
@@ -4492,8 +4823,9 @@ export function WhatsAppInterface() {
                     ) : (
                       <Button
                         variant="ghost" size="icon"
-                        className="h-9 w-9 rounded-xl hover:bg-red-50 hover:text-red-600 transition-colors"
+                        className="h-9 w-9 rounded-xl hover:bg-red-500/10 hover:text-red-600 transition-colors"
                         title="Gravar áudio"
+                        aria-label="Gravar áudio"
                         onClick={startRecording}
                         disabled={inputMode === "nota" || attachedFiles.length > 0 || sendingMedia}
                       >
@@ -4501,13 +4833,14 @@ export function WhatsAppInterface() {
                       </Button>
                     )}
                     <Button
-                      className={`h-9 w-9 rounded-xl shadow-lg transition-all active:scale-90 ${
+                      className={`h-9 w-9 rounded-xl transition-all active:scale-90 disabled:opacity-100 disabled:shadow-none disabled:bg-muted disabled:text-muted-foreground/50 disabled:cursor-not-allowed ${
                         isRecording
-                          ? "bg-red-500 hover:bg-red-600 shadow-red-500/20"
-                          : (inputMode === "nota" ? noteInput.trim() : messageInput.trim())
-                            ? (inputMode === "nota" ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-primary hover:bg-primary/90 shadow-primary/20")
-                            : "bg-muted text-muted-foreground opacity-50"
+                          ? "bg-red-500 hover:bg-red-600 text-white shadow-md"
+                          : inputMode === "nota"
+                            ? "bg-amber-500 hover:bg-amber-600 text-white shadow-md"
+                            : "bg-primary hover:bg-primary/90 text-primary-foreground shadow-md"
                       }`}
+                      aria-label={isRecording ? 'Parar e enviar áudio' : inputMode === "nota" ? 'Salvar nota' : 'Enviar mensagem'}
                       disabled={
                         isRecording
                           ? false
@@ -4516,7 +4849,7 @@ export function WhatsAppInterface() {
                             : (isAiProcessing || !(inputMode === "nota" ? noteInput.trim() : messageInput.trim()))
                       }
                       onClick={isRecording ? sendRecording : handleSendMessage}
-                      title={isRecording ? 'Parar e enviar áudio' : 'Enviar'}
+                      title={isRecording ? 'Parar e enviar áudio' : inputMode === "nota" ? 'Salvar nota (Enter)' : 'Enviar (Enter)'}
                     >
                       {sendingMedia ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Send className="h-4.5 w-4.5" />}
                     </Button>
@@ -4619,19 +4952,20 @@ export function WhatsAppInterface() {
             className="fixed inset-0 z-40 bg-black/40 lg:hidden"
             onClick={() => setShowContactPanel(false)}
           />
-          <div className="fixed inset-y-0 right-0 z-50 w-full max-w-[380px] lg:static lg:z-auto lg:w-[300px] lg:max-w-none shrink-0 border-l bg-card lg:bg-card/20 backdrop-blur-md flex flex-col animate-in slide-in-from-right duration-300">
+          <div className="fixed inset-y-0 right-0 z-50 w-full max-w-[380px] lg:static lg:z-auto lg:w-80 lg:max-w-none min-w-0 overflow-x-hidden shrink-0 border-l bg-card lg:bg-card/20 backdrop-blur-md flex flex-col animate-in slide-in-from-right duration-300">
           {/* Panel header */}
           <div className="flex items-center justify-between px-5 py-4 border-b bg-background/40">
-            <h3 className="text-sm font-bold tracking-tight">Detalhes do Contato</h3>
+            <h3 className="text-sm font-bold tracking-tight">{activeChat.is_group ? "Detalhes do Grupo" : "Detalhes do Contato"}</h3>
             <Button
               variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-muted"
               onClick={() => setShowContactPanel(false)}
+              aria-label="Fechar detalhes"
             >
               <X className="h-4 w-4" />
             </Button>
           </div>
 
-          <ScrollArea className="flex-1">
+          <ScrollArea className={`flex-1 min-h-0 ${SCROLL_VIEWPORT_BLOCK}`}>
             {/* Avatar + name + phone */}
             <div className="flex flex-col items-center pt-8 pb-6 px-5 bg-gradient-to-b from-primary/[0.03] to-transparent">
               <button
@@ -4668,7 +5002,7 @@ export function WhatsAppInterface() {
                   <>
                     <p className="font-black text-base tracking-tight truncate max-w-[200px]">{activeChat.name}</p>
                     <button
-                      onClick={() => { setNameInput(activeChat.name); setEditingName(true); }}
+                      onClick={() => { setNameInput(activeChat.nameIsFallback ? "" : activeChat.name); setEditingName(true); }}
                       className="p-1 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all"
                       title="Editar nome"
                     >
@@ -4678,31 +5012,48 @@ export function WhatsAppInterface() {
                 )}
               </div>
               
-              <div className="flex flex-col items-center gap-1 w-full">
-                <div className="flex items-center gap-2 bg-muted/50 rounded-full pl-4 pr-2 py-1">
-                  <span className="text-xs font-bold text-foreground/80">{activeChat.phone}</span>
-                  <button 
-                    onClick={() => {
-                      navigator.clipboard.writeText(activeChat.phone);
-                      toast.success("Telefone copiado!");
-                    }}
-                    className="p-1 hover:bg-background rounded-full transition-colors"
-                    title="Copiar telefone"
-                  >
-                    <Copy className="h-3 w-3 text-muted-foreground" />
-                  </button>
-                </div>
+              <div className="flex flex-col items-center gap-1 w-full min-w-0">
+                {/* [UI/UX chat, fase 6.9] Grupo: resumo legível no lugar do ID técnico cru (que
+                    fica em "Informações técnicas"). Contato: telefone formatado. */}
+                {activeChat.is_group ? (
+                  <p className="text-xs text-muted-foreground text-center">
+                    {[
+                      grupoInfoExtra?.size ? `${grupoInfoExtra.size} participantes` : null,
+                      grupoInfoExtra?.creation ? `criado em ${new Date(grupoInfoExtra.creation * 1000).toLocaleDateString('pt-BR')}` : null,
+                    ].filter(Boolean).join(' · ') || 'Grupo'}
+                  </p>
+                ) : (
+                  <div className="flex items-center gap-2 bg-muted/50 rounded-full pl-4 pr-2 py-1 max-w-full min-w-0">
+                    <span className="text-xs font-semibold text-foreground/80 truncate">{formatWaPhone(activeChat.phone) || 'Número oculto pelo WhatsApp'}</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(activeChat.phone);
+                        toast.success("Telefone copiado!");
+                      }}
+                      className="p-1 hover:bg-background rounded-full transition-colors shrink-0"
+                      title="Copiar telefone"
+                      aria-label="Copiar telefone"
+                    >
+                      <Copy className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  </div>
+                )}
                 {activeChat.online && (
                   <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest animate-pulse">Online Agora</span>
                 )}
                 {/* [AUDITORIA] FIX APLICADO (Sprint Colunas de Status de Envio, 2026-07-31): mesma
                     tag já usada em StepContacts (Disparos.tsx) e ContatoDetalhe.tsx — só
-                    visibilidade, não bloqueia nada. */}
-                <TagStatusEnvio
-                  ultimoDisparoEm={statusEnvioPorTelefone[chaveTelefone(activeChat.phone)]?.ultimo_disparo_em}
-                  campanhaNome={statusEnvioPorTelefone[chaveTelefone(activeChat.phone)]?.campanha_nome}
-                  className="mt-1"
-                />
+                    visibilidade, não bloqueia nada. Só pra contato individual — disparo de
+                    campanha não vai pra grupo, então "Nunca enviado" num grupo só confundia. */}
+                {!activeChat.is_group && (
+                  <span title="Se este contato já recebeu alguma campanha de Disparo em massa">
+                    <TagStatusEnvio
+                      ultimoDisparoEm={statusEnvioPorTelefone[chaveTelefone(activeChat.phone)]?.ultimo_disparo_em}
+                      campanhaNome={statusEnvioPorTelefone[chaveTelefone(activeChat.phone)]?.campanha_nome}
+                      className="mt-1"
+                    />
+                  </span>
+                )}
                 {/* [AUDITORIA] LÓGICA (multi-número — seleção de instância no envio, 2026-08-07):
                     handleSendMessage manda `instancia: chat?.source` em todo envio desta
                     conversa — antes não havia como trocar, ficava travado na instância da
@@ -4760,31 +5111,45 @@ export function WhatsAppInterface() {
                 ABRIR NO CRM
               </Button>
               
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={toggleIA}
-                  disabled={togglingIA}
-                  className={`flex items-center justify-center gap-2 h-11 rounded-2xl border text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 ${
-                    iaPausada
-                      ? "bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100"
-                      : "bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                  }`}
-                >
-                  {togglingIA ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : iaPausada ? (
+              {/* [UI/UX chat, fases 6.9/6.10] Grade de 2 colunas com botões que truncam (antes
+                  vazavam pra direita) e cores com variante escura (bg-*-50 virava bloco claro no
+                  tema escuro). "Sair do grupo" foi pro fim do painel, com confirmação. */}
+              <div className="grid grid-cols-2 gap-2 min-w-0">
+                {activeChat.is_group ? (
+                  <span
+                    title="A IA nunca responde em grupos, nesta ou em nenhuma conta."
+                    className="min-w-0 w-full flex items-center justify-center gap-2 h-11 px-2 rounded-2xl border text-[10px] font-black uppercase tracking-tight bg-muted/40 border-border/50 text-muted-foreground"
+                  >
                     <BotOff className="h-3.5 w-3.5" />
-                  ) : (
-                    <Bot className="h-3.5 w-3.5" />
-                  )}
-                  {iaPausada ? "IA Pausada" : "IA Ativa"}
-                </button>
+                    <span className="truncate">IA não entra em grupo</span>
+                  </span>
+                ) : (
+                  <button
+                    onClick={toggleIA}
+                    disabled={togglingIA}
+                    title={iaPausada ? "IA pausada nesta conversa — clique para reativar" : "IA ativa nesta conversa — clique para pausar"}
+                    className={`min-w-0 w-full flex items-center justify-center gap-2 h-11 px-2 rounded-2xl border text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 ${
+                      iaPausada
+                        ? "bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20"
+                        : "bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-400 hover:bg-green-500/20"
+                    }`}
+                  >
+                    {togglingIA ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : iaPausada ? (
+                      <BotOff className="h-3.5 w-3.5" />
+                    ) : (
+                      <Bot className="h-3.5 w-3.5" />
+                    )}
+                    <span className="truncate">{iaPausada ? "IA Pausada" : "IA Ativa"}</span>
+                  </button>
+                )}
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="flex items-center justify-center gap-2 h-11 rounded-2xl border bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted text-[10px] font-black uppercase tracking-tight transition-all active:scale-95">
-                      <BellOff className="h-3.5 w-3.5" />
-                      Silenciar
+                    <button className="min-w-0 w-full flex items-center justify-center gap-2 h-11 px-2 rounded-2xl border bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted text-[10px] font-black uppercase tracking-tight transition-all active:scale-95">
+                      <BellOff className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">Silenciar</span>
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-xl">
@@ -4803,24 +5168,10 @@ export function WhatsAppInterface() {
               {activeChat.is_group && (
                 <button
                   onClick={() => setShowImportarGrupoModal(true)}
-                  className="w-full flex items-center justify-center gap-2 h-11 rounded-2xl border bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95"
+                  className="w-full min-w-0 flex items-center justify-center gap-2 h-11 px-2 rounded-2xl border bg-violet-500/10 border-violet-500/30 text-violet-700 dark:text-violet-300 hover:bg-violet-500/20 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95"
                 >
-                  <Users className="h-3.5 w-3.5" />
-                  Leads do grupo
-                </button>
-              )}
-              {/* [AUDITORIA] LÓGICA (Sprint Grupos Entrar/Sair, 2026-09-06, pedido explícito do
-                  usuário): mesma faixa de ações do grupo, cor de alerta pra diferenciar de uma
-                  ação neutra (mesma convenção de "Excluir agente"/outros botões destrutivos do
-                  app). */}
-              {activeChat.is_group && (
-                <button
-                  onClick={sairDoGrupo}
-                  disabled={saindoDoGrupo}
-                  className="w-full flex items-center justify-center gap-2 h-11 rounded-2xl border bg-red-50 border-red-200 text-red-700 hover:bg-red-100 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 disabled:opacity-60"
-                >
-                  {saindoDoGrupo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogOut className="h-3.5 w-3.5" />}
-                  Sair do grupo
+                  <Users className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Leads do grupo</span>
                 </button>
               )}
               {resultadoImportacaoGrupo && (
@@ -4851,23 +5202,35 @@ export function WhatsAppInterface() {
             {/* Sobre */}
             <div className="border-t border-border/40 px-5 py-5">
               <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 mb-2">Sobre / Recado</p>
-              <p className="text-sm font-medium text-foreground/80 leading-relaxed italic">
-                {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): descrição
-                    real do grupo (`desc`, buscada fresca via fetchGrupoInfoExtra) tem prioridade
-                    sobre o texto genérico "Grupo de conversa" — só cai no genérico se a Evolution
-                    não devolver descrição pra este grupo (grupo sem descrição definida, ou ainda
-                    carregando). Nunca aplicável a contato individual. */}
-                {activeChat.is_group
+              {/* [AUDITORIA] LÓGICA (Sprint Importar Contatos de Grupo, 2026-08-04): descrição
+                  real do grupo (`desc`, buscada fresca via fetchGrupoInfoExtra) tem prioridade
+                  sobre o texto genérico "Grupo de conversa" — só cai no genérico se a Evolution
+                  não devolver descrição pra este grupo (grupo sem descrição definida, ou ainda
+                  carregando). Nunca aplicável a contato individual.
+                  [UI/UX chat, fase 6.9] Quebra de linha/palavra (texto era cortado), formatação
+                  e links do WhatsApp, "Ver mais" depois de 4 linhas, sem o "~" do pushName. */}
+              {(() => {
+                const sobre = activeChat.is_group
                   ? (grupoInfoExtra?.desc || "Grupo de conversa")
-                  : (activeChat.push_name ? `~${activeChat.push_name}` : "Disponível")}
-              </p>
-              {activeChat.is_group && grupoInfoExtra && (grupoInfoExtra.size || grupoInfoExtra.creation) && (
-                <p className="text-[11px] text-muted-foreground/70 font-medium mt-2">
-                  {grupoInfoExtra.size ? `${grupoInfoExtra.size} participantes` : ''}
-                  {grupoInfoExtra.size && grupoInfoExtra.creation ? ' · ' : ''}
-                  {grupoInfoExtra.creation ? `criado em ${new Date(grupoInfoExtra.creation * 1000).toLocaleDateString('pt-BR')}` : ''}
-                </p>
-              )}
+                  : (cleanPushName(activeChat.push_name) || "Disponível");
+                const longo = sobre.split('\n').length > 4 || sobre.length > 220;
+                return (
+                  <>
+                    <div className={`text-sm text-foreground/80 leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${longo && !sobreExpandido ? "line-clamp-4" : ""}`}>
+                      {renderWhatsAppText(sobre)}
+                    </div>
+                    {longo && (
+                      <button
+                        type="button"
+                        className="mt-1 text-xs font-semibold text-primary hover:underline"
+                        onClick={() => setSobreExpandido(v => !v)}
+                      >
+                        {sobreExpandido ? "Ver menos" : "Ver mais"}
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
             </div>
 
             {/* Etiquetas / Tags */}
@@ -4979,7 +5342,7 @@ export function WhatsAppInterface() {
                 </button>
               </div>
               {activeChat.notes ? (
-                <p className="text-xs font-medium text-foreground/80 leading-relaxed bg-white/50 p-3 rounded-xl border border-amber-500/10 italic">"{activeChat.notes}"</p>
+                <p className="text-xs font-medium text-foreground/80 leading-relaxed bg-background/50 p-3 rounded-xl border border-amber-500/10 italic break-words">"{activeChat.notes}"</p>
               ) : (
                 <div className="flex flex-col items-center justify-center py-4 px-2 bg-muted/20 rounded-xl border border-dashed border-muted-foreground/20">
                   <Plus className="h-4 w-4 text-muted-foreground/30 mb-1" />
@@ -4987,10 +5350,57 @@ export function WhatsAppInterface() {
                 </div>
               )}
             </div>
+
+            {/* Informações técnicas (ID cru do grupo/contato, recolhido — útil pra suporte, ruído pro resto) */}
+            <details className="border-t border-border/40 px-5 py-3 group/tech">
+              <summary className="cursor-pointer text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 select-none">
+                Informações técnicas
+              </summary>
+              <div className="mt-2 space-y-1 text-[11px] text-muted-foreground break-all">
+                <p>ID: <span className="font-mono">{activeChat.phone}{activeChat.is_group ? '@g.us' : ''}</span></p>
+                {activeChat.source && <p>Instância: <span className="font-mono">{activeChat.source}</span></p>}
+              </div>
+            </details>
+
+            {/* [UI/UX chat, fase 6.9] Ação destrutiva no fim, com peso visual menor e confirmação. */}
+            {activeChat.is_group && (
+              <div className="border-t border-border/40 px-5 py-4">
+                <Button
+                  variant="ghost"
+                  className="w-full justify-center gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={() => setShowSairGrupoDialog(true)}
+                  disabled={saindoDoGrupo}
+                >
+                  {saindoDoGrupo ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+                  Sair do grupo
+                </Button>
+              </div>
+            )}
           </ScrollArea>
           </div>
         </>
       )}
+      <AlertDialog open={showSairGrupoDialog} onOpenChange={setShowSairGrupoDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Sair de "{activeChat?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Você para de receber mensagens novas deste grupo. O histórico já trocado continua salvo
+              aqui — só quem administra o grupo pode te adicionar de volta.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { setShowSairGrupoDialog(false); sairDoGrupo(); }}
+            >
+              Sair do grupo
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Modal de Encaminhar */}
       <Dialog open={showForwardModal} onOpenChange={setShowForwardModal}>
         <DialogContent className="sm:max-w-[420px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl">
@@ -5009,7 +5419,7 @@ export function WhatsAppInterface() {
               {chats.map(chat => (
                 <button
                   key={chat.id}
-                  onClick={() => handleForwardMessages(chat.phone, chat.source)}
+                  onClick={() => handleForwardMessages(chat.phone, chat.source, chat.is_group)}
                   className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-primary/5 transition-colors group text-left"
                 >
                   <ChatAvatar name={chat.name} url={chat.profile_pic} size="sm" />

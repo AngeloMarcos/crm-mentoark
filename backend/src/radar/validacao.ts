@@ -3,9 +3,18 @@ import { log } from '../logger';
 import { consultarConvite, instanciaConectada, ClienteEvolution } from './evolutionGrupos';
 import { buscarPaginaConvite } from './paginaConvite';
 import { avaliarAderencia, CriteriosNicho, mesclarPesos, pontuarGrupo, PesosScore } from './scoring';
+import { instanciaDeProspeccao } from './instanciaProspeccao';
 
-/** Instância usada SÓ para ler convites (participantes). Etapa 3 troca isto pelo papel `prospeccao`. */
-export function configLeitura(): { cliente: ClienteEvolution; instancia: string } | null {
+/**
+ * Instância usada para ler convites (participantes, descrição). Prioriza a instância de
+ * prospecção já configurada em Radar → Configurações → Entrada em grupo (Etapa 3) — cai pro env
+ * var antigo (`RADAR_EVOLUTION_INSTANCE`) só se essa conta ainda não tiver escolhido uma. Sem isso,
+ * o Catálogo continuava mostrando "nenhuma instância configurada" mesmo com a de prospecção pronta
+ * (achado real, validação ao vivo em produção — 2026-09-28).
+ */
+export async function configLeitura(pool: Pool, userId: string): Promise<{ cliente: ClienteEvolution; instancia: string } | null> {
+  const prospeccao = await instanciaDeProspeccao(pool, userId).catch(() => null);
+  if (prospeccao) return { cliente: { base: prospeccao.url, apiKey: prospeccao.apiKey }, instancia: prospeccao.instancia };
   const base = process.env.EVOLUTION_API_URL;
   const apiKey = process.env.EVOLUTION_API_KEY;
   const instancia = process.env.RADAR_EVOLUTION_INSTANCE;
@@ -29,13 +38,19 @@ export async function pausar(pool: Pool, recurso: string, minutos: number, motiv
   log.warn('RADAR', 'recurso pausado por bloqueio/limite', { recurso, minutos, motivo });
 }
 
+/** Chave de emergência: levanta a pausa manualmente (usuário decide, não espera o prazo). */
+export async function retomar(pool: Pool, recurso: string): Promise<void> {
+  await pool.query(`DELETE FROM radar_pausas WHERE recurso = $1`, [recurso]);
+  log.warn('RADAR', 'pausa levantada manualmente', { recurso });
+}
+
 export function textoPausa(p: { ate: Date; motivo: string }): string {
   const hora = p.ate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
   return `pausado até ${hora} — ${p.motivo}`;
 }
 
 let cacheConexao: { em: number; ok: boolean; instancia: string } | null = null;
-async function conectada(cfg: NonNullable<ReturnType<typeof configLeitura>>): Promise<boolean> {
+async function conectada(cfg: NonNullable<Awaited<ReturnType<typeof configLeitura>>>): Promise<boolean> {
   if (cacheConexao && cacheConexao.instancia === cfg.instancia && Date.now() - cacheConexao.em < 60_000) return cacheConexao.ok;
   const ok = await instanciaConectada(cfg.cliente, cfg.instancia);
   cacheConexao = { em: Date.now(), ok, instancia: cfg.instancia };
@@ -120,7 +135,10 @@ export async function vincularImportados(pool: Pool, userId: string): Promise<nu
     const mudou = g.importado_lista_id !== i.lista_id || Number(g.pct_com_telefone ?? -1) !== Number(pct ?? -1);
     if (!mudou) continue;
     const upd = await pool.query(
-      `UPDATE radar_grupos SET importado_lista_id = $2, importado_em = $3, pct_com_telefone = $4, updated_at = now() WHERE id = $1 RETURNING *`,
+      `UPDATE radar_grupos SET importado_lista_id = $2, importado_em = $3, pct_com_telefone = $4,
+              extraido_em = CASE WHEN entrou_em IS NOT NULL AND extraido_em IS NULL THEN $3 ELSE extraido_em END,
+              updated_at = now()
+        WHERE id = $1 RETURNING *`,
       [g.id, i.lista_id, i.created_at, pct]);
     const k = g.nicho_id ?? '';
     if (!cache.has(k)) cache.set(k, await nichoDoGrupo(pool, userId, g.nicho_id));
@@ -195,8 +213,8 @@ export async function validarGrupo(pool: Pool, grupoId: string): Promise<'ok' | 
   if (!g || g.plataforma !== 'whatsapp') return 'ignorado';
   if (['rejeitado'].includes(g.status)) return 'ignorado';
 
-  const cfg = configLeitura();
-  if (!cfg) throw new ValidacaoIndisponivel('Nenhuma instância configurada para leitura de convites (RADAR_EVOLUTION_INSTANCE)');
+  const cfg = await configLeitura(pool, g.user_id);
+  if (!cfg) throw new ValidacaoIndisponivel('Nenhuma instância configurada para leitura de convites (defina a instância de prospecção em Radar → Configurações, ou RADAR_EVOLUTION_INSTANCE)');
   if (!(await conectada(cfg))) throw new ValidacaoIndisponivel(`Instância ${cfg.instancia} não está conectada`);
 
   const res = await consultarConvite(cfg.cliente, cfg.instancia, g.codigo_convite);

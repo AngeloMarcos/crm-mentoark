@@ -156,6 +156,15 @@ export function pontuarGrupo(
   return { score: Math.max(0, Math.min(100, Math.round(soma))), motivos };
 }
 
+/**
+ * true se o grupo já bateu o teto de participantes do WhatsApp (1024 num grupo comum) — não dá
+ * pra entrar. Decidido ANTES de tentar entrar (nº de participantes já vem da leitura do convite,
+ * Etapa 2); nunca inferido de um erro da Evolution (ver RELATORIO-EVOLUTION-ENTRAR.md, seção 4).
+ */
+export function grupoCheio(participantes: number | null | undefined, teto: { tamanho_max: number } = PESOS_PADRAO): boolean {
+  return typeof participantes === 'number' && participantes >= teto.tamanho_max;
+}
+
 /** Mescla pesos vindos do banco/tela com os padrões, aceitando só números finitos e não negativos. */
 export function mesclarPesos(parcial: unknown): PesosScore {
   const out: PesosScore = { ...PESOS_PADRAO };

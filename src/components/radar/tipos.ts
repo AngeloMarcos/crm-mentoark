@@ -9,7 +9,7 @@ export interface StatusRadar {
   limite_consultas_dia: number;
   redis: { usadoMb: number; maxMb: number; alerta: boolean } | null;
   leitura_convites: { configurada: boolean; instancia: string | null };
-  pausas?: { busca: string | null; verificacao_links: string | null };
+  pausas?: { busca: string | null; verificacao_links: string | null; entrada: string | null };
   raspagem?: { ativa: boolean; diretorios: string[]; paginas_hoje: number; limite_dia: number };
 }
 
@@ -54,7 +54,50 @@ export interface Grupo {
   pct_com_telefone: number | string | null;
   importado_lista_id: string | null;
   importado_em: string | null;
+  jid: string | null;
+  somente_admins: boolean | null;
+  aprovacao_admin: boolean | null;
+  entrada_tentativas?: number;
+  entrada_erro?: string | null;
+  entrou_em?: string | null;
+  extracao_agendada_para?: string | null;
+  extraido_em?: string | null;
   created_at: string;
+}
+
+export interface AgenteInstancia {
+  id: string;
+  nome: string | null;
+  evolution_instancia: string | null;
+  papel: "atendimento" | "disparo" | "prospeccao" | null;
+  ativo: boolean;
+}
+
+export interface InstanciaProspeccao {
+  id: string;
+  nome: string | null;
+  evolution_instancia: string;
+  health_score: number | null;
+  evolution_conectado_em: string | null;
+}
+
+export interface EntradaConfig {
+  user_id: string;
+  agente_id: string | null;
+  limite_dia: number;
+  pausa_min_seg: number;
+  pausa_max_seg: number;
+  janela_inicio: string;
+  janela_fim: string;
+  corte_score: number;
+  corte_membros: number;
+  corte_dias_conectado: number;
+  corte_health_score: number;
+  extracao_apos_horas: number;
+  sair_apos_extrair: boolean;
+  instancias_disponiveis: InstanciaProspeccao[];
+  instancia_selecionada_apta: { ok: true } | { ok: false; motivo: string } | null;
+  entradas_hoje: number;
 }
 
 export interface Busca {
@@ -117,6 +160,7 @@ export function statusLabel(s: string): string {
   return ({
     descoberto: "Descoberto", aprovado: "Aprovado", rejeitado: "Rejeitado", invalido: "Inválido",
     na_fila: "Na fila", entrou: "Entrou", extraido: "Extraído",
+    aguardando_aprovacao: "Aguardando aprovação", cheio: "Grupo cheio",
   } as Record<string, string>)[s] ?? s;
 }
 
