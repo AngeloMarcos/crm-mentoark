@@ -71,6 +71,7 @@ import { aoConectarInstancia, aoDesconectarInstancia, instanciasEmProtecao } fro
 import { aoQuedaSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
 import { extrairIdentidades, resolverTelefone, registrarIdentidades, lembrarDestinoLid, marcarContatoSoLid } from '../services/identidadeContato';
 import { registrarOrigemInbound } from './smartLinks';
+import { registrarEventoWebhook } from '../services/saudeWebhook';
 import { registrarAckDisparo, marcarRespostaNoEnvio } from '../services/metricasDisparo';
 import { withTenantContext } from '../db';
 import { salvarMidiaWhatsapp, salvarFotoPerfilLocal, baixarMidiaDecriptografada, buscarInfoGrupo } from '../utils/whatsappMediaStorage';
@@ -616,6 +617,7 @@ export default function webhookRouter(pool: Pool): Router {
     try {
       const payload = req.body as EvolutionPayload;
       const eventClean = (payload.event || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      registrarEventoWebhook(pool, payload.instance); // Sprint 7: detecção de webhook parado
 
       log.info('WEBHOOK', 'Evento recebido', {
         traceId,

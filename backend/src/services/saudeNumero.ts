@@ -166,7 +166,7 @@ interface Metricas7d {
   quedasComuns: number;
 }
 
-async function metricas7d(pool: Pool, instancia: string, numero: string): Promise<Metricas7d> {
+export async function metricas7d(pool: Pool, instancia: string, numero: string): Promise<Metricas7d> {
   const [env, fal, ev] = await Promise.all([
     pool.query(
       `SELECT COUNT(*)::int AS enviados,
@@ -472,19 +472,9 @@ export async function avaliarFases(pool: Pool): Promise<{ avancos: number; bansC
     avancos++;
   }
 
-  // 3) Aptidão para API oficial (checklist 6.6, parte que o CRM consegue medir).
-  await pool.query(
-    `UPDATE whatsapp_numeros w SET apto_api_oficial = (
-        w.fase IN ('pre_oficial','madura')
-        AND w.bans_total = 0
-        AND w.primeira_conexao_em <= NOW() - INTERVAL '21 days'
-        AND w.perfil_completo
-        AND NOT EXISTS (SELECT 1 FROM whatsapp_eventos_saude e WHERE e.numero = w.numero
-                        AND e.tipo = 'ban_suspeito' AND e.criado_em >= NOW() - INTERVAL '21 days')
-        AND EXISTS (SELECT 1 FROM agentes a WHERE regexp_replace(a.numero_conectado, '\\D', '', 'g') = w.numero
-                    AND a.score_updated_at IS NOT NULL AND a.whatsapp_score >= 85)
-     )`
-  ).catch(err => log.warn('SAUDE_NUMERO', 'Falha ao atualizar aptidão API oficial', { err: err?.message }));
+  // 3) Aptidão para API oficial: saiu daqui na Sprint 7 (2026-10-06) — o checklist completo, com
+  // resposta/opt-out e as confirmações manuais, roda em `recalcularAptidaoOficial`
+  // (services/checklistOficial.ts), chamado pelo cron logo depois desta função.
 
   if (avancos || bansConfirmados) invalidarCacheSaude();
   return { avancos, bansConfirmados };

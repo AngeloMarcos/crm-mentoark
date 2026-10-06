@@ -23,7 +23,9 @@ import { buscarPreviewLink } from '../utils/linkPreview';
 import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
 import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
 import { buscarConexoesDuplicadas, normalizarNumero, invalidarCacheProtecao, DIAS_PROTECAO } from '../services/protecaoNumero';
-import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE } from '../services/saudeNumero';
+import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE, invalidarCacheSaude } from '../services/saudeNumero';
+import { calcularChecklistOficial } from '../services/checklistOficial';
+import { webhooksParados } from '../services/saudeWebhook';
 import { log } from '../logger';
 import { normalizarTelefone as normalizarTel } from '../utils/telefone';
 import { resolverNome as resolverNomeLimpo } from '../utils/nomes';
@@ -1829,6 +1831,16 @@ export default function whatsappRouter(pool: Pool): Router {
     });
   });
 
+  // GET /saude-webhook — Sprint 7 (Sprint 5 / H6): instâncias da conta cujo webhook da Evolution
+  // parou (enviaram há 5+ min e nenhum evento chegou depois).
+  router.get('/saude-webhook', async (req: AuthRequest, res: Response) => {
+    try {
+      return res.json({ parados: await webhooksParados(pool, req.userId!) });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
   // GET /saude/:agenteId/eventos — linha do tempo de saúde do número/instância (aba Diagnóstico).
   router.get('/saude/:agenteId/eventos', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
@@ -1845,6 +1857,48 @@ export default function whatsappRouter(pool: Pool): Router {
       [numero, ag.rows[0].evolution_instancia]
     );
     return res.json(r.rows);
+  });
+
+  // Sprint 7 (Sprint 3 / H2): checklist "Apto para API oficial" do número desta instância.
+  router.get('/saude/:agenteId/checklist-oficial', async (req: AuthRequest, res: Response) => {
+    const c = await calcularChecklistOficial(pool, req.params.agenteId, req.userId!);
+    if (!c) return res.status(404).json({ message: 'Instância não encontrada' });
+    invalidarCacheSaude();
+    return res.json(c);
+  });
+
+  // Confirmações manuais do checklist: data de início do app Business e verificação do portfólio
+  // (com link do print). Datas no futuro são recusadas.
+  router.put('/saude/:agenteId/checklist-oficial', async (req: AuthRequest, res: Response) => {
+    const ag = await pool.query(`SELECT numero_conectado FROM agentes WHERE id = $1 AND user_id = $2`, [req.params.agenteId, req.userId]);
+    const numero = normalizarSaude(ag.rows[0]?.numero_conectado);
+    if (!numero) return res.status(404).json({ message: 'Instância sem número conectado' });
+    const data = (v: any) => {
+      if (v === null || v === '') return null;
+      const d = new Date(v);
+      return isNaN(d.getTime()) || d.getTime() > Date.now() + 86_400_000 ? undefined : d.toISOString();
+    };
+    const { app_business_desde, portfolio_verificado_em, portfolio_prova } = req.body || {};
+    const app = app_business_desde === undefined ? undefined : data(app_business_desde);
+    const port = portfolio_verificado_em === undefined ? undefined : data(portfolio_verificado_em);
+    if (app === undefined && app_business_desde !== undefined) return res.status(400).json({ message: 'Data do app Business inválida' });
+    if (port === undefined && portfolio_verificado_em !== undefined) return res.status(400).json({ message: 'Data da verificação inválida' });
+    if (portfolio_prova && !/^https?:\/\//i.test(String(portfolio_prova))) return res.status(400).json({ message: 'O print precisa ser um link (https://…)' });
+    const upd = await pool.query(
+      `UPDATE whatsapp_numeros SET
+         app_business_desde = CASE WHEN $2 THEN $3::timestamptz ELSE app_business_desde END,
+         portfolio_verificado_em = CASE WHEN $4 THEN $5::timestamptz ELSE portfolio_verificado_em END,
+         portfolio_prova = CASE WHEN $6 THEN $7 ELSE portfolio_prova END
+       WHERE numero = $1`,
+      [numero, app_business_desde !== undefined, app ?? null, portfolio_verificado_em !== undefined, port ?? null,
+       portfolio_prova !== undefined, portfolio_prova ? String(portfolio_prova).slice(0, 1000) : null]
+    );
+    // Sem linha em whatsapp_numeros = número nunca registrado pela saúde (criar aqui inventaria a
+    // data da 1ª conexão e falsearia o item "21 dias").
+    if (!upd.rowCount) return res.status(409).json({ message: 'Este número ainda não tem registro de saúde — reconecte a instância.' });
+    const c =await calcularChecklistOficial(pool, req.params.agenteId, req.userId!);
+    invalidarCacheSaude();
+    return res.json(c);
   });
 
   router.post('/connect', async (req: AuthRequest, res: Response) => {

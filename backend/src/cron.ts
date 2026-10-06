@@ -5,6 +5,8 @@ import { reconciliarInstanciasEvolution } from './services/evolutionReconciliati
 import { retentarMidiaPendente } from './services/mediaRetry';
 import { recalcularTodosScores } from './services/instanceScore';
 import { avaliarFases } from './services/saudeNumero';
+import { recalcularAptidaoOficial } from './services/checklistOficial';
+import { verificarWebhooksParados } from './services/saudeWebhook';
 import { retomarCampanhasInstanciaCaida, recalcularMetricasCampanhas } from './services/metricasDisparo';
 import { atualizarNumerosOficiais } from './routes/metaOficial';
 import { processarMaturador } from './services/maturadorProcessor';
@@ -268,8 +270,19 @@ export function initCronJobs() {
       if (avancos > 0 || bansConfirmados > 0) {
         log.info('CRON', 'Fases de maturação avaliadas', { avancos, bansConfirmados });
       }
+      await recalcularAptidaoOficial(pool); // Sprint 7: checklist "Apto para API oficial"
     } catch (err: any) {
       log.error('CRON', 'Erro ao avaliar fases de maturação', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Sprint 7 (Sprint 5 / H6): webhook da Evolution parado — instância que enviou e não recebeu
+  // nenhum evento depois disso (services/saudeWebhook.ts). Só registra no log (Grafana/Loki).
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      await verificarWebhooksParados(pool);
+    } catch (err: any) {
+      log.error('CRON', 'Erro ao verificar webhooks parados', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 

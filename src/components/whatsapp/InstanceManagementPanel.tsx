@@ -72,6 +72,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
+import { ChecklistApiOficial } from "./ChecklistApiOficial";
 import {
   createInstance,
   fetchConnectionStatus,
@@ -1053,9 +1054,13 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                     </span>
                   </div>
                 )}
-                {sd?.apto_api_oficial && (
-                  <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-700">Apto para API oficial</Badge>
-                )}
+                {/* Sprint 7: checklist "Apto para API oficial" (itens verdes/vermelhos + confirmações manuais). */}
+                <div className="flex items-center gap-1">
+                  {sd?.apto_api_oficial && (
+                    <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-700">Apto para API oficial</Badge>
+                  )}
+                  <ChecklistApiOficial agenteId={a.id} apto={!!sd?.apto_api_oficial} />
+                </div>
 
                 {/* [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): texto
                     diferenciado — "desconectada" e "score crítico" são achados diferentes, não

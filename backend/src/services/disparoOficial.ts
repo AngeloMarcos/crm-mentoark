@@ -192,7 +192,10 @@ export async function processarEnvioOficial(pool: Pool, msg: any, camp: any): Pr
   const mapa: Record<string, string> = camp.meta_variaveis || {};
   const parametros = Object.keys(mapa).sort((a, b) => Number(a) - Number(b))
     .map(k => ({ type: 'text', text: valorVariavel(c, mapa[k], 'tudo bem') }));
-  const r = await graphFetch(cfg, `${cfg.phone_number_id}/messages`, {
+  // Sprint 7 / H7: Marketing com a flag ligada vai pela Marketing Messages API (otimização de
+  // entrega da Meta; sem habilitação na WABA, a Meta encaminha pela Cloud API normal sozinha).
+  const endpoint = marketing && cfg.usar_mm_api ? 'marketing_messages' : 'messages';
+  const r = await graphFetch(cfg, `${cfg.phone_number_id}/${endpoint}`, {
     method: 'POST',
     body: {
       messaging_product: 'whatsapp', to: String(telefone).replace(/\D/g, ''), type: 'template',
@@ -203,8 +206,8 @@ export async function processarEnvioOficial(pool: Pool, msg: any, camp: any): Pr
   if (r.ok) {
     const wamid = r.data?.messages?.[0]?.id || null;
     await pool.query(
-      `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW(), message_id = $2, instancia = $3, tipo_falha = NULL WHERE id = $1`,
-      [log_id, wamid, `meta_oficial:${cfg.phone_number_id}`]
+      `UPDATE disparo_logs SET status = 'sent', enviado_at = NOW(), message_id = $2, instancia = $3, tipo_falha = NULL, meta_endpoint = $4 WHERE id = $1`,
+      [log_id, wamid, `meta_oficial:${cfg.phone_number_id}`, endpoint]
     );
     await pool.query(`UPDATE disparos SET enviados = enviados + 1 WHERE id = $1`, [disparo_id]).catch(() => {});
     await pool.query(`UPDATE contatos SET ultimo_disparo_em = NOW() WHERE id = $1`, [c.id]).catch(() => {});

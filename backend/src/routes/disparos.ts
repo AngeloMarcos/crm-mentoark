@@ -383,7 +383,44 @@ REGRAS ESTRITAS:
          GROUP BY 1 ORDER BY 1`,
         [req.params.id]
       );
-      return res.json({ ...tot.rows[0], por_hora: porHora.rows });
+      // Sprint 7 (Sprint 6 / H4-H5): % de contatos com opt-in e de qual origem, cliques em botões,
+      // falhas por código da Meta e custo real (status cobráveis × preço) — os 3 últimos só têm
+      // dado em campanha do canal oficial.
+      const optin = await pool.query(
+        `SELECT COALESCE(c.optin_origem, 'sem_optin') AS origem, COUNT(*)::int AS total
+         FROM disparo_logs dl
+         LEFT JOIN LATERAL (
+           SELECT optin_origem FROM contatos c
+           WHERE c.user_id = dl.user_id AND (c.id = dl.contato_id OR (dl.contato_id IS NULL
+             AND RIGHT(regexp_replace(c.telefone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace(dl.telefone, '\\D', '', 'g'), 11)))
+           LIMIT 1) c ON true
+         WHERE dl.disparo_id = $1
+         GROUP BY 1 ORDER BY 2 DESC`,
+        [req.params.id]
+      );
+      const oficial = await pool.query(
+        `SELECT COUNT(*) FILTER (WHERE dl.clique_em IS NOT NULL)::int AS cliques,
+                COUNT(*) FILTER (WHERE s.pricing_cobravel)::int AS cobradas,
+                COALESCE(SUM(p.preco_usd) FILTER (WHERE s.pricing_cobravel), 0)::numeric(12,4) AS custo_real_usd
+         FROM disparo_logs dl
+         LEFT JOIN meta_mensagens_status s ON s.message_id = dl.message_id
+         LEFT JOIN precos_meta p ON p.pais = 'BR' AND p.categoria = s.pricing_categoria
+         WHERE dl.disparo_id = $1`,
+        [req.params.id]
+      ).catch(() => ({ rows: [{}] as any[] }));
+      const errosMeta = await pool.query(
+        `SELECT s.erro_codigo AS codigo, MAX(s.erro_titulo) AS titulo, COUNT(*)::int AS total
+         FROM disparo_logs dl JOIN meta_mensagens_status s ON s.message_id = dl.message_id
+         WHERE dl.disparo_id = $1 AND s.erro_codigo IS NOT NULL GROUP BY 1 ORDER BY 3 DESC`,
+        [req.params.id]
+      ).catch(() => ({ rows: [] as any[] }));
+      const totalLogs = optin.rows.reduce((s: number, x: any) => s + x.total, 0);
+      const semOptin = optin.rows.find((x: any) => x.origem === 'sem_optin')?.total ?? 0;
+      return res.json({
+        ...tot.rows[0], por_hora: porHora.rows,
+        optin: { pct: totalLogs ? Math.round(((totalLogs - semOptin) / totalLogs) * 100) : 0, por_origem: optin.rows },
+        ...oficial.rows[0], erros_meta: errosMeta.rows,
+      });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

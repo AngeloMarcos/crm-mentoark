@@ -25,6 +25,8 @@ import crypto from 'crypto';
 import { withTenantContext } from '../db';
 import { log } from '../logger';
 import { registrarEvento } from './saudeNumero';
+import { processarComDebounce, PREFIXO_OFICIAL } from './agentEngine';
+import { marcarRespostaNoEnvio } from './metricasDisparo';
 
 const PALAVRAS_OPTOUT = /^\s*(sair|parar|pare|stop|cancelar|remover|n[aã]o quero( mais)?|parar promo[cç][oõ]es|descadastrar)\s*[.!]*\s*$/i;
 const digitos = (s: unknown) => String(s || '').replace(/\D/g, '');
@@ -147,9 +149,28 @@ async function tratarMensagem(pool: Pool, cfg: any, msg: any, valor: any): Promi
       [cfg.user_id, t, v, contatoId, cfg.waba_id]
     ).catch(() => {});
   }
-  if (texto && PALAVRAS_OPTOUT.test(texto)) {
+  // Sprint 7 / H7: resposta e clique em botão contam na campanha oficial. O clique vem como
+  // mensagem `button`/`interactive` com `context.id` = id da mensagem de template que enviamos.
+  const pediuSair = !!(texto && PALAVRAS_OPTOUT.test(texto));
+  await marcarRespostaNoEnvio(pool, cfg.user_id, telefone, pediuSair);
+  if (msg.context?.id && (tipo === 'button' || tipo === 'interactive')) {
+    await pool.query(
+      `UPDATE disparo_logs SET clique_em = COALESCE(clique_em, NOW()), clique_texto = COALESCE(clique_texto, $2) WHERE message_id = $1`,
+      [String(msg.context.id), texto ? texto.slice(0, 100) : null]
+    ).catch(() => {});
+  }
+  if (pediuSair) {
     await pool.query(`UPDATE contatos SET opt_out = true, marketing_optout_em = COALESCE(marketing_optout_em, NOW()) WHERE id = $1`, [contatoId]).catch(() => {});
     await pool.query(`INSERT INTO disparo_optouts (user_id, telefone, motivo) VALUES ($1, $2, $3)`, [cfg.user_id, telefone, `API oficial: ${texto.slice(0, 60)}`]).catch(() => {});
+    return;
+  }
+  // Sprint 7 / H6: IA no número oficial — só com agente escolhido e IA ligada na configuração
+  // (a ligação exige escopo; o motor confere o escopo de novo antes de responder).
+  if (cfg.ia_ativa && cfg.agente_id && texto) {
+    void processarComDebounce(pool, {
+      instancia: `${PREFIXO_OFICIAL}${cfg.phone_number_id}`, messageId: String(msg.id), telefone,
+      pushName: pushName || '', texto, tipo: 'text', timestamp: ts, userId: cfg.user_id, agenteId: cfg.agente_id,
+    }).catch(err => log.warn('META_WEBHOOK', 'Falha ao acionar IA no número oficial', { err: err?.message }));
   }
 }
 

@@ -55,6 +55,8 @@ export interface ConfigOficial {
   verify_token: string | null; ativo: boolean; quality_rating: string | null; limite_mensagens_valor: number | null;
   limite_mensagens_label: string; conta_status: string | null; alerta: string | null; ultimo_webhook_em: string | null;
   webhook_url: string; temAccessToken: boolean; temAppSecret: boolean; ultimo_erro: string | null;
+  ia_ativa: boolean; agente_id: string | null; usar_mm_api: boolean; mm_onboarding_status: string | null;
+  name_status: string | null; platform_type: string | null; verified_name: string | null;
 }
 
 export function NumerosOficiais() {
@@ -270,6 +272,10 @@ function FormOficial({ cfg, onFechar }: { cfg: ConfigOficial | null; onFechar: (
             )}
           </div>
         )}
+        {atual && <RegistroOficial cfg={atual} />}
+        {atual && <IAOficial cfg={atual} onMudou={setAtual} />}
+        {atual && <MarketingMessages cfg={atual} onMudou={setAtual} />}
+        {atual && <PerfilNegocio cfg={atual} />}
       </DialogContent>
     </Dialog>
   );
@@ -521,5 +527,167 @@ export function TemplatesMetaSecao() {
       </CardHeader>
       <CardContent>{sel && <TemplatesMeta configId={sel} />}</CardContent>
     </Card>
+  );
+}
+
+// ── Sprint 7 / H6: registro do número + status do nome de exibição ───────────────────────────
+function RegistroOficial({ cfg }: { cfg: ConfigOficial }) {
+  const [st, setSt] = useState<any>(null);
+  const [pin, setPin] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const consultar = () => chamar(`/configs/${cfg.id}/registro`).then(setSt).catch((e) => setSt({ erro: e.message }));
+  useEffect(() => { if (cfg.temAccessToken) consultar(); }, [cfg.id]);
+  const registrar = async () => {
+    setOcupado(true);
+    try { await chamar(`/configs/${cfg.id}/registrar`, { method: "POST", body: { pin } }); toast.success("Número registrado na Cloud API"); setPin(""); consultar(); }
+    catch (e: any) { toast.error(e.message); } finally { setOcupado(false); }
+  };
+  return (
+    <div className="space-y-2 border-t pt-3 text-sm">
+      <div className="font-medium">Registro do número</div>
+      {!st ? <p className="text-xs text-muted-foreground">Salve o Access Token para consultar.</p>
+        : st.erro ? <p className="text-xs text-red-500">{st.erro}</p>
+        : (
+          <div className="text-xs space-y-0.5">
+            <div>{st.registrado ? <CheckCircle2 className="inline h-3.5 w-3.5 text-emerald-500 mr-1" /> : <XCircle className="inline h-3.5 w-3.5 text-red-500 mr-1" />}{st.registro_pt}</div>
+            <div>Nome de exibição: <b>{st.verified_name || "—"}</b>{st.nome_status_pt ? ` · ${st.nome_status_pt}` : ""}</div>
+          </div>
+        )}
+      {st && !st.erro && !st.registrado && (
+        <div className="flex gap-2">
+          <Input inputMode="numeric" maxLength={6} placeholder="PIN de 6 dígitos (confirmação em duas etapas)" value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} />
+          <Button size="sm" onClick={registrar} disabled={pin.length !== 6 || ocupado}>Registrar</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sprint 7 / H6: IA no número oficial (exige agente com escopo) ────────────────────────────
+function IAOficial({ cfg, onMudou }: { cfg: ConfigOficial; onMudou: (c: ConfigOficial) => void }) {
+  const { user } = useAuth();
+  const [agentes, setAgentes] = useState<{ id: string; nome: string; escopo_ia: string | null }[]>([]);
+  const [agenteId, setAgenteId] = useState(cfg.agente_id || "");
+  useEffect(() => {
+    if (user) api.from("agentes").select("id, nome, escopo_ia").eq("user_id", user.id).eq("ativo", true)
+      .then(({ data }: any) => setAgentes(data || []));
+  }, [user?.id]);
+  const escolhido = agentes.find(a => a.id === agenteId);
+  const salvar = async (ativa: boolean) => {
+    try {
+      onMudou(await chamar(`/configs/${cfg.id}/ia`, { method: "PUT", body: { ia_ativa: ativa, agente_id: agenteId || null } }));
+      toast.success(ativa ? "IA ligada neste número" : "IA desligada neste número");
+    } catch (e: any) { toast.error(e.message); }
+  };
+  return (
+    <div className="space-y-2 border-t pt-3 text-sm">
+      <div className="font-medium flex items-center gap-2">IA neste número {cfg.ia_ativa ? <Badge>Ligada</Badge> : <Badge variant="secondary">Desligada</Badge>}</div>
+      <p className="text-xs text-muted-foreground">
+        A Meta não permite assistente de uso geral na API oficial: o agente precisa ter um escopo definido
+        (ex.: "agendamento de consultas") e oferece passar para um atendente humano.
+      </p>
+      <Select value={agenteId} onValueChange={setAgenteId}>
+        <SelectTrigger><SelectValue placeholder="Escolha o agente" /></SelectTrigger>
+        <SelectContent>{agentes.map(a => <SelectItem key={a.id} value={a.id}>{a.nome}{a.escopo_ia ? "" : " (sem escopo)"}</SelectItem>)}</SelectContent>
+      </Select>
+      {escolhido && !escolhido.escopo_ia && <p className="text-xs text-amber-600 dark:text-amber-400">Este agente não tem escopo — defina em Agentes antes de ligar.</p>}
+      <div className="flex gap-2">
+        <Button size="sm" onClick={() => salvar(true)} disabled={!agenteId}>Ligar IA</Button>
+        {cfg.ia_ativa && <Button size="sm" variant="outline" onClick={() => salvar(false)}>Desligar</Button>}
+      </div>
+    </div>
+  );
+}
+
+// ── Sprint 7 / H7: Marketing Messages API ────────────────────────────────────────────────────
+function MarketingMessages({ cfg, onMudou }: { cfg: ConfigOficial; onMudou: (c: ConfigOficial) => void }) {
+  const [status, setStatus] = useState<string | null>(cfg.mm_onboarding_status);
+  const verificar = () => chamar(`/configs/${cfg.id}/mm-status`).then((r: any) => setStatus(r.status || "sem informação")).catch((e) => toast.error(e.message));
+  const alternar = async (v: boolean) => {
+    try { onMudou(await chamar(`/configs/${cfg.id}/mm`, { method: "PUT", body: { usar_mm_api: v } })); } catch (e: any) { toast.error(e.message); }
+  };
+  return (
+    <div className="space-y-2 border-t pt-3 text-sm">
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input type="checkbox" className="mt-0.5" checked={cfg.usar_mm_api} onChange={(e) => alternar(e.target.checked)} />
+        <span>
+          <span className="font-medium">Usar otimização de entrega da Meta para Marketing</span>
+          <span className="block text-xs text-muted-foreground">
+            Templates de Marketing saem pela Marketing Messages API (mesmo template e cobrança, com métricas de clique).
+            Se a conta não estiver habilitada, a Meta envia pelo caminho normal.
+          </span>
+        </span>
+      </label>
+      <div className="flex items-center gap-2 text-xs">
+        <span>Habilitação na conta: <b>{status || "não consultado"}</b></span>
+        <Button size="sm" variant="ghost" onClick={verificar}>Consultar</Button>
+      </div>
+    </div>
+  );
+}
+
+// ── Sprint 7 / H6: perfil do negócio ─────────────────────────────────────────────────────────
+const SETORES: Record<string, string> = {
+  AUTO: "Automotivo", BEAUTY: "Beleza e estética", APPAREL: "Roupas e acessórios", EDU: "Educação", ENTERTAIN: "Entretenimento",
+  EVENT_PLAN: "Eventos", FINANCE: "Finanças", GROCERY: "Mercado", GOVT: "Governo", HOTEL: "Hotelaria", HEALTH: "Saúde",
+  NONPROFIT: "Sem fins lucrativos", PROF_SERVICES: "Serviços profissionais", RETAIL: "Varejo", TRAVEL: "Viagens",
+  RESTAURANT: "Restaurante", OTHER: "Outro",
+};
+function PerfilNegocio({ cfg }: { cfg: ConfigOficial }) {
+  const [aberto, setAberto] = useState(false);
+  const [p, setP] = useState<any>(null);
+  const [salvando, setSalvando] = useState(false);
+  const abrir = async () => {
+    setAberto(true);
+    try {
+      const d = await chamar(`/configs/${cfg.id}/perfil`);
+      setP({ about: d.about || "", description: d.description || "", address: d.address || "", email: d.email || "",
+        site1: d.websites?.[0] || "", site2: d.websites?.[1] || "", vertical: d.vertical || "", foto: d.profile_picture_url || null });
+    } catch (e: any) { toast.error(e.message); setAberto(false); }
+  };
+  const salvar = async () => {
+    setSalvando(true);
+    try {
+      await chamar(`/configs/${cfg.id}/perfil`, { method: "PUT", body: {
+        about: p.about, description: p.description, address: p.address, email: p.email,
+        websites: [p.site1, p.site2].filter(Boolean), ...(p.vertical ? { vertical: p.vertical } : {}),
+      } });
+      toast.success("Perfil atualizado na Meta");
+      setAberto(false);
+    } catch (e: any) { toast.error(e.message); } finally { setSalvando(false); }
+  };
+  return (
+    <div className="border-t pt-3">
+      <Button size="sm" variant="outline" onClick={abrir} disabled={!cfg.temAccessToken}>Perfil do negócio</Button>
+      {aberto && p && (
+        <Dialog open onOpenChange={() => setAberto(false)}>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Perfil do negócio</DialogTitle>
+              <DialogDescription>O que o cliente vê ao abrir o perfil deste número no WhatsApp.</DialogDescription>
+            </DialogHeader>
+            {p.foto && <img src={p.foto} alt="Foto do perfil" className="h-16 w-16 rounded-full object-cover" />}
+            <p className="text-xs text-muted-foreground">A foto se troca no Gerenciador do WhatsApp (business.facebook.com).</p>
+            <div className="space-y-2">
+              <div><Label>Recado (até 139)</Label><Input maxLength={139} value={p.about} onChange={e => setP({ ...p, about: e.target.value })} /></div>
+              <div><Label>Descrição (até 512)</Label><Textarea maxLength={512} rows={3} value={p.description} onChange={e => setP({ ...p, description: e.target.value })} /></div>
+              <div><Label>Endereço</Label><Input maxLength={256} value={p.address} onChange={e => setP({ ...p, address: e.target.value })} /></div>
+              <div><Label>E-mail</Label><Input maxLength={128} value={p.email} onChange={e => setP({ ...p, email: e.target.value })} /></div>
+              <div><Label>Site 1</Label><Input placeholder="https://" value={p.site1} onChange={e => setP({ ...p, site1: e.target.value })} /></div>
+              <div><Label>Site 2</Label><Input placeholder="https://" value={p.site2} onChange={e => setP({ ...p, site2: e.target.value })} /></div>
+              <div>
+                <Label>Setor</Label>
+                <Select value={p.vertical} onValueChange={v => setP({ ...p, vertical: v })}>
+                  <SelectTrigger><SelectValue placeholder="Escolha" /></SelectTrigger>
+                  <SelectContent>{Object.entries(SETORES).map(([k, l]) => <SelectItem key={k} value={k}>{l}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter><Button onClick={salvar} disabled={salvando}>{salvando ? "Salvando…" : "Salvar na Meta"}</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
   );
 }

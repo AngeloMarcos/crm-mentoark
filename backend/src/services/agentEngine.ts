@@ -25,9 +25,14 @@ import { baixarMidiaDecriptografada } from '../utils/whatsappMediaStorage';
 import { transcreverAudio } from '../utils/transcribe';
 import { registrarUsoIA, estimarCustoUsd, estimarCustoWhisperUsd } from '../utils/aiCusto';
 import { analisarImagem } from '../utils/vision';
-import { withTenantContext } from '../db';
+import { withTenantContext, pool as poolGlobal } from '../db';
 import { log } from '../logger';
 import { destinoEnvio, jidConversa } from './identidadeContato';
+import { enviarTextoMetaOficial } from './metaCloudApi';
+
+// Sprint 7 / H6 (2026-10-06): conversa do número oficial chega com instancia `meta_oficial:<phone_number_id>`.
+export const PREFIXO_OFICIAL = 'meta_oficial:';
+export const ehInstanciaOficial = (instancia: string | null | undefined) => String(instancia || '').startsWith(PREFIXO_OFICIAL);
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
@@ -42,6 +47,7 @@ export interface MensagemEntrada {
   midiaUrl?: string;
   timestamp: number;
   userId?: string;
+  agenteId?: string; // Sprint 7 / H6: número oficial aponta o agente explicitamente
 }
 
 // ── Buffer de mensagens picotadas ────────────────────────────────────────────
@@ -239,6 +245,23 @@ async function enviarResposta(
     log.info('IA_SANDBOX', 'Mensagem gerada de teste (envio real suprimido)', {
       telefone, instancia, responseText: texto, ok: true,
     });
+    return;
+  }
+
+  // Sprint 7 / H6: resposta no número oficial sai pela Graph API (dentro da janela de 24h aberta
+  // pela mensagem do cliente), não pela Evolution.
+  if (ehInstanciaOficial(instancia)) {
+    const cfg = (await poolGlobal.query(
+      `SELECT * FROM whatsapp_oficial_config WHERE user_id = $1 AND phone_number_id = $2 AND ativo = true LIMIT 1`,
+      [userId, instancia.slice(PREFIXO_OFICIAL.length)]
+    )).rows[0];
+    if (!cfg) throw new Error('Número oficial não encontrado ou inativo');
+    const r = await enviarTextoMetaOficial(cfg, telefone, texto);
+    if (!r.ok) throw new Error(`Meta: ${r.erro}`);
+    if (r.messageId) {
+      botMessageIds.add(r.messageId);
+      setTimeout(() => botMessageIds.delete(r.messageId!), BOT_ECHO_TTL_MS);
+    }
     return;
   }
 
@@ -708,7 +731,18 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // diagnosticos/AUDITORIA_LOG.md), a busca exige user_id exato. Só cai para "qualquer
   // agente com esse nome de instância" no caso residual de userId não vir preenchido.
   let agenteRows: any[];
-  if (entrada.userId) {
+  if (entrada.agenteId && entrada.userId) {
+    // Sprint 7 / H6: número oficial — só o agente escolhido na configuração, sem fallback.
+    agenteRows = (await pool.query(
+      `SELECT * FROM agentes WHERE id = $1 AND user_id = $2 AND ativo = true`, [entrada.agenteId, entrada.userId]
+    )).rows;
+    if (!agenteRows.length) {
+      log.warn('ENGINE', 'Agente do número oficial inativo ou removido — sem resposta', { instancia: entrada.instancia });
+      return;
+    }
+  } else if (ehInstanciaOficial(entrada.instancia)) {
+    return; // número oficial sem agente escolhido: IA não responde
+  } else if (entrada.userId) {
     const r1 = await pool.query(
       `SELECT * FROM agentes
        WHERE LOWER(evolution_instancia) = LOWER($1) AND user_id = $2 AND ativo = true
@@ -754,6 +788,17 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     agente.evolution_api_key = process.env.EVOLUTION_API_KEY || '';
   if (!agente.evolution_instancia)
     agente.evolution_instancia = entrada.instancia;
+  if (ehInstanciaOficial(entrada.instancia)) {
+    // Política da Meta (desde 15/01/2026): IA no canal oficial só com escopo definido. A ativação
+    // já é barrada sem escopo (rota /meta-oficial/configs/:id/ia); aqui é a segunda trava, caso o
+    // escopo seja apagado depois.
+    if (!String(agente.escopo_ia || '').trim()) {
+      log.warn('ENGINE', 'Agente sem escopo no número oficial — IA não responde', { agente: agente.nome });
+      return;
+    }
+    agente.evolution_instancia = entrada.instancia; // a resposta sai pelo mesmo número oficial
+    agente.resposta_voz_habilitada = false;          // áudio por Evolution não existe aqui
+  }
 
   const userIdFinal = agente.user_id || entrada.userId!;
 

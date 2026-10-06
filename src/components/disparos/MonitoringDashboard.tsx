@@ -36,6 +36,11 @@ import { getAuthToken } from "@/lib/api-token";
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 
+const ROTULO_OPTIN: Record<string, string> = {
+  sem_optin: "sem opt-in", smart_link: "Smart Link", anuncio_ctwa: "anúncio", conversa_iniciada_pelo_contato: "iniciou a conversa",
+  importado_com_consentimento: "importação com consentimento", formulario: "formulário",
+};
+
 // [AUDITORIA] LÓGICA: mesmo piso de segurança de `StepAntiBan` (Disparos.tsx) — duplicado de
 // propósito (constante primitiva, um único número) em vez de exportar de `Disparos.tsx` (que só
 // tem export default da página) — mesmo espírito pragmático já documentado em
@@ -315,6 +320,24 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
               : "Detectamos que mais de 10% dos disparos estão falhando. Recomendamos revisar suas instâncias."}
           </AlertDescription>
         </Alert>
+      )}
+
+      {/* Sprint 7 (API oficial / H4-H7): opt-in da audiência por origem; cliques, custo real e
+          falhas por código da Meta só aparecem com dado (campanha do canal oficial). */}
+      {metricas?.optin && (
+        <div className="rounded-md border p-3 text-xs space-y-1">
+          <div>
+            <span className="font-medium">Contatos com consentimento (opt-in): {metricas.optin.pct}%</span>
+            <span className="text-muted-foreground"> — {(metricas.optin.por_origem ?? []).map((o: any) =>
+              `${ROTULO_OPTIN[o.origem] ?? o.origem}: ${o.total}`).join(" · ")}</span>
+          </div>
+          {((metricas.cliques ?? 0) > 0 || (metricas.cobradas ?? 0) > 0) && (
+            <div>Cliques em botões: <b>{metricas.cliques ?? 0}</b> · Mensagens cobradas: <b>{metricas.cobradas ?? 0}</b> · Custo real: <b>US$ {Number(metricas.custo_real_usd ?? 0).toFixed(2)}</b></div>
+          )}
+          {(metricas.erros_meta ?? []).length > 0 && (
+            <div className="text-muted-foreground">Falhas na Meta: {metricas.erros_meta.map((e: any) => `${e.codigo} ${e.titulo ?? ""} (${e.total})`).join(" · ")}</div>
+          )}
+        </div>
       )}
 
       {(metricas?.falhas_instancia_caida ?? 0) > 0 && (

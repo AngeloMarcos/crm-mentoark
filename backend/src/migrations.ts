@@ -2414,6 +2414,22 @@ export async function runMigrations(pool: Pool): Promise<void> {
   `).catch(() => {});
   log.info('MIGRATIONS', 'API oficial (inbox/status/erros/templates/opt-in) OK');
 
+  // Sprint 7 (2026-10-06), H6/H7 da Sprint 6: IA por número oficial (agente escolhido + liga/desliga;
+  // a ligação exige escopo), Marketing Messages API (flag por número, desligada por padrão, e o
+  // status de elegibilidade da WABA), e o estado do registro do número/nome de exibição na Meta.
+  // `disparo_logs.meta_endpoint` registra por qual endpoint o template saiu ('messages' |
+  // 'marketing_messages'). Reversível: DROP COLUMN.
+  for (const col of ['ia_ativa BOOLEAN NOT NULL DEFAULT false', 'agente_id UUID', 'usar_mm_api BOOLEAN NOT NULL DEFAULT false',
+                     'mm_onboarding_status TEXT', 'name_status TEXT', 'platform_type TEXT', 'verified_name TEXT']) {
+    await pool.query(`ALTER TABLE whatsapp_oficial_config ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  for (const col of ['meta_endpoint TEXT', 'clique_em TIMESTAMPTZ', 'clique_texto TEXT']) {
+    await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  // Sprint 7 (Sprint 5 / H6): último evento da Evolution por instância (alerta de webhook parado).
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ultimo_webhook_em TIMESTAMPTZ`).catch(() => {});
+  log.info('MIGRATIONS', 'API oficial Sprint 7 (IA/MM API/registro) OK');
+
   // ── Circuit-breaker de loop de LOGOUT (Sprint 2026-08-10, continuação Serenovlogs067) ────────
   // [AUDITORIA] BUG GRAVE (2 incidentes reais confirmados — Serenovlogs067 em 10/08 e outro
   // usuário no mesmo dia, ambos com número derrubado/banido pelo WhatsApp): reconectar

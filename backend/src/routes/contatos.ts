@@ -316,6 +316,22 @@ export default function contatos(pool: Pool): Router {
         inseridos.push(...r.rows);
       }
 
+      // Sprint 7 (Sprint 6 / H4): "Tenho consentimento destes contatos" marcado na importação vira
+      // opt-in (`importado_com_consentimento`) com quem declarou e quando — vale para os contatos
+      // do arquivo que ainda não tinham opt-in (novos e já existentes). Sem a marcação, nada muda.
+      let comConsentimento = 0;
+      if (req.body?.consentimento === true && chavesVistas.size) {
+        const prova = `declarado por ${req.userEmail || userId} na importação de ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
+        const c = await pool.query(
+          `UPDATE contatos SET optin_origem = 'importado_com_consentimento', optin_em = NOW(), optin_prova = $3
+           WHERE user_id = $1 AND optin_origem IS NULL
+             AND (telefone_normalizado = ANY($2::text[]) OR telefone = ANY($4::text[]))`,
+          [userId, Array.from(chavesVistas), prova, Array.from(telefonesEnviados)]
+        );
+        comConsentimento = c.rowCount ?? 0;
+        log.info('CONTATOS', 'Importação com consentimento declarado', { userId, contatos: comConsentimento });
+      }
+
       const telefonesInseridos = new Set(inseridos.map(r => r.telefone));
       const telefonesJaExistiam = Array.from(telefonesEnviados).filter(t => !telefonesInseridos.has(t));
 
@@ -325,6 +341,7 @@ export default function contatos(pool: Pool): Router {
         telefonesJaExistiam,
         vinculados,
         invalidos,
+        comConsentimento,
       });
     } catch (err: any) {
       log.error('CONTATOS', 'Erro em importar-lote', { err: err?.message, stack: err?.stack });

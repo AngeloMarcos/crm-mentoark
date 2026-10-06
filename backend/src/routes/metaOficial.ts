@@ -30,6 +30,7 @@ const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
 const COLUNAS = `id, nome, numero_exibicao, phone_number_id, waba_id, verify_token, graph_api_version,
   ativo, ultima_conexao_em, ultimo_erro, quality_rating, messaging_limit_tier, max_conversas_dia,
   conta_status, alerta, alerta_em, ultimo_webhook_em, qualidade_atualizada_em, created_at,
+  ia_ativa, agente_id, usar_mm_api, mm_onboarding_status, name_status, platform_type, verified_name,
   (access_token_enc IS NOT NULL) AS "temAccessToken", (app_secret_enc IS NOT NULL) AS "temAppSecret"`;
 
 function formatar(row: any) {
@@ -178,6 +179,103 @@ export default function metaOficialRouter(pool: Pool): Router {
     const r = await graphFetch(cfg, `${cfg.waba_id}/subscribed_apps`, { method: 'POST' });
     if (!r.ok) return res.status(502).json({ message: r.erro });
     return res.json({ ok: true });
+  });
+
+  // ── Sprint 7 / H6: IA no número oficial ────────────────────────────────────────────────────
+  // Política da Meta (desde 15/01/2026): assistente de uso geral é proibido no canal oficial — só
+  // liga com agente que tenha ESCOPO definido (e a passagem para humano da Sprint 3 / H9).
+  router.put('/configs/:id/ia', async (req: AuthRequest, res: Response) => {
+    const cfg = await configDoUsuario(req, req.params.id);
+    if (!cfg) return res.status(404).json({ message: 'Número oficial não encontrado' });
+    const ativa = req.body?.ia_ativa === true;
+    const agenteId = req.body?.agente_id || cfg.agente_id || null;
+    if (ativa) {
+      if (!agenteId) return res.status(422).json({ message: 'Escolha o agente que vai atender neste número.' });
+      const ag = (await pool.query(`SELECT nome, escopo_ia, ativo FROM agentes WHERE id = $1 AND user_id = $2`, [agenteId, req.userId])).rows[0];
+      if (!ag) return res.status(404).json({ message: 'Agente não encontrado' });
+      if (!String(ag.escopo_ia || '').trim()) {
+        return res.status(422).json({
+          code: 'SEM_ESCOPO',
+          message: `O agente "${ag.nome}" não tem escopo definido. A Meta proíbe IA de uso geral na API oficial: defina o escopo (ex.: "agendamento de consultas") em Agentes antes de ligar.`,
+        });
+      }
+    }
+    const r = await pool.query(
+      `UPDATE whatsapp_oficial_config SET ia_ativa = $3, agente_id = $4, updated_at = NOW() WHERE id = $1 AND user_id = $2 RETURNING ${COLUNAS}`,
+      [cfg.id, req.userId, ativa, agenteId]
+    );
+    return res.json(formatar(r.rows[0]));
+  });
+
+  // ── Sprint 7 / H6: perfil do negócio ───────────────────────────────────────────────────────
+  const CAMPOS_PERFIL = 'about,address,description,email,profile_picture_url,websites,vertical';
+  router.get('/configs/:id/perfil', async (req: AuthRequest, res: Response) => {
+    const cfg = await configDoUsuario(req, req.params.id);
+    if (!cfg) return res.status(404).json({ message: 'Número oficial não encontrado' });
+    const r = await graphFetch(cfg, `${cfg.phone_number_id}/whatsapp_business_profile?fields=${CAMPOS_PERFIL}`);
+    if (!r.ok) return res.status(502).json({ message: r.erro });
+    return res.json(r.data?.data?.[0] ?? {});
+  });
+
+  router.put('/configs/:id/perfil', async (req: AuthRequest, res: Response) => {
+    const cfg = await configDoUsuario(req, req.params.id);
+    if (!cfg) return res.status(404).json({ message: 'Número oficial não encontrado' });
+    const v = validarPerfil(req.body || {});
+    if (v.erro) return res.status(400).json({ message: v.erro });
+    const r = await graphFetch(cfg, `${cfg.phone_number_id}/whatsapp_business_profile`, {
+      method: 'POST', body: { messaging_product: 'whatsapp', ...v.perfil },
+    });
+    if (!r.ok) return res.status(502).json({ message: r.erro });
+    return res.json({ ok: true });
+  });
+
+  // ── Sprint 7 / H6: registro do número na Cloud API + status do nome de exibição ────────────
+  router.get('/configs/:id/registro', async (req: AuthRequest, res: Response) => {
+    const cfg = await configDoUsuario(req, req.params.id);
+    if (!cfg) return res.status(404).json({ message: 'Número oficial não encontrado' });
+    const r = await graphFetch(cfg, `${cfg.phone_number_id}?fields=verified_name,name_status,platform_type,status,code_verification_status`);
+    if (!r.ok) return res.status(502).json({ message: r.erro });
+    await pool.query(
+      `UPDATE whatsapp_oficial_config SET name_status = $2, platform_type = $3, verified_name = $4 WHERE id = $1`,
+      [cfg.id, r.data?.name_status ?? null, r.data?.platform_type ?? null, r.data?.verified_name ?? null]
+    ).catch(() => {});
+    return res.json({ ...r.data, registrado: r.data?.platform_type === 'CLOUD_API', ...rotulosRegistro(r.data) });
+  });
+
+  router.post('/configs/:id/registrar', async (req: AuthRequest, res: Response) => {
+    const cfg = await configDoUsuario(req, req.params.id);
+    if (!cfg) return res.status(404).json({ message: 'Número oficial não encontrado' });
+    const pin = String(req.body?.pin || '');
+    if (!/^\d{6}$/.test(pin)) return res.status(400).json({ message: 'O PIN de confirmação em duas etapas tem 6 dígitos.' });
+    // O PIN não é gravado nem logado — só repassado à Meta.
+    const r = await graphFetch(cfg, `${cfg.phone_number_id}/register`, { method: 'POST', body: { messaging_product: 'whatsapp', pin } });
+    if (!r.ok) return res.status(502).json({ message: r.erro });
+    await pool.query(`UPDATE whatsapp_oficial_config SET platform_type = 'CLOUD_API' WHERE id = $1`, [cfg.id]).catch(() => {});
+    return res.json({ ok: true });
+  });
+
+  // ── Sprint 7 / H7: Marketing Messages API ──────────────────────────────────────────────────
+  // Flag por número, desligada por padrão. Se a WABA não estiver habilitada, a própria Meta envia
+  // pela Cloud API normal (mesmo template, mesma cobrança) — ligar não quebra o envio.
+  router.get('/configs/:id/mm-status', async (req: AuthRequest, res: Response) => {
+    const cfg = await configDoUsuario(req, req.params.id);
+    if (!cfg) return res.status(404).json({ message: 'Número oficial não encontrado' });
+    if (!cfg.waba_id) return res.status(400).json({ message: 'Preencha o WABA ID antes.' });
+    const r = await graphFetch(cfg, `${cfg.waba_id}?fields=marketing_messages_onboarding_status`);
+    if (!r.ok) return res.status(502).json({ message: r.erro });
+    const status = r.data?.marketing_messages_onboarding_status ?? null;
+    const texto = typeof status === 'string' ? status : status ? JSON.stringify(status) : null;
+    await pool.query(`UPDATE whatsapp_oficial_config SET mm_onboarding_status = $2 WHERE id = $1`, [cfg.id, texto]).catch(() => {});
+    return res.json({ status: texto });
+  });
+
+  router.put('/configs/:id/mm', async (req: AuthRequest, res: Response) => {
+    const r = await pool.query(
+      `UPDATE whatsapp_oficial_config SET usar_mm_api = $3, updated_at = NOW() WHERE id = $1 AND user_id = $2 RETURNING ${COLUNAS}`,
+      [req.params.id, req.userId, req.body?.usar_mm_api === true]
+    );
+    if (!r.rows.length) return res.status(404).json({ message: 'Número oficial não encontrado' });
+    return res.json(formatar(r.rows[0]));
   });
 
   // Uso do limite: contatos únicos que receberam mensagem nossa em 24h e na semana.
@@ -409,12 +507,16 @@ export async function atualizarNumerosOficiais(pool: Pool): Promise<{ numeros: n
   let templates = 0;
   for (const cfg of r.rows) {
     try {
-      const q = await graphFetch(cfg, `${cfg.phone_number_id}?fields=quality_rating`);
+      const q = await graphFetch(cfg, `${cfg.phone_number_id}?fields=quality_rating,name_status,platform_type,verified_name`);
       const limite = await buscarLimiteMensagens(cfg).catch(() => null);
+      const d = q.ok ? q.data || {} : {};
       await pool.query(
         `UPDATE whatsapp_oficial_config SET quality_rating = COALESCE($2, quality_rating),
-                messaging_limit_tier = COALESCE($3, messaging_limit_tier), qualidade_atualizada_em = NOW() WHERE id = $1`,
-        [cfg.id, q.ok ? q.data?.quality_rating ?? null : null, limite]
+                messaging_limit_tier = COALESCE($3, messaging_limit_tier), qualidade_atualizada_em = NOW(),
+                name_status = COALESCE($4, name_status), platform_type = COALESCE($5, platform_type),
+                verified_name = COALESCE($6, verified_name)
+         WHERE id = $1`,
+        [cfg.id, d.quality_rating ?? null, limite, d.name_status ?? null, d.platform_type ?? null, d.verified_name ?? null]
       );
       if (cfg.waba_id) templates += await sincronizarTemplates(pool, cfg);
     } catch (err: any) {
@@ -422,4 +524,51 @@ export async function atualizarNumerosOficiais(pool: Pool): Promise<{ numeros: n
     }
   }
   return { numeros: r.rows.length, templates };
+}
+
+// ── Sprint 7 / H6: perfil do negócio e registro ──────────────────────────────────────────────
+export const SETORES_META: Record<string, string> = {
+  AUTO: 'Automotivo', BEAUTY: 'Beleza e estética', APPAREL: 'Roupas e acessórios', EDU: 'Educação',
+  ENTERTAIN: 'Entretenimento', EVENT_PLAN: 'Eventos', FINANCE: 'Finanças', GROCERY: 'Mercado',
+  GOVT: 'Governo', HOTEL: 'Hotelaria', HEALTH: 'Saúde', NONPROFIT: 'Sem fins lucrativos',
+  PROF_SERVICES: 'Serviços profissionais', RETAIL: 'Varejo', TRAVEL: 'Viagens', RESTAURANT: 'Restaurante', OTHER: 'Outro',
+};
+
+/** Limites de tamanho da Meta para o perfil do negócio. Só envia os campos que vieram no corpo. */
+export function validarPerfil(b: any): { erro?: string; perfil?: Record<string, unknown> } {
+  const perfil: Record<string, unknown> = {};
+  const texto = (campo: string, max: number, rotulo: string): string | null => {
+    if (b[campo] === undefined) return null;
+    const v = String(b[campo] ?? '').trim();
+    if (v.length > max) return `${rotulo}: máximo de ${max} caracteres.`;
+    perfil[campo] = v;
+    return null;
+  };
+  const erro = texto('about', 139, 'Recado') || texto('description', 512, 'Descrição') || texto('address', 256, 'Endereço') || texto('email', 128, 'E-mail');
+  if (erro) return { erro };
+  if (perfil.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(perfil.email))) return { erro: 'E-mail inválido.' };
+  if (b.websites !== undefined) {
+    const sites = (Array.isArray(b.websites) ? b.websites : [b.websites]).map((s: unknown) => String(s || '').trim()).filter(Boolean);
+    if (sites.length > 2) return { erro: 'A Meta aceita no máximo 2 sites.' };
+    if (sites.some((s: string) => !/^https?:\/\//i.test(s) || s.length > 256)) return { erro: 'Site precisa começar com http:// ou https:// (até 256 caracteres).' };
+    perfil.websites = sites;
+  }
+  if (b.vertical !== undefined && b.vertical !== '') {
+    if (!SETORES_META[String(b.vertical)]) return { erro: 'Setor inválido.' };
+    perfil.vertical = String(b.vertical);
+  }
+  return { perfil };
+}
+
+const NOME_STATUS_PT: Record<string, string> = {
+  APPROVED: 'Nome aprovado', AVAILABLE_WITHOUT_REVIEW: 'Nome liberado (sem revisão)', PENDING_REVIEW: 'Nome em análise',
+  DECLINED: 'Nome recusado', EXPIRED: 'Pedido de nome expirado', NON_EXISTS: 'Sem nome cadastrado', NONE: 'Sem nome cadastrado',
+};
+export function rotulosRegistro(d: any): { nome_status_pt: string | null; registro_pt: string } {
+  return {
+    nome_status_pt: d?.name_status ? (NOME_STATUS_PT[d.name_status] ?? d.name_status) : null,
+    registro_pt: d?.platform_type === 'CLOUD_API' ? 'Registrado na Cloud API'
+      : d?.platform_type === 'ON_PREMISE' ? 'Registrado na API On-Premises (migre para Cloud API)'
+      : 'Ainda não registrado na Cloud API',
+  };
 }

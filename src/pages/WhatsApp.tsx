@@ -17,6 +17,7 @@ import { TesteInstancias } from "@/components/whatsapp/TesteInstancias";
 import { LinhaTempoSaude } from "@/components/whatsapp/LinhaTempoSaude";
 import { MaturadorNumeros } from "@/components/whatsapp/MaturadorNumeros";
 import { NumerosOficiais } from "@/components/whatsapp/NumerosOficiais";
+import { AlertaWebhookParado } from "@/components/whatsapp/AlertaWebhookParado";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Inbox, MessageSquare, Smartphone, FlaskConical, MessageCircleHeart } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
@@ -64,6 +65,7 @@ export default function WhatsAppPage() {
           <WhatsAppInterface />
         </TabsContent>
         <TabsContent value="instancias" className="m-0">
+          <AlertaWebhookParado />
           <InstanceManagementPanel />
           <NumerosOficiais />
         </TabsContent>

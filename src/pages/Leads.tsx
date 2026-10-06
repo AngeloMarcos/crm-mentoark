@@ -142,6 +142,8 @@ export default function LeadsPage() {
   // Importação
   const [csvTexto, setCsvTexto] = useState("");
   const [importLista, setImportLista] = useState<string>("");
+  // Sprint 7 (API oficial / H4): consentimento declarado na importação vira opt-in dos contatos.
+  const [importConsentimento, setImportConsentimento] = useState(false);
 
   // ============ CARREGAR DADOS ============
   const carregar = async () => {
@@ -512,7 +514,7 @@ export default function LeadsPage() {
     // derruba o lote, e contato que já existe é vinculado à lista em vez de duplicado/ignorado.
     let resumo: { inseridos: number; jaExistiam: number; vinculados: number; invalidos: number };
     try {
-      const { data } = await api.post("/api/contatos/importar-lote", { contatos: novos });
+      const { data } = await api.post("/api/contatos/importar-lote", { contatos: novos, consentimento: importConsentimento });
       resumo = data;
     } catch (err: any) {
       toast({ title: "Erro na importação", description: err?.message, variant: "destructive" });
@@ -522,9 +524,10 @@ export default function LeadsPage() {
     setModalImport(false);
     setCsvTexto("");
     setImportLista("");
+    setImportConsentimento(false);
     toast({
       title: `✅ Importação concluída`,
-      description: `${resumo.inseridos} novos, ${resumo.jaExistiam} já existiam${resumo.vinculados ? ` (${resumo.vinculados} vinculados à lista)` : ""}, ${resumo.invalidos} inválidos, ${ignorados.length} ignorados de ${totalLinhas} linhas${isCnpjBiz ? " • formato Cnpj.biz" : ""}`,
+      description: `${resumo.inseridos} novos, ${resumo.jaExistiam} já existiam${resumo.vinculados ? ` (${resumo.vinculados} vinculados à lista)` : ""}, ${(resumo as any).comConsentimento ? `${(resumo as any).comConsentimento} com consentimento registrado, ` : ""}${resumo.invalidos} inválidos, ${ignorados.length} ignorados de ${totalLinhas} linhas${isCnpjBiz ? " • formato Cnpj.biz" : ""}`,
     });
     if (ignorados.length > 0) {
       const exemplos = ignorados.slice(0, 3)
@@ -652,7 +655,7 @@ export default function LeadsPage() {
             <Button variant="outline" size="sm" onClick={baixarModeloContatosXLSX}>
               <FileDown className="h-4 w-4 mr-1" /> Baixar modelo
             </Button>
-            <Button variant="outline" size="sm" onClick={() => { setImportLista(""); setModalImport(true); }}>
+            <Button variant="outline" size="sm" onClick={() => { setImportLista(""); setImportConsentimento(false); setModalImport(true); }}>
               <Upload className="h-4 w-4 mr-1" /> Importar CSV
             </Button>
             <Button variant="outline" size="sm" onClick={exportarCsv}>
@@ -1006,6 +1009,22 @@ export default function LeadsPage() {
                   className="font-mono text-xs"
                 />
               </div>
+
+              <label className="flex items-start gap-2 rounded-md border p-3 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={importConsentimento}
+                  onChange={(e) => setImportConsentimento(e.target.checked)}
+                />
+                <span>
+                  <strong>Tenho consentimento destes contatos</strong> para receber mensagens pelo WhatsApp.
+                  <span className="block text-xs text-muted-foreground">
+                    Necessário para disparar pela API Oficial da Meta. Fica registrado quem declarou e quando.
+                    Não marque para listas compradas ou contatos tirados de grupos.
+                  </span>
+                </span>
+              </label>
             </div>
 
             <DialogFooter>
