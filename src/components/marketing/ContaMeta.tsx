@@ -1,9 +1,13 @@
-import { useState } from "react";
-import { CheckCircle2, AlertCircle, ExternalLink, Copy, Webhook, RefreshCw, LogOut } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { CheckCircle2, AlertCircle, ExternalLink, Copy, Webhook, RefreshCw, LogOut, KeyRound } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import { getAuthToken } from "@/lib/api-token";
 import { type MetaStatus } from "@/hooks/useMetaStatus";
 
 // Ícone manual para evitar erro de importação da lucide-react
@@ -32,24 +36,124 @@ interface Props {
   onRecarregar: () => void;
 }
 
+interface ContaAnuncio {
+  id: string;
+  nome: string;
+  status: "ativa" | "inativa";
+  moeda: string | null;
+  business: string | null;
+}
+
+const authHeaders = (json = false): HeadersInit => ({
+  Authorization: `Bearer ${getAuthToken()}`,
+  ...(json ? { "Content-Type": "application/json" } : {}),
+});
+
+async function lerErro(r: Response) {
+  const data = await r.json().catch(() => ({}));
+  return data?.error?.message || data?.message || `HTTP ${r.status}`;
+}
+
 export function ContaMeta({ status, onRecarregar }: Props) {
   const [desconectando, setDesconectando] = useState(false);
+  const [tokenSistema, setTokenSistema] = useState("");
+  const [salvandoToken, setSalvandoToken] = useState(false);
+  const [contas, setContas] = useState<ContaAnuncio[]>([]);
+  const [carregandoContas, setCarregandoContas] = useState(false);
+  const [trocandoConta, setTrocandoConta] = useState(false);
 
-  const handleConectar = () => {
-    const authUrl = `${BASE}/api/marketing/facebook/auth`;
-    window.open(authUrl, "_blank", "width=600,height=700");
-    // Após fechar a janela, recarrega o status
-    const interval = setInterval(() => { onRecarregar(); }, 3000);
-    setTimeout(() => clearInterval(interval), 60000);
+  const carregarContas = useCallback(async () => {
+    setCarregandoContas(true);
+    try {
+      const r = await fetch(`${BASE}/api/marketing/facebook/contas`, { headers: authHeaders() });
+      if (!r.ok) throw new Error(await lerErro(r));
+      const data = await r.json();
+      setContas(data.contas ?? []);
+    } catch (e) {
+      toast.error("Erro ao listar contas de anúncio: " + (e as Error).message);
+    } finally {
+      setCarregandoContas(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (status.conectado) carregarContas();
+    else setContas([]);
+  }, [status.conectado, carregarContas]);
+
+  // O popup do OAuth avisa por postMessage quando termina (sucesso ou erro).
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      if (ev.origin !== new URL(BASE).origin || ev.data?.tipo !== "meta_oauth") return;
+      if (ev.data.ok) {
+        toast.success(ev.data.mensagem || "Conta Meta conectada!");
+        onRecarregar();
+      } else {
+        toast.error(ev.data.mensagem || "Não foi possível conectar à Meta.");
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [onRecarregar]);
+
+  const handleConectar = async () => {
+    // Abre o popup já no clique (senão o navegador bloqueia) e só depois aponta pra URL da Meta.
+    const popup = window.open("about:blank", "meta_oauth", "width=600,height=700");
+    try {
+      const r = await fetch(`${BASE}/api/marketing/facebook/auth`, { headers: authHeaders() });
+      if (!r.ok) throw new Error(await lerErro(r));
+      const { url } = await r.json();
+      if (popup) popup.location.href = url;
+      else window.location.href = url;
+    } catch (e) {
+      popup?.close();
+      toast.error((e as Error).message);
+    }
+  };
+
+  const handleSalvarToken = async () => {
+    setSalvandoToken(true);
+    try {
+      const r = await fetch(`${BASE}/api/marketing/facebook/token`, {
+        method: "POST", headers: authHeaders(true), body: JSON.stringify({ access_token: tokenSistema.trim() }),
+      });
+      if (!r.ok) throw new Error(await lerErro(r));
+      const data = await r.json();
+      setTokenSistema("");
+      toast.success(data.ad_account_id
+        ? `Conectado como ${data.nome}.`
+        : `Conectado como ${data.nome}. Escolha abaixo qual das ${data.contas.length} contas de anúncio usar.`);
+      onRecarregar();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSalvandoToken(false);
+    }
+  };
+
+  const handleTrocarConta = async (adAccountId: string) => {
+    setTrocandoConta(true);
+    try {
+      const r = await fetch(`${BASE}/api/marketing/facebook/conta`, {
+        method: "POST", headers: authHeaders(true), body: JSON.stringify({ ad_account_id: adAccountId }),
+      });
+      if (!r.ok) throw new Error(await lerErro(r));
+      const data = await r.json();
+      toast.success(`Conta de anúncios: ${data.nome}`);
+      onRecarregar();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setTrocandoConta(false);
+    }
   };
 
   const handleDesconectar = async () => {
     if (!confirm("Deseja desconectar a conta Meta Ads? Os dados de campanhas e leads não serão apagados.")) return;
     setDesconectando(true);
     try {
-      const token = localStorage.getItem("crm_access_token") || "";
       await fetch(`${BASE}/api/marketing/facebook/desconectar`, {
-        method: "POST", headers: { Authorization: `Bearer ${token}` },
+        method: "POST", headers: authHeaders(),
       });
       toast.success("Conta Meta desconectada.");
       onRecarregar();
@@ -87,10 +191,43 @@ export function ContaMeta({ status, onRecarregar }: Props) {
                 <div>
                   <p className="font-medium text-green-800 dark:text-green-300">Conta conectada</p>
                   <p className="text-sm text-green-700 dark:text-green-400">
-                    {status.nome_conta} · Ad Account: {status.ad_account_id}
+                    {status.nome_conta} · {status.tipo_token === "system_user" ? "Token de Usuário do Sistema (não expira)" : "Login com Facebook"}
                   </p>
                 </div>
               </div>
+
+              {status.tipo_token !== "system_user" && status.dias_restantes != null && status.dias_restantes <= 7 && (
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 text-sm text-yellow-800 dark:text-yellow-300">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  O acesso à Meta expira em {Math.max(0, status.dias_restantes)} dia(s). Clique em "Conectar com Facebook Business" de novo para renovar.
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <Label>Conta de anúncios</Label>
+                <Select
+                  value={status.ad_account_id ?? undefined}
+                  onValueChange={handleTrocarConta}
+                  disabled={carregandoContas || trocandoConta || contas.length === 0}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={carregandoContas ? "Carregando contas..." : "Escolha a conta de anúncios"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {contas.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.nome}{c.business ? ` · ${c.business}` : ""}{c.status === "inativa" ? " (inativa)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {!status.ad_account_id && contas.length > 0 && (
+                  <p className="text-xs text-yellow-700 dark:text-yellow-400">
+                    Escolha a conta para ver Métricas e Campanhas.
+                  </p>
+                )}
+              </div>
+
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={onRecarregar} className="gap-1.5">
                   <RefreshCw className="h-3.5 w-3.5" /> Verificar status
@@ -107,17 +244,48 @@ export function ContaMeta({ status, onRecarregar }: Props) {
               <div className="flex items-start gap-3 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200">
                 <AlertCircle className="h-5 w-5 text-yellow-600 shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-medium text-yellow-800 dark:text-yellow-300">Não conectado</p>
+                  <p className="font-medium text-yellow-800 dark:text-yellow-300">
+                    {status.expirado ? "Acesso à Meta expirado" : "Não conectado"}
+                  </p>
                   <p className="text-sm text-yellow-700 dark:text-yellow-400">
-                    Clique abaixo para autorizar o acesso à sua conta Meta Ads via OAuth.
+                    Conecte de uma das duas formas abaixo.
                   </p>
                 </div>
               </div>
-              <Button onClick={handleConectar} className="gap-2 bg-blue-600 hover:bg-blue-700">
-                <Facebook className="h-4 w-4" />
-                Conectar com Facebook Business
-                <ExternalLink className="h-3.5 w-3.5" />
-              </Button>
+
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  <KeyRound className="h-4 w-4" /> Token de Usuário do Sistema <Badge variant="outline" className="text-[10px]">recomendado</Badge>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Business Manager → Configurações → Usuários do sistema → atribua as contas de anúncio →
+                  Gerar token com <code>ads_read</code>, <code>ads_management</code> e <code>leads_retrieval</code>. Não expira.
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    placeholder="Cole o token aqui (EAA...)"
+                    value={tokenSistema}
+                    onChange={(e) => setTokenSistema(e.target.value)}
+                  />
+                  <Button onClick={handleSalvarToken} disabled={salvandoToken || tokenSistema.trim().length < 50}>
+                    {salvandoToken ? "Validando..." : "Conectar"}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="text-sm font-medium">Login com Facebook</p>
+                <p className="text-xs text-muted-foreground">
+                  Para quem não tem Business Manager. O acesso dura ~60 dias e precisa ser renovado.
+                </p>
+                <Button onClick={handleConectar} className="gap-2 bg-blue-600 hover:bg-blue-700">
+                  <Facebook className="h-4 w-4" />
+                  Conectar com Facebook Business
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
           )}
         </CardContent>

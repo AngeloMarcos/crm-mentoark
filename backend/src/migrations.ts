@@ -107,6 +107,16 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `);
 
+  // [AUDITORIA] LÓGICA (Sprint Conexão Meta Ads, 2026-10-03): token passa a ser gravado
+  // criptografado em `access_token_enc` (coluna antiga `access_token` vira NULL, linhas legadas
+  // migradas na 1ª leitura em routes/marketing.ts → getContaMeta). `tipo_token`: 'oauth' (Login
+  // com Facebook, expira ~60d) | 'system_user' (token de Usuário do Sistema do BM, não expira).
+  // `ad_account_id` pode ficar NULL até o usuário escolher a conta quando o token enxerga várias.
+  await pool.query(`ALTER TABLE facebook_contas ADD COLUMN IF NOT EXISTS access_token_enc TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE facebook_contas ADD COLUMN IF NOT EXISTS tipo_token TEXT NOT NULL DEFAULT 'oauth'`).catch(() => {});
+  await pool.query(`ALTER TABLE facebook_contas ALTER COLUMN access_token DROP NOT NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE facebook_contas ALTER COLUMN ad_account_id DROP NOT NULL`).catch(() => {});
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS marketing_leads (
       id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,

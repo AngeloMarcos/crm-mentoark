@@ -4,8 +4,12 @@ const BASE = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
 
 export interface MetaStatus {
   conectado: boolean;
+  expirado?: boolean;
   nome_conta?: string;
-  ad_account_id?: string;
+  ad_account_id?: string | null;
+  tipo_token?: "oauth" | "system_user";
+  token_expira_em?: string | null;
+  dias_restantes?: number | null;
   loading: boolean;
 }
 
@@ -21,7 +25,7 @@ export function useMetaStatus() {
       });
       if (r.ok) {
         const data = await r.json();
-        setStatus({ conectado: data.conectado ?? false, nome_conta: data.nome_conta, ad_account_id: data.ad_account_id, loading: false });
+        setStatus({ ...data, conectado: data.conectado ?? false, loading: false });
       } else {
         setStatus({ conectado: false, loading: false });
       }

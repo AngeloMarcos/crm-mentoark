@@ -43,12 +43,12 @@ export function useCampanhas(metaConectado: boolean) {
       const r = await fetch(`${BASE}/api/marketing/campanhas?status=${filtroStatus}`, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error?.message || data?.message || `HTTP ${r.status}`);
       setCampanhas(data.campanhas ?? []);
-    } catch (e: any) {
+    } catch (e) {
       setCampanhas([]);
-      setErro(e?.message || "Falha ao carregar campanhas da Meta");
+      setErro((e as Error)?.message || "Falha ao carregar campanhas da Meta");
     } finally {
       setLoading(false);
     }
@@ -56,15 +56,15 @@ export function useCampanhas(metaConectado: boolean) {
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  const pausar = async (id: string) => {
-    await fetch(`${BASE}/api/marketing/campanhas/${id}/pausar`, { method: "POST", headers: { Authorization: `Bearer ${getAuthToken()}` } });
+  // Lança erro quando a Meta recusa — antes resolvia sempre e o toast mostrava "pausada" mesmo falhando.
+  const alterarStatus = async (id: string, acao: "pausar" | "reativar") => {
+    const r = await fetch(`${BASE}/api/marketing/campanhas/${id}/${acao}`, { method: "POST", headers: { Authorization: `Bearer ${getAuthToken()}` } });
+    const data = await r.json().catch(() => ({}));
     carregar();
+    if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
   };
-
-  const reativar = async (id: string) => {
-    await fetch(`${BASE}/api/marketing/campanhas/${id}/reativar`, { method: "POST", headers: { Authorization: `Bearer ${getAuthToken()}` } });
-    carregar();
-  };
+  const pausar = (id: string) => alterarStatus(id, "pausar");
+  const reativar = (id: string) => alterarStatus(id, "reativar");
 
   return { campanhas, loading, erro, metaConectado, filtroStatus, setFiltroStatus, recarregar: carregar, pausar, reativar };
 }

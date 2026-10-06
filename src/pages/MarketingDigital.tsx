@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Megaphone, MessageCircle, BarChart3, Settings2, Zap, Target, TrendingUp } from "lucide-react";
+import { Megaphone, MessageCircle, BarChart3, Settings2, Zap, Target, TrendingUp, Activity } from "lucide-react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { type ProjecaoInputs, type ProjecaoResultado } from "@/components/market
 import { ProjecaoResultados } from "@/components/marketing/ProjecaoResultados";
 import { ProjecaoComparativo, type SimulacaoSalva } from "@/components/marketing/ProjecaoComparativo";
 import { CampanhasDashboard } from "@/components/marketing/CampanhasDashboard";
+import { MetricasMeta } from "@/components/marketing/MetricasMeta";
 import { LeadsCaptados } from "@/components/marketing/LeadsCaptados";
 import { ContaMeta } from "@/components/marketing/ContaMeta";
 import { toast } from "sonner";
@@ -63,6 +64,8 @@ function PlaceholderTab({ texto }: { texto: string }) {
 
 export default function MarketingDigitalPage() {
   const meta = useMetaStatus();
+  // Conectado E com conta de anúncios escolhida — sem conta, Métricas/Campanhas não têm o que buscar.
+  const metaPronto = meta.conectado && !!meta.ad_account_id;
   const [loadingCalc, setLoadingCalc] = useState(false);
   const [resultado, setResultado] = useState<ProjecaoResultado | null>(null);
   const [historico, setHistorico] = useState<SimulacaoSalva[]>([]);
@@ -110,7 +113,7 @@ export default function MarketingDigitalPage() {
               {meta.conectado ? (
                 <Badge className="bg-green-100 text-green-700 border-green-300 gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-                  Meta Ads conectado · {meta.nome_conta}
+                  Meta Ads conectado · {meta.nome_conta}{!meta.ad_account_id && " · escolha a conta de anúncios"}
                 </Badge>
               ) : (
                 <Badge className="bg-yellow-100 text-yellow-700 border-yellow-300 gap-1.5">
@@ -141,6 +144,9 @@ export default function MarketingDigitalPage() {
           <TabsList className="flex-wrap h-auto">
             <TabsTrigger value="projecao" className="gap-1.5">
               <BarChart3 className="h-3.5 w-3.5" /> Projeção
+            </TabsTrigger>
+            <TabsTrigger value="metricas" className="gap-1.5">
+              <Activity className="h-3.5 w-3.5" /> Métricas
             </TabsTrigger>
             <TabsTrigger value="campanhas" className="gap-1.5">
               <Megaphone className="h-3.5 w-3.5" /> Campanhas
@@ -174,8 +180,12 @@ export default function MarketingDigitalPage() {
             <ProjecaoComparativo historico={historico} onRemover={(id) => setHistorico((p) => p.filter((h) => h.id !== id))} />
           </TabsContent>
           
+          <TabsContent value="metricas">
+            <MetricasMeta key={meta.ad_account_id ?? "nenhuma"} metaConectado={metaPronto} />
+          </TabsContent>
+
           <TabsContent value="campanhas">
-            <CampanhasDashboard metaConectado={meta.conectado} />
+            <CampanhasDashboard key={meta.ad_account_id ?? "nenhuma"} metaConectado={metaPronto} />
           </TabsContent>
 
           <TabsContent value="leads">
