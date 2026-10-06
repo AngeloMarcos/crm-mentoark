@@ -92,3 +92,20 @@ describe('validarProxy', () => {
     expect(validarProxy({ host: 'x.com', port: 80, protocolo: 'ftp' }).erro).toBeTruthy();
   });
 });
+
+import { ROTA_ENVIO } from '../src/utils/resilientFetch';
+describe('trava central de envio (evolutionFetch)', () => {
+  const inst = (u: string) => ROTA_ENVIO.exec(u)?.[1] ?? null;
+  it('reconhece todo tipo de envio pela instância', () => {
+    for (const rota of ['message/sendText', 'message/sendMedia', 'message/sendWhatsAppAudio', 'message/sendReaction',
+      'message/sendStatus', 'message/sendPoll', 'chat/markMessageAsRead', 'chat/sendPresence']) {
+      expect(inst(`https://disparo.mentoark.com.br/${rota}/crm_5319f0ed61b3_2`)).toBe('crm_5319f0ed61b3_2');
+    }
+  });
+  it('não trava leitura, conexão, configuração nem proxy', () => {
+    for (const rota of ['instance/connect', 'instance/connectionState', 'chat/findMessages', 'chat/whatsappNumbers',
+      'settings/set', 'proxy/set', 'chat/getBase64FromMediaMessage', 'chat/fetchProfilePictureUrl']) {
+      expect(inst(`https://disparo.mentoark.com.br/${rota}/crm_5319f0ed61b3_2`)).toBeNull();
+    }
+  });
+});

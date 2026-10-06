@@ -21,7 +21,7 @@ import { invalidarNumerosMaturador } from '../services/maturadorFiltro';
 import { registrarEvento, mudarFase, normalizar as normalizarNumeroSaude } from '../services/saudeNumero';
 import { recalcularScoreAgente } from '../services/instanceScore';
 import { resolverOwnerId } from '../services/subscription';
-import { avaliarParticipantes, globalLigado, montarRedeGlobal, TERMO_GLOBAL_VERSAO } from '../services/maturadorGlobal';
+import { avaliarParticipantes, globalLigado, montarRedeGlobal, TERMO_GLOBAL_VERSAO, bloqueioEnvio } from '../services/maturadorGlobal';
 import { validarProxy, aplicarProxy, removerProxy } from '../services/proxyInstancia';
 
 export const TERMO_GLOBAL_TEXTO =
@@ -215,16 +215,28 @@ export default function maturadorRouter(pool: Pool): Router {
       invalidarNumerosMaturador(userId);
     }
 
-    // Ligar zera o estado de falha/pausa automática e libera a 1ª troca na hora.
+    // Ligar zera o estado de falha/pausa automática e libera a 1ª troca na hora. Sprint 9: se uma
+    // das pontas é número novo (só recebe), a 1ª mensagem fica para o dia seguinte entre 9h e 10h
+    // (guia de aquecimento: o número novo começa a receber a partir do 2º dia).
+    let comNumeroNovo = false;
+    if (ativo) {
+      const inst = (await pool.query(
+        `SELECT a.evolution_instancia AS ia, b.evolution_instancia AS ib FROM maturador_pares mp
+         JOIN agentes a ON a.id = mp.agente_a_id JOIN agentes b ON b.id = mp.agente_b_id WHERE mp.id = $1`, [req.params.id]
+      )).rows[0];
+      if (inst) comNumeroNovo = !!((await bloqueioEnvio(pool, inst.ia)) || (await bloqueioEnvio(pool, inst.ib)));
+    }
     const r = await pool.query(
       `UPDATE maturador_pares
        SET ativo = $1, updated_at = NOW(),
            falhas_consecutivas = CASE WHEN $1 THEN 0 ELSE falhas_consecutivas END,
            pausado_motivo      = CASE WHEN $1 THEN NULL ELSE pausado_motivo END,
-           proxima_mensagem_em = CASE WHEN $1 THEN NOW() ELSE proxima_mensagem_em END,
+           proxima_mensagem_em = CASE WHEN $1 AND $4 THEN ((NOW() AT TIME ZONE 'America/Sao_Paulo')::date + 1 + TIME '09:00'
+                                        + (floor(random() * 60)::int || ' minutes')::interval) AT TIME ZONE 'America/Sao_Paulo'
+                                      WHEN $1 THEN NOW() ELSE proxima_mensagem_em END,
            msgs_restantes_sessao = CASE WHEN $1 THEN 0 ELSE msgs_restantes_sessao END
-       WHERE id = $2 AND user_id = $3 AND NOT global RETURNING id, ativo`,
-      [ativo, req.params.id, userId]
+       WHERE id = $2 AND user_id = $3 AND NOT global RETURNING id, ativo, proxima_mensagem_em`,
+      [ativo, req.params.id, userId, comNumeroNovo]
     );
     if (!r.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
     return res.json(r.rows[0]);

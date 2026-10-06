@@ -67,6 +67,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
 import { ehTrafegoMaturador, ehTrafegoMaturadorGlobal } from '../services/maturadorFiltro';
+import { motivoEnvioBloqueado } from '../utils/resilientFetch';
 import { aoConectarInstancia, aoDesconectarInstancia, instanciasEmProtecao } from '../services/protecaoNumero';
 import { aoQuedaSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
 import { extrairIdentidades, resolverTelefone, registrarIdentidades, lembrarDestinoLid, marcarContatoSoLid } from '../services/identidadeContato';
@@ -1876,7 +1877,8 @@ export default function webhookRouter(pool: Pool): Router {
                process.env.EVOLUTION_API_KEY || '',
                instancia]
             ).catch(() => ({ rows: [] as any[] }));
-            if (cfgOptOut.rows.length) {
+            // Sprint 9: número que só recebe (novo/protegido) não manda nem a confirmação de opt-out.
+            if (cfgOptOut.rows.length && !(await motivoEnvioBloqueado(`/message/sendText/${cfgOptOut.rows[0].instancia}`))) {
               const { url: evoUrl, api_key: evoApiKey, instancia: evoInst } = cfgOptOut.rows[0];
               const base = (evoUrl || '').trim().replace(/\/+$/, '');
               // [AUDITORIA] BUG (achado da revisão externa/Google AI Studio, Sprint 6): este

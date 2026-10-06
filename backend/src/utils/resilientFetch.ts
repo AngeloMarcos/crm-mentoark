@@ -185,10 +185,37 @@ export async function resilientFetch(
  * Sempre sanitiza a URL, usa EVOLUTION_FETCH_TIMEOUT_MS e retenta em 503/504.
  * Throw em qualquer resposta não-ok (para quem chama tratar o status).
  */
+// [AUDITORIA] LÓGICA (Sprint 9, 2026-10-06 — regra do usuário: "número novo não manda mensagem de
+// forma nenhuma, só recebe até ser liberado"): trava ÚNICA no ponto por onde passa todo envio
+// pela Evolution — texto, mídia, áudio, reação, status, enquete, "lido" e "digitando", venha da
+// IA, campanha, Maturador, catálogo, MCP/n8n ou envio manual. Instância cujo número só recebe
+// (`maturadorGlobal.bloqueioEnvio`: proteção de número novo, perfil/aquecimento_1, quarentena,
+// conta em revisão, 21 dias após ban) recebe 423 com o motivo, sem a requisição sair.
+export const ROTA_ENVIO = /\/(?:message\/send[A-Za-z]*|chat\/(?:markMessageAsRead|sendPresence|updatePresence|markChatUnread))\/([^/?#]+)/;
+
+export async function motivoEnvioBloqueado(url: string): Promise<string | null> {
+  const m = ROTA_ENVIO.exec(url);
+  if (!m) return null;
+  const instancia = decodeURIComponent(m[1]);
+  try {
+    const [{ bloqueioEnvio }, { pool }] = await Promise.all([import('../services/maturadorGlobal'), import('../db')]);
+    return await bloqueioEnvio(pool, instancia);
+  } catch {
+    return null; // falha ao consultar não derruba envio legítimo (o motor de cada fluxo tem a própria trava)
+  }
+}
+
 export async function evolutionFetch(
   url: string,
   options: ResilientFetchOptions = {},
 ): Promise<Response> {
+  const bloqueio = await motivoEnvioBloqueado(url);
+  if (bloqueio) {
+    console.warn(`[ENVIO_BLOQUEADO] ${url.replace(/apikey=[^&]+/, '')} — ${bloqueio}`);
+    return new Response(JSON.stringify({ message: `Envio bloqueado: ${bloqueio}.` }), {
+      status: 423, headers: { 'Content-Type': 'application/json' },
+    });
+  }
   return resilientFetch(url, {
     timeoutMs:   TIMEOUT_MS,
     maxRetries:  MAX_RETRIES,
