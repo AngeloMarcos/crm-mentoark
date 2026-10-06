@@ -8,7 +8,8 @@ import { avaliarFases } from './services/saudeNumero';
 import { recalcularAptidaoOficial } from './services/checklistOficial';
 import { verificarWebhooksParados } from './services/saudeWebhook';
 import { gerarBackupsTodas } from './services/backupInstancia';
-import { montarRedeGlobal } from './services/maturadorGlobal';
+import { montarRedeGlobal, globalLigado } from './services/maturadorGlobal';
+import { reverificarProxies } from './services/proxyInstancia';
 import { retomarCampanhasInstanciaCaida, recalcularMetricasCampanhas } from './services/metricasDisparo';
 import { atualizarNumerosOficiais } from './routes/metaOficial';
 import { processarMaturador } from './services/maturadorProcessor';
@@ -282,9 +283,11 @@ export function initCronJobs() {
   // número, adesão, proxy e quedas). Desligado no admin = desativa todos os vínculos globais.
   cron.schedule('*/30 * * * *', async () => {
     try {
+      // Auditoria: proxy reconferido a cada 6h antes de montar a rede (número sem proxy ativo sai).
+      if (await globalLigado(pool)) await reverificarProxies(pool);
       await montarRedeGlobal(pool);
     } catch (err: any) {
-      log.error('CRON', 'Erro no Maturador Global', { err: err.message });
+      log.error('CRON', 'Erro no Aquecimento Global', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 

@@ -2439,7 +2439,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE maturador_mensagens ADD COLUMN IF NOT EXISTS mentoria BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
   await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS maturador_global BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
   for (const col of ['proxy_host TEXT', 'proxy_port INTEGER', 'proxy_protocolo TEXT', 'proxy_usuario TEXT',
-                     'proxy_senha_enc TEXT', 'proxy_aplicado_em TIMESTAMPTZ']) {
+                     'proxy_senha_enc TEXT', 'proxy_aplicado_em TIMESTAMPTZ', 'proxy_verificado_em TIMESTAMPTZ']) {
     await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
   await pool.query(`

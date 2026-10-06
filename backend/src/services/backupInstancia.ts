@@ -58,6 +58,7 @@ export async function gerarBackupInstancia(pool: Pool, userId: string, instancia
               COALESCE(timestamp_wa, created_at) AS quando
        FROM whatsapp_messages
        WHERE user_id = $1 AND instance_name = $2 AND deleted_at IS NULL AND remote_jid NOT LIKE '%@g.us'
+         AND NOT maturador_global -- Sprint 9: conversa com número de outra conta não vai para o backup do cliente
          AND created_at >= NOW() - INTERVAL '30 days'
        ORDER BY conversa, quando`,
       [userId, instancia]

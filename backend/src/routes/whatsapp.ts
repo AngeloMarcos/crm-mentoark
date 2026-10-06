@@ -402,6 +402,7 @@ export default function whatsappRouter(pool: Pool): Router {
         `SELECT DISTINCT split_part(remote_jid, '@', 1) AS phone
          FROM whatsapp_messages
          WHERE user_id = $1 AND remote_jid NOT LIKE '%@g.us' AND deleted_at IS NULL
+           AND NOT maturador_global -- Sprint 9: números de outras contas (Aquecimento Global) não viram contato
          LIMIT 200`,
         [userId]
       );
@@ -3224,6 +3225,7 @@ export default function whatsappRouter(pool: Pool): Router {
           AND c.telefone ILIKE '%' || RIGHT(split_part(m.remote_jid,'@',1), 11)
         WHERE m.user_id = $1 AND m.content ILIKE $2
           AND m.remote_jid NOT LIKE '%@g.us'
+          AND NOT m.maturador_global -- Sprint 9: busca não mostra conversa do Aquecimento Global
           AND m.deleted_at IS NULL
         ORDER BY m.created_at DESC LIMIT 50`,
       [tenantId, `%${q}%`]

@@ -67,7 +67,7 @@ export async function aplicarProxy(pool: Pool, agenteId: string, userId: string,
   if (!ativo) return 'O proxy foi enviado, mas a Evolution não confirmou que ficou ativo. Tente de novo.';
   await pool.query(
     `UPDATE agentes SET proxy_host = $3, proxy_port = $4, proxy_protocolo = $5, proxy_usuario = $6,
-            proxy_senha_enc = COALESCE($7, proxy_senha_enc), proxy_aplicado_em = NOW(), updated_at = NOW()
+            proxy_senha_enc = COALESCE($7, proxy_senha_enc), proxy_aplicado_em = NOW(), proxy_verificado_em = NOW(), updated_at = NOW()
      WHERE id = $1 AND user_id = $2`,
     [agenteId, userId, p.host, p.port, p.protocolo, p.usuario ?? null, p.senha ? encriptarSegredoMetaOficial(p.senha) : null]
   );
@@ -90,4 +90,40 @@ export async function removerProxy(pool: Pool, agenteId: string, userId: string)
     [agenteId, userId]
   );
   return null;
+}
+
+/**
+ * Sprint 9 (auditoria 2026-10-06): o proxy era conferido só quando configurado. Se depois ele for
+ * desligado/trocado na Evolution, o número seguiria no Aquecimento Global saindo pelo IP da VPS —
+ * justamente o risco que o proxy obrigatório evita. Reconfere a cada 6h (cron do Aquecimento
+ * Global); sem confirmação de proxy ativo com o mesmo host, o número sai da rede na hora
+ * (`proxy_aplicado_em = NULL`) e o evento fica na linha do tempo de saúde. Falha de rede ao
+ * consultar NÃO derruba (só não marca como verificado).
+ */
+export async function reverificarProxies(pool: Pool): Promise<{ conferidos: number; removidos: number }> {
+  const r = await pool.query(
+    `SELECT id, evolution_instancia, evolution_server_url, evolution_api_key, proxy_host, numero_conectado
+     FROM agentes WHERE proxy_aplicado_em IS NOT NULL AND evolution_instancia IS NOT NULL
+       AND (proxy_verificado_em IS NULL OR proxy_verificado_em < NOW() - INTERVAL '6 hours')`
+  );
+  let removidos = 0;
+  for (const a of r.rows) {
+    const { base, key } = credenciais(a);
+    const resp = await evolutionFetch(`${base}/proxy/find/${encodeURIComponent(a.evolution_instancia)}`, { headers: { apikey: key } }).catch(() => null);
+    if (!resp?.ok) continue; // Evolution fora do ar: tenta de novo no próximo ciclo
+    const conf: any = await resp.json().catch(() => null);
+    const ok = conf?.enabled === true && String(conf?.host || '').toLowerCase() === String(a.proxy_host || '').toLowerCase();
+    if (ok) {
+      await pool.query(`UPDATE agentes SET proxy_verificado_em = NOW() WHERE id = $1`, [a.id]);
+    } else {
+      removidos++;
+      await pool.query(`UPDATE agentes SET proxy_aplicado_em = NULL, proxy_verificado_em = NOW() WHERE id = $1`, [a.id]);
+      log.warn('PROXY', 'Proxy não está mais ativo na Evolution — número sai do Aquecimento Global', { instancia: a.evolution_instancia });
+      await pool.query(
+        `INSERT INTO whatsapp_eventos_saude (numero, instancia, tipo, detalhe) VALUES ($1, $2, 'proxy_perdido', $3)`,
+        [String(a.numero_conectado || '').replace(/\D/g, '') || null, a.evolution_instancia, JSON.stringify({ host: a.proxy_host })]
+      ).catch(() => {});
+    }
+  }
+  return { conferidos: r.rows.length, removidos };
 }

@@ -136,7 +136,7 @@ async function executar(
           // homologação (ver diagnosticos/AUDITORIA_LOG.md).
           withTenantContext({ userId }, (client) => client.query(
             `SELECT content, from_me, instance_name, created_at
-             FROM whatsapp_messages WHERE user_id = $1 AND deleted_at IS NULL
+             FROM whatsapp_messages WHERE user_id = $1 AND deleted_at IS NULL AND NOT maturador_global
              ORDER BY created_at DESC LIMIT 5`,
             [userId],
           )),

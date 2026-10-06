@@ -83,6 +83,10 @@ export async function mudarFase(pool: Pool, numero: string, nova: Fase, motivo: 
   if (r.rowCount) {
     await registrarEvento(pool, numero, instancia, 'mudanca_fase', null, { fase: nova, motivo });
     invalidarCacheSaude();
+    // Auditoria Sprint 9: a trava de envio (cache de 60s) passa a valer NA HORA — número que acabou
+    // de cair em quarentena não pode mandar mais nada nem no minuto seguinte. Import dinâmico
+    // porque maturadorGlobal importa este arquivo.
+    void import('./maturadorGlobal').then(m => m.invalidarCacheBloqueio()).catch(() => {});
     log.info('SAUDE_NUMERO', 'Mudança de fase', { numero, fase: nova, motivo });
   }
 }
