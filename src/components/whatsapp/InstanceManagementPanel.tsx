@@ -73,6 +73,7 @@ import {
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
 import { ChecklistApiOficial } from "./ChecklistApiOficial";
+import { BackupsInstancia } from "./BackupsInstancia";
 import {
   createInstance,
   fetchConnectionStatus,
@@ -128,6 +129,7 @@ interface SaudeInfo {
   fase_desde: string | null;
   bans_total: number;
   apto_api_oficial: boolean;
+  em_revisao_desde?: string | null; // Sprint 8 (Sprint 3 / H10)
   enviados_hoje: number;
   limite: { limite: number; somenteConhecidos: boolean; motivo: string | null; liberaEm: string | null };
   alerta: string | null;
@@ -681,6 +683,30 @@ export function InstanceManagementPanel() {
     } catch { /* informativo — não bloqueia a tela */ }
   };
 
+  // Sprint 8 (Sprint 3 / H10): cliente confirma que o app mostra "conta em revisão".
+  const marcarRevisao = async (a: Agente, emRevisao: boolean) => {
+    if (emRevisao && !confirm(`O app do WhatsApp deste número mostra "Conta em revisão"?
+
+Enquanto estiver em revisão:
+• NÃO reinstale o WhatsApp nem leia QR Code de novo;
+• aguarde 24h;
+• depois, use a opção de contestação do próprio WhatsApp.
+
+O CRM não vai contar como ban enquanto a revisão durar.`)) return;
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/saude/${a.id}/revisao`, {
+        method: "PUT", headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+        body: JSON.stringify({ em_revisao: emRevisao }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.message || "Erro ao salvar");
+      toast.success(emRevisao ? "Marcado como em revisão" : "Revisão encerrada");
+      carregarProtecao();
+    } catch (e: any) { toast.error(e.message); }
+  };
+
   const liberarProtecao = async (a: Agente) => {
     if (!confirm(`Pular o aquecimento do número de "${a.nome}" e liberar campanhas agora?
 
@@ -1043,6 +1069,18 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                         Pular aquecimento (assumo o risco)
                       </Button>
                     )}
+                    {/* Sprint 8 (Sprint 3 / H10): "conta em revisão" não é ban — instruções + não conta em bans_total. */}
+                    {sd.em_revisao_desde ? (
+                      <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-amber-800 dark:text-amber-300">
+                        <p className="font-semibold">Conta em revisão desde {new Date(sd.em_revisao_desde).toLocaleDateString("pt-BR")}</p>
+                        <p>Não reinstale o WhatsApp nem leia QR Code. Aguarde 24h e depois use a contestação do próprio WhatsApp. Não conta como ban enquanto durar.</p>
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => marcarRevisao(a, false)}>Revisão encerrada</Button>
+                      </div>
+                    ) : sd.fase === "quarentena" && (
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => marcarRevisao(a, true)}>
+                        O app mostra "Conta em revisão"
+                      </Button>
+                    )}
                   </div>
                 )}
                 {!!sd?.bans_total && (
@@ -1060,6 +1098,7 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                     <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-700">Apto para API oficial</Badge>
                   )}
                   <ChecklistApiOficial agenteId={a.id} apto={!!sd?.apto_api_oficial} />
+                  <BackupsInstancia agenteId={a.id} nome={a.nome} />
                 </div>
 
                 {/* [AUDITORIA] LÓGICA (Sprint Score Real + Maturador, 2026-08-09): texto

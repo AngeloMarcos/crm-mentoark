@@ -70,6 +70,8 @@ import { MonitoringDashboard } from "@/components/disparos/MonitoringDashboard";
 // F5/link direto, mesmo padrão já usado e comprovado em `MonitorWhatsApp.tsx`.
 import { CampanhasList } from "@/components/disparos/CampanhasList";
 import { RecorteCard, RecorteAudiencia, OpcoesRecorte } from "@/components/disparos/RecorteCard";
+import { LinterMensagemCard } from "@/components/disparos/LinterMensagemCard";
+import { validarFormato } from "@/lib/linterMensagem";
 import { useSearchParams } from "react-router-dom";
 
 // [AUDITORIA] LÓGICA (Sprint Estruturar Disparo, 2026-08-11): "há X min/h/dias" em pt-BR sem
@@ -733,10 +735,11 @@ export default function DisparosPage() {
           excluir_robos: opcoesRecorte.excluirRobos,
           excluir_sem_nome: opcoesRecorte.excluirSemNome,
           somente_conhecidos: opcoesRecorte.somenteConhecidos === true,
+          permitir_estrangeiros: opcoesRecorte.permitirEstrangeiros === true,
         });
         const porId = new Map(unique.map((c: any) => [c.id, c] as [string, any]));
         const ordenados = (pre.elegiveis as string[]).map(id => porId.get(id)).filter(Boolean);
-        setRecorte({ selecionados: unique.length, elegiveis: ordenados.length, excluidos: pre.excluidos ?? {}, rotulos: pre.rotulos ?? {}, comPropensao: pre.com_propensao ?? 0, frios: pre.frios ?? 0 });
+        setRecorte({ selecionados: unique.length, elegiveis: ordenados.length, excluidos: pre.excluidos ?? {}, rotulos: pre.rotulos ?? {}, comPropensao: pre.com_propensao ?? 0, frios: pre.frios ?? 0, resumo: pre.resumo });
         setTargetContacts(ordenados);
       } catch {
         setRecorte(null);
@@ -745,12 +748,14 @@ export default function DisparosPage() {
       setLoadingCount(false);
     };
     fetchCount();
-  }, [form.tags_selecionadas, form.estagios_selecionados, form.listas_selecionadas, opcoesRecorte.excluirRobos, opcoesRecorte.excluirSemNome, opcoesRecorte.somenteConhecidos]);
+  }, [form.tags_selecionadas, form.estagios_selecionados, form.listas_selecionadas, opcoesRecorte.excluirRobos, opcoesRecorte.excluirSemNome, opcoesRecorte.somenteConhecidos, opcoesRecorte.permitirEstrangeiros]);
 
   // Validação por etapa — habilita "Próximo" só quando OK
   const stepValid = useMemo(() => {
     if (step === 0) return form.nome.trim().length > 0 && targetContacts.length > 0;
     if (step === 1) {
+      // Sprint 8 (Sprint 4 / H6): variável desconhecida/formato antigo/chave desbalanceada trava.
+      if ([form.mensagem, form.legenda_midia, ...(form.mensagens_variantes || [])].some((t: string) => t && validarFormato(t).length)) return false;
       if (form.tipo_midia === "texto") return form.mensagem.trim().length > 0;
       return form.url_midia.trim().length > 0;
     }
@@ -773,7 +778,12 @@ export default function DisparosPage() {
       if (!form.nome.trim()) return "Informe o nome da campanha";
       return "Selecione ao menos uma tag, lista, estágio ou importe um CSV";
     }
-    if (step === 1) return form.tipo_midia === "texto" ? "Escreva a mensagem" : "Informe a URL do arquivo";
+    if (step === 1) {
+      const erroFormato = [form.mensagem, form.legenda_midia, ...(form.mensagens_variantes || [])]
+        .map((t: string) => (t ? validarFormato(t)[0] : undefined)).find(Boolean);
+      if (erroFormato) return erroFormato;
+      return form.tipo_midia === "texto" ? "Escreva a mensagem" : "Informe a URL do arquivo";
+    }
     if (step === 2) {
       if (form.instancias_ids.length === 0) return "Selecione ao menos uma instância";
       return "Corrija o intervalo customizado (mínimo não pode ser maior que o máximo, nem menor que o piso de segurança)";
@@ -2456,6 +2466,9 @@ function StepMessage({ form, setForm }: any) {
           )}
         </div>
 
+        {/* Sprint 8 (Sprint 4 / H6): nota da mensagem, dicas e prévia de 5 variações. */}
+        <LinterMensagemCard texto={textoAtivo || ""} variantes={form.mensagens_variantes} variacaoAutomatica={form.variacao_automatica} />
+
         <VariantesMensagem form={form} setForm={setForm} />
 
         {/* Preview Card */}
@@ -2695,6 +2708,8 @@ function StepAntiBan({ form, setForm }: any) {
   // limiar fixo de score. Sem dado de saúde (instância antiga sem número registrado), segue a regra
   // de score de antes.
   const bloqueadaPorSaude = (i: any) => {
+    // Sprint 8 (Sprint 4 / H8): prospecção e pessoal nunca disparam (o backend também recusa).
+    if (i.papel === "prospeccao" || i.papel === "pessoal") return true;
     const s = saudeInst[i.id];
     return s ? s.limite.limite <= 0 : (scoreCalculado(i) && scoreDe(i) < LIMIAR_PADRAO);
   };
@@ -2772,7 +2787,11 @@ function StepAntiBan({ form, setForm }: any) {
                   <div>
                     <p className="text-sm font-bold">{inst.nome}</p>
                     <p className="text-[10px] text-muted-foreground font-mono">{inst.evolution_instancia}</p>
-                    {s && (
+                    {(inst.papel === "prospeccao" || inst.papel === "pessoal") ? (
+                      <p className="text-[10px] mt-0.5 text-red-600">
+                        Número de {inst.papel === "pessoal" ? "uso pessoal" : "prospecção (entra em grupos)"} — não dispara campanha.
+                      </p>
+                    ) : s && (
                       <p className={`text-[10px] mt-0.5 ${isBlocked ? "text-red-600" : "text-muted-foreground"}`}>
                         {isBlocked
                           ? s.limite.motivo

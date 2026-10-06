@@ -7,6 +7,7 @@ import { recalcularTodosScores } from './services/instanceScore';
 import { avaliarFases } from './services/saudeNumero';
 import { recalcularAptidaoOficial } from './services/checklistOficial';
 import { verificarWebhooksParados } from './services/saudeWebhook';
+import { gerarBackupsTodas } from './services/backupInstancia';
 import { retomarCampanhasInstanciaCaida, recalcularMetricasCampanhas } from './services/metricasDisparo';
 import { atualizarNumerosOficiais } from './routes/metaOficial';
 import { processarMaturador } from './services/maturadorProcessor';
@@ -273,6 +274,16 @@ export function initCronJobs() {
       await recalcularAptidaoOficial(pool); // Sprint 7: checklist "Apto para API oficial"
     } catch (err: any) {
       log.error('CRON', 'Erro ao avaliar fases de maturação', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Sprint 8 (Sprint 3 / H10): backup diário (CSV gzip) de contatos e conversas por instância,
+  // de madrugada, mantendo as 3 cópias mais recentes (services/backupInstancia.ts).
+  cron.schedule('40 3 * * *', async () => {
+    try {
+      await gerarBackupsTodas(pool);
+    } catch (err: any) {
+      log.error('CRON', 'Erro no backup por instância', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 

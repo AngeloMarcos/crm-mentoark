@@ -35,6 +35,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 import { pool, migrationsPool } from './db';
+import { metricasMaturacaoAdmin } from './services/metricasMaturacao';
 import { authMiddleware, adminMiddleware, tenantContextMiddleware, assinaturaGuard, masterOnly, AuthRequest } from './middleware';
 import { makeCrud } from './crud';
 
@@ -542,6 +543,16 @@ app.get('/api/seguranca/status-chaves', authMiddleware, adminMiddleware, (_req, 
     { chave: 'N8N_CRIS_WEBHOOK',      configurado: !!process.env.N8N_CRIS_WEBHOOK },
   ];
   res.json(chaves);
+});
+
+// ── Maturação de números (admin, Sprint 8 = Sprint 3 / H10) ──────────────────
+// GET /api/admin/maturacao — números por fase, Maturador, restrições/bans por fase e tempo até madura.
+app.get('/api/admin/maturacao', authMiddleware, adminMiddleware, async (_req: AuthRequest, res) => {
+  try {
+    res.json(await metricasMaturacaoAdmin(pool));
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
 // ── Diagnóstico WhatsApp (admin) ─────────────────────────────

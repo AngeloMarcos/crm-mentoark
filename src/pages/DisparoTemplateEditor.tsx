@@ -21,6 +21,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { getAuthToken } from "@/lib/api-token";
 import { BIBLIOTECA_VARIACOES, textoTemSpintax, personalizarMensagem } from "@/lib/motorTexto";
 import { VARIAVEIS_MENSAGEM_CONTATO, CONTATO_EXEMPLO } from "@/lib/modeloImportacao";
+import { LinterMensagemCard } from "@/components/disparos/LinterMensagemCard";
+import { validarFormato } from "@/lib/linterMensagem";
 
 // [AUDITORIA] LÓGICA (Sprint Editor Template WhatsApp, 2026-09-04 — mockup de referência trazido
 // pelo usuário): esta tela substitui o antigo modal simples de `DisparoTemplates.tsx` por um
@@ -360,6 +362,8 @@ export default function DisparoTemplateEditorPage() {
     if (!user) return;
     if (!nome.trim()) { toast.error("Nome do template é obrigatório"); return; }
     if (!corpo.trim()) { toast.error("Corpo da mensagem é obrigatório"); return; }
+    const errosFormato = validarFormato(corpo); // Sprint 8 / H6: formato único de variáveis/spintax
+    if (errosFormato.length) { toast.error(errosFormato[0]); return; }
     if (HEADER_TIPOS_COM_MIDIA.includes(headerTipo) && !headerMidiaUrl.trim()) {
       toast.error("Selecione ou informe um arquivo para o header");
       return;
@@ -590,6 +594,9 @@ export default function DisparoTemplateEditorPage() {
                   Preenchidas com o dado real do contato ao enviar — mesmas variáveis do passo Mensagem em Disparos.
                 </p>
               </div>
+
+              {/* Sprint 8 (Sprint 4 / H6): nota, dicas e prévia de 5 variações antes de salvar. */}
+              <LinterMensagemCard texto={corpo} />
 
               <div className="space-y-1.5">
                 <div className="flex items-center gap-1.5 flex-wrap">

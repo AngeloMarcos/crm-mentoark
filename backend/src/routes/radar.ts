@@ -5,7 +5,7 @@ import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { configProviderDoAmbiente, consultasDoNicho, diretoriosUteis, consultasUsadasHoje, LIMITES, paginasRaspadasHoje, RASPAGEM, semearNichosSeVazio } from '../radar/busca';
 import { enfileirarBusca, enfileirarEntrada, enfileirarLinkPublico, enfileirarValidacao, memoriaRedis, redisConfigurado } from '../radar/fila';
-import { carregarPesos, configLeitura, pausar, pausaAtiva, pontuarTodos, retomar, textoPausa } from '../radar/validacao';
+import { carregarPesos, configLeitura, pausar, pausaAtiva, pontuarTodos, retomar, textoPausa, consultasConviteHoje } from '../radar/validacao';
 import { mesclarPesos } from '../radar/scoring';
 import { importarCsv } from '../radar/importarPlanilha';
 import { entradasHoje, instanciaApta, instanciaDeProspeccao, podeEntrar, transicaoValida } from '../radar/entrar';
@@ -284,7 +284,8 @@ export default function radarRouter(pool: Pool): Router {
     try {
       if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'id inválido' });
       const papel = String(req.body?.papel ?? '');
-      if (!['atendimento', 'disparo', 'prospeccao'].includes(papel)) return res.status(400).json({ error: 'papel inválido' });
+      // Sprint 8 (Sprint 4 / H8): + pessoal (sem IA e sem disparo) e maturacao.
+      if (!['atendimento', 'disparo', 'prospeccao', 'pessoal', 'maturacao'].includes(papel)) return res.status(400).json({ error: 'papel inválido' });
       const ownerId = await resolverOwnerId(pool, req.userId!);
       const r = await pool.query(
         `UPDATE agentes SET papel = $3, updated_at = now() WHERE id = $1 AND user_id = $2 RETURNING id, nome, evolution_instancia, papel`,
@@ -309,6 +310,7 @@ export default function radarRouter(pool: Pool): Router {
         instancias_disponiveis: instancias.rows,
         instancia_selecionada_apta: instancia ? instanciaApta(instancia, { corteDiasConectado: cfg.corte_dias_conectado, corteHealthScore: cfg.corte_health_score }) : null,
         entradas_hoje: await entradasHoje(pool, userId),
+        consultas_hoje: await consultasConviteHoje(pool, userId),
       });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -333,6 +335,7 @@ export default function radarRouter(pool: Pool): Router {
            corte_health_score   = COALESCE($11, corte_health_score),
            extracao_apos_horas  = COALESCE($12, extracao_apos_horas),
            sair_apos_extrair    = COALESCE($13, sair_apos_extrair),
+           limite_consultas_dia = COALESCE($14, limite_consultas_dia),
            updated_at = now()
          WHERE user_id = $1 RETURNING *`,
         [userId, UUID_RE.test(String(b.agente_id ?? '')) ? b.agente_id : null,
@@ -340,7 +343,9 @@ export default function radarRouter(pool: Pool): Router {
          /^\d{2}:\d{2}$/.test(b.janela_inicio ?? '') ? b.janela_inicio : null,
          /^\d{2}:\d{2}$/.test(b.janela_fim ?? '') ? b.janela_fim : null,
          numOuNull(b.corte_score), numOuNull(b.corte_membros), numOuNull(b.corte_dias_conectado), numOuNull(b.corte_health_score),
-         numOuNull(b.extracao_apos_horas), typeof b.sair_apos_extrair === 'boolean' ? b.sair_apos_extrair : null],
+         numOuNull(b.extracao_apos_horas), typeof b.sair_apos_extrair === 'boolean' ? b.sair_apos_extrair : null,
+         // Sprint 8 / H7: consultas de convite por dia (1 a 500).
+         numOuNull(b.limite_consultas_dia) === null ? null : Math.max(1, Math.min(500, Math.round(b.limite_consultas_dia)))],
       );
       res.json(r.rows[0]);
     } catch (err: any) { res.status(500).json({ error: err.message }); }

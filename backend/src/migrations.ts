@@ -2426,6 +2426,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
   for (const col of ['meta_endpoint TEXT', 'clique_em TIMESTAMPTZ', 'clique_texto TEXT']) {
     await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+  // Sprint 8 (Sprint 3 / H10): "conta em revisão" confirmada pelo cliente — não vira ban enquanto durar.
+  await pool.query(`ALTER TABLE whatsapp_numeros ADD COLUMN IF NOT EXISTS em_revisao_desde TIMESTAMPTZ`).catch(() => {});
   // Sprint 7 (Sprint 5 / H6): último evento da Evolution por instância (alerta de webhook parado).
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ultimo_webhook_em TIMESTAMPTZ`).catch(() => {});
   log.info('MIGRATIONS', 'API oficial Sprint 7 (IA/MM API/registro) OK');
@@ -3036,13 +3038,26 @@ export async function runMigrations(pool: Pool): Promise<void> {
   try {
     await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS papel TEXT NOT NULL DEFAULT 'atendimento'`).catch(() => {});
     await pool.query(`ALTER TABLE agentes DROP CONSTRAINT IF EXISTS chk_agentes_papel`).catch(() => {});
-    await pool.query(`ALTER TABLE agentes ADD CONSTRAINT chk_agentes_papel CHECK (papel IN ('atendimento','disparo','prospeccao'))`).catch(() => {});
-    log.info('MIGRATIONS', 'agentes.papel (atendimento/disparo/prospeccao) OK');
+    // Sprint 8 (Sprint 4 / H8, 2026-10-06): + 'pessoal' (sem IA e sem disparo) e 'maturacao'.
+    await pool.query(`ALTER TABLE agentes ADD CONSTRAINT chk_agentes_papel CHECK (papel IN ('atendimento','disparo','prospeccao','pessoal','maturacao'))`).catch(() => {});
+    log.info('MIGRATIONS', 'agentes.papel (atendimento/disparo/prospeccao/pessoal/maturacao) OK');
+    // Sprint 8 (Sprint 4 / H7): contador diário de consultas de convite (fuso de São Paulo). O
+    // limite (`radar_entrada_config.limite_consultas_dia`) é criado depois de `migrarRadar`.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS radar_consultas_convite (
+        user_id UUID NOT NULL,
+        dia     DATE NOT NULL,
+        total   INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, dia)
+      )
+    `).catch(() => {});
   } catch (err: any) {
     log.error('MIGRATIONS', 'Falha na migration de agentes.papel', { err: err?.message, stack: err?.stack });
   }
 
   await migrarRadar(pool);
+  // Sprint 8 (Sprint 4 / H7): limite diário de consultas de convite (padrão 50).
+  await pool.query(`ALTER TABLE radar_entrada_config ADD COLUMN IF NOT EXISTS limite_consultas_dia INTEGER NOT NULL DEFAULT 50`).catch(() => {});
 
   log.info('MIGRATIONS', 'OK');
 }

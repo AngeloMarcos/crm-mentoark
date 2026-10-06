@@ -191,3 +191,20 @@ export function sortearTema(temaAtual: number | null): number {
   if (t === temaAtual) t = (t + 1 + Math.floor(Math.random() * (TEMAS.length - 1))) % TEMAS.length;
   return t;
 }
+
+// ── Sprint 8 (Sprint 3 / H10, 2026-10-06): enquete ocasional e status neutro ─────────────────
+/** Enquetes leves entre os parceiros (sinal orgânico de uso de recurso nativo do WhatsApp). */
+export const ENQUETES: { pergunta: string; opcoes: string[] }[] = [
+  { pergunta: 'Almoço hoje?', opcoes: ['Comida caseira', 'Lanche', 'Ainda não sei'] },
+  { pergunta: 'Melhor horário pra gente se falar amanhã?', opcoes: ['Manhã', 'Tarde', 'Noite'] },
+  { pergunta: 'Café ou chá?', opcoes: ['Café', 'Chá', 'Os dois'] },
+  { pergunta: 'Fim de semana:', opcoes: ['Descansar', 'Sair', 'Trabalhar um pouco'] },
+  { pergunta: 'Reunião da semana que vem:', opcoes: ['Segunda', 'Quarta', 'Sexta'] },
+];
+
+/** Status de texto neutros (sem promoção, sem link) — publicados só para o parceiro do par. */
+export const STATUS_TEXTOS = [
+  'Bom dia! ☀️', 'Semana produtiva por aqui 💪', 'Café e foco ☕', 'Dia corrido, mas seguimos 🙏',
+  'Boa tarde a todos!', 'Sextou 😄', 'Gratidão pelo dia de hoje', 'Organizando a semana 📅',
+];
+export const STATUS_CORES = ['#128C7E', '#34B7F1', '#7E57C2', '#EF6C00', '#5D4037', '#C2185B'];

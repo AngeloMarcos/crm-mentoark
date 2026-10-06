@@ -4,6 +4,7 @@ import { consultarConvite, instanciaConectada, ClienteEvolution } from './evolut
 import { buscarPaginaConvite } from './paginaConvite';
 import { avaliarAderencia, CriteriosNicho, mesclarPesos, pontuarGrupo, PesosScore } from './scoring';
 import { instanciaDeProspeccao } from './instanciaProspeccao';
+import { registrarEvento } from '../services/saudeNumero';
 
 /**
  * Instância usada para ler convites (participantes, descrição). Prioriza a instância de
@@ -12,14 +13,55 @@ import { instanciaDeProspeccao } from './instanciaProspeccao';
  * o Catálogo continuava mostrando "nenhuma instância configurada" mesmo com a de prospecção pronta
  * (achado real, validação ao vivo em produção — 2026-09-28).
  */
+// Sprint 8 (Sprint 4 / H7, 2026-10-06): SÓ a instância de prospecção lê convites — o fallback pra
+// `RADAR_EVOLUTION_INSTANCE` saiu (não estava configurado em nenhum ambiente) porque podia apontar
+// pra uma instância de atendimento/disparo e gastar a reputação dela com consulta em massa.
 export async function configLeitura(pool: Pool, userId: string): Promise<{ cliente: ClienteEvolution; instancia: string } | null> {
   const prospeccao = await instanciaDeProspeccao(pool, userId).catch(() => null);
-  if (prospeccao) return { cliente: { base: prospeccao.url, apiKey: prospeccao.apiKey }, instancia: prospeccao.instancia };
-  const base = process.env.EVOLUTION_API_URL;
-  const apiKey = process.env.EVOLUTION_API_KEY;
-  const instancia = process.env.RADAR_EVOLUTION_INSTANCE;
-  if (!base || !apiKey || !instancia) return null;
-  return { cliente: { base, apiKey }, instancia };
+  if (!prospeccao) return null;
+  return { cliente: { base: prospeccao.url, apiKey: prospeccao.apiKey }, instancia: prospeccao.instancia };
+}
+
+// ── Sprint 8 / H7: limite diário de consultas de convite e pausa progressiva após 429 ─────────
+const LIMITE_CONSULTAS_PADRAO = 50;
+const hojeSp = `(NOW() AT TIME ZONE 'America/Sao_Paulo')::date`;
+
+export async function consultasConviteHoje(pool: Pool, userId: string): Promise<number> {
+  const r = await pool.query(`SELECT total FROM radar_consultas_convite WHERE user_id = $1 AND dia = ${hojeSp}`, [userId]).catch(() => ({ rows: [] as any[] }));
+  return r.rows[0]?.total ?? 0;
+}
+
+/** Reserva 1 consulta do dia; false quando o limite da conta já foi atingido. */
+export async function reservarConsultaConvite(pool: Pool, userId: string): Promise<{ ok: boolean; limite: number }> {
+  const cfg = await pool.query(`SELECT limite_consultas_dia FROM radar_entrada_config WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
+  const limite = cfg.rows[0]?.limite_consultas_dia ?? LIMITE_CONSULTAS_PADRAO;
+  const r = await pool.query(
+    `INSERT INTO radar_consultas_convite (user_id, dia, total) VALUES ($1, ${hojeSp}, 1)
+     ON CONFLICT (user_id, dia) DO UPDATE SET total = radar_consultas_convite.total + 1
+       WHERE radar_consultas_convite.total < $2
+     RETURNING total`,
+    [userId, limite]
+  );
+  return { ok: r.rows.length > 0, limite };
+}
+
+/**
+ * 429 da Evolution ao ler convite: evento `rate_limit` na saúde da instância (desconta no score) e
+ * pausa as consultas dessa instância com backoff exponencial — 30 min, 1h, 2h… até 24h, conforme
+ * quantos 429 ela levou nas últimas 24h.
+ */
+export async function tratarLimiteConvite(pool: Pool, instancia: string, motivo: string): Promise<number> {
+  const numero = (await pool.query(
+    `SELECT regexp_replace(COALESCE(numero_conectado, ''), '\\D', '', 'g') AS n FROM agentes WHERE evolution_instancia = $1 LIMIT 1`, [instancia]
+  ).catch(() => ({ rows: [] as any[] }))).rows[0]?.n || null;
+  await registrarEvento(pool, numero, instancia, 'rate_limit', 429, { origem: 'radar_convite', motivo });
+  const n = (await pool.query(
+    `SELECT COUNT(*)::int AS n FROM whatsapp_eventos_saude WHERE instancia = $1 AND tipo = 'rate_limit' AND criado_em >= NOW() - INTERVAL '24 hours'`,
+    [instancia]
+  ).catch(() => ({ rows: [{ n: 1 }] }))).rows[0].n;
+  const minutos = Math.min(24 * 60, 30 * 2 ** Math.max(0, n - 1));
+  await pausar(pool, `convite:${instancia}`, minutos, `${motivo} — ${n}º limite em 24h`);
+  return minutos;
 }
 
 export class ValidacaoIndisponivel extends Error {}
@@ -214,11 +256,16 @@ export async function validarGrupo(pool: Pool, grupoId: string): Promise<'ok' | 
   if (['rejeitado'].includes(g.status)) return 'ignorado';
 
   const cfg = await configLeitura(pool, g.user_id);
-  if (!cfg) throw new ValidacaoIndisponivel('Nenhuma instância configurada para leitura de convites (defina a instância de prospecção em Radar → Configurações, ou RADAR_EVOLUTION_INSTANCE)');
+  if (!cfg) throw new ValidacaoIndisponivel('Nenhuma instância de prospecção configurada para ler convites (Radar → Configurações → Entrada em grupo)');
+  const pausa = await pausaAtiva(pool, `convite:${cfg.instancia}`);
+  if (pausa) throw new ValidacaoIndisponivel(`Consultas de convite ${textoPausa(pausa)}`);
   if (!(await conectada(cfg))) throw new ValidacaoIndisponivel(`Instância ${cfg.instancia} não está conectada`);
+  const reserva = await reservarConsultaConvite(pool, g.user_id);
+  if (!reserva.ok) throw new ValidacaoIndisponivel(`Limite diário de consultas de convite (${reserva.limite}) atingido — retoma amanhã`);
 
   const res = await consultarConvite(cfg.cliente, cfg.instancia, g.codigo_convite);
   if (res.tipo === 'indisponivel') {
+    if (/429/.test(res.motivo)) await tratarLimiteConvite(pool, cfg.instancia, res.motivo);
     await pool.query(`UPDATE radar_grupos SET erro_validacao = $2, updated_at = now() WHERE id = $1`, [g.id, res.motivo.slice(0, 300)]);
     throw new ValidacaoIndisponivel(res.motivo);
   }

@@ -23,9 +23,10 @@ import { buscarPreviewLink } from '../utils/linkPreview';
 import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
 import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
 import { buscarConexoesDuplicadas, normalizarNumero, invalidarCacheProtecao, DIAS_PROTECAO } from '../services/protecaoNumero';
-import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE, invalidarCacheSaude } from '../services/saudeNumero';
+import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE, invalidarCacheSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
 import { calcularChecklistOficial } from '../services/checklistOficial';
 import { webhooksParados } from '../services/saudeWebhook';
+import { gerarBackupInstancia, listarBackups, dirBackup } from '../services/backupInstancia';
 import { log } from '../logger';
 import { normalizarTelefone as normalizarTel } from '../utils/telefone';
 import { resolverNome as resolverNomeLimpo } from '../utils/nomes';
@@ -1155,24 +1156,43 @@ export default function whatsappRouter(pool: Pool): Router {
       const db = await req.getDb!();
 
       const r = await db.query(
-        `WITH ranked AS (
-           SELECT
-             split_part(m.remote_jid,'@',1) AS phone,
-             m.instance_name,
-             m.content,
-             m.from_me,
-             m.created_at,
-             m.message_id,
-             m.message_type,
-             m.remote_jid LIKE '%@g.us' AS is_group,
-             m.push_name AS last_sender,
-             COUNT(*) OVER (PARTITION BY split_part(m.remote_jid,'@',1)) AS total,
-             ROW_NUMBER() OVER (
-               PARTITION BY split_part(m.remote_jid,'@',1)
-               ORDER BY m.created_at DESC
-             ) AS rn
+        `WITH base AS (
+           -- Sprint 8 (Sprint 4 / H10, 2026-10-06): conversa guardada pelo LID (@lid) cujo telefone
+           -- já é conhecido (contato_identidades, Sprint 3 / H1) entra na MESMA conversa do
+           -- telefone — antes aparecia duplicada, com o número do LID no lugar do nome.
+           SELECT m.*, COALESCE(li.telefone, split_part(m.remote_jid,'@',1)) AS chave,
+                  (m.remote_jid LIKE '%@lid' AND li.telefone IS NULL) AS so_lid
            FROM whatsapp_messages m
+           LEFT JOIN contato_identidades li
+             ON m.remote_jid LIKE '%@lid' AND li.user_id = m.user_id AND li.tipo = 'lid'
+            AND li.valor = split_part(m.remote_jid,'@',1)
            WHERE m.user_id = $1 AND m.deleted_at IS NULL
+         ),
+         ranked AS (
+           SELECT
+             b.chave AS phone,
+             b.instance_name,
+             b.content,
+             b.from_me,
+             b.created_at,
+             b.message_id,
+             b.message_type,
+             b.remote_jid LIKE '%@g.us' AS is_group,
+             b.push_name AS last_sender,
+             b.so_lid,
+             COUNT(*) OVER (PARTITION BY b.chave) AS total,
+             ROW_NUMBER() OVER (
+               PARTITION BY b.chave
+               ORDER BY b.created_at DESC
+             ) AS rn
+           FROM base b
+         ),
+         -- pushName do contato (última mensagem RECEBIDA dele): nome a mostrar quando não há
+         -- contato salvo, em vez do número cru do LID.
+         push_recebido AS (
+           SELECT DISTINCT ON (chave) chave, push_name AS push_contato
+           FROM base WHERE NOT from_me AND push_name IS NOT NULL
+           ORDER BY chave, created_at DESC
          ),
          contato_unico AS (
            SELECT DISTINCT ON (RIGHT(telefone, 11))
@@ -1218,6 +1238,8 @@ export default function whatsappRouter(pool: Pool): Router {
            r.message_type AS ultimo_tipo,
            r.is_group,
            r.last_sender,
+           r.so_lid,
+           pr.push_contato,
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
            cu.push_name,
            cu.nome_contato,
@@ -1231,6 +1253,7 @@ export default function whatsappRouter(pool: Pool): Router {
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          LEFT JOIN grupo_unico gu ON gu.grupo_id = r.phone AND r.is_group
          LEFT JOIN whatsapp_instance_numeros win ON win.instance_name = r.instance_name
+         LEFT JOIN push_recebido pr ON pr.chave = r.phone AND NOT r.is_group
          WHERE r.rn = 1
            AND COALESCE(cu.is_archived, false) = $2
            AND ($3::boolean IS NOT TRUE OR r.is_group)
@@ -1260,14 +1283,16 @@ export default function whatsappRouter(pool: Pool): Router {
         // buscarInfoGrupo).
         const nomeFormatado = isGroup
           ? (row.nome_grupo || `Grupo ${row.session_id.split('-')[0]?.slice(-4) ?? row.session_id.slice(-8)}`)
-          : (row.nome_contato || row.push_name || row.session_id.replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3'));
+          : (row.nome_contato || row.push_name || row.push_contato
+              // Sprint 8 / H10: LID sem telefone conhecido não é telefone — não formata como se fosse.
+              || (row.so_lid ? 'Contato (número oculto)' : row.session_id.replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3')));
         return {
           session_id: row.session_id,
           instancia: row.instancia,
           numero: row.numero,
           is_group: isGroup,
           nome: nomeFormatado,
-          push_name: isGroup ? (row.last_sender || null) : (row.push_name || null),
+          push_name: isGroup ? (row.last_sender || null) : (row.push_name || row.push_contato || null),
           profile_pic_url: (isGroup ? row.grupo_pic : row.profile_pic_url) || null,
           ultima_atividade: row.ultima_atividade,
           ultima_mensagem: row.ultima_mensagem || '',
@@ -1288,6 +1313,19 @@ export default function whatsappRouter(pool: Pool): Router {
       return res.status(500).json({ message: err.message });
     }
   });
+
+  // Sprint 8 (Sprint 4 / H10): ids de remote_jid de uma conversa — o telefone e os LIDs ligados a
+  // ele em contato_identidades (ou, se o parâmetro for um LID, o telefone dele).
+  async function idsDaConversa(db: { query: (sql: string, p: any[]) => Promise<any> }, tenantId: string, phone: string): Promise<string[]> {
+    const r = await db.query(
+      `SELECT valor, telefone FROM contato_identidades
+       WHERE user_id = $1 AND tipo = 'lid' AND (valor = $2 OR RIGHT(COALESCE(telefone, ''), 11) = RIGHT($2, 11))`,
+      [tenantId, phone]
+    ).catch(() => ({ rows: [] as any[] }));
+    const ids = new Set<string>([phone]);
+    for (const x of r.rows) { if (x.valor) ids.add(String(x.valor)); if (x.telefone) ids.add(String(x.telefone)); }
+    return [...ids];
+  }
 
   router.get('/conversas/:phone', async (req: AuthRequest, res: Response) => {
     log.info('WHATSAPP', 'request recebida', { method: req.method, path: req.path, userId: req.userId, params: req.params });
@@ -1317,6 +1355,9 @@ export default function whatsappRouter(pool: Pool): Router {
       // recentes anteriores a `before`, pro scroll-up carregar mais antigas) via ORDER BY DESC,
       // depois reverte pra ordem cronológica (ASC) antes de responder — mantém o formato de
       // resposta que o front já espera.
+      // Sprint 8 (Sprint 4 / H10): "Nenhuma mensagem encontrada" em conversa de contato que tem
+      // LID e telefone — as mensagens antigas ficaram gravadas sob o LID. Busca pelos dois.
+      const ids = await idsDaConversa(db, tenantId, phone);
       const r = await db.query(
         `SELECT
            m.id, m.message_id, m.from_me, m.message_type, m.content,
@@ -1328,13 +1369,13 @@ export default function whatsappRouter(pool: Pool): Router {
          LEFT JOIN whatsapp_message_status s
            ON s.message_id = m.message_id AND s.instance_name = m.instance_name
          LEFT JOIN users u ON u.id = m.sent_by_user_id
-         WHERE split_part(m.remote_jid, '@', 1) = $1
+         WHERE split_part(m.remote_jid, '@', 1) = ANY($1::text[])
            AND m.user_id = $2
            AND m.deleted_at IS NULL
            AND ($4::timestamptz IS NULL OR COALESCE(m.timestamp_wa, m.created_at) < $4::timestamptz)
          ORDER BY COALESCE(m.timestamp_wa, m.created_at) DESC
          LIMIT $3`,
-        [phone, tenantId, limit, before]
+        [ids, tenantId, limit, before]
       );
 
       const mensagens = r.rows.reverse().map(row => ({
@@ -1829,6 +1870,58 @@ export default function whatsappRouter(pool: Pool): Router {
         return { ...s, score_itens: v2?.itens ?? [], alerta: e.protecao_alerta ?? null, alerta_em: e.protecao_alerta_em ?? null };
       }),
     });
+  });
+
+  // ── Sprint 8 (Sprint 3 / H10): backup de contatos e conversas por instância ──────────────────
+  const ultimoBackupManual = new Map<string, number>();
+  async function instanciaDoTenant(req: AuthRequest): Promise<{ tenantId: string; instancia: string } | null> {
+    const tenantId = await resolveOwnerId(req.userId!);
+    const r = await pool.query(`SELECT evolution_instancia FROM agentes WHERE id = $1 AND user_id = $2 AND evolution_instancia IS NOT NULL`, [req.params.agenteId, tenantId]);
+    return r.rows[0] ? { tenantId, instancia: r.rows[0].evolution_instancia } : null;
+  }
+  router.get('/backups/:agenteId', async (req: AuthRequest, res: Response) => {
+    const i = await instanciaDoTenant(req);
+    if (!i) return res.status(404).json({ message: 'Instância não encontrada' });
+    return res.json(await listarBackups(i.tenantId, i.instancia));
+  });
+  router.post('/backups/:agenteId/gerar', async (req: AuthRequest, res: Response) => {
+    const i = await instanciaDoTenant(req);
+    if (!i) return res.status(404).json({ message: 'Instância não encontrada' });
+    if (Date.now() - (ultimoBackupManual.get(i.instancia) ?? 0) < 10 * 60_000) {
+      return res.status(429).json({ message: 'Backup desta instância gerado há pouco — aguarde 10 minutos.' });
+    }
+    ultimoBackupManual.set(i.instancia, Date.now());
+    const r = await gerarBackupInstancia(pool, i.tenantId, i.instancia);
+    if (!r) return res.status(507).json({ message: 'Pouco espaço em disco no servidor — avise o suporte.' });
+    return res.json(r);
+  });
+  router.get('/backups/:agenteId/:arquivo', async (req: AuthRequest, res: Response) => {
+    const i = await instanciaDoTenant(req);
+    if (!i) return res.status(404).json({ message: 'Instância não encontrada' });
+    const arquivo = String(req.params.arquivo);
+    if (!/^\d{4}-\d{2}-\d{2}-(contatos|conversas)\.csv\.gz$/.test(arquivo)) return res.status(400).json({ message: 'Arquivo inválido' });
+    return res.download(path.join(dirBackup(i.tenantId, i.instancia), arquivo), arquivo, err => {
+      if (err && !res.headersSent) res.status(404).json({ message: 'Arquivo não encontrado' });
+    });
+  });
+
+  // PUT /saude/:agenteId/revisao — Sprint 8 (Sprint 3 / H10): o cliente confirma que o app do
+  // WhatsApp mostra "conta em revisão". Enquanto isso, a quarentena não vira ban nem soma em
+  // bans_total (ver avaliarFases). Reconectar limpa a marcação sozinho.
+  router.put('/saude/:agenteId/revisao', async (req: AuthRequest, res: Response) => {
+    const ag = await pool.query(`SELECT evolution_instancia, numero_conectado FROM agentes WHERE id = $1 AND user_id = $2`, [req.params.agenteId, req.userId]);
+    const numero = normalizarSaude(ag.rows[0]?.numero_conectado);
+    if (!numero) return res.status(404).json({ message: 'Instância sem número registrado' });
+    const emRevisao = req.body?.em_revisao === true;
+    const r = await pool.query(
+      `UPDATE whatsapp_numeros SET em_revisao_desde = CASE WHEN $2 THEN COALESCE(em_revisao_desde, NOW()) ELSE NULL END
+       WHERE numero = $1 RETURNING em_revisao_desde`,
+      [numero, emRevisao]
+    );
+    if (!r.rowCount) return res.status(409).json({ message: 'Este número ainda não tem registro de saúde.' });
+    await registrarEventoSaude(pool, numero, ag.rows[0].evolution_instancia, emRevisao ? 'em_revisao' : 'revisao_encerrada', null, { confirmado_pelo_cliente: true });
+    invalidarCacheSaude();
+    return res.json({ em_revisao_desde: r.rows[0].em_revisao_desde });
   });
 
   // GET /saude-webhook — Sprint 7 (Sprint 5 / H6): instâncias da conta cujo webhook da Evolution

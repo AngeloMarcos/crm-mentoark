@@ -85,6 +85,8 @@ export interface EntradaConfig {
   user_id: string;
   agente_id: string | null;
   limite_dia: number;
+  limite_consultas_dia?: number;  // Sprint 8 / H7: consultas de convite por dia (padrão 50)
+  consultas_hoje?: number;
   pausa_min_seg: number;
   pausa_max_seg: number;
   janela_inicio: string;

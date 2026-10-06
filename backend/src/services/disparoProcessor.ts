@@ -122,7 +122,8 @@ async function resolverInstanciasCampanha(pool: Pool, disparoId: string, userId:
   if (ids.length) {
     const agentesRes = await pool.query(
       `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
-       FROM agentes WHERE id = ANY($1::uuid[]) AND user_id = $2 AND evolution_instancia IS NOT NULL`,
+       FROM agentes WHERE id = ANY($1::uuid[]) AND user_id = $2 AND evolution_instancia IS NOT NULL
+         AND papel NOT IN ('prospeccao', 'pessoal')`, // Sprint 8 / H8: essas funções não disparam
       [ids, userId]
     ).catch(() => ({ rows: [] as any[] }));
     instancias = agentesRes.rows.filter((r: any) => r.url && r.instancia);
@@ -149,7 +150,7 @@ async function resolverInstanciaFallback(pool: Pool, userId: string): Promise<In
   const agenteRes = await pool.query(
     `SELECT evolution_server_url AS url, evolution_api_key AS api_key, evolution_instancia AS instancia
      FROM agentes
-     WHERE user_id = $1 AND ativo = true
+     WHERE user_id = $1 AND ativo = true AND papel NOT IN ('prospeccao', 'pessoal') -- Sprint 8 / H8
      ORDER BY updated_at DESC LIMIT 1`,
     [userId]
   ).catch(() => ({ rows: [] as any[] }));

@@ -152,7 +152,11 @@ function Nichos() {
   );
 }
 
-const ROTULO_PAPEL: Record<string, string> = { atendimento: "Atendimento", disparo: "Disparo", prospeccao: "Prospecção (entra em grupo)" };
+// Sprint 8 (Sprint 4 / H8): pessoal (sem IA e sem disparo) e maturação.
+const ROTULO_PAPEL: Record<string, string> = {
+  atendimento: "Atendimento (IA responde)", disparo: "Disparo (campanhas + IA)", prospeccao: "Prospecção (entra em grupo, sem disparo)",
+  pessoal: "Pessoal (sem IA e sem disparo)", maturacao: "Maturação (aquecimento)",
+};
 
 function PapelInstancias() {
   const qc = useQueryClient();
@@ -171,12 +175,23 @@ function PapelInstancias() {
     <Card>
       <CardHeader>
         <CardTitle className="text-lg">Papel de cada instância</CardTitle>
-        <CardDescription>Só a instância marcada "Prospecção" pode entrar em grupo — atendimento e disparo são recusados, de propósito.</CardDescription>
+        <CardDescription>
+          Só a instância marcada "Prospecção" entra em grupo, e ela não dispara campanha. Número "Pessoal" não recebe IA nem campanha.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         {agentes.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
         {!agentes.isLoading && !comInstancia.length && (
           <p className="text-sm text-muted-foreground">Nenhuma instância WhatsApp conectada foi encontrada nesta conta.</p>
+        )}
+        {/* Sprint 8 / H8: um ban não pode derrubar o atendimento — recomenda 2+ números com funções separadas. */}
+        {!agentes.isLoading && comInstancia.length > 0 && (comInstancia.length < 2
+          || !comInstancia.some((a: AgenteInstancia) => (a.papel ?? "atendimento") === "atendimento")
+          || !comInstancia.some((a: AgenteInstancia) => ["disparo", "prospeccao"].includes(a.papel ?? ""))) && (
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-300">
+            Recomendado: pelo menos 2 números — um de <b>atendimento</b> e outro de <b>disparo/prospecção</b>. Assim, se o número
+            de campanha for banido, o atendimento continua de pé.
+          </p>
         )}
         {comInstancia.map((a: AgenteInstancia) => (
           <div key={a.id} className="flex items-center justify-between gap-3 rounded-md border p-2">
@@ -262,6 +277,14 @@ function EntradaGrupo() {
                 <Label>Entradas por dia (máximo)</Label>
                 <Input type="number" min={1} max={50} value={f.limite_dia ?? 5} onChange={e => setF(s => ({ ...s, limite_dia: Number(e.target.value) || 1 }))} />
                 {typeof cfgQ.data?.entradas_hoje === "number" && <p className="text-xs text-muted-foreground">{cfgQ.data.entradas_hoje} já tentada(s) hoje.</p>}
+              </div>
+              <div className="space-y-1">
+                <Label>Consultas de convite por dia (máximo)</Label>
+                <Input type="number" min={1} max={500} value={f.limite_consultas_dia ?? 50} onChange={e => setF(s => ({ ...s, limite_consultas_dia: Number(e.target.value) || 1 }))} />
+                <p className="text-xs text-muted-foreground">
+                  Ler convites usa a instância de prospecção. Se o WhatsApp limitar (erro 429), as consultas pausam 30 min, depois 1h, 2h…
+                  {typeof cfgQ.data?.consultas_hoje === "number" && <> {cfgQ.data.consultas_hoje} feita(s) hoje.</>}
+                </p>
               </div>
               <div className="space-y-1">
                 <Label>Pausa entre entradas (segundos, min–máx)</Label>

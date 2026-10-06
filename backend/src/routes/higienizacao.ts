@@ -309,27 +309,56 @@ export default function higienizacaoRouter(pool: Pool): Router {
         excluirSemNome: req.body?.excluir_sem_nome === true,
         diasSuprimirNegativa: Math.max(0, Number(req.body?.dias_suprimir_negativa) || 90),
         somenteConhecidos: req.body?.somente_conhecidos === true,
+        // Sprint 8 (Sprint 4 / H5): DDI diferente de +55 fica de fora, salvo "liberar estrangeiros".
+        bloquearEstrangeiros: req.body?.permitir_estrangeiros !== true,
       };
       const contatos: any[] = [];
       for (let i = 0; i < ids.length; i += 5000) {
         const q = await pool.query(
-          `SELECT id, telefone, telefone_normalizado, tipo_telefone, whatsapp_status, opt_out, bot_detectado,
-                  resposta_categoria, resposta_em, ultimo_disparo_em, nome_confiavel, propensao,
+          `SELECT c.id, c.telefone, c.telefone_normalizado, c.tipo_telefone, c.whatsapp_status, c.opt_out, c.bot_detectado,
+                  c.resposta_categoria, c.resposta_em, c.ultimo_disparo_em, c.nome_confiavel, c.propensao,
                   -- Sprint 3 / H7: já conversou = respondeu, veio de Smart Link/anúncio, ou o contato
                   -- nasceu de mensagem recebida no WhatsApp (webhook cria com origem 'WhatsApp').
-                  (resposta_em IS NOT NULL OR origem_inbound_em IS NOT NULL OR origem = 'WhatsApp') AS conhecido
-             FROM contatos WHERE user_id = $1 AND id = ANY($2::uuid[])`, [tenantId, ids.slice(i, i + 5000)]);
+                  (c.resposta_em IS NOT NULL OR c.origem_inbound_em IS NOT NULL OR c.origem = 'WhatsApp') AS conhecido,
+                  -- Sprint 8 / H5: contato pessoal = está na lista de ignorados da IA (família/amigos).
+                  EXISTS (SELECT 1 FROM ia_contatos_ignorados ig WHERE ig.user_id = c.user_id
+                          AND RIGHT(regexp_replace(ig.telefone, '\\D', '', 'g'), 11)
+                            = RIGHT(regexp_replace(COALESCE(c.telefone_normalizado, c.telefone), '\\D', '', 'g'), 11)) AS pessoal
+             FROM contatos c WHERE c.user_id = $1 AND c.id = ANY($2::uuid[])`, [tenantId, ids.slice(i, i + 5000)]);
         contatos.push(...q.rows);
       }
-      const recorte = montarRecorte(contatos, op);
+      // Sprint 8 / H5: o mesmo número em dois contatos da seleção recebe uma vez só.
+      const vistos = new Set<string>();
+      const unicos: any[] = [];
+      let duplicados = 0;
+      for (const c of contatos) {
+        const chave = String(c.telefone_normalizado || c.telefone || '').replace(/\D/g, '').slice(-11);
+        if (chave && vistos.has(chave)) { duplicados++; continue; }
+        if (chave) vistos.add(chave);
+        unicos.push(c);
+      }
+      const recorte = montarRecorte(unicos, op);
+      if (duplicados) recorte.excluidos.duplicado = duplicados;
+      // Resumo antes de confirmar (H5): números que ainda não passaram pela checagem de WhatsApp,
+      // sem nome (sem personalização) e já contatados nos últimos 7 dias, entre os elegíveis.
+      const seteDias = Date.now() - 7 * 86_400_000;
+      const el = recorte.elegiveis as any[];
+      const semNome = el.filter(c => c.nome_confiavel !== true).length;
       return res.json({
-        total: recorte.total,
-        elegiveis: recorte.elegiveis.map(c => c.id),
+        total: contatos.length,
+        elegiveis: el.map(c => c.id),
         excluidos: recorte.excluidos,
         rotulos: ROTULOS_EXCLUSAO,
-        com_propensao: recorte.elegiveis.filter(c => c.propensao !== null).length,
+        com_propensao: el.filter(c => c.propensao !== null).length,
         // Sprint 3 / H7: quantos da seleção nunca conversaram com a empresa (aviso acima de 30%).
         frios: contatos.filter(c => c.conhecido === false).length,
+        resumo: {
+          a_verificar: el.filter(c => !['valido', 'sem_whatsapp'].includes(c.whatsapp_status)).length,
+          a_verificar_ids: el.filter(c => !['valido', 'sem_whatsapp'].includes(c.whatsapp_status)).map(c => c.id),
+          sem_nome: semNome,
+          aviso_sem_nome: el.length > 0 && semNome / el.length > 0.5,
+          contatados_7d: el.filter(c => c.ultimo_disparo_em && new Date(c.ultimo_disparo_em).getTime() >= seteDias).length,
+        },
       });
     } catch (err: any) {
       log.error('HIGIENIZACAO', 'Erro em POST /precheck', { err: err?.message });

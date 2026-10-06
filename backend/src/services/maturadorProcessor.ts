@@ -26,7 +26,7 @@
 import { Pool } from 'pg';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
-import { TEMAS, REACOES, aplicarVariacao, sortearTema } from './maturadorDialogos';
+import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, STATUS_CORES } from './maturadorDialogos';
 import { registrarIdMaturador, invalidarNumerosMaturador } from './maturadorFiltro';
 import { saudePorInstancia, MAX_ENVIOS_HORA } from './saudeNumero';
 
@@ -252,17 +252,68 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
           }
         }
 
+        // Sprint 8 (Sprint 3 / H10): status de texto neutro em ~40% dos dias (sorteio fixo por
+        // número+dia), 1 por dia, visível SÓ para o parceiro do par (statusJidList) — nunca
+        // aparece para os contatos reais do cliente.
+        const diaDoStatus = [...`${de.id}${hoje}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 10 < 4;
+        if (diaDoStatus) {
+          const jaPostou = (await pool.query(
+            `SELECT 1 FROM maturador_mensagens WHERE de_agente_id = $1 AND tipo = 'status'
+               AND (created_at AT TIME ZONE '${TZ}')::date = $2::date LIMIT 1`, [de.id, hoje]
+          ).catch(() => ({ rows: [1] }))).rows.length > 0;
+          if (!jaPostou) {
+            const textoStatus = STATUS_TEXTOS[randInt(0, STATUS_TEXTOS.length - 1)];
+            const rs = await evolutionFetch(`${baseUrl}/message/sendStatus/${de.instancia}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', apikey: de.key },
+              body: JSON.stringify({
+                type: 'text', content: textoStatus, backgroundColor: STATUS_CORES[randInt(0, STATUS_CORES.length - 1)], font: 1,
+                allContacts: false, statusJidList: [`${numeroDestino}@s.whatsapp.net`],
+              }),
+            }).catch(() => null);
+            await pool.query(
+              `INSERT INTO maturador_mensagens (par_id, user_id, de_agente_id, para_agente_id, tipo, texto) VALUES ($1, $2, $3, $4, 'status', $5)`,
+              [par.id, par.user_id, de.id, para.id, rs?.ok ? textoStatus : `[falhou] ${textoStatus}`]
+            ).catch(() => {});
+          }
+        }
+
         let novoTema: number | null = par.tema_atual ?? null;
         let novaLinha: number = par.linha_atual ?? 0;
         if (novoTema === null || novoTema >= TEMAS.length || novaLinha >= TEMAS[novoTema].length) {
           novoTema = sortearTema(par.tema_atual ?? null);
           novaLinha = 0;
         }
+        // Sprint 8 (Sprint 3 / H10): de vez em quando (8%) abre um tema novo com uma enquete.
+        if (novaLinha === 0 && Math.random() < 0.08) {
+          const e = ENQUETES[randInt(0, ENQUETES.length - 1)];
+          const rp = await evolutionFetch(`${baseUrl}/message/sendPoll/${de.instancia}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: de.key },
+            body: JSON.stringify({ number: numeroDestino, name: e.pergunta, selectableCount: 1, values: e.opcoes }),
+          }).catch(() => null);
+          if (rp?.ok) {
+            await pool.query(
+              `INSERT INTO maturador_mensagens (par_id, user_id, de_agente_id, para_agente_id, tipo, texto) VALUES ($1, $2, $3, $4, 'enquete', $5)`,
+              [par.id, par.user_id, de.id, para.id, e.pergunta]
+            ).catch(() => {});
+          }
+        }
+
         const texto = aplicarVariacao(TEMAS[novoTema][novaLinha]);
+        // Sprint 8 (Sprint 3 / H10): ~20% das respostas citam a mensagem anterior (quoted), como
+        // gente de verdade faz em conversa.
+        let quoted: any = undefined;
+        if (par.ultima_msg_id && novaLinha > 0 && Math.random() < 0.2) {
+          const anterior = (await pool.query(
+            `SELECT texto FROM maturador_mensagens WHERE message_id = $1 LIMIT 1`, [par.ultima_msg_id]
+          ).catch(() => ({ rows: [] as any[] }))).rows[0]?.texto;
+          if (anterior) quoted = { key: { id: par.ultima_msg_id, remoteJid: `${numeroDestino}@s.whatsapp.net`, fromMe: false }, message: { conversation: anterior } };
+        }
         const resp = await evolutionFetch(`${baseUrl}/message/sendText/${de.instancia}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', apikey: de.key },
-          body: JSON.stringify({ number: numeroDestino, text: texto, delay: delayDigitacaoMs(texto) }),
+          body: JSON.stringify({ number: numeroDestino, text: texto, delay: delayDigitacaoMs(texto), ...(quoted ? { quoted } : {}) }),
         });
         if (!resp.ok) {
           const errBody = await resp.text().catch(() => '');

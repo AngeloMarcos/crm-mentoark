@@ -730,6 +730,20 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // webhook.ts nunca mais chama processarComDebounce sem userId resolvido — ver
   // diagnosticos/AUDITORIA_LOG.md), a busca exige user_id exato. Só cai para "qualquer
   // agente com esse nome de instância" no caso residual de userId não vir preenchido.
+  // Sprint 8 (Sprint 4 / H8): número com função "pessoal" nunca aciona a IA — nem pelo fallback
+  // "último agente ativo da conta" abaixo (a linha da instância pessoal pode estar inativa e o
+  // fallback acharia outro agente pra responder a família/amigos do dono).
+  if (entrada.userId && !ehInstanciaOficial(entrada.instancia)) {
+    const papel = (await pool.query(
+      `SELECT papel FROM agentes WHERE LOWER(evolution_instancia) = LOWER($1) AND user_id = $2 LIMIT 1`,
+      [entrada.instancia, entrada.userId]
+    ).catch(() => ({ rows: [] as any[] }))).rows[0]?.papel;
+    if (papel === 'pessoal') {
+      log.info('ENGINE', 'Instância pessoal — IA não responde', { instancia: entrada.instancia });
+      return;
+    }
+  }
+
   let agenteRows: any[];
   if (entrada.agenteId && entrada.userId) {
     // Sprint 7 / H6: número oficial — só o agente escolhido na configuração, sem fallback.

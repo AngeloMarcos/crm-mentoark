@@ -98,6 +98,8 @@ async function numeroDaInstancia(pool: Pool, instancia: string): Promise<string>
 /** Chamado depois que o número da instância foi registrado (`protecaoNumero.aoConectarInstancia`). */
 export async function aoConectarSaude(pool: Pool, instancia: string, numero: string, perfilCompleto: boolean | null): Promise<void> {
   await registrarEvento(pool, numero, instancia, 'conectou');
+  // Sprint 8 (Sprint 3 / H10): reconectou → a "conta em revisão" acabou.
+  await pool.query(`UPDATE whatsapp_numeros SET em_revisao_desde = NULL WHERE numero = $1 AND em_revisao_desde IS NOT NULL`, [numero]).catch(() => {});
   if (perfilCompleto !== null) {
     await pool.query(`UPDATE whatsapp_numeros SET perfil_completo = $2 WHERE numero = $1`, [numero, perfilCompleto]).catch(() => {});
   }
@@ -247,6 +249,14 @@ export async function calcularScoreSaude(pool: Pool, instancia: string, numeroBr
   const m = await metricas7d(pool, instancia, numero);
   add('Quedas suspeitas (7d)', -Math.min(20, m.quedasBan * 10), `${m.quedasBan} queda(s) 401/402/403/406`);
   add('Quedas de conexão (7d)', -Math.min(15, m.quedasComuns * 3), `${m.quedasComuns} queda(s) comum(ns)`);
+  // Sprint 8 (Sprint 4 / H7): limite de requisições (429) nas últimas 24h, -5 cada, até -15.
+  const limites = (await pool.query(
+    `SELECT COUNT(*)::int AS n FROM whatsapp_eventos_saude
+     WHERE (CASE WHEN $1 <> '' THEN numero = $1 ELSE instancia = $2 END)
+       AND tipo = 'rate_limit' AND criado_em >= NOW() - INTERVAL '24 hours'`,
+    [numero, instancia]
+  ).catch(() => ({ rows: [{ n: 0 }] }))).rows[0].n;
+  add('Limite de requisições (24h)', -Math.min(15, limites * 5), `${limites} vez(es) o WhatsApp limitou as consultas desta instância`);
 
   if (nr?.primeira_conexao_em) {
     const dias = (Date.now() - new Date(nr.primeira_conexao_em).getTime()) / 86_400_000;
@@ -323,6 +333,7 @@ export interface SaudeInstancia {
   bans_total: number;
   ultimo_ban_em: string | null;
   apto_api_oficial: boolean;
+  em_revisao_desde: string | null;
   score: number | null;
   score_rotulo: string | null;
   enviados_hoje: number;
@@ -337,7 +348,7 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
   const r = await pool.query(
     `SELECT a.id AS agente_id, a.user_id, a.evolution_instancia AS instancia, a.numero_conectado,
             a.whatsapp_score, a.score_updated_at,
-            w.fase, w.fase_desde, w.bans_total, w.ultimo_ban_em, w.apto_api_oficial,
+            w.fase, w.fase_desde, w.bans_total, w.ultimo_ban_em, w.apto_api_oficial, w.em_revisao_desde,
             (SELECT COUNT(*)::int FROM disparo_logs dl WHERE dl.instancia = a.evolution_instancia AND dl.status = 'sent'
                AND dl.enviado_at >= NOW() - INTERVAL '24 hours') AS enviados_hoje,
             (SELECT COUNT(*)::int FROM disparo_logs dl WHERE dl.instancia = a.evolution_instancia AND dl.status = 'sent'
@@ -362,6 +373,7 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
       bans_total: x.bans_total ?? 0,
       ultimo_ban_em: x.ultimo_ban_em,
       apto_api_oficial: !!x.apto_api_oficial,
+      em_revisao_desde: x.em_revisao_desde ?? null,
       score,
       score_rotulo: score === null ? null : rotuloScore(score),
       enviados_hoje: x.enviados_hoje,
@@ -402,10 +414,13 @@ export async function avaliarFases(pool: Pool): Promise<{ avancos: number; bansC
   let avancos = 0;
   let bansConfirmados = 0;
 
-  // 1) Quarentena sem reconexão há 24h → ban confirmado.
+  // 1) Quarentena sem reconexão há 24h → ban confirmado. Sprint 8 (Sprint 3 / H10): conta que o
+  // cliente confirmou estar "em revisão" pelo WhatsApp não vira ban (nem conta em bans_total)
+  // enquanto a revisão durar — até 30 dias; depois disso, sem reconexão, vira ban.
   const quarentena = await pool.query(
     `SELECT w.numero, w.fase_desde FROM whatsapp_numeros w
-     WHERE w.fase = 'quarentena' AND w.fase_desde <= NOW() - INTERVAL '24 hours'`
+     WHERE w.fase = 'quarentena' AND w.fase_desde <= NOW() - INTERVAL '24 hours'
+       AND (w.em_revisao_desde IS NULL OR w.em_revisao_desde < NOW() - INTERVAL '30 days')`
   ).catch(() => ({ rows: [] as any[] }));
   for (const q of quarentena.rows) {
     await pool.query(

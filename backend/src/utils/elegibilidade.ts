@@ -19,6 +19,9 @@ export interface ContatoParaChecagem {
   // Sprint 3 / H7: já conversou com a empresa (respondeu, veio de Smart Link/anúncio ou mandou
   // mensagem primeiro). undefined = não avaliado (regra "só conhecidos" não se aplica).
   conhecido?: boolean;
+  // Sprint 8 (Sprint 4 / H5): número da lista de contatos pessoais (`ia_contatos_ignorados`) —
+  // família/amigos do dono não recebem campanha. undefined = não avaliado.
+  pessoal?: boolean;
 }
 
 export interface OpcoesElegibilidade {
@@ -28,11 +31,14 @@ export interface OpcoesElegibilidade {
   excluirSemNome?: boolean;        // padrão false (80% dos contatos de grupo não têm nome)
   diasSuprimirNegativa?: number;   // padrão 90
   somenteConhecidos?: boolean;     // padrão false — Sprint 3 / H7 (inbound primeiro)
+  // Sprint 8 (Sprint 4 / H5): barra DDI diferente do Brasil. Só a pré-checagem liga (com opção de
+  // liberar na tela) — o envio não, pra não mudar campanhas já criadas com número estrangeiro.
+  bloquearEstrangeiros?: boolean;
 }
 
 export type MotivoExclusao =
   | 'sem_telefone' | 'telefone_invalido' | 'grupo_ou_lid' | 'opt_out' | 'resposta_negativa'
-  | 'robo' | 'sem_whatsapp' | 'cooldown' | 'sem_nome' | 'contato_frio';
+  | 'robo' | 'sem_whatsapp' | 'cooldown' | 'sem_nome' | 'contato_frio' | 'estrangeiro' | 'pessoal' | 'duplicado';
 
 export const ROTULOS_EXCLUSAO: Record<MotivoExclusao, string> = {
   sem_telefone: 'sem telefone',
@@ -45,6 +51,9 @@ export const ROTULOS_EXCLUSAO: Record<MotivoExclusao, string> = {
   cooldown: 'em cooldown',
   sem_nome: 'sem nome',
   contato_frio: 'nunca conversou com a empresa',
+  estrangeiro: 'número de outro país (DDI diferente de +55)',
+  pessoal: 'contato pessoal (lista de ignorados da IA)',
+  duplicado: 'número repetido na seleção', // marcado pela pré-checagem (depende da lista inteira)
 };
 
 const ms = (d: string | Date | null): number => (d ? new Date(d).getTime() : NaN);
@@ -61,6 +70,10 @@ export function avaliarElegibilidade(c: ContatoParaChecagem, o: OpcoesElegibilid
   // disparo mandava pra um "telefone" que não existe. Só responde dentro da conversa.
   if (c.tipo_telefone === 'lid') return 'grupo_ou_lid';
   if (c.opt_out === true) return 'opt_out';
+  if (c.pessoal === true) return 'pessoal';
+  if (o.bloquearEstrangeiros && (c.tipo_telefone === 'internacional' || (digitos.length >= 12 && !digitos.startsWith('55')))) {
+    return 'estrangeiro';
+  }
 
   const cat = c.resposta_categoria;
   if (cat === 'opt_out') return 'opt_out';
