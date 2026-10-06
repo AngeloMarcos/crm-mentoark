@@ -1161,7 +1161,8 @@ export default function whatsappRouter(pool: Pool): Router {
            -- já é conhecido (contato_identidades, Sprint 3 / H1) entra na MESMA conversa do
            -- telefone — antes aparecia duplicada, com o número do LID no lugar do nome.
            SELECT m.*, COALESCE(li.telefone, split_part(m.remote_jid,'@',1)) AS chave,
-                  (m.remote_jid LIKE '%@lid' AND li.telefone IS NULL) AS so_lid
+                  (m.remote_jid LIKE '%@lid' AND li.telefone IS NULL) AS so_lid,
+                  li.nome AS nome_lid -- pushName importado da Evolution (contato só com LID)
            FROM whatsapp_messages m
            LEFT JOIN contato_identidades li
              ON m.remote_jid LIKE '%@lid' AND li.user_id = m.user_id AND li.tipo = 'lid'
@@ -1180,6 +1181,7 @@ export default function whatsappRouter(pool: Pool): Router {
              b.remote_jid LIKE '%@g.us' AS is_group,
              b.push_name AS last_sender,
              b.so_lid,
+             MAX(b.nome_lid) OVER (PARTITION BY b.chave) AS nome_lid,
              COUNT(*) OVER (PARTITION BY b.chave) AS total,
              ROW_NUMBER() OVER (
                PARTITION BY b.chave
@@ -1239,6 +1241,7 @@ export default function whatsappRouter(pool: Pool): Router {
            r.is_group,
            r.last_sender,
            r.so_lid,
+           r.nome_lid,
            pr.push_contato,
            CASE WHEN r.from_me THEN 'assistant' ELSE 'user' END AS ultimo_role,
            cu.push_name,
@@ -1283,7 +1286,7 @@ export default function whatsappRouter(pool: Pool): Router {
         // buscarInfoGrupo).
         const nomeFormatado = isGroup
           ? (row.nome_grupo || `Grupo ${row.session_id.split('-')[0]?.slice(-4) ?? row.session_id.slice(-8)}`)
-          : (row.nome_contato || row.push_name || row.push_contato
+          : (row.nome_contato || row.push_name || row.push_contato || row.nome_lid
               // Sprint 8 / H10: LID sem telefone conhecido não é telefone — não formata como se fosse.
               || (row.so_lid ? 'Contato (número oculto)' : row.session_id.replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3')));
         return {
@@ -1292,7 +1295,7 @@ export default function whatsappRouter(pool: Pool): Router {
           numero: row.numero,
           is_group: isGroup,
           nome: nomeFormatado,
-          push_name: isGroup ? (row.last_sender || null) : (row.push_name || row.push_contato || null),
+          push_name: isGroup ? (row.last_sender || null) : (row.push_name || row.push_contato || row.nome_lid || null),
           profile_pic_url: (isGroup ? row.grupo_pic : row.profile_pic_url) || null,
           ultima_atividade: row.ultima_atividade,
           ultima_mensagem: row.ultima_mensagem || '',

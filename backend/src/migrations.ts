@@ -2426,6 +2426,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
   for (const col of ['meta_endpoint TEXT', 'clique_em TIMESTAMPTZ', 'clique_texto TEXT']) {
     await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+  // Sprint 8 (Sprint 4 / H10): nome (pushName) do contato que só tem LID, importado da Evolution
+  // — a lista de conversas mostra o nome em vez de "Contato (número oculto)".
+  await pool.query(`ALTER TABLE contato_identidades ADD COLUMN IF NOT EXISTS nome TEXT`).catch(() => {});
   // Sprint 8 (Sprint 3 / H10): "conta em revisão" confirmada pelo cliente — não vira ban enquanto durar.
   await pool.query(`ALTER TABLE whatsapp_numeros ADD COLUMN IF NOT EXISTS em_revisao_desde TIMESTAMPTZ`).catch(() => {});
   // Sprint 7 (Sprint 5 / H6): último evento da Evolution por instância (alerta de webhook parado).
