@@ -1,3 +1,4 @@
+import { processarEnvioOficial } from './disparoOficial';
 import { Pool } from 'pg';
 import { humanizarMensagem } from './humanizationService';
 import { registrarUsoIA, estimarCustoUsd } from '../utils/aiCusto';
@@ -399,6 +400,25 @@ async function processarUmaMensagem(pool: Pool, msg: any): Promise<void> {
   // acima) — liberada no `finally` no fim da função, cobrindo todo caminho de saída.
   let instanciaLockKey: string | null = null;
   let instanciaAtual: string | null = null; // Sprint 4 / H4: visível no catch pra pausar por instância caída
+  // Sprint 6 / H5 (2026-10-05): campanha do canal oficial (Meta Cloud API) não usa instância
+  // Evolution, teto de 50/dia nem humanização — envia template aprovado via Graph, com as
+  // regras de opt-in/qualidade/limite do portfólio em `disparoOficial.ts`. A Meta aguenta
+  // ~80 msg/s por número; o espaçamento de 1,5s aqui é só pra não estourar o throughput (130429).
+  const camp = (await pool.query(
+    `SELECT canal, oficial_config_id, meta_template_nome, meta_template_idioma, meta_variaveis FROM disparos WHERE id = $1`,
+    [disparo_id]
+  ).catch(() => ({ rows: [] as any[] }))).rows[0];
+  if (camp?.canal === 'oficial') {
+    try {
+      await processarEnvioOficial(pool, msg, camp);
+    } catch (err: any) {
+      log.error('DISPARO_OFICIAL', 'Erro ao enviar mensagem oficial', { disparo_id, logId: log_id, err: err?.message });
+      await requeuePendentes(pool, [{ log_id }]).catch(() => {});
+    } finally {
+      proximoEnvioPermitidoPorCampanha.set(disparo_id, Date.now() + 1500);
+    }
+    return;
+  }
   try {
     // [AUDITORIA] FIX APLICADO (Sprint 5, 2026-07-23 — teto diário; revisado 2026-07-29 pra
     // ser POR INSTÂNCIA): antes de processar a mensagem desta campanha, resolve as

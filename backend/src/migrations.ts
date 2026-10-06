@@ -2280,6 +2280,140 @@ export async function runMigrations(pool: Pool): Promise<void> {
   `).catch(() => {});
   log.info('MIGRATIONS', 'IA segura (nome de exibição, agente único, contatos ignorados) OK');
 
+  // ── API oficial: webhook completo, status/erros/custo, templates, opt-in (Sprint 5 + Sprint 3 H2-H5) ──
+  // [AUDITORIA] LÓGICA (2026-10-05): o canal oficial é a integração DIRETA com a Meta
+  // (routes/metaWebhook.ts), não a Evolution — decisão do usuário. Até aqui o webhook só gravava
+  // mensagens recebidas; status, qualidade, limite, templates e opt-out de marketing iam só pro log.
+  //   - meta_webhook_inbox: todo evento bruto, idempotente por (config, campo, id do evento);
+  //   - meta_mensagens_status: último status por mensagem com código de erro e cobrança (pricing);
+  //   - meta_erros_acao: o que fazer com cada código de erro da Meta (tabela editável);
+  //   - meta_templates: templates da WABA com status/categoria/motivo de rejeição;
+  //   - contatos: opt-in (origem/data/prova), opt-out de marketing, janela de atendimento,
+  //     saturação (131049) e contagem de 131026.
+  // Reversível: DROP TABLE / DROP COLUMN.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meta_webhook_inbox (
+      id            BIGSERIAL   PRIMARY KEY,
+      config_id     UUID,
+      user_id       UUID,
+      waba_id       TEXT,
+      campo         TEXT        NOT NULL,
+      evento_id     TEXT,
+      payload       JSONB       NOT NULL,
+      recebido_em   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      processado_em TIMESTAMPTZ,
+      erro          TEXT
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_meta_webhook_evento ON meta_webhook_inbox(config_id, campo, evento_id) WHERE evento_id IS NOT NULL`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meta_mensagens_status (
+      message_id        TEXT        PRIMARY KEY,
+      config_id         UUID,
+      user_id           UUID,
+      destinatario      TEXT,
+      status            TEXT,
+      erro_codigo       INTEGER,
+      erro_titulo       TEXT,
+      pricing_categoria TEXT,
+      pricing_cobravel  BOOLEAN,
+      pricing_modelo    TEXT,
+      conversa_id       TEXT,
+      atualizado_em     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meta_erros_acao (
+      codigo       INTEGER PRIMARY KEY,
+      significado  TEXT    NOT NULL,
+      acao         TEXT    NOT NULL
+    )
+  `).catch(() => {});
+  // Códigos conferidos na documentação/guias da Meta em 05/10/2026. `acao` é lida pelo processador.
+  await pool.query(`
+    INSERT INTO meta_erros_acao (codigo, significado, acao) VALUES
+      (131049, 'Marketing segurado para manter o engajamento saudável (limite por usuário)', 'saturar'),
+      (131026, 'Mensagem não entregue (sem WhatsApp, app antigo ou bloqueio)', 'invalido_apos_2'),
+      (131047, 'Fora da janela de 24h — exige template', 'exige_template'),
+      (131048, 'Limite de spam: muitas mensagens bloqueadas/denunciadas', 'risco_pausar'),
+      (131050, 'Usuário parou de receber marketing', 'optout_marketing'),
+      (131056, 'Muitas mensagens para o mesmo contato em pouco tempo', 'espacar_contato'),
+      (130429, 'Limite de taxa (throughput) da Cloud API', 'backoff')
+    ON CONFLICT (codigo) DO NOTHING
+  `).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meta_templates (
+      id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      config_id        UUID        NOT NULL,
+      user_id          UUID        NOT NULL,
+      meta_id          TEXT,
+      nome             TEXT        NOT NULL,
+      idioma           TEXT        NOT NULL DEFAULT 'pt_BR',
+      categoria        TEXT,
+      status           TEXT,
+      motivo_rejeicao  TEXT,
+      componentes      JSONB,
+      atualizado_em    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT uq_meta_template UNIQUE (config_id, nome, idioma)
+    )
+  `).catch(() => {});
+  for (const col of ['max_conversas_dia TEXT', 'conta_status TEXT', 'alerta TEXT', 'alerta_em TIMESTAMPTZ', 'qualidade_atualizada_em TIMESTAMPTZ',
+                     'ultimo_webhook_em TIMESTAMPTZ', 'nome TEXT']) {
+    await pool.query(`ALTER TABLE whatsapp_oficial_config ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  // Uso do limite (contatos únicos/24h) conta pela 1ª vez que a mensagem apareceu.
+  await pool.query(`ALTER TABLE meta_mensagens_status ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_meta_status_config_criado ON meta_mensagens_status(config_id, criado_em)`).catch(() => {});
+  // Sprint 6 / H5: campanha pelo canal oficial — número oficial, template aprovado e mapeamento
+  // das variáveis {{1}}, {{2}}… para campos do contato. `canal` = 'evolution' (padrão) | 'oficial'.
+  for (const col of ["canal TEXT NOT NULL DEFAULT 'evolution'", 'oficial_config_id UUID', 'meta_template_nome TEXT',
+                     'meta_template_idioma TEXT', 'meta_template_categoria TEXT', 'meta_variaveis JSONB', 'custo_estimado_usd NUMERIC(12,4)']) {
+    await pool.query(`ALTER TABLE disparos ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  // Sprint 6 / H5: preço por mensagem entregue (cobrança por mensagem desde 01/07/2025), editável.
+  // Só Marketing/BR vem preenchido: fontes consultadas em 05/10/2026 batem em US$ 0,0625; Utilidade
+  // e Autenticação divergem entre fontes — ficam NULL até o admin conferir na tabela oficial da Meta
+  // (estimativa mostra "preço não cadastrado" em vez de inventar um valor).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS precos_meta (
+      pais        TEXT    NOT NULL,
+      categoria   TEXT    NOT NULL,
+      preco_usd   NUMERIC(10,5),
+      vigencia    DATE    NOT NULL DEFAULT CURRENT_DATE,
+      fonte       TEXT,
+      PRIMARY KEY (pais, categoria)
+    )
+  `).catch(() => {});
+  await pool.query(`
+    INSERT INTO precos_meta (pais, categoria, preco_usd, fonte) VALUES
+      ('BR', 'marketing', 0.0625, 'tabela de referência 2026 — conferir em developers.facebook.com/.../pricing'),
+      ('BR', 'utility', NULL, 'preencher conforme tabela oficial da Meta'),
+      ('BR', 'authentication', NULL, 'preencher conforme tabela oficial da Meta')
+    ON CONFLICT (pais, categoria) DO NOTHING
+  `).catch(() => {});
+  // Sprint 6 / H3: vários números oficiais por conta (vários Phone Number IDs da mesma WABA) —
+  // troca UNIQUE(user_id) por um número oficial único por conta. Reversível recriando a UNIQUE(user_id).
+  await pool.query(`ALTER TABLE whatsapp_oficial_config DROP CONSTRAINT IF EXISTS whatsapp_oficial_config_user_id_key`).catch(() => {});
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_oficial_config_numero
+      ON whatsapp_oficial_config (user_id, phone_number_id) WHERE phone_number_id IS NOT NULL
+  `).catch(() => {});
+  for (const col of ['optin_origem TEXT', 'optin_em TIMESTAMPTZ', 'optin_prova TEXT', 'marketing_optout_em TIMESTAMPTZ',
+                     'janela_oficial_ate TIMESTAMPTZ', 'meta_saturado_ate TIMESTAMPTZ', 'meta_falhas_131026 INTEGER DEFAULT 0']) {
+    await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  // Checklist "Apto para API oficial" (Sprint 3 / H2): confirmações manuais do cliente.
+  for (const col of ['app_business_desde DATE', 'portfolio_verificado_em DATE', 'portfolio_prova TEXT']) {
+    await pool.query(`ALTER TABLE whatsapp_numeros ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  // Opt-in retroativo, só onde há prova no próprio CRM: veio de Smart Link/anúncio (Sprint 3).
+  await pool.query(`
+    UPDATE contatos SET optin_origem = CASE WHEN origem_inbound_tipo = 'anuncio' THEN 'anuncio_ctwa' ELSE 'smart_link' END,
+                        optin_em = origem_inbound_em, optin_prova = 'origem inbound: ' || COALESCE(origem_inbound_campanha, origem_inbound_tipo)
+     WHERE optin_origem IS NULL AND origem_inbound_em IS NOT NULL
+  `).catch(() => {});
+  log.info('MIGRATIONS', 'API oficial (inbox/status/erros/templates/opt-in) OK');
+
   // ── Circuit-breaker de loop de LOGOUT (Sprint 2026-08-10, continuação Serenovlogs067) ────────
   // [AUDITORIA] BUG GRAVE (2 incidentes reais confirmados — Serenovlogs067 em 10/08 e outro
   // usuário no mesmo dia, ambos com número derrubado/banido pelo WhatsApp): reconectar

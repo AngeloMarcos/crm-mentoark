@@ -62,12 +62,16 @@ function decriptar(valorEnc: string): string {
 export { encriptar as encriptarSegredoMetaOficial };
 
 export async function buscarConfigMetaOficial(pool: Pool, userId: string): Promise<MetaOficialConfig | null> {
-  const r = await pool.query(`SELECT * FROM whatsapp_oficial_config WHERE user_id = $1 LIMIT 1`, [userId]);
+  const r = await pool.query(`SELECT * FROM whatsapp_oficial_config WHERE user_id = $1 ORDER BY created_at LIMIT 1`, [userId]);
   return r.rows[0] || null;
 }
 
+// Sprint 6 / H2: versão da Graph API centralizada (env META_GRAPH_VERSION), não espalhada por config.
+export function versaoGraph(cfg?: { graph_api_version?: string | null }): string {
+  return process.env.META_GRAPH_VERSION || cfg?.graph_api_version || 'v21.0';
+}
 function graphUrl(cfg: MetaOficialConfig, path: string): string {
-  return `https://graph.facebook.com/${cfg.graph_api_version}/${path}`;
+  return `https://graph.facebook.com/${versaoGraph(cfg)}/${path}`;
 }
 
 // [AUDITORIA] LÓGICA (2026-09-16): a Graph API devolve o limite de mensagens como um enum tipo
@@ -76,6 +80,40 @@ function graphUrl(cfg: MetaOficialConfig, path: string): string {
 // ex.: o antigo "TIER_1K" virou um patamar de 2 mil). Em vez de mapear um enum fixo (quebraria
 // silenciosamente se a Meta adicionar um degrau novo), extrai o número e o multiplicador "K" do
 // próprio nome do enum — funciona pra qualquer TIER_<n>[K] que a Meta já usou ou venha a usar.
+/** Chamada genérica à Graph API com o token da config (Sprint 5, 2026-10-05). Nunca lança. */
+export async function graphFetch(
+  cfg: MetaOficialConfig, path: string, init: { method?: string; body?: unknown } = {}
+): Promise<{ ok: boolean; status: number; data: any; erro?: string }> {
+  if (!cfg.access_token_enc) return { ok: false, status: 0, data: null, erro: 'Access Token não configurado' };
+  try {
+    const resp = await fetch(graphUrl(cfg, path), {
+      method: init.method || 'GET',
+      headers: { Authorization: `Bearer ${decriptar(cfg.access_token_enc)}`, 'Content-Type': 'application/json' },
+      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+    });
+    const data: any = await resp.json().catch(() => ({}));
+    return { ok: resp.ok, status: resp.status, data, erro: resp.ok ? undefined : (data?.error?.message || `Erro ${resp.status} da Graph API`) };
+  } catch (err: any) {
+    return { ok: false, status: 0, data: null, erro: err?.message || 'Falha de rede ao contatar a Meta' };
+  }
+}
+
+/**
+ * Limite de mensagens do número. [AUDITORIA] BUG CORRIGIDO (2026-10-05): o teste de conexão
+ * pedia `messaging_limit_tier` junto com os outros campos — a Meta descontinuou esse campo em
+ * fev/2026 e a Graph API rejeita a requisição INTEIRA quando um campo não existe, então o teste
+ * passaria a falhar sempre. Agora o limite é pedido à parte, tentando o campo novo e caindo pro
+ * antigo; falha aqui não derruba o teste.
+ */
+export async function buscarLimiteMensagens(cfg: MetaOficialConfig): Promise<string | null> {
+  for (const campo of ['whatsapp_business_manager_messaging_limit', 'messaging_limit_tier']) {
+    const r = await graphFetch(cfg, `${cfg.phone_number_id}?fields=${campo}`);
+    const v = r.ok ? r.data?.[campo] : null;
+    if (v) return typeof v === 'string' ? v : (v.current_limit || v.max_daily_conversations_per_business || null);
+  }
+  return null;
+}
+
 export function parseLimiteMensagens(tier: string | null | undefined): { valor: number | null; label: string } {
   if (!tier) return { valor: null, label: '—' };
   if (tier === 'TIER_UNLIMITED') return { valor: null, label: 'Ilimitado' };
@@ -100,19 +138,21 @@ export async function testarConexaoMetaOficial(cfg: MetaOficialConfig): Promise<
   }
   try {
     const token = decriptar(cfg.access_token_enc);
-    const url = graphUrl(cfg, `${cfg.phone_number_id}?fields=verified_name,display_phone_number,quality_rating,messaging_limit_tier`);
+    // Sem `messaging_limit_tier` aqui (descontinuado — ver buscarLimiteMensagens abaixo).
+    const url = graphUrl(cfg, `${cfg.phone_number_id}?fields=verified_name,display_phone_number,quality_rating`);
     const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     const data: any = await resp.json().catch(() => ({}));
     if (!resp.ok) {
       return { ok: false, erro: data?.error?.message || `Erro ${resp.status} da Graph API` };
     }
-    const { valor, label } = parseLimiteMensagens(data.messaging_limit_tier);
+    const limiteTier = await buscarLimiteMensagens(cfg).catch(() => null);
+    const { valor, label } = parseLimiteMensagens(limiteTier);
     return {
       ok: true,
       numeroExibicao: data.display_phone_number,
       nomeVerificado: data.verified_name,
       qualidade: data.quality_rating,
-      limiteTier: data.messaging_limit_tier,
+      limiteTier: limiteTier ?? undefined,
       limiteValor: valor,
       limiteLabel: label,
     };

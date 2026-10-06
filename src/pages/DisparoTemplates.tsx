@@ -31,6 +31,7 @@ import {
 import { toast } from "sonner";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
+import { TemplatesMetaSecao } from "@/components/whatsapp/NumerosOficiais";
 
 // [AUDITORIA] LÓGICA (Sprint Editor Template WhatsApp, 2026-09-04): esta tela ficou só com
 // listar/buscar/excluir — criar e editar viraram uma página própria (`DisparoTemplateEditor.tsx`,
@@ -205,6 +206,8 @@ export default function DisparoTemplatesPage() {
             })}
           </div>
         )}
+
+        <TemplatesMetaSecao />
       </div>
     </CRMLayout>
   );

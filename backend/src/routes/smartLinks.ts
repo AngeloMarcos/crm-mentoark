@@ -57,6 +57,16 @@ export async function registrarOrigemInbound(pool: Pool, userId: string, telefon
       tipo = 'anuncio';
       campanha = String(anuncio.title || anuncio.sourceId || 'Anúncio clique-para-WhatsApp').slice(0, 200);
     }
+    // Sprint 6 / opt-in (2026-10-05): consentimento pra API Oficial. Smart Link/anúncio contam como
+    // opt-in; sem link, só conta quem escreveu PRIMEIRO (nunca recebeu disparo nosso) — resposta a
+    // prospecção fria não é consentimento. Primeiro registro vence (não sobrescreve).
+    await pool.query(
+      `UPDATE contatos SET optin_origem = $3, optin_em = NOW(), optin_prova = $4
+       WHERE user_id = $1 AND telefone ILIKE $2 AND optin_origem IS NULL
+         AND ($3 <> 'conversa_iniciada_pelo_contato' OR ultimo_disparo_em IS NULL)`,
+      [userId, sufixo, tipo === 'anuncio' ? 'anuncio_ctwa' : tipo ? 'smart_link' : 'conversa_iniciada_pelo_contato',
+       String(texto || '').slice(0, 200) || null]
+    ).catch(() => {});
     if (!tipo) return;
 
     const upd = await pool.query(

@@ -23,8 +23,8 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { verificarAssinaturaWebhook, decriptarSegredoMetaOficial } from '../services/metaCloudApi';
-import { withTenantContext } from '../db';
 import { log } from '../logger';
+import { processarWebhookMeta } from '../services/metaWebhookProcessor';
 
 export default function metaWebhookRouter(pool: Pool): Router {
   const router = Router();
@@ -58,95 +58,53 @@ export default function metaWebhookRouter(pool: Pool): Router {
   // POST /webhook/meta/:configId — eventos de verdade (mensagem recebida, status de entrega,
   // status de aprovação de template).
   router.post('/:configId', async (req: Request, res: Response) => {
-    // [AUDITORIA] LÓGICA: responde 200 JÁ NO INÍCIO, antes de processar — mesma convenção que
-    // integrações com webhook da Meta recomendam (evita a Meta reenviar o mesmo evento em loop
-    // por timeout enquanto processamos; qualquer falha de processamento vira só log, não afeta
-    // a entrega em si). O corpo já foi lido (`req.rawBody`, capturado no `express.json({verify})`
-    // de index.ts) antes deste handler rodar, então responder cedo não perde nada.
-    res.sendStatus(200);
+    // [AUDITORIA] BUG CORRIGIDO (Sprint 6 / H1 1.2, 2026-10-05): respondia 200 ANTES de validar a
+    // assinatura e descartava o evento forjado em silêncio — quem testava a URL com assinatura
+    // errada via "200 OK" e achava que estava tudo certo. Agora valida primeiro (é rápido: 1 leitura
+    // da config + 1 HMAC, bem dentro dos 3s que a Meta tolera) e responde 401/404 quando não bate;
+    // só depois devolve 200 e processa (o processamento continua fora do tempo de resposta — 1.3).
+    let cfg: any;
     try {
       const cfgRes = await pool.query(
         `SELECT * FROM whatsapp_oficial_config WHERE id = $1 AND ativo = true`,
         [req.params.configId]
       );
-      const cfg = cfgRes.rows[0];
+      cfg = cfgRes.rows[0];
       if (!cfg) {
         log.warn('META_WEBHOOK', 'POST recebido pra config inexistente/inativa — ignorado', { configId: req.params.configId });
-        return;
+        return res.sendStatus(404);
       }
       if (!cfg.app_secret_enc) {
-        log.warn('META_WEBHOOK', 'Config sem App Secret cadastrado — não dá pra validar assinatura, evento ignorado por segurança', { configId: req.params.configId });
-        return;
+        log.warn('META_WEBHOOK', 'Config sem App Secret cadastrado — não dá pra validar assinatura, evento recusado', { configId: req.params.configId });
+        return res.sendStatus(401);
       }
-
       const rawBody: Buffer | undefined = (req as any).rawBody;
       const assinatura = req.headers['x-hub-signature-256'] as string | undefined;
       const appSecret = decriptarSegredoMetaOficial(cfg.app_secret_enc);
       if (!rawBody || !verificarAssinaturaWebhook(appSecret, rawBody, assinatura)) {
-        log.warn('META_WEBHOOK', 'Assinatura inválida — evento descartado (possível requisição forjada)', { configId: req.params.configId });
-        return;
+        log.warn('META_WEBHOOK', 'Assinatura inválida — evento recusado (possível requisição forjada)', { configId: req.params.configId });
+        return res.sendStatus(401);
       }
+    } catch (err: any) {
+      log.error('META_WEBHOOK', 'Erro ao validar evento', { err: err?.message });
+      return res.sendStatus(500);
+    }
 
-      const entradas: any[] = req.body?.entry || [];
-      for (const entrada of entradas) {
-        for (const mudanca of entrada.changes || []) {
-          const valor = mudanca.value || {};
-          const mensagens: any[] = valor.messages || [];
-          for (const msg of mensagens) {
-            await processarMensagemRecebida(pool, cfg, msg, valor);
-          }
-          // status de entrega/leitura (sent/delivered/read/failed) e status de aprovação de
-          // template (message_template_status_update) chegam aqui também, em `valor.statuses`/
-          // como um `field` diferente — não processados ainda nesta primeira fase (só log).
-          if (valor.statuses?.length) {
-            log.info('META_WEBHOOK', 'Status de mensagem recebido (ainda não processado)', {
-              configId: req.params.configId, total: valor.statuses.length,
-            });
-          }
-        }
-      }
+    res.sendStatus(200);
+    try {
+      await pool.query(`UPDATE whatsapp_oficial_config SET ultimo_webhook_em = NOW() WHERE id = $1`, [cfg.id]).catch(() => {});
+      // Sprint 5/6 (2026-10-05): processamento completo — todos os entry/changes, inbox idempotente,
+      // status com erro/cobrança, qualidade/limite, templates, opt-out de marketing e coexistência.
+      const r = await processarWebhookMeta(pool, cfg, req.body);
+      log.info('META_WEBHOOK', 'Evento processado', { configId: req.params.configId, ...r });
     } catch (err: any) {
       log.error('META_WEBHOOK', 'Erro ao processar evento', { err: err?.message, stack: err?.stack });
     }
   });
 
-  async function processarMensagemRecebida(pool: Pool, cfg: any, msg: any, valor: any): Promise<void> {
-    const de: string = msg.from; // dígitos puros, sem @s.whatsapp.net (formato diferente da Evolution)
-    const tipo: string = msg.type; // 'text' | 'image' | 'audio' | 'video' | 'document' | ...
-    const texto: string | null = msg.text?.body || null;
-    const pushName: string | null = valor.contacts?.[0]?.profile?.name || null;
-    const instanceName = `meta_oficial:${cfg.phone_number_id}`;
-
-    log.info('META_WEBHOOK', 'Mensagem recebida via API Oficial', {
-      userId: cfg.user_id, de, tipo, temTexto: !!texto,
-    });
-
-    // [AUDITORIA] LÓGICA: grava em whatsapp_messages com o MESMO formato de remote_jid que a
-    // Evolution usa (`<digitos>@s.whatsapp.net`) — WhatsAppInterface.tsx/GET /conversas nunca
-    // precisam saber que esta mensagem veio de um canal diferente, só o `instance_name` distinto
-    // marca a procedência (útil pra filtrar/depurar depois). withTenantContext necessário pro
-    // piloto de RLS em whatsapp_messages, mesmo motivo já documentado em webhook.ts/agentEngine.ts.
-    await withTenantContext({ userId: cfg.user_id, isAdmin: false }, client => client.query(
-      `INSERT INTO whatsapp_messages
-         (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa, push_name)
-       VALUES ($1,$2,$3,$4,false,$5,$6,'received',to_timestamp($7),$8)
-       ON CONFLICT (message_id, instance_name) DO NOTHING`,
-      [
-        cfg.user_id, instanceName, `${de}@s.whatsapp.net`, msg.id,
-        tipo === 'text' ? 'text' : tipo,
-        texto,
-        Number(msg.timestamp) || Math.floor(Date.now() / 1000),
-        pushName,
-      ]
-    )).catch(err => log.error('META_WEBHOOK', 'Falha ao gravar mensagem recebida', { err: err?.message }));
-
-    // [AUDITORIA] FIX PENDENTE (motivo: decisão de produto — próxima fase desta sprint, só depois
-    // de confirmar recebimento básico funcionando contra a conta real do usuário): nenhuma
-    // resposta automática ainda. agentEngine.ts hoje só sabe responder via Evolution
-    // (enviarResposta/enviarRespostaVoz chamam a Evolution direto) — conectar este canal ao motor
-    // de IA exige abstrair o envio por trás de uma interface comum (Evolution vs Meta Oficial),
-    // não só chamar enviarTextoMetaOficial isolado daqui.
-  }
+  // [AUDITORIA] FIX PENDENTE (motivo: decisão de produto, mantido da fase anterior): a IA ainda não
+  // responde pelo canal oficial — agentEngine.ts só envia pela Evolution; ligar exige abstrair o
+  // envio (Evolution × Meta) e respeitar janela de 24h/templates.
 
   return router;
 }

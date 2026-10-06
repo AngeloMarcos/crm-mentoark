@@ -6,6 +6,7 @@ import { retentarMidiaPendente } from './services/mediaRetry';
 import { recalcularTodosScores } from './services/instanceScore';
 import { avaliarFases } from './services/saudeNumero';
 import { retomarCampanhasInstanciaCaida, recalcularMetricasCampanhas } from './services/metricasDisparo';
+import { atualizarNumerosOficiais } from './routes/metaOficial';
 import { processarMaturador } from './services/maturadorProcessor';
 import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
 import { enfileirarBusca, enfileirarLinkPublico } from './radar/fila';
@@ -230,6 +231,18 @@ export function initCronJobs() {
       }
     } catch (err: any) {
       log.error('CRON', 'Erro ao recalcular Score de Saúde', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // [AUDITORIA] LÓGICA (Sprint 6 / H3+H4, 2026-10-05): a cada 6h, sincroniza os templates da Meta
+  // e atualiza qualidade/limite de todos os números oficiais ativos (o webhook já atualiza na hora
+  // quando a Meta avisa; isto cobre webhook perdido ou app ainda não inscrito na WABA).
+  cron.schedule('20 */6 * * *', async () => {
+    try {
+      const r = await atualizarNumerosOficiais(pool);
+      if (r.numeros > 0) log.info('CRON', 'Números oficiais atualizados', r);
+    } catch (err: any) {
+      log.error('CRON', 'Erro ao atualizar números oficiais', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 
