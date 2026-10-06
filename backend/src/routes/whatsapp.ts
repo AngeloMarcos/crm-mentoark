@@ -1284,9 +1284,12 @@ export default function whatsappRouter(pool: Pool): Router {
         // fallback pros grupos ainda não sincronizados (nenhuma mensagem nova desde o fix, ou
         // a minoria de grupos que a Evolution não devolve subject/foto — ver comentário em
         // buscarInfoGrupo).
+        // Sprint 8 / H10: contato "fantasma" criado pelo LID tem como nome o próprio número —
+        // isso não é nome; cai para o pushName/nome importado.
+        const nomeReal = (n: string | null | undefined) => (n && !/^[+\d\s()-]{8,}$/.test(n) ? n : null);
         const nomeFormatado = isGroup
           ? (row.nome_grupo || `Grupo ${row.session_id.split('-')[0]?.slice(-4) ?? row.session_id.slice(-8)}`)
-          : (row.nome_contato || row.push_name || row.push_contato || row.nome_lid
+          : (nomeReal(row.nome_contato) || nomeReal(row.push_name) || row.push_contato || row.nome_lid
               // Sprint 8 / H10: LID sem telefone conhecido não é telefone — não formata como se fosse.
               || (row.so_lid ? 'Contato (número oculto)' : row.session_id.replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3')));
         return {
@@ -1295,7 +1298,7 @@ export default function whatsappRouter(pool: Pool): Router {
           numero: row.numero,
           is_group: isGroup,
           nome: nomeFormatado,
-          push_name: isGroup ? (row.last_sender || null) : (row.push_name || row.push_contato || row.nome_lid || null),
+          push_name: isGroup ? (row.last_sender || null) : (nomeReal(row.push_name) || row.push_contato || row.nome_lid || null),
           profile_pic_url: (isGroup ? row.grupo_pic : row.profile_pic_url) || null,
           ultima_atividade: row.ultima_atividade,
           ultima_mensagem: row.ultima_mensagem || '',
