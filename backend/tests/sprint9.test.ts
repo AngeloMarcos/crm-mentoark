@@ -109,3 +109,24 @@ describe('trava central de envio (evolutionFetch)', () => {
     }
   });
 });
+
+import { primeiraMensagemEm, SCORE_MENTOR_TESTE } from '../src/services/maturadorGlobal';
+describe('modo teste e 1ª mensagem', () => {
+  const DIA_MS = 86_400_000;
+  const agora2 = Date.UTC(2026, 9, 6, 16); // 13h em Brasília
+  const maduro = { fase: 'madura', protecao_ate: null, protecao_liberada_em: null, bans_total: 0, primeira_conexao_em: new Date(agora2 - 30 * DIA_MS) };
+  it('no modo teste, maduro com score 65 é mentor; no modo normal, só conversa', () => {
+    expect(papelGlobal(maduro, 65, agora2, SCORE_MENTOR_TESTE)).toBe('mentor');
+    expect(papelGlobal(maduro, 65, agora2)).toBe('conversador');
+  });
+  it('número conectado há menos de 24h só recebe a 1ª mensagem na manhã seguinte (9h–10h Brasília)', () => {
+    const em = primeiraMensagemEm(new Date(agora2 - 6 * 3_600_000), agora2);
+    expect(em.toISOString().slice(0, 10)).toBe('2026-10-07');
+    expect(em.getUTCHours()).toBe(12); // 09h em Brasília
+  });
+  it('número mais antigo: 1ª mensagem em 1–3h', () => {
+    const em = primeiraMensagemEm(new Date(agora2 - 5 * DIA_MS), agora2).getTime() - agora2;
+    expect(em).toBeGreaterThanOrEqual(60 * 60_000);
+    expect(em).toBeLessThanOrEqual(180 * 60_000);
+  });
+});

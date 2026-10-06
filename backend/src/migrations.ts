@@ -2451,6 +2451,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
   await pool.query(`INSERT INTO maturador_global_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`).catch(() => {});
+  // Modo teste (2026-10-06): só as contas listadas participam, sem exigir proxy (ver lerConfigGlobal).
+  await pool.query(`ALTER TABLE maturador_global_config ADD COLUMN IF NOT EXISTS modo_teste BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE maturador_global_config ADD COLUMN IF NOT EXISTS contas_teste UUID[] NOT NULL DEFAULT '{}'`).catch(() => {});
   await pool.query(`
     CREATE TABLE IF NOT EXISTS maturador_global_adesao (
       user_id       UUID        PRIMARY KEY,

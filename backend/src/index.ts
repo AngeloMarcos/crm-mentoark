@@ -561,7 +561,9 @@ app.get('/api/admin/maturacao', authMiddleware, adminMiddleware, async (_req: Au
 app.get('/api/admin/maturador-global', authMiddleware, adminMiddleware, async (_req: AuthRequest, res) => {
   try {
     const [cfg, part, vinc, msgs] = await Promise.all([
-      pool.query(`SELECT ativo, atualizado_em, atualizado_por FROM maturador_global_config WHERE id = 1`),
+      pool.query(`SELECT c.ativo, c.atualizado_em, c.atualizado_por, c.modo_teste,
+                         COALESCE((SELECT array_agg(u.email ORDER BY u.email) FROM users u WHERE u.id = ANY(c.contas_teste)), '{}') AS contas_teste_emails
+                  FROM maturador_global_config c WHERE c.id = 1`),
       avaliarParticipantes(pool),
       pool.query(`SELECT tipo, COUNT(*) FILTER (WHERE ativo)::int AS ativos FROM maturador_pares WHERE global GROUP BY 1`),
       pool.query(`SELECT COUNT(*) FILTER (WHERE NOT m.mentoria)::int AS conversa, COUNT(*) FILTER (WHERE m.mentoria)::int AS mentoria
@@ -572,17 +574,35 @@ app.get('/api/admin/maturador-global', authMiddleware, adminMiddleware, async (_
     const fora: Record<string, number> = {};
     for (const n of part) {
       if (n.papel) porPapel[n.papel] = (porPapel[n.papel] ?? 0) + 1;
-      else if (n.fora && n.fora !== 'conta não aderiu ao Aquecimento Global') fora[n.fora] = (fora[n.fora] ?? 0) + 1;
+      else if (n.fora && n.fora !== 'conta não aderiu ao Aquecimento Global' && !n.fora.startsWith('Aquecimento Global em modo teste')) {
+        fora[n.fora] = (fora[n.fora] ?? 0) + 1;
+      }
     }
     res.json({ ...(cfg.rows[0] ?? { ativo: false }), contas_aderidas: new Set(part.filter(n => n.fora !== 'conta não aderiu ao Aquecimento Global').map(n => n.userId)).size,
-      por_papel: porPapel, fora, vinculos: vinc.rows, mensagens_24h: msgs.rows[0] });
+      por_papel: porPapel, fora, vinculos: vinc.rows, mensagens_24h: msgs.rows[0],
+      // modo teste: lista os números das contas de teste com papel/motivo (para acompanhar o teste)
+      participantes_teste: part.filter(n => n.modo_teste).map(n => ({ instancia: n.instancia, numero: n.numero, papel: n.papel, fora: n.fora, so_recebe: n.so_recebe })) });
   } catch (err: any) { res.status(500).json({ message: err.message }); }
 });
 app.put('/api/admin/maturador-global', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
   try {
     const ativo = req.body?.ativo === true;
-    await pool.query(`UPDATE maturador_global_config SET ativo = $1, atualizado_em = NOW(), atualizado_por = $2 WHERE id = 1`, [ativo, req.userEmail || req.userId]);
-    log.info('MATURADOR_GLOBAL', ativo ? 'Ligado pelo admin' : 'Desligado pelo admin', { por: req.userEmail });
+    // Modo teste: { modo_teste: true, contas_teste_emails: ['a@x.com', ...] }. Omitido = mantém.
+    let contasTeste: string[] | null = null;
+    if (Array.isArray(req.body?.contas_teste_emails)) {
+      const emails = req.body.contas_teste_emails.map((e: unknown) => String(e || '').trim().toLowerCase()).filter(Boolean);
+      const r = await pool.query(`SELECT id, lower(email) AS email FROM users WHERE lower(email) = ANY($1::text[])`, [emails]);
+      const faltando = emails.filter((e: string) => !r.rows.some((x: any) => x.email === e));
+      if (faltando.length) return res.status(400).json({ message: `Conta(s) não encontrada(s): ${faltando.join(', ')}` });
+      contasTeste = r.rows.map((x: any) => x.id);
+    }
+    const modoTeste = typeof req.body?.modo_teste === 'boolean' ? req.body.modo_teste : null;
+    await pool.query(
+      `UPDATE maturador_global_config SET ativo = $1, atualizado_em = NOW(), atualizado_por = $2,
+              modo_teste = COALESCE($3, modo_teste), contas_teste = COALESCE($4::uuid[], contas_teste)
+       WHERE id = 1`,
+      [ativo, req.userEmail || req.userId, modoTeste, contasTeste]);
+    log.info('MATURADOR_GLOBAL', ativo ? 'Ligado pelo admin' : 'Desligado pelo admin', { por: req.userEmail, modoTeste, contasTeste: contasTeste?.length });
     res.json(await montarRedeGlobal(pool));
   } catch (err: any) { res.status(500).json({ message: err.message }); }
 });

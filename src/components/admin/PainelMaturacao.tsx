@@ -82,13 +82,20 @@ const PAPEL_ADMIN: Record<string, string> = { receptor: "Só recebem (números n
 export function AdminMaturadorGlobal() {
   const [d, setD] = useState<any>(null);
   const [salvando, setSalvando] = useState(false);
-  const carregar = () => adminFetch<any>("/api/admin/maturador-global", { silent: true }).then(setD).catch(() => {});
+  const [modoTeste, setModoTeste] = useState(false);
+  const [emails, setEmails] = useState("");
+  const carregar = () => adminFetch<any>("/api/admin/maturador-global", { silent: true }).then((x: any) => {
+    setD(x); setModoTeste(!!x?.modo_teste); setEmails((x?.contas_teste_emails || []).join("\n"));
+  }).catch(() => {});
   useEffect(() => { carregar(); }, []);
-  const alternar = async () => {
-    const ligar = !d?.ativo;
-    if (ligar && !confirm("Ligar o Aquecimento Global? Os números das contas que aderiram (com proxy próprio) passam a conversar entre si.")) return;
+  const salvar = async (ativo: boolean) => {
+    const lista = emails.split(/[\s,;]+/).map(e => e.trim()).filter(Boolean);
+    if (ativo && modoTeste && !lista.length) { alert("Informe pelo menos uma conta (e-mail) para o modo teste."); return; }
+    if (ativo && !confirm(modoTeste
+      ? `Ligar o Aquecimento Global em MODO TESTE? Só estas contas participam, sem exigir proxy: ${lista.join(", ")}`
+      : "Ligar o Aquecimento Global? Os números das contas que aderiram (com proxy próprio) passam a conversar entre si.")) return;
     setSalvando(true);
-    try { await adminFetch("/api/admin/maturador-global", { method: "PUT", body: { ativo: ligar } }); await carregar(); }
+    try { await adminFetch("/api/admin/maturador-global", { method: "PUT", body: { ativo, modo_teste: modoTeste, contas_teste_emails: lista } }); await carregar(); }
     finally { setSalvando(false); }
   };
   return (
@@ -96,7 +103,7 @@ export function AdminMaturadorGlobal() {
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base flex items-center gap-2"><Flame className="h-4 w-4 text-orange-500" /> Aquecimento Global</CardTitle>
         {d && (
-          <button onClick={alternar} disabled={salvando}
+          <button onClick={() => salvar(!d.ativo)} disabled={salvando}
             className={`rounded-md px-3 py-1 text-sm font-medium text-white ${d.ativo ? "bg-red-600" : "bg-emerald-600"}`}>
             {salvando ? "…" : d.ativo ? "Desligar" : "Ligar"}
           </button>
@@ -105,11 +112,32 @@ export function AdminMaturadorGlobal() {
       <CardContent className="space-y-2 text-sm">
         {!d ? <Loader2 className="h-4 w-4 animate-spin" /> : (
           <>
-            <p>Status: <b>{d.ativo ? "LIGADO" : "desligado"}</b>{d.atualizado_por ? ` (por ${d.atualizado_por} em ${new Date(d.atualizado_em).toLocaleString("pt-BR")})` : ""}</p>
-            <p className="text-xs text-muted-foreground">Contas que aderiram: {d.contas_aderidas}</p>
+            <p>
+              Status: <b>{d.ativo ? (d.modo_teste ? "LIGADO — MODO TESTE" : "LIGADO") : "desligado"}</b>
+              {d.atualizado_por ? ` (por ${d.atualizado_por} em ${new Date(d.atualizado_em).toLocaleString("pt-BR")})` : ""}
+            </p>
+            <div className="rounded-md border p-2 space-y-2">
+              <label className="flex items-center gap-2 text-xs font-medium">
+                <input type="checkbox" checked={modoTeste} onChange={e => setModoTeste(e.target.checked)} disabled={d.ativo} />
+                Modo teste: só as contas abaixo participam, sem exigir proxy (mentor a partir de score 60)
+              </label>
+              {modoTeste && (
+                <textarea className="w-full rounded-md border bg-background p-2 text-xs" rows={2} value={emails} disabled={d.ativo}
+                  placeholder="e-mails das contas de teste, um por linha" onChange={e => setEmails(e.target.value)} />
+              )}
+              {d.ativo && <p className="text-[11px] text-muted-foreground">Desligue para mudar o modo ou as contas.</p>}
+            </div>
+            {!d.modo_teste && <p className="text-xs text-muted-foreground">Contas que aderiram: {d.contas_aderidas}</p>}
             <div className="flex flex-wrap gap-2 text-xs">
               {Object.entries(d.por_papel || {}).map(([p, n]) => <span key={p} className="rounded-md border px-2 py-1">{PAPEL_ADMIN[p] ?? p}: <b>{String(n)}</b></span>)}
             </div>
+            {d.modo_teste && (d.participantes_teste || []).length > 0 && (
+              <ul className="text-xs space-y-0.5">
+                {d.participantes_teste.map((n: any) => (
+                  <li key={n.instancia}>{n.numero || n.instancia}: <b>{n.papel ? (PAPEL_ADMIN[n.papel] ?? n.papel) : "fora"}</b> {n.fora ? `— ${n.fora}` : n.so_recebe ? `— ${n.so_recebe}` : ""}</li>
+                ))}
+              </ul>
+            )}
             {Object.keys(d.fora || {}).length > 0 && (
               <p className="text-xs text-muted-foreground">De fora: {Object.entries(d.fora).map(([m, n]) => `${m} (${n})`).join(" · ")}</p>
             )}

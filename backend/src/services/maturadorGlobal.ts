@@ -73,10 +73,13 @@ export function motivoSoRecebe(n: InfoNumero | null | undefined, agora = Date.no
   return null;
 }
 
-export function papelGlobal(n: InfoNumero, score: number | null, agora = Date.now()): PapelGlobal | null {
+export const SCORE_MENTOR = 85;
+export const SCORE_MENTOR_TESTE = 60;
+
+export function papelGlobal(n: InfoNumero, score: number | null, agora = Date.now(), scoreMentor = SCORE_MENTOR): PapelGlobal | null {
   if (n.fase === 'banida' || n.fase === 'quarentena') return null;
   if (motivoSoRecebe(n, agora)) return 'receptor';
-  if ((n.fase === 'madura' || n.fase === 'pre_oficial') && (score ?? 0) >= 85 && (n.bans_total ?? 0) === 0) return 'mentor';
+  if ((n.fase === 'madura' || n.fase === 'pre_oficial') && (score ?? 0) >= scoreMentor && (n.bans_total ?? 0) === 0) return 'mentor';
   return 'conversador';
 }
 
@@ -167,8 +170,49 @@ export async function globalLigado(pool: Pool): Promise<boolean> {
   return r.rows[0]?.ativo === true;
 }
 
+/**
+ * MODO TESTE (2026-10-06, pedido do usuário para validar sem comprar proxy): só as contas listadas
+ * em `contas_teste` participam — nenhum cliente real entra, mesmo que tenha aderido —, o proxy é
+ * dispensado só para elas (o IP é o mesmo de hoje: todos os números já saem pela VPS) e o mentor
+ * pode ter score a partir de 60. Todas as outras travas (número novo só recebe, quarentena, tetos)
+ * continuam iguais.
+ */
+export interface ConfigGlobal { ativo: boolean; modo_teste: boolean; contas_teste: string[] }
+export async function lerConfigGlobal(pool: Pool): Promise<ConfigGlobal> {
+  const r = await pool.query(`SELECT ativo, modo_teste, contas_teste FROM maturador_global_config WHERE id = 1`).catch(() => ({ rows: [] as any[] }));
+  const x = r.rows[0] || {};
+  return { ativo: x.ativo === true, modo_teste: x.modo_teste === true, contas_teste: (x.contas_teste || []).map(String) };
+}
+
+/** Número conectado há menos de 24h só começa a receber na manhã seguinte (9h–10h, Brasília). */
+export function primeiraMensagemEm(primeiraConexao: string | Date | null, agora = Date.now()): Date {
+  const prim = primeiraConexao ? new Date(primeiraConexao).getTime() : NaN;
+  if (Number.isFinite(prim) && agora - prim < 86_400_000) {
+    const amanha = new Date(agora - 3 * 3_600_000); // "agora" no horário de Brasília (UTC-3)
+    amanha.setUTCDate(amanha.getUTCDate() + 1);
+    amanha.setUTCHours(12, Math.floor(Math.random() * 60), 0, 0); // 12:00 UTC = 09:00 Brasília
+    return amanha;
+  }
+  return new Date(agora + (60 + Math.floor(Math.random() * 120)) * 60_000);
+}
+
+/** O número reconectou há menos de 3h? Enviar logo depois de conectar é sinal de risco. */
+let cacheReconexao: { em: number; mapa: Map<string, number> } | null = null;
+export async function reconectouRecente(pool: Pool, instancia: string, horas = 3): Promise<boolean> {
+  if (!cacheReconexao || Date.now() - cacheReconexao.em > 60_000) {
+    const r = await pool.query(
+      `SELECT instancia, MAX(criado_em) AS em FROM whatsapp_eventos_saude
+       WHERE tipo = 'conectou' AND criado_em >= NOW() - INTERVAL '24 hours' GROUP BY instancia`
+    ).catch(() => ({ rows: [] as any[] }));
+    cacheReconexao = { em: Date.now(), mapa: new Map(r.rows.map((x: any) => [x.instancia, new Date(x.em).getTime()])) };
+  }
+  const em = cacheReconexao.mapa.get(instancia);
+  return !!em && Date.now() - em < horas * 3_600_000;
+}
+
 /** Participantes elegíveis agora, com o motivo de quem ficou de fora (para a tela). */
-export async function avaliarParticipantes(pool: Pool, userId?: string) {
+export async function avaliarParticipantes(pool: Pool, userId?: string, cfgDado?: ConfigGlobal) {
+  const cfg = cfgDado ?? await lerConfigGlobal(pool);
   const r = await pool.query(
     `SELECT a.id, a.user_id, a.nome, a.evolution_instancia, a.numero_conectado, a.papel AS funcao,
             a.whatsapp_score, a.score_updated_at, a.proxy_aplicado_em,
@@ -183,24 +227,28 @@ export async function avaliarParticipantes(pool: Pool, userId?: string) {
   );
   return r.rows.map((x: any) => {
     const score = x.score_updated_at ? x.whatsapp_score : null;
+    const contaTeste = cfg.modo_teste && cfg.contas_teste.includes(String(x.user_id));
     let fora: string | null = null;
-    if (!x.aderiu) fora = 'conta não aderiu ao Aquecimento Global';
+    if (cfg.modo_teste && !contaTeste) fora = 'Aquecimento Global em modo teste (só contas de teste)';
+    else if (!x.aderiu && !contaTeste) fora = 'conta não aderiu ao Aquecimento Global';
     else if (!x.numero_conectado) fora = 'instância desconectada';
     else if (!x.fase) fora = 'número sem registro de saúde';
     else if (x.funcao === 'pessoal') fora = 'número pessoal não participa';
-    else if (!x.proxy_aplicado_em) fora = 'sem proxy próprio configurado';
-    const papel = fora ? null : papelGlobal(x, score);
+    else if (!x.proxy_aplicado_em && !contaTeste) fora = 'sem proxy próprio configurado';
+    const papel = fora ? null : papelGlobal(x, score, Date.now(), contaTeste ? SCORE_MENTOR_TESTE : SCORE_MENTOR);
     if (!fora && !papel) fora = x.fase === 'quarentena' ? 'número em quarentena' : 'número banido';
     return {
       agenteId: x.id, userId: x.user_id, nome: x.nome, instancia: x.evolution_instancia,
       numero: x.numero_conectado ? normalizar(x.numero_conectado) : null,
-      papel, fora, so_recebe: motivoSoRecebe(x), score, fase: x.fase,
+      papel, fora, so_recebe: motivoSoRecebe(x), score, fase: x.fase, primeira_conexao_em: x.primeira_conexao_em,
+      modo_teste: contaTeste,
     };
   });
 }
 
 export async function montarRedeGlobal(pool: Pool): Promise<{ ligado: boolean; participantes: number; criados: number; desativados: number }> {
-  if (!(await globalLigado(pool))) {
+  const cfg = await lerConfigGlobal(pool);
+  if (!cfg.ativo) {
     const off = await pool.query(
       `UPDATE maturador_pares SET ativo = false, pausado_motivo = 'Aquecimento Global desligado', updated_at = NOW()
        WHERE global AND ativo RETURNING user_id`
@@ -208,7 +256,8 @@ export async function montarRedeGlobal(pool: Pool): Promise<{ ligado: boolean; p
     off.rows.forEach((x: any) => invalidarNumerosMaturador(x.user_id));
     return { ligado: false, participantes: 0, criados: 0, desativados: off.rowCount ?? 0 };
   }
-  const todos = await avaliarParticipantes(pool);
+  const todos = await avaliarParticipantes(pool, undefined, cfg);
+  const primConexao = new Map(todos.map(x => [x.agenteId, x.primeira_conexao_em]));
   const participantes: Participante[] = todos.filter(x => x.papel).map(x => ({ agenteId: x.agenteId, userId: x.userId, papel: x.papel! }));
   const atuaisR = await pool.query(`SELECT id, agente_a_id, agente_b_id, tipo, ativo FROM maturador_pares WHERE global`);
   const atuais: (Vinculo & { id: string; ativo: boolean })[] = atuaisR.rows.map((x: any) => ({ id: x.id, a: x.agente_a_id, b: x.agente_b_id, tipo: x.tipo, ativo: x.ativo }));
@@ -230,12 +279,13 @@ export async function montarRedeGlobal(pool: Pool): Promise<{ ligado: boolean; p
     const r = await pool.query(
       `INSERT INTO maturador_pares (user_id, agente_a_id, agente_b_id, ativo, global, tipo, data_inicio, hora_inicio, hora_fim,
                                     proxima_mensagem_em, ultimo_remetente)
-       VALUES ($1, $2, $3, true, true, $4, NOW(), 8, 21, NOW() + (($5)::text || ' minutes')::interval, 'b')
+       VALUES ($1, $2, $3, true, true, $4, NOW(), 8, 21, $5::timestamptz, 'b')
        ON CONFLICT (agente_a_id, agente_b_id) DO UPDATE SET ativo = true, global = true, tipo = EXCLUDED.tipo,
          pausado_motivo = NULL, falhas_consecutivas = 0, proxima_mensagem_em = EXCLUDED.proxima_mensagem_em, updated_at = NOW()
        WHERE maturador_pares.banido_em IS NULL AND maturador_pares.global -- nunca converte par da conta em global
        RETURNING user_id`,
-      [dono.get(v.a), v.a, v.b, v.tipo, String(60 + Math.floor(Math.random() * 120))]
+      // Receptor conectado há menos de 24h: 1ª mensagem só na manhã seguinte (começa a receber no 2º dia).
+      [dono.get(v.a), v.a, v.b, v.tipo, primeiraMensagemEm(v.tipo === 'mentoria' ? primConexao.get(v.b) ?? null : null).toISOString()]
     ).catch(err => { log.warn('MATURADOR_GLOBAL', 'Falha ao criar vínculo', { err: err?.message }); return { rowCount: 0, rows: [] as any[] }; });
     if (r.rowCount) {
       criados++;

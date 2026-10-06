@@ -27,7 +27,7 @@ import { Pool } from 'pg';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
 import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, STATUS_CORES, MENSAGENS_MENTORIA } from './maturadorDialogos';
-import { bloqueioEnvio, MAX_MENTORIA_DIA_MENTOR, MAX_RECEBIDAS_DIA_RECEPTOR } from './maturadorGlobal';
+import { bloqueioEnvio, reconectouRecente, MAX_MENTORIA_DIA_MENTOR, MAX_RECEBIDAS_DIA_RECEPTOR } from './maturadorGlobal';
 import { registrarIdMaturador, invalidarNumerosMaturador } from './maturadorFiltro';
 import { saudePorInstancia, MAX_ENVIOS_HORA } from './saudeNumero';
 
@@ -196,6 +196,11 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
           modoMentoria = true;
         }
         if ((remetente === 'a' ? bloqA : bloqB)) continue; // mentor travado (ex.: caiu em quarentena)
+        // 2026-10-06: quem acabou de (re)conectar espera 3h antes de enviar qualquer coisa.
+        if (await reconectouRecente(pool, remetente === 'a' ? par.a_instancia : par.b_instancia)) {
+          await pool.query(`UPDATE maturador_pares SET proxima_mensagem_em = NOW() + INTERVAL '30 minutes' WHERE id = $1`, [par.id]).catch(() => {});
+          continue;
+        }
         const de = remetente === 'a'
           ? { id: par.agente_a_id, url: par.a_url, key: par.a_key, instancia: par.a_instancia }
           : { id: par.agente_b_id, url: par.b_url, key: par.b_key, instancia: par.b_instancia };
