@@ -25,7 +25,7 @@ import { avaliarParticipantes, globalLigado, montarRedeGlobal, TERMO_GLOBAL_VERS
 import { validarProxy, aplicarProxy, removerProxy } from '../services/proxyInstancia';
 
 export const TERMO_GLOBAL_TEXTO =
-  'Ao participar do Maturador Global, os números desta conta trocam mensagens curtas e neutras ' +
+  'Ao participar do Aquecimento Global, os números desta conta trocam mensagens curtas e neutras ' +
   '(sem propaganda e sem dados dos seus clientes) com números de outras contas da MentoArk, para ' +
   'criar histórico de uso e melhorar o score. Os números das outras contas aparecem nas conversas ' +
   'do seu WhatsApp no celular (não aparecem na caixa de entrada do CRM). Números novos só recebem ' +
@@ -71,7 +71,7 @@ export default function maturadorRouter(pool: Pool): Router {
   router.put('/global/adesao', async (req: AuthRequest, res: Response) => {
     const ownerId = await resolverOwnerId(pool, req.userId!);
     const ativo = req.body?.ativo === true;
-    if (ativo && req.body?.aceito !== true) return res.status(400).json({ message: 'Para participar, aceite o termo do Maturador Global.' });
+    if (ativo && req.body?.aceito !== true) return res.status(400).json({ message: 'Para participar, aceite o termo do Aquecimento Global.' });
     await pool.query(
       `INSERT INTO maturador_global_adesao (user_id, ativo, aceito_em, aceito_por, termo_versao, atualizado_em)
        VALUES ($1, $2, CASE WHEN $2 THEN NOW() END, CASE WHEN $2 THEN $3 END, CASE WHEN $2 THEN $4 END, NOW())
@@ -85,7 +85,7 @@ export default function maturadorRouter(pool: Pool): Router {
     // Sair desliga na hora os vínculos globais dos números desta conta.
     if (!ativo) {
       await pool.query(
-        `UPDATE maturador_pares mp SET ativo = false, pausado_motivo = 'Conta saiu do Maturador Global', updated_at = NOW()
+        `UPDATE maturador_pares mp SET ativo = false, pausado_motivo = 'Conta saiu do Aquecimento Global', updated_at = NOW()
          FROM agentes a WHERE mp.global AND mp.ativo AND a.user_id = $1 AND a.id IN (mp.agente_a_id, mp.agente_b_id)`, [ownerId]);
     } else {
       void montarRedeGlobal(pool).catch(() => {});

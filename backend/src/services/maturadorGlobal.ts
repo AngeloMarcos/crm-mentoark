@@ -184,7 +184,7 @@ export async function avaliarParticipantes(pool: Pool, userId?: string) {
   return r.rows.map((x: any) => {
     const score = x.score_updated_at ? x.whatsapp_score : null;
     let fora: string | null = null;
-    if (!x.aderiu) fora = 'conta não aderiu ao Maturador Global';
+    if (!x.aderiu) fora = 'conta não aderiu ao Aquecimento Global';
     else if (!x.numero_conectado) fora = 'instância desconectada';
     else if (!x.fase) fora = 'número sem registro de saúde';
     else if (x.funcao === 'pessoal') fora = 'número pessoal não participa';
@@ -202,7 +202,7 @@ export async function avaliarParticipantes(pool: Pool, userId?: string) {
 export async function montarRedeGlobal(pool: Pool): Promise<{ ligado: boolean; participantes: number; criados: number; desativados: number }> {
   if (!(await globalLigado(pool))) {
     const off = await pool.query(
-      `UPDATE maturador_pares SET ativo = false, pausado_motivo = 'Maturador Global desligado', updated_at = NOW()
+      `UPDATE maturador_pares SET ativo = false, pausado_motivo = 'Aquecimento Global desligado', updated_at = NOW()
        WHERE global AND ativo RETURNING user_id`
     );
     off.rows.forEach((x: any) => invalidarNumerosMaturador(x.user_id));
@@ -219,7 +219,7 @@ export async function montarRedeGlobal(pool: Pool): Promise<{ ligado: boolean; p
   let desativados = 0;
   for (const v of atuais.filter(v => v.ativo && !manterIds.has(v.id))) {
     const r = await pool.query(
-      `UPDATE maturador_pares SET ativo = false, pausado_motivo = 'Saiu do Maturador Global (papel, adesão ou proxy mudou)', updated_at = NOW()
+      `UPDATE maturador_pares SET ativo = false, pausado_motivo = 'Saiu do Aquecimento Global (papel, adesão ou proxy mudou)', updated_at = NOW()
        WHERE id = $1 RETURNING user_id`, [v.id]);
     if (r.rowCount) { desativados++; invalidarNumerosMaturador(r.rows[0].user_id); }
   }

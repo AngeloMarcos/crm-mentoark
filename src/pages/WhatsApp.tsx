@@ -19,7 +19,7 @@ import { MaturadorNumeros } from "@/components/whatsapp/MaturadorNumeros";
 import { NumerosOficiais } from "@/components/whatsapp/NumerosOficiais";
 import { AlertaWebhookParado } from "@/components/whatsapp/AlertaWebhookParado";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Inbox, MessageSquare, Smartphone, FlaskConical, MessageCircleHeart } from "lucide-react";
+import { Inbox, MessageSquare, Smartphone, FlaskConical, Flame } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 const VALID_TABS = ["conversas", "instancias", "maturador", "diagnostico"] as const;
@@ -55,7 +55,7 @@ export default function WhatsAppPage() {
             <Smartphone className="h-4 w-4" /> Instâncias
           </TabsTrigger>
           <TabsTrigger value="maturador" className="gap-2">
-            <MessageCircleHeart className="h-4 w-4" /> Maturador
+            <Flame className="h-4 w-4 text-orange-500" /> Aquecimento
           </TabsTrigger>
           <TabsTrigger value="diagnostico" className="gap-2">
             <FlaskConical className="h-4 w-4" /> 🔬 Diagnóstico

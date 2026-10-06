@@ -572,9 +572,9 @@ app.get('/api/admin/maturador-global', authMiddleware, adminMiddleware, async (_
     const fora: Record<string, number> = {};
     for (const n of part) {
       if (n.papel) porPapel[n.papel] = (porPapel[n.papel] ?? 0) + 1;
-      else if (n.fora && n.fora !== 'conta não aderiu ao Maturador Global') fora[n.fora] = (fora[n.fora] ?? 0) + 1;
+      else if (n.fora && n.fora !== 'conta não aderiu ao Aquecimento Global') fora[n.fora] = (fora[n.fora] ?? 0) + 1;
     }
-    res.json({ ...(cfg.rows[0] ?? { ativo: false }), contas_aderidas: new Set(part.filter(n => n.fora !== 'conta não aderiu ao Maturador Global').map(n => n.userId)).size,
+    res.json({ ...(cfg.rows[0] ?? { ativo: false }), contas_aderidas: new Set(part.filter(n => n.fora !== 'conta não aderiu ao Aquecimento Global').map(n => n.userId)).size,
       por_papel: porPapel, fora, vinculos: vinc.rows, mensagens_24h: msgs.rows[0] });
   } catch (err: any) { res.status(500).json({ message: err.message }); }
 });

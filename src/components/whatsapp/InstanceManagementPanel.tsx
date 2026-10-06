@@ -1377,7 +1377,7 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                   <li>Use o chip no celular por alguns dias antes: foto, nome, conversas reais.</li>
                   <li>Conecte o número em <b>um lugar só</b>. Nunca no CRM de teste e no de produção ao mesmo tempo.</li>
                   <li>Leia o QR uma vez, com o celular na internet estável. Se falhar, espere antes de tentar de novo.</li>
-                  <li>Nos primeiros 14 dias o número fica protegido: sem campanhas, só conversa e Maturador.</li>
+                  <li>Nos primeiros 14 dias o número fica protegido: sem campanhas, só conversa e Aquecimento.</li>
                 </ul>
               </div>
             </div>

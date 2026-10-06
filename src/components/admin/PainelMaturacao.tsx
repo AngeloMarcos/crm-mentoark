@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { adminFetch } from "@/lib/adminApi";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
+import { Loader2, Flame } from "lucide-react";
 
 const FASE: Record<string, string> = {
   perfil: "Perfil", aquecimento_1: "Aquecimento 1", aquecimento_2: "Aquecimento 2", aquecimento_3: "Aquecimento 3",
@@ -23,7 +23,7 @@ export function PainelMaturacao() {
 
   return (
     <Card>
-      <CardHeader><CardTitle className="text-base">Maturação de números (todas as contas)</CardTitle></CardHeader>
+      <CardHeader><CardTitle className="text-base">Aquecimento de números (todas as contas)</CardTitle></CardHeader>
       <CardContent className="space-y-4 text-sm">
         {erro && <p className="text-red-600">{erro}</p>}
         {!d && !erro && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -41,7 +41,7 @@ export function PainelMaturacao() {
               </p>
             </div>
             <div>
-              <div className="font-medium mb-1">Maturador</div>
+              <div className="font-medium mb-1">Aquecimento (pares por conta)</div>
               <p className="text-xs">
                 {d.maturador.ativos} pares ativos em {d.maturador.contas} conta(s) · {d.maturador.pausados} pausados ·
                 {" "}{d.maturador.pares_pausados_por_falha} pausados por falha nos últimos 30 dias
@@ -86,7 +86,7 @@ export function AdminMaturadorGlobal() {
   useEffect(() => { carregar(); }, []);
   const alternar = async () => {
     const ligar = !d?.ativo;
-    if (ligar && !confirm("Ligar o Maturador Global? Os números das contas que aderiram (com proxy próprio) passam a conversar entre si.")) return;
+    if (ligar && !confirm("Ligar o Aquecimento Global? Os números das contas que aderiram (com proxy próprio) passam a conversar entre si.")) return;
     setSalvando(true);
     try { await adminFetch("/api/admin/maturador-global", { method: "PUT", body: { ativo: ligar } }); await carregar(); }
     finally { setSalvando(false); }
@@ -94,7 +94,7 @@ export function AdminMaturadorGlobal() {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">Maturador Global</CardTitle>
+        <CardTitle className="text-base flex items-center gap-2"><Flame className="h-4 w-4 text-orange-500" /> Aquecimento Global</CardTitle>
         {d && (
           <button onClick={alternar} disabled={salvando}
             className={`rounded-md px-3 py-1 text-sm font-medium text-white ${d.ativo ? "bg-red-600" : "bg-emerald-600"}`}>

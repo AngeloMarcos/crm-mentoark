@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Loader2, Users2, Plus, Trash2, AlertOctagon, Info, MessageCircleHeart, Clock, PauseCircle, ShieldCheck,
+  Loader2, Users2, Plus, Trash2, AlertOctagon, Info, Flame, Clock, PauseCircle, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { MaturadorGlobal } from "./MaturadorGlobal";
@@ -85,7 +85,7 @@ function faseMaturacao(dataInicio: string): { dias: number; limite: number; fase
   const dias = Math.max(0, Math.floor((Date.now() - new Date(dataInicio).getTime()) / 86_400_000));
   if (dias < 7) return { dias, limite: 20, fase: "Semana 1" };
   if (dias < 14) return { dias, limite: 50, fase: "Semana 2" };
-  return { dias, limite: 100, fase: "Maturado" };
+  return { dias, limite: 100, fase: "Aquecido" };
 }
 
 function corScore(score: number | null): string {
@@ -135,7 +135,7 @@ export function MaturadorNumeros() {
       setAgentes(((agData ?? []) as Agente[]).filter(a => !!a.evolution_instancia));
       setPares(paresData);
     } catch (err: any) {
-      if (!silencioso) toast.error(`Erro ao carregar Maturador: ${err.message}`);
+      if (!silencioso) toast.error(`Erro ao carregar Aquecimento: ${err.message}`);
     } finally {
       if (!silencioso) setLoading(false);
     }
@@ -240,7 +240,7 @@ export function MaturadorNumeros() {
       <MaturadorGlobal />
       <div>
         <h2 className="text-xl font-bold tracking-tight flex items-center gap-2">
-          <MessageCircleHeart className="h-5 w-5 text-primary" /> Maturador de Números
+          <Flame className="h-5 w-5 text-orange-500" /> Aquecimento de Números
         </h2>
         <p className="text-sm text-muted-foreground">
           Aquece número novo trocando conversas naturais com outra instância da sua conta: em
@@ -253,13 +253,13 @@ export function MaturadorNumeros() {
         <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
         <div className="text-xs text-muted-foreground space-y-1">
           <p>
-            As mensagens do Maturador nunca chegam na IA, não viram contato nem lead. Pode manter
+            As mensagens do Aquecimento nunca chegam na IA, não viram contato nem lead. Pode manter
             sua IA ligada normalmente.
           </p>
           <p>
             Para o número ganhar score: use chip com WhatsApp ativo no celular, evite reconectar
             o QR várias vezes seguidas, nunca conecte o mesmo número em duas instâncias e só
-            comece campanhas depois da fase "Maturado".
+            comece campanhas depois da fase "Aquecido".
           </p>
         </div>
       </Card>

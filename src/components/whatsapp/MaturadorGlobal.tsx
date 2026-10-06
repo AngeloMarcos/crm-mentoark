@@ -1,5 +1,5 @@
 /**
- * MaturadorGlobal.tsx — adesão da conta ao Maturador Global, situação de cada número (papel ou
+ * MaturadorGlobal.tsx — adesão da conta ao Aquecimento Global, situação de cada número (papel ou
  * motivo de estar de fora) e proxy próprio por número (Sprint 9, 2026-10-06).
  * Backend: GET /api/maturador/global, PUT /api/maturador/global/adesao, PUT|DELETE /api/maturador/proxy/:id.
  */
@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Globe2, ShieldCheck, AlertTriangle } from "lucide-react";
+import { Flame, ShieldCheck, AlertTriangle } from "lucide-react";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
 const BASE = `${API_URL}/api/maturador`;
@@ -46,7 +46,7 @@ export function MaturadorGlobal() {
   const aderir = async (ativo: boolean) => {
     try {
       await chamar("/global/adesao", { method: "PUT", body: { ativo, aceito: ativo } });
-      toast.success(ativo ? "Conta participando do Maturador Global" : "Conta saiu do Maturador Global");
+      toast.success(ativo ? "Conta participando do Aquecimento Global" : "Conta saiu do Aquecimento Global");
       setTermoAberto(false);
       carregar();
     } catch (e: any) { toast.error(e.message); }
@@ -56,7 +56,7 @@ export function MaturadorGlobal() {
     <Card className="mb-4">
       <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
         <div>
-          <CardTitle className="flex items-center gap-2 text-base"><Globe2 className="h-5 w-5 text-primary" /> Maturador Global</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base"><Flame className="h-5 w-5 text-orange-500" /> Aquecimento Global</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
             Seus números conversam com números de outras contas MentoArk para ganhar histórico e score.
             Números novos só recebem mensagens até a liberação.
@@ -69,7 +69,7 @@ export function MaturadorGlobal() {
       <CardContent className="space-y-3 text-sm">
         {!d.ligado && (
           <p className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
-            <AlertTriangle className="h-4 w-4 shrink-0" /> O Maturador Global está desligado pela MentoArk no momento — nada é enviado.
+            <AlertTriangle className="h-4 w-4 shrink-0" /> O Aquecimento Global está desligado pela MentoArk no momento — nada é enviado.
           </p>
         )}
         {d.adesao?.ativo && (
@@ -106,7 +106,7 @@ export function MaturadorGlobal() {
         <Dialog open onOpenChange={() => setTermoAberto(false)}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Participar do Maturador Global</DialogTitle>
+              <DialogTitle>Participar do Aquecimento Global</DialogTitle>
               <DialogDescription>Leia antes de aceitar.</DialogDescription>
             </DialogHeader>
             <p className="text-sm whitespace-pre-wrap">{d.termo.texto}</p>
@@ -137,7 +137,7 @@ function ProxyDialog({ numero, onFechar }: { numero: any; onFechar: () => void }
     } catch (e: any) { toast.error(e.message); } finally { setSalvando(false); }
   };
   const remover = async () => {
-    if (!confirm("Remover o proxy deste número? Ele sai do Maturador Global.")) return;
+    if (!confirm("Remover o proxy deste número? Ele sai do Aquecimento Global.")) return;
     try { await chamar(`/proxy/${numero.agenteId}`, { method: "DELETE" }); toast.success("Proxy removido"); onFechar(); }
     catch (e: any) { toast.error(e.message); }
   };
