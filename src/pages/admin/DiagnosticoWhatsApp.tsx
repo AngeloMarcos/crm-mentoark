@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { adminFetch } from "@/lib/adminApi";
-import { PainelMaturacao } from "@/components/admin/PainelMaturacao";
+import { PainelMaturacao, AdminMaturadorGlobal } from "@/components/admin/PainelMaturacao";
 import { toast } from "sonner";
 import { Search, Loader2, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 
@@ -191,6 +191,7 @@ export default function DiagnosticoWhatsApp() {
         )}
 
         {/* Sprint 8 (Sprint 3 / H10): visão da plataforma da maturação de números. */}
+        <AdminMaturadorGlobal />
         <PainelMaturacao />
       </div>
     </CRMLayout>

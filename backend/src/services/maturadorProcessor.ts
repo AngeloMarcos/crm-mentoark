@@ -26,7 +26,8 @@
 import { Pool } from 'pg';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
-import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, STATUS_CORES } from './maturadorDialogos';
+import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, STATUS_CORES, MENSAGENS_MENTORIA } from './maturadorDialogos';
+import { bloqueioEnvio, MAX_MENTORIA_DIA_MENTOR, MAX_RECEBIDAS_DIA_RECEPTOR } from './maturadorGlobal';
 import { registrarIdMaturador, invalidarNumerosMaturador } from './maturadorFiltro';
 import { saudePorInstancia, MAX_ENVIOS_HORA } from './saudeNumero';
 
@@ -178,13 +179,44 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
           await pool.query(`UPDATE maturador_pares SET contador_dia = 0, contador_resetado_em = $2::date WHERE id = $1`, [par.id, hoje]);
         }
 
-        const remetente: 'a' | 'b' = par.ultimo_remetente === 'a' ? 'b' : 'a';
+        let remetente: 'a' | 'b' = par.ultimo_remetente === 'a' ? 'b' : 'a';
+        // Sprint 9 (2026-10-06): TRAVA UNIVERSAL — número novo/em proteção/quarentena/revisão não
+        // envia NADA (nem no par da própria conta). Se a vez é dele, quem escreve é o outro lado em
+        // "modo mentoria" (só ele fala, ritmo de ~2h, sem reação/citação/enquete/status); se os dois
+        // estão travados, o par espera. Vínculo global do tipo 'mentoria': sempre a = mentor.
+        const bloqA = await bloqueioEnvio(pool, par.a_instancia);
+        const bloqB = await bloqueioEnvio(pool, par.b_instancia);
+        let modoMentoria = par.tipo === 'mentoria';
+        if (modoMentoria) remetente = 'a';
+        else if (bloqA && bloqB) {
+          await pool.query(`UPDATE maturador_pares SET proxima_mensagem_em = NOW() + INTERVAL '60 minutes' WHERE id = $1`, [par.id]).catch(() => {});
+          continue;
+        } else if (bloqA || bloqB) {
+          remetente = bloqA ? 'b' : 'a';
+          modoMentoria = true;
+        }
+        if ((remetente === 'a' ? bloqA : bloqB)) continue; // mentor travado (ex.: caiu em quarentena)
         const de = remetente === 'a'
           ? { id: par.agente_a_id, url: par.a_url, key: par.a_key, instancia: par.a_instancia }
           : { id: par.agente_b_id, url: par.b_url, key: par.b_key, instancia: par.b_instancia };
         const para = remetente === 'a'
           ? { id: par.agente_b_id, url: par.b_url, key: par.b_key, instancia: par.b_instancia }
           : { id: par.agente_a_id, url: par.a_url, key: par.a_key, instancia: par.a_instancia };
+
+        if (modoMentoria) {
+          // Receptor recebe no máximo 6 mensagens do maturador por dia (somando todos os
+          // remetentes); cada remetente manda no máximo 3 mensagens de mentoria por dia.
+          const cotas = (await pool.query(
+            `SELECT COUNT(*) FILTER (WHERE para_agente_id = $1 AND tipo = 'texto')::int AS recebidas,
+                    COUNT(*) FILTER (WHERE de_agente_id = $2 AND mentoria)::int AS mentoria_enviadas
+             FROM maturador_mensagens WHERE (created_at AT TIME ZONE '${TZ}')::date = $3::date AND (para_agente_id = $1 OR de_agente_id = $2)`,
+            [para.id, de.id, hoje]
+          ).catch(() => ({ rows: [{ recebidas: 99, mentoria_enviadas: 99 }] }))).rows[0];
+          if (cotas.recebidas >= MAX_RECEBIDAS_DIA_RECEPTOR || cotas.mentoria_enviadas >= MAX_MENTORIA_DIA_MENTOR) {
+            await pool.query(`UPDATE maturador_pares SET proxima_mensagem_em = NOW() + INTERVAL '3 hours' WHERE id = $1`, [par.id]).catch(() => {});
+            continue;
+          }
+        }
 
         if (!de.url || !de.instancia || !para.url || !para.instancia) {
           await registrarFalha(pool, par, 'Uma das instâncias está sem credenciais da Evolution');
@@ -228,7 +260,8 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         const baseUrl = sanitizeEvolutionUrl(de.url);
 
         // Marca como lida a última mensagem que esta ponta recebeu, antes de "responder".
-        if (par.ultima_msg_id) {
+        // (modo mentoria: o remetente não recebeu nada do receptor — não há o que marcar)
+        if (par.ultima_msg_id && !modoMentoria) {
           await evolutionFetch(`${baseUrl}/chat/markMessageAsRead/${de.instancia}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: de.key },
@@ -237,7 +270,7 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         }
 
         // De vez em quando (12%) reage com emoji à mensagem recebida antes de responder.
-        if (par.ultima_msg_id && Math.random() < 0.12) {
+        if (par.ultima_msg_id && !modoMentoria && Math.random() < 0.12) {
           const reacao = REACOES[randInt(0, REACOES.length - 1)];
           const r = await evolutionFetch(`${baseUrl}/message/sendReaction/${de.instancia}`, {
             method: 'POST',
@@ -256,7 +289,7 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // número+dia), 1 por dia, visível SÓ para o parceiro do par (statusJidList) — nunca
         // aparece para os contatos reais do cliente.
         const diaDoStatus = [...`${de.id}${hoje}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 10 < 4;
-        if (diaDoStatus) {
+        if (diaDoStatus && !modoMentoria) {
           const jaPostou = (await pool.query(
             `SELECT 1 FROM maturador_mensagens WHERE de_agente_id = $1 AND tipo = 'status'
                AND (created_at AT TIME ZONE '${TZ}')::date = $2::date LIMIT 1`, [de.id, hoje]
@@ -285,7 +318,7 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
           novaLinha = 0;
         }
         // Sprint 8 (Sprint 3 / H10): de vez em quando (8%) abre um tema novo com uma enquete.
-        if (novaLinha === 0 && Math.random() < 0.08) {
+        if (novaLinha === 0 && !modoMentoria && Math.random() < 0.08) {
           const e = ENQUETES[randInt(0, ENQUETES.length - 1)];
           const rp = await evolutionFetch(`${baseUrl}/message/sendPoll/${de.instancia}`, {
             method: 'POST',
@@ -300,11 +333,15 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
           }
         }
 
-        const texto = aplicarVariacao(TEMAS[novoTema][novaLinha]);
+        // Modo mentoria: mensagem avulsa que não pede resposta (o receptor nunca responde) — tema e
+        // linha da conversa ficam como estavam.
+        const texto = modoMentoria
+          ? aplicarVariacao(MENSAGENS_MENTORIA[randInt(0, MENSAGENS_MENTORIA.length - 1)])
+          : aplicarVariacao(TEMAS[novoTema][novaLinha]);
         // Sprint 8 (Sprint 3 / H10): ~20% das respostas citam a mensagem anterior (quoted), como
         // gente de verdade faz em conversa.
         let quoted: any = undefined;
-        if (par.ultima_msg_id && novaLinha > 0 && Math.random() < 0.2) {
+        if (par.ultima_msg_id && !modoMentoria && novaLinha > 0 && Math.random() < 0.2) {
           const anterior = (await pool.query(
             `SELECT texto FROM maturador_mensagens WHERE message_id = $1 LIMIT 1`, [par.ultima_msg_id]
           ).catch(() => ({ rows: [] as any[] }))).rows[0]?.texto;
@@ -322,19 +359,21 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         }
         const body: any = await resp.json().catch(() => null);
         const messageId: string | null = body?.key?.id || null;
-        registrarIdMaturador(messageId);
-        novaLinha++;
+        registrarIdMaturador(messageId, par.global === true);
+        if (!modoMentoria) novaLinha++;
+        else { novoTema = par.tema_atual ?? null; novaLinha = par.linha_atual ?? 0; }
 
         await pool.query(
-          `INSERT INTO maturador_mensagens (par_id, user_id, de_agente_id, para_agente_id, message_id, tipo, texto)
-           VALUES ($1, $2, $3, $4, $5, 'texto', $6)`,
-          [par.id, par.user_id, de.id, para.id, messageId, texto]
+          `INSERT INTO maturador_mensagens (par_id, user_id, de_agente_id, para_agente_id, message_id, tipo, texto, mentoria)
+           VALUES ($1, $2, $3, $4, $5, 'texto', $6, $7)`,
+          [par.id, par.user_id, de.id, para.id, messageId, texto, modoMentoria]
         );
 
         // Ritmo: sessão de 3–7 trocas com resposta em 1–4 min; acabou a sessão, pausa de 40–150 min.
-        let restantes = par.msgs_restantes_sessao > 0 ? par.msgs_restantes_sessao : randInt(3, 7);
-        restantes--;
-        const proximaMin = restantes > 0 ? rand(1, 4) : rand(40, 150);
+        // Modo mentoria: ~1 mensagem a cada 2h (100–160 min), sem sessão.
+        let restantes = modoMentoria ? 0 : (par.msgs_restantes_sessao > 0 ? par.msgs_restantes_sessao : randInt(3, 7));
+        if (!modoMentoria) restantes--;
+        const proximaMin = modoMentoria ? rand(100, 160) : restantes > 0 ? rand(1, 4) : rand(40, 150);
 
         await pool.query(
           `UPDATE maturador_pares

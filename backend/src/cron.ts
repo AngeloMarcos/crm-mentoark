@@ -8,6 +8,7 @@ import { avaliarFases } from './services/saudeNumero';
 import { recalcularAptidaoOficial } from './services/checklistOficial';
 import { verificarWebhooksParados } from './services/saudeWebhook';
 import { gerarBackupsTodas } from './services/backupInstancia';
+import { montarRedeGlobal } from './services/maturadorGlobal';
 import { retomarCampanhasInstanciaCaida, recalcularMetricasCampanhas } from './services/metricasDisparo';
 import { atualizarNumerosOficiais } from './routes/metaOficial';
 import { processarMaturador } from './services/maturadorProcessor';
@@ -274,6 +275,16 @@ export function initCronJobs() {
       await recalcularAptidaoOficial(pool); // Sprint 7: checklist "Apto para API oficial"
     } catch (err: any) {
       log.error('CRON', 'Erro ao avaliar fases de maturação', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Sprint 9: Maturador Global — monta/ajusta a rede a cada 30 min (papéis mudam com a fase do
+  // número, adesão, proxy e quedas). Desligado no admin = desativa todos os vínculos globais.
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      await montarRedeGlobal(pool);
+    } catch (err: any) {
+      log.error('CRON', 'Erro no Maturador Global', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 

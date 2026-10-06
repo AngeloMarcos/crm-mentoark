@@ -25,6 +25,7 @@ import {
   Loader2, Users2, Plus, Trash2, AlertOctagon, Info, MessageCircleHeart, Clock, PauseCircle, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
+import { MaturadorGlobal } from "./MaturadorGlobal";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
 
@@ -235,6 +236,8 @@ export function MaturadorNumeros() {
 
   return (
     <div className="space-y-4">
+      {/* Sprint 9: Maturador Global (entre contas) — adesão, situação de cada número e proxy. */}
+      <MaturadorGlobal />
       <div>
         <h2 className="text-xl font-bold tracking-tight flex items-center gap-2">
           <MessageCircleHeart className="h-5 w-5 text-primary" /> Maturador de Números

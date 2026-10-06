@@ -76,7 +76,8 @@ function aplicarVariacaoDicionario(texto: string): string {
 
 /** Ponto de entrada único usado pelo motor — resolve spintax da linha e varia por sinônimo. */
 export function aplicarVariacao(linha: string): string {
-  return aplicarVariacaoDicionario(resolverSpintax(linha));
+  // Opção vazia no spintax (`{🙂|}`) não pode deixar espaço duplo/sobrando.
+  return aplicarVariacaoDicionario(resolverSpintax(linha)).replace(/ {2,}/g, ' ').trim();
 }
 
 // [AUDITORIA] BUG CORRIGIDO (Maturador v2, 2026-10-04): a v1 tinha UM diálogo linear de 20
@@ -208,3 +209,22 @@ export const STATUS_TEXTOS = [
   'Boa tarde a todos!', 'Sextou 😄', 'Gratidão pelo dia de hoje', 'Organizando a semana 📅',
 ];
 export const STATUS_CORES = ['#128C7E', '#34B7F1', '#7E57C2', '#EF6C00', '#5D4037', '#C2185B'];
+
+// ── Sprint 9 (2026-10-06): mensagens de mentoria (Maturador Global) ───────────────────────────
+/**
+ * Enviadas por um número maduro para um número novo que SÓ RECEBE. Não fazem pergunta direta nem
+ * pedem resposta (o receptor nunca responde enquanto estiver em proteção), sem link, sem promoção,
+ * curtas — como recado de alguém conhecido. Spintax `{a|b}` + variação de dicionário.
+ */
+export const MENSAGENS_MENTORIA: string[] = [
+  '{Bom dia|Bom diaa} ☀️ {passando só pra desejar um ótimo dia|que o dia seja produtivo}',
+  '{Boa tarde|Boa tarde!} {Por aqui tá tudo tranquilo|Correria por aqui, mas tudo certo} {🙂|}',
+  '{Lembrei de você hoje|Passei por aquele café hoje e lembrei de você} {kkk|😄}',
+  '{Fim de semana chegando|Quase sexta} {🙌|😄} {Bom descanso quando der|Aproveita pra descansar}',
+  '{Choveu muito aqui hoje|Que calor hoje} {🌧️|☀️} {Espero que aí esteja melhor|Se cuida aí}',
+  '{Depois a gente marca aquele café|Qualquer dia a gente se encontra} {☕|🙂}',
+  '{Hoje o trânsito tava impossível|Peguei um trânsito daqueles hoje} {😅|kkk}',
+  '{Boa noite|Boa noite!} {Descansa bem|Bom descanso} {🌙|}',
+  '{Vi uma receita ótima hoje|Fiz um bolo hoje} {e lembrei de você|kkk} 🍰',
+  '{Semana corrida, mas tá indo|Tudo indo bem por aqui} {graças a Deus|🙏}',
+];

@@ -2426,6 +2426,41 @@ export async function runMigrations(pool: Pool): Promise<void> {
   for (const col of ['meta_endpoint TEXT', 'clique_em TIMESTAMPTZ', 'clique_texto TEXT']) {
     await pool.query(`ALTER TABLE disparo_logs ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+  // Sprint 9 (2026-10-06): Maturador Global (services/maturadorGlobal.ts).
+  //   - maturador_pares.global/tipo: vínculo entre números de contas diferentes; 'mentoria' =
+  //     número maduro (a) escreve para número novo que só recebe (b);
+  //   - maturador_mensagens.mentoria: conta as cotas de mentoria (3/dia por remetente);
+  //   - whatsapp_messages.maturador_global: esconde essas conversas da caixa de entrada;
+  //   - agentes.proxy_*: proxy próprio por número (obrigatório para entrar), senha criptografada;
+  //   - maturador_global_config (liga/desliga geral, admin) e maturador_global_adesao (opt-in por
+  //     conta, com versão do termo aceito). Reversível: DROP TABLE / DROP COLUMN.
+  await pool.query(`ALTER TABLE maturador_pares ADD COLUMN IF NOT EXISTS global BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE maturador_pares ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'conversa'`).catch(() => {});
+  await pool.query(`ALTER TABLE maturador_mensagens ADD COLUMN IF NOT EXISTS mentoria BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS maturador_global BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  for (const col of ['proxy_host TEXT', 'proxy_port INTEGER', 'proxy_protocolo TEXT', 'proxy_usuario TEXT',
+                     'proxy_senha_enc TEXT', 'proxy_aplicado_em TIMESTAMPTZ']) {
+    await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_global_config (
+      id            INTEGER     PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      ativo         BOOLEAN     NOT NULL DEFAULT false,
+      atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      atualizado_por TEXT
+    )
+  `).catch(() => {});
+  await pool.query(`INSERT INTO maturador_global_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_global_adesao (
+      user_id       UUID        PRIMARY KEY,
+      ativo         BOOLEAN     NOT NULL DEFAULT false,
+      aceito_em     TIMESTAMPTZ,
+      aceito_por    TEXT,
+      termo_versao  TEXT,
+      atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
   // Sprint 8 (Sprint 4 / H10): nome (pushName) do contato que só tem LID, importado da Evolution
   // — a lista de conversas mostra o nome em vez de "Contato (número oculto)".
   await pool.query(`ALTER TABLE contato_identidades ADD COLUMN IF NOT EXISTS nome TEXT`).catch(() => {});

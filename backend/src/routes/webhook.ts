@@ -66,7 +66,7 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import fs from 'fs';
 import { processarComDebounce, botMessageIds, botSentTexts } from '../services/agentEngine';
-import { ehTrafegoMaturador } from '../services/maturadorFiltro';
+import { ehTrafegoMaturador, ehTrafegoMaturadorGlobal } from '../services/maturadorFiltro';
 import { aoConectarInstancia, aoDesconectarInstancia, instanciasEmProtecao } from '../services/protecaoNumero';
 import { aoQuedaSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
 import { extrairIdentidades, resolverTelefone, registrarIdentidades, lembrarDestinoLid, marcarContatoSoLid } from '../services/identidadeContato';
@@ -987,13 +987,17 @@ export default function webhookRouter(pool: Pool): Router {
         telefone, (payload.data?.key as any)?.senderPn, (payload.data?.key as any)?.remoteJidAlt,
       ]).catch(() => false)) {
         const tsMat = payload.data?.messageTimestamp || Math.floor(Date.now() / 1000);
+        // Sprint 9: conversa do Maturador Global (número de outra conta) fica fora da caixa de entrada.
+        const globalMat = await ehTrafegoMaturadorGlobal(pool, userId, messageId, [
+          telefone, (payload.data?.key as any)?.senderPn, (payload.data?.key as any)?.remoteJidAlt,
+        ]).catch(() => false);
         await withTenantContext({ userId, isAdmin: false }, client => client.query(
           `INSERT INTO whatsapp_messages
-             (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))
+             (user_id, instance_name, remote_jid, message_id, from_me, message_type, content, status, timestamp_wa, maturador_global)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9), $10)
            ON CONFLICT (message_id, instance_name) DO NOTHING`,
           [userId, instancia, remoteJid, messageId, fromMe, extrairTipo(payload.data), extrairTexto(payload.data) || null,
-           fromMe ? 'sent' : 'received', tsMat > 1e10 ? Math.floor(tsMat / 1000) : tsMat]
+           fromMe ? 'sent' : 'received', tsMat > 1e10 ? Math.floor(tsMat / 1000) : tsMat, globalMat]
         )).catch(err => log.warn('WEBHOOK', 'Erro ao gravar mensagem do maturador', { traceId, err: err.message }));
         wlog('WEBHOOK_MATURADOR', `Tráfego do maturador — ignorado pela IA/contatos mid=${messageId} inst=${instancia}`);
         return;

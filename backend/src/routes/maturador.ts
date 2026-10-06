@@ -20,9 +20,95 @@ import { SELECT_PARES_COM_CREDENCIAIS, instanciaConectada, resolverNumerosPar } 
 import { invalidarNumerosMaturador } from '../services/maturadorFiltro';
 import { registrarEvento, mudarFase, normalizar as normalizarNumeroSaude } from '../services/saudeNumero';
 import { recalcularScoreAgente } from '../services/instanceScore';
+import { resolverOwnerId } from '../services/subscription';
+import { avaliarParticipantes, globalLigado, montarRedeGlobal, TERMO_GLOBAL_VERSAO } from '../services/maturadorGlobal';
+import { validarProxy, aplicarProxy, removerProxy } from '../services/proxyInstancia';
+
+export const TERMO_GLOBAL_TEXTO =
+  'Ao participar do Maturador Global, os números desta conta trocam mensagens curtas e neutras ' +
+  '(sem propaganda e sem dados dos seus clientes) com números de outras contas da MentoArk, para ' +
+  'criar histórico de uso e melhorar o score. Os números das outras contas aparecem nas conversas ' +
+  'do seu WhatsApp no celular (não aparecem na caixa de entrada do CRM). Números novos só recebem ' +
+  'mensagens até a liberação. Cada número precisa de um proxy próprio. Você pode sair a qualquer momento.';
 
 export default function maturadorRouter(pool: Pool): Router {
   const router = Router();
+
+  // ── Sprint 9 (2026-10-06): Maturador Global — adesão da conta, situação de cada número, proxy ──
+  // Registradas antes das rotas `/:id` de propósito.
+  router.get('/global', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const [ligado, ad, numeros, proxies, vinc] = await Promise.all([
+      globalLigado(pool),
+      pool.query(`SELECT ativo, aceito_em, aceito_por, termo_versao FROM maturador_global_adesao WHERE user_id = $1`, [ownerId]),
+      avaliarParticipantes(pool, ownerId),
+      pool.query(`SELECT id, proxy_host, proxy_port, proxy_protocolo, proxy_aplicado_em FROM agentes WHERE user_id = $1`, [ownerId]),
+      pool.query(
+        `SELECT a.id, COUNT(mp.id) FILTER (WHERE mp.ativo)::int AS vinculos,
+                (SELECT COUNT(*)::int FROM maturador_mensagens m JOIN maturador_pares p ON p.id = m.par_id AND p.global
+                  WHERE m.de_agente_id = a.id AND m.tipo = 'texto' AND m.created_at >= NOW() - INTERVAL '24 hours') AS enviadas_24h,
+                (SELECT COUNT(*)::int FROM maturador_mensagens m JOIN maturador_pares p ON p.id = m.par_id AND p.global
+                  WHERE m.para_agente_id = a.id AND m.tipo = 'texto' AND m.created_at >= NOW() - INTERVAL '24 hours') AS recebidas_24h
+         FROM agentes a LEFT JOIN maturador_pares mp ON mp.global AND a.id IN (mp.agente_a_id, mp.agente_b_id)
+         WHERE a.user_id = $1 GROUP BY a.id`, [ownerId]),
+    ]);
+    const px = new Map(proxies.rows.map((x: any) => [x.id, x]));
+    const vv = new Map(vinc.rows.map((x: any) => [x.id, x]));
+    return res.json({
+      ligado,
+      adesao: ad.rows[0] ?? { ativo: false },
+      termo: { versao: TERMO_GLOBAL_VERSAO, texto: TERMO_GLOBAL_TEXTO },
+      numeros: numeros.map(n => {
+        const p: any = px.get(n.agenteId) || {};
+        const v: any = vv.get(n.agenteId) || {};
+        return { ...n, userId: undefined,
+          proxy: p.proxy_aplicado_em ? { host: p.proxy_host, port: p.proxy_port, protocolo: p.proxy_protocolo, aplicado_em: p.proxy_aplicado_em } : null,
+          vinculos: v.vinculos ?? 0, enviadas_24h: v.enviadas_24h ?? 0, recebidas_24h: v.recebidas_24h ?? 0 };
+      }),
+    });
+  });
+
+  router.put('/global/adesao', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const ativo = req.body?.ativo === true;
+    if (ativo && req.body?.aceito !== true) return res.status(400).json({ message: 'Para participar, aceite o termo do Maturador Global.' });
+    await pool.query(
+      `INSERT INTO maturador_global_adesao (user_id, ativo, aceito_em, aceito_por, termo_versao, atualizado_em)
+       VALUES ($1, $2, CASE WHEN $2 THEN NOW() END, CASE WHEN $2 THEN $3 END, CASE WHEN $2 THEN $4 END, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET ativo = $2, atualizado_em = NOW(),
+         aceito_em = CASE WHEN $2 THEN NOW() ELSE maturador_global_adesao.aceito_em END,
+         aceito_por = CASE WHEN $2 THEN $3 ELSE maturador_global_adesao.aceito_por END,
+         termo_versao = CASE WHEN $2 THEN $4 ELSE maturador_global_adesao.termo_versao END`,
+      [ownerId, ativo, req.userEmail || req.userId, TERMO_GLOBAL_VERSAO]
+    );
+    log.info('MATURADOR_GLOBAL', ativo ? 'Conta aderiu' : 'Conta saiu', { ownerId });
+    // Sair desliga na hora os vínculos globais dos números desta conta.
+    if (!ativo) {
+      await pool.query(
+        `UPDATE maturador_pares mp SET ativo = false, pausado_motivo = 'Conta saiu do Maturador Global', updated_at = NOW()
+         FROM agentes a WHERE mp.global AND mp.ativo AND a.user_id = $1 AND a.id IN (mp.agente_a_id, mp.agente_b_id)`, [ownerId]);
+    } else {
+      void montarRedeGlobal(pool).catch(() => {});
+    }
+    return res.json({ ativo });
+  });
+
+  router.put('/proxy/:agenteId', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const v = validarProxy(req.body);
+    if (v.erro) return res.status(400).json({ message: v.erro });
+    const erro = await aplicarProxy(pool, req.params.agenteId, ownerId, v.proxy!);
+    if (erro) return res.status(422).json({ message: erro });
+    return res.json({ ok: true });
+  });
+
+  router.delete('/proxy/:agenteId', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const erro = await removerProxy(pool, req.params.agenteId, ownerId);
+    if (erro) return res.status(404).json({ message: erro });
+    void montarRedeGlobal(pool).catch(() => {});
+    return res.json({ ok: true });
+  });
 
   // GET / — lista pares do usuário, com nome/instância/score das 2 pontas, quanto cada ponta já
   // mandou hoje (teto é por instância) e as últimas mensagens trocadas (evita N+1 no frontend).
@@ -46,7 +132,7 @@ export default function maturadorRouter(pool: Pool): Router {
        FROM maturador_pares mp
        JOIN agentes a ON a.id = mp.agente_a_id
        JOIN agentes b ON b.id = mp.agente_b_id
-       WHERE mp.user_id = $1
+       WHERE mp.user_id = $1 AND NOT mp.global -- Sprint 9: par global é gerido pelo sistema
        ORDER BY mp.created_at DESC`,
       [userId]
     );
@@ -57,7 +143,7 @@ export default function maturadorRouter(pool: Pool): Router {
   // do webhook depende do número pra reconhecer o tráfego do maturador). Devolve o motivo da
   // recusa, ou null se estiver tudo certo.
   async function motivoParaNaoAtivar(parId: string, userId: string): Promise<string | null> {
-    const r = await pool.query(`${SELECT_PARES_COM_CREDENCIAIS} WHERE mp.id = $1 AND mp.user_id = $2`, [parId, userId]);
+    const r = await pool.query(`${SELECT_PARES_COM_CREDENCIAIS} WHERE mp.id = $1 AND mp.user_id = $2 AND NOT mp.global`, [parId, userId]);
     const par = r.rows[0];
     if (!par) return 'Par não encontrado';
     if (!par.a_url || !par.a_instancia || !par.b_url || !par.b_instancia) {
@@ -137,7 +223,7 @@ export default function maturadorRouter(pool: Pool): Router {
            pausado_motivo      = CASE WHEN $1 THEN NULL ELSE pausado_motivo END,
            proxima_mensagem_em = CASE WHEN $1 THEN NOW() ELSE proxima_mensagem_em END,
            msgs_restantes_sessao = CASE WHEN $1 THEN 0 ELSE msgs_restantes_sessao END
-       WHERE id = $2 AND user_id = $3 RETURNING id, ativo`,
+       WHERE id = $2 AND user_id = $3 AND NOT global RETURNING id, ativo`,
       [ativo, req.params.id, userId]
     );
     if (!r.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
@@ -156,7 +242,7 @@ export default function maturadorRouter(pool: Pool): Router {
     }
     const r = await pool.query(
       `UPDATE maturador_pares SET hora_inicio = $1, hora_fim = $2, updated_at = NOW()
-       WHERE id = $3 AND user_id = $4 RETURNING id, hora_inicio, hora_fim`,
+       WHERE id = $3 AND user_id = $4 AND NOT global RETURNING id, hora_inicio, hora_fim`,
       [inicio, fim, req.params.id, userId]
     );
     if (!r.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
@@ -175,7 +261,7 @@ export default function maturadorRouter(pool: Pool): Router {
     if (!agente_id) return res.status(400).json({ message: 'agente_id é obrigatório (qual lado do par caiu/baniu)' });
 
     const par = await pool.query(
-      `SELECT * FROM maturador_pares WHERE id = $1 AND user_id = $2`,
+      `SELECT * FROM maturador_pares WHERE id = $1 AND user_id = $2 AND NOT global`,
       [req.params.id, userId]
     );
     if (!par.rows.length) return res.status(404).json({ message: 'Par não encontrado' });
@@ -222,7 +308,7 @@ export default function maturadorRouter(pool: Pool): Router {
     const r = await pool.query(
       `UPDATE maturador_pares
        SET banido_em = NULL, banido_agente_id = NULL, updated_at = NOW()
-       WHERE id = $1 AND user_id = $2
+       WHERE id = $1 AND user_id = $2 AND NOT global
        RETURNING *`,
       [req.params.id, userId]
     );
@@ -235,7 +321,7 @@ export default function maturadorRouter(pool: Pool): Router {
   router.delete('/:id', async (req: AuthRequest, res: Response) => {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ message: 'Usuário não autenticado' });
-    await pool.query(`DELETE FROM maturador_pares WHERE id = $1 AND user_id = $2`, [req.params.id, userId]);
+    await pool.query(`DELETE FROM maturador_pares WHERE id = $1 AND user_id = $2 AND NOT global`, [req.params.id, userId]);
     invalidarNumerosMaturador(userId);
     return res.status(204).send();
   });

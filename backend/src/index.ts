@@ -36,6 +36,7 @@ import { randomUUID } from 'crypto';
 
 import { pool, migrationsPool } from './db';
 import { metricasMaturacaoAdmin } from './services/metricasMaturacao';
+import { avaliarParticipantes, montarRedeGlobal } from './services/maturadorGlobal';
 import { authMiddleware, adminMiddleware, tenantContextMiddleware, assinaturaGuard, masterOnly, AuthRequest } from './middleware';
 import { makeCrud } from './crud';
 
@@ -553,6 +554,37 @@ app.get('/api/admin/maturacao', authMiddleware, adminMiddleware, async (_req: Au
   } catch (err: any) {
     res.status(500).json({ message: err.message });
   }
+});
+
+// ── Maturador Global (admin, Sprint 9) ─────────────────────────────────────────
+// GET: liga/desliga atual + números por papel + vínculos e mensagens em 24h. PUT { ativo }.
+app.get('/api/admin/maturador-global', authMiddleware, adminMiddleware, async (_req: AuthRequest, res) => {
+  try {
+    const [cfg, part, vinc, msgs] = await Promise.all([
+      pool.query(`SELECT ativo, atualizado_em, atualizado_por FROM maturador_global_config WHERE id = 1`),
+      avaliarParticipantes(pool),
+      pool.query(`SELECT tipo, COUNT(*) FILTER (WHERE ativo)::int AS ativos FROM maturador_pares WHERE global GROUP BY 1`),
+      pool.query(`SELECT COUNT(*) FILTER (WHERE NOT m.mentoria)::int AS conversa, COUNT(*) FILTER (WHERE m.mentoria)::int AS mentoria
+                  FROM maturador_mensagens m JOIN maturador_pares p ON p.id = m.par_id AND p.global
+                  WHERE m.tipo = 'texto' AND m.created_at >= NOW() - INTERVAL '24 hours'`),
+    ]);
+    const porPapel: Record<string, number> = {};
+    const fora: Record<string, number> = {};
+    for (const n of part) {
+      if (n.papel) porPapel[n.papel] = (porPapel[n.papel] ?? 0) + 1;
+      else if (n.fora && n.fora !== 'conta não aderiu ao Maturador Global') fora[n.fora] = (fora[n.fora] ?? 0) + 1;
+    }
+    res.json({ ...(cfg.rows[0] ?? { ativo: false }), contas_aderidas: new Set(part.filter(n => n.fora !== 'conta não aderiu ao Maturador Global').map(n => n.userId)).size,
+      por_papel: porPapel, fora, vinculos: vinc.rows, mensagens_24h: msgs.rows[0] });
+  } catch (err: any) { res.status(500).json({ message: err.message }); }
+});
+app.put('/api/admin/maturador-global', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const ativo = req.body?.ativo === true;
+    await pool.query(`UPDATE maturador_global_config SET ativo = $1, atualizado_em = NOW(), atualizado_por = $2 WHERE id = 1`, [ativo, req.userEmail || req.userId]);
+    log.info('MATURADOR_GLOBAL', ativo ? 'Ligado pelo admin' : 'Desligado pelo admin', { por: req.userEmail });
+    res.json(await montarRedeGlobal(pool));
+  } catch (err: any) { res.status(500).json({ message: err.message }); }
 });
 
 // ── Diagnóstico WhatsApp (admin) ─────────────────────────────

@@ -1168,6 +1168,7 @@ export default function whatsappRouter(pool: Pool): Router {
              ON m.remote_jid LIKE '%@lid' AND li.user_id = m.user_id AND li.tipo = 'lid'
             AND li.valor = split_part(m.remote_jid,'@',1)
            WHERE m.user_id = $1 AND m.deleted_at IS NULL
+             AND NOT m.maturador_global -- Sprint 9: conversa do Maturador Global não aparece na caixa de entrada
          ),
          ranked AS (
            SELECT

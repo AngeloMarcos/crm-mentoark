@@ -21,42 +21,49 @@ import { Pool } from 'pg';
 
 // Ids enviados recentemente pelo motor — caminho rápido, sem ir no banco.
 const idsRecentes = new Map<string, number>();
+const idsGlobais = new Set<string>(); // Sprint 9: ids enviados por par do Maturador Global
 const IDS_TTL_MS = 30 * 60 * 1000;
 
-export function registrarIdMaturador(messageId: string | null): void {
+export function registrarIdMaturador(messageId: string | null, global = false): void {
   if (!messageId) return;
   idsRecentes.set(messageId, Date.now());
+  if (global) idsGlobais.add(messageId);
   if (idsRecentes.size > 5000) {
     const limite = Date.now() - IDS_TTL_MS;
-    for (const [id, em] of idsRecentes) if (em < limite) idsRecentes.delete(id);
+    for (const [id, em] of idsRecentes) if (em < limite) { idsRecentes.delete(id); idsGlobais.delete(id); }
   }
 }
 
 // Números dos pares por usuário — cache curto, a lista muda raramente.
-const numerosCache = new Map<string, { numeros: string[]; em: number }>();
+// Sprint 9: `globais` = números de pares do Maturador Global (outras contas) — além de não virar
+// contato/IA, essas conversas ficam fora da caixa de entrada (whatsapp_messages.maturador_global).
+const numerosCache = new Map<string, { numeros: string[]; globais: string[]; em: number }>();
 const NUMEROS_TTL_MS = 60 * 1000;
 
-async function numerosDosPares(pool: Pool, userId: string): Promise<string[]> {
+async function numerosDosPares(pool: Pool, userId: string): Promise<{ numeros: string[]; globais: string[] }> {
   const c = numerosCache.get(userId);
-  if (c && Date.now() - c.em < NUMEROS_TTL_MS) return c.numeros;
+  if (c && Date.now() - c.em < NUMEROS_TTL_MS) return c;
+  // Sprint 9: par global pertence (user_id) à conta de UMA das pontas — a outra conta também
+  // precisa reconhecer o tráfego, então busca também pelo dono de cada instância.
   const r = await pool.query(
-    `SELECT mp.numero_a, mp.numero_b, a.numero_conectado AS na, b.numero_conectado AS nb
+    `SELECT mp.global, mp.numero_a, mp.numero_b, a.numero_conectado AS na, b.numero_conectado AS nb
      FROM maturador_pares mp
      JOIN agentes a ON a.id = mp.agente_a_id
      JOIN agentes b ON b.id = mp.agente_b_id
-     WHERE mp.user_id = $1`,
+     WHERE mp.user_id = $1 OR (mp.global AND (a.user_id = $1 OR b.user_id = $1))`,
     [userId]
   );
   const numeros = new Set<string>();
+  const globais = new Set<string>();
   for (const row of r.rows) {
     for (const n of [row.numero_a, row.numero_b, row.na, row.nb]) {
       const d = String(n || '').replace(/\D/g, '');
-      if (d.length >= 10) numeros.add(d);
+      if (d.length >= 10) { numeros.add(d); if (row.global) globais.add(d); }
     }
   }
-  const lista = [...numeros];
-  numerosCache.set(userId, { numeros: lista, em: Date.now() });
-  return lista;
+  const out = { numeros: [...numeros], globais: [...globais], em: Date.now() };
+  numerosCache.set(userId, out);
+  return out;
 }
 
 /** Mesmo número? Tolera o 9º dígito brasileiro presente/ausente (compara DDI+DDD e os 8 finais). */
@@ -73,7 +80,7 @@ export async function ehTrafegoMaturador(
 ): Promise<boolean> {
   if (messageId && idsRecentes.has(messageId)) return true;
 
-  const numeros = await numerosDosPares(pool, userId).catch(() => [] as string[]);
+  const { numeros } = await numerosDosPares(pool, userId).catch(() => ({ numeros: [] as string[], globais: [] as string[] }));
   if (!numeros.length) return false; // usuário sem par nenhum — caminho comum, custo de 1 query cacheada
 
   const candidatos = telefonesCandidatos
@@ -91,4 +98,18 @@ export async function ehTrafegoMaturador(
 /** Chamado quando os pares mudam (criar/excluir), pra o webhook enxergar na hora. */
 export function invalidarNumerosMaturador(userId: string): void {
   numerosCache.delete(userId);
+}
+
+/**
+ * Sprint 9: o tráfego reconhecido é do Maturador Global (número de outra conta)? Usado pelo
+ * webhook para gravar a mensagem com `maturador_global = true` (fica fora da caixa de entrada).
+ */
+export async function ehTrafegoMaturadorGlobal(pool: Pool, userId: string, messageId: string, telefonesCandidatos: Array<string | null | undefined>): Promise<boolean> {
+  if (messageId && idsGlobais.has(messageId)) return true;
+  const { globais } = await numerosDosPares(pool, userId).catch(() => ({ numeros: [] as string[], globais: [] as string[] }));
+  if (!globais.length) return false;
+  const candidatos = telefonesCandidatos
+    .map(t => String(t || '').split('@')[0].replace(/\D/g, ''))
+    .filter(t => t.length >= 10);
+  return candidatos.some(c => globais.some(n => mesmoNumero(c, n)));
 }

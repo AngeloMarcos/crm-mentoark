@@ -75,3 +75,51 @@ export function PainelMaturacao() {
     </Card>
   );
 }
+
+const PAPEL_ADMIN: Record<string, string> = { receptor: "Só recebem (números novos)", conversador: "Conversam", mentor: "Mentores" };
+
+/** Liga/desliga geral do Maturador Global (Sprint 9) + situação da rede. */
+export function AdminMaturadorGlobal() {
+  const [d, setD] = useState<any>(null);
+  const [salvando, setSalvando] = useState(false);
+  const carregar = () => adminFetch<any>("/api/admin/maturador-global", { silent: true }).then(setD).catch(() => {});
+  useEffect(() => { carregar(); }, []);
+  const alternar = async () => {
+    const ligar = !d?.ativo;
+    if (ligar && !confirm("Ligar o Maturador Global? Os números das contas que aderiram (com proxy próprio) passam a conversar entre si.")) return;
+    setSalvando(true);
+    try { await adminFetch("/api/admin/maturador-global", { method: "PUT", body: { ativo: ligar } }); await carregar(); }
+    finally { setSalvando(false); }
+  };
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">Maturador Global</CardTitle>
+        {d && (
+          <button onClick={alternar} disabled={salvando}
+            className={`rounded-md px-3 py-1 text-sm font-medium text-white ${d.ativo ? "bg-red-600" : "bg-emerald-600"}`}>
+            {salvando ? "…" : d.ativo ? "Desligar" : "Ligar"}
+          </button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {!d ? <Loader2 className="h-4 w-4 animate-spin" /> : (
+          <>
+            <p>Status: <b>{d.ativo ? "LIGADO" : "desligado"}</b>{d.atualizado_por ? ` (por ${d.atualizado_por} em ${new Date(d.atualizado_em).toLocaleString("pt-BR")})` : ""}</p>
+            <p className="text-xs text-muted-foreground">Contas que aderiram: {d.contas_aderidas}</p>
+            <div className="flex flex-wrap gap-2 text-xs">
+              {Object.entries(d.por_papel || {}).map(([p, n]) => <span key={p} className="rounded-md border px-2 py-1">{PAPEL_ADMIN[p] ?? p}: <b>{String(n)}</b></span>)}
+            </div>
+            {Object.keys(d.fora || {}).length > 0 && (
+              <p className="text-xs text-muted-foreground">De fora: {Object.entries(d.fora).map(([m, n]) => `${m} (${n})`).join(" · ")}</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Vínculos ativos: {(d.vinculos || []).map((v: any) => `${v.tipo} ${v.ativos}`).join(" · ") || "0"} ·
+              Mensagens 24h: conversa {d.mensagens_24h?.conversa ?? 0}, mentoria {d.mensagens_24h?.mentoria ?? 0}
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
