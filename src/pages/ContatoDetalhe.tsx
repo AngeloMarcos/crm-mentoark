@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { authHeader } from "@/lib/api-token";
 import { useStatusEnvio, chaveTelefone } from "@/hooks/useStatusEnvio";
 import { TagStatusEnvio } from "@/components/TagStatusEnvio";
+import { OrigemAnuncio } from "@/components/marketing/OrigemAnuncio";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
 
@@ -396,6 +397,8 @@ export default function ContatoDetalhePage() {
                     campanhaNome={statusEnvioPorTelefone[chaveTelefone(contato.telefone)]?.campanha_nome}
                   />
                 </div>
+
+                <OrigemAnuncio contatoId={String(contato.id)} />
 
                 {/* Bloco de Qualificação */}
                 {(contato.email || contato.renda_bruta || contato.tipo_trabalho) && (

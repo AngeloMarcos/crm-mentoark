@@ -3110,5 +3110,80 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // Sprint 8 (Sprint 4 / H7): limite diário de consultas de convite (padrão 50).
   await pool.query(`ALTER TABLE radar_entrada_config ADD COLUMN IF NOT EXISTS limite_consultas_dia INTEGER NOT NULL DEFAULT 50`).catch(() => {});
 
+  // ── Sprint M1 (2026-10-06): atribuição de anúncio (Meta Ads × funil) ──────────────────────────
+  // `atribuicoes_anuncio`: um registro por toque de anúncio (clique CTWA no número oficial ou na
+  // Evolution, formulário de Lead Ads). `chave` deduplica: ctwa:<ctwa_clid> | lead:<leadgen_id> |
+  // <canal>:<ad>:<telefone>:<dia> quando a Meta não manda id de clique. `telefone` guarda o toque
+  // mesmo quando o contato ainda não existe (webhook da Evolution registra a origem antes de criar
+  // o contato) — a leitura casa por contato_id OU telefone. Primeiro toque: contatos.primeira_atribuicao_id.
+  // `meta_entidades`: cache de nomes/hierarquia anúncio → conjunto → campanha (a M2 reaproveita).
+  // `meta_paginas`: páginas inscritas no webhook `leadgen` (roteia o lead pelo page_id → usuário).
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS atribuicoes_anuncio (
+        id           UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        contato_id   UUID REFERENCES contatos(id) ON DELETE SET NULL,
+        telefone     TEXT,
+        canal        TEXT NOT NULL CHECK (canal IN ('ctwa', 'lead_ads', 'utm')),
+        chave        TEXT NOT NULL,
+        ctwa_clid    TEXT,
+        meta_lead_id TEXT,
+        ad_id        TEXT,
+        adset_id     TEXT,
+        campaign_id  TEXT,
+        source_type  TEXT,
+        source_url   TEXT,
+        headline     TEXT,
+        payload      JSONB,
+        criado_em    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, chave)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_atrib_user_ad ON atribuicoes_anuncio (user_id, ad_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_atrib_user_campanha ON atribuicoes_anuncio (user_id, campaign_id, criado_em)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_atrib_contato ON atribuicoes_anuncio (contato_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_atrib_user_tel ON atribuicoes_anuncio (user_id, telefone)`);
+    await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS primeira_atribuicao_id UUID`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS meta_entidades (
+        user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        id            TEXT NOT NULL,
+        nivel         TEXT NOT NULL CHECK (nivel IN ('campaign', 'adset', 'ad')),
+        parent_id     TEXT,
+        campaign_id   TEXT,
+        nome          TEXT,
+        status        TEXT,
+        objetivo      TEXT,
+        thumbnail_url TEXT,
+        atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS meta_paginas (
+        user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        page_id          TEXT NOT NULL,
+        nome             TEXT,
+        page_token_enc   TEXT,
+        inscrito_leadgen BOOLEAN NOT NULL DEFAULT false,
+        atualizado_em    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, page_id)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_meta_paginas_page ON meta_paginas (page_id) WHERE inscrito_leadgen`);
+
+    // marketing_leads: `campanha_id` recebia o ad_id (o webhook antigo não tinha a campanha) — daqui
+    // pra frente cada nível tem a sua coluna e o lead aponta pro contato criado no CRM.
+    for (const col of ['ad_id TEXT', 'adset_id TEXT', 'page_id TEXT', 'contato_id UUID']) {
+      await pool.query(`ALTER TABLE marketing_leads ADD COLUMN IF NOT EXISTS ${col}`);
+    }
+    log.info('MIGRATIONS', 'Sprint M1: atribuicoes_anuncio / meta_entidades / meta_paginas OK');
+  } catch (err: any) {
+    log.error('MIGRATIONS', 'Falha na migration da Sprint M1 (atribuição de anúncio)', { err: err?.message });
+  }
+
   log.info('MIGRATIONS', 'OK');
 }

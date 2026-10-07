@@ -14,6 +14,7 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
+import { registrarAtribuicao } from '../services/atribuicaoAnuncio';
 
 const ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sem 0/O/1/I — fácil de ler e digitar
 function gerarCodigo(): string {
@@ -56,6 +57,21 @@ export async function registrarOrigemInbound(pool: Pool, userId: string, telefon
     if (!tipo && anuncio) {
       tipo = 'anuncio';
       campanha = String(anuncio.title || anuncio.sourceId || 'Anúncio clique-para-WhatsApp').slice(0, 200);
+    }
+    // Sprint M1 (2026-10-06): todo toque de anúncio vira atribuição (não só o primeiro). Só conta
+    // quando há id do anúncio ou do clique — `externalAdReply` também aparece em prévia de link
+    // comum. [AUDITORIA] FIX PENDENTE (motivo: formato não confirmado ao vivo): os nomes
+    // `sourceId`/`sourceType`/`ctwaClid` seguem o proto do Baileys; confirmar com um clique real
+    // em anúncio num número da Evolution (payload cru fica em atribuicoes_anuncio.payload).
+    if (anuncio && (anuncio.sourceId || anuncio.ctwaClid)) {
+      const ehAnuncio = !anuncio.sourceType || String(anuncio.sourceType).toLowerCase() === 'ad';
+      void registrarAtribuicao(pool, {
+        userId, canal: 'ctwa', telefone,
+        ctwaClid: anuncio.ctwaClid ?? null,
+        adId: ehAnuncio ? anuncio.sourceId ?? null : null,
+        sourceType: anuncio.sourceType ?? null, sourceUrl: anuncio.sourceUrl ?? null, headline: anuncio.title ?? null,
+        payload: { ...anuncio, thumbnail: undefined, jpegThumbnail: undefined, origem: 'evolution' },
+      });
     }
     // Sprint 6 / opt-in (2026-10-05): consentimento pra API Oficial. Smart Link/anúncio contam como
     // opt-in; sem link, só conta quem escreveu PRIMEIRO (nunca recebeu disparo nosso) — resposta a

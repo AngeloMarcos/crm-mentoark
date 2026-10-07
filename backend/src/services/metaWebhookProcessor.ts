@@ -27,6 +27,7 @@ import { log } from '../logger';
 import { registrarEvento } from './saudeNumero';
 import { processarComDebounce, PREFIXO_OFICIAL } from './agentEngine';
 import { marcarRespostaNoEnvio } from './metricasDisparo';
+import { registrarAtribuicao } from './atribuicaoAnuncio';
 
 const PALAVRAS_OPTOUT = /^\s*(sair|parar|pare|stop|cancelar|remover|n[aã]o quero( mais)?|parar promo[cç][oõ]es|descadastrar)\s*[.!]*\s*$/i;
 const digitos = (s: unknown) => String(s || '').replace(/\D/g, '');
@@ -140,6 +141,39 @@ async function tratarMensagem(pool: Pool, cfg: any, msg: any, valor: any): Promi
               origem_inbound_campanha = COALESCE(origem_inbound_campanha, $2) WHERE id = $1`,
       [contatoId, String(anuncio.headline || anuncio.source_id || 'Anúncio clique-para-WhatsApp').slice(0, 200)]
     ).catch(() => {});
+  }
+  // Sprint M1 (2026-10-06): todo toque de anúncio (não só o primeiro) com ad_id + ctwa_clid —
+  // é o que liga a conversa ao gasto da campanha (M3) e alimenta a Conversions API (M4).
+  if (anuncio) {
+    await registrarAtribuicao(pool, {
+      userId: cfg.user_id, canal: 'ctwa', contatoId, telefone,
+      ctwaClid: anuncio.ctwa_clid ?? null,
+      adId: anuncio.source_type === 'ad' ? anuncio.source_id ?? null : null,
+      sourceType: anuncio.source_type ?? null, sourceUrl: anuncio.source_url ?? null, headline: anuncio.headline ?? null,
+      payload: { ...anuncio, origem: 'meta_oficial', phone_number_id: cfg.phone_number_id },
+    });
+  }
+  // Sprint M1 (2026-10-06): todo toque de anúncio (não só o primeiro) com ad_id + ctwa_clid —
+  // é o que liga a conversa ao gasto da campanha (M3) e alimenta a Conversions API (M4).
+  if (anuncio) {
+    await registrarAtribuicao(pool, {
+      userId: cfg.user_id, canal: 'ctwa', contatoId, telefone,
+      ctwaClid: anuncio.ctwa_clid ?? null,
+      adId: anuncio.source_type === 'ad' ? anuncio.source_id ?? null : null,
+      sourceType: anuncio.source_type ?? null, sourceUrl: anuncio.source_url ?? null, headline: anuncio.headline ?? null,
+      payload: { ...anuncio, origem: 'meta_oficial', phone_number_id: cfg.phone_number_id },
+    });
+  }
+  // Sprint M1 (2026-10-06): todo toque de anúncio (não só o primeiro) com ad_id + ctwa_clid —
+  // é o que liga a conversa ao gasto da campanha (M3) e alimenta a Conversions API (M4).
+  if (anuncio) {
+    await registrarAtribuicao(pool, {
+      userId: cfg.user_id, canal: 'ctwa', contatoId, telefone,
+      ctwaClid: anuncio.ctwa_clid ?? null,
+      adId: anuncio.source_type === 'ad' ? anuncio.source_id ?? null : null,
+      sourceType: anuncio.source_type ?? null, sourceUrl: anuncio.source_url ?? null, headline: anuncio.headline ?? null,
+      payload: { ...anuncio, origem: 'meta_oficial', phone_number_id: cfg.phone_number_id },
+    });
   }
   for (const [t, v] of [['wa_id', telefone], ['bsuid', bsuid], ['username', contato0.username || null]] as const) {
     if (!v || !contatoId) continue;

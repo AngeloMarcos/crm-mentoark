@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { getAuthToken } from "@/lib/api-token";
 import { type MetaStatus } from "@/hooks/useMetaStatus";
+import { PaginasLeadAds } from "./PaginasLeadAds";
 
 // Ícone manual para evitar erro de importação da lucide-react
 const Facebook = ({ className }: { className?: string }) => (
@@ -259,7 +260,8 @@ export function ContaMeta({ status, onRecarregar }: Props) {
                 </p>
                 <p className="text-xs text-muted-foreground">
                   Business Manager → Configurações → Usuários do sistema → atribua as contas de anúncio →
-                  Gerar token com <code>ads_read</code>, <code>ads_management</code> e <code>leads_retrieval</code>. Não expira.
+                  Gerar token com <code>ads_read</code>, <code>ads_management</code>, <code>leads_retrieval</code>,{" "}
+                  <code>pages_show_list</code> e <code>pages_manage_metadata</code> (para receber os leads de formulário). Não expira.
                 </p>
                 <div className="flex gap-2">
                   <Input
@@ -291,6 +293,8 @@ export function ContaMeta({ status, onRecarregar }: Props) {
         </CardContent>
       </Card>
 
+      {status.conectado && <PaginasLeadAds />}
+
       {/* Webhook de Lead Ads */}
       <Card>
         <CardHeader>
@@ -317,11 +321,10 @@ export function ContaMeta({ status, onRecarregar }: Props) {
             <p className="font-medium">Como configurar:</p>
             <ol className="space-y-1.5 text-muted-foreground list-none">
               {[
-                "Acesse Meta Business Manager → Configurações → Configurações de Negócios",
-                "Vá em Webhooks → Adicionar assinatura → Selecione 'leadgen'",
-                "Cole a URL acima e o token de verificação: mentoark-lead-webhook",
-                "Selecione os campos: id, ad_id, form_id, created_time, field_data",
-                "Salve e verifique o webhook. Os leads chegarão automaticamente.",
+                "Configuração única do app da Mentoark (feita pelo administrador): developers.facebook.com → app → Webhooks → objeto \"Page\"",
+                "Cole a URL acima e o token de verificação configurado no servidor (META_WEBHOOK_VERIFY_TOKEN)",
+                "Assine o campo 'leadgen'",
+                "Depois disso, cada cliente só liga as páginas dele no card \"Formulários de Lead Ads\" acima",
               ].map((passo, i) => (
                 <li key={i} className="flex items-start gap-2">
                   <span className="w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-xs flex items-center justify-center shrink-0 mt-0.5 font-medium">
@@ -350,8 +353,8 @@ export function ContaMeta({ status, onRecarregar }: Props) {
         <CardContent>
           <div className="flex flex-wrap gap-2">
             {[
-              "ads_management", "ads_read", "pages_show_list",
-              "leads_retrieval", "business_management", "instagram_basic",
+              "ads_read", "ads_management", "business_management", "pages_show_list",
+              "pages_read_engagement", "pages_manage_metadata", "leads_retrieval",
             ].map((perm) => (
               <Badge key={perm} variant="outline" className="font-mono text-xs">{perm}</Badge>
             ))}

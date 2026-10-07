@@ -4,53 +4,12 @@ import crypto from 'crypto';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 
-import { encriptarSegredoMetaOficial, decriptarSegredoMetaOficial } from '../services/metaCloudApi';
-
-// ── Helpers de métricas (Meta Insights) ───────────────────────────────────
-// [AUDITORIA] FIX APLICADO (Sprint Conexão Meta Ads, 2026-10-03): v19.0 saiu do suporte da Meta
-// — todas as chamadas deste arquivo (antes com `v19.0` fixo em 6 lugares) passam a usar só esta
-// constante, configurável por `META_GRAPH_VERSION` sem precisar de deploy de código.
-const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v23.0';
-const GRAPH_URL = `https://graph.facebook.com/${GRAPH_VERSION}`;
-
-// ── Credencial Meta Ads por usuário ───────────────────────────────────────
-// [AUDITORIA] FIX APLICADO (Sprint Conexão Meta Ads, 2026-10-03): token passa a ser gravado
-// criptografado (`access_token_enc`, mesmo esquema AES-256-CBC/ENCRYPTION_KEY de
-// `whatsapp_oficial_config`) — antes ia em texto plano em `access_token`. Linhas antigas ainda em
-// texto plano são migradas na primeira leitura (`getContaMeta`), sem precisar de script à parte.
-type ContaMeta = {
-  token: string;
-  ad_account_id: string | null;
-  nome_conta: string | null;
-  tipo_token: string;
-  token_expira_em: Date | null;
-};
-
-async function getContaMeta(pool: Pool, userId: string | undefined): Promise<ContaMeta | null> {
-  const { rows: [c] } = await pool.query(
-    `SELECT access_token, access_token_enc, ad_account_id, nome_conta, tipo_token, token_expira_em
-     FROM facebook_contas WHERE user_id=$1`, [userId]
-  );
-  if (!c) return null;
-  let token: string | null = null;
-  if (c.access_token_enc) {
-    token = decriptarSegredoMetaOficial(c.access_token_enc);
-  } else if (c.access_token) {
-    token = c.access_token;
-    await pool.query(
-      `UPDATE facebook_contas SET access_token_enc=$2, access_token=NULL WHERE user_id=$1`,
-      [userId, encriptarSegredoMetaOficial(c.access_token)]
-    ).catch(err => log.warn('MARKETING', 'Falha ao migrar token Meta para formato criptografado', { err: err?.message }));
-  }
-  if (!token) return null;
-  return {
-    token,
-    ad_account_id: c.ad_account_id || null,
-    nome_conta: c.nome_conta,
-    tipo_token: c.tipo_token || 'oauth',
-    token_expira_em: c.token_expira_em,
-  };
-}
+import { encriptarSegredoMetaOficial, verificarAssinaturaWebhook } from '../services/metaCloudApi';
+// getContaMeta / GRAPH_URL moram em services/metaAds.ts desde a Sprint M1 (2026-10-06) —
+// reaproveitados pela atribuição de anúncio (services/atribuicaoAnuncio.ts) e pelo Lead Ads.
+import { GRAPH_VERSION, GRAPH_URL, getContaMeta, graphRequest } from '../services/metaAds';
+import { processarLeadgen } from '../services/leadAds';
+import { atribuicoesDoContato } from '../services/atribuicaoAnuncio';
 
 async function salvarContaMeta(
   pool: Pool, userId: string, token: string, tipo: 'oauth' | 'system_user',
@@ -285,7 +244,9 @@ export default function marketing(pool: Pool) {
       const url = new URL(`https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth`);
       url.searchParams.set("client_id", process.env.FACEBOOK_APP_ID!);
       url.searchParams.set("redirect_uri", `${process.env.API_URL}/api/marketing/facebook/callback`);
-      url.searchParams.set("scope", "ads_management,ads_read,leads_retrieval,pages_show_list,business_management");
+      // pages_read_engagement + pages_manage_metadata (Sprint M1): listar páginas e inscrevê-las no
+      // webhook `leadgen`; ads_management: pausar/reativar campanha.
+      url.searchParams.set("scope", "ads_management,ads_read,leads_retrieval,pages_show_list,pages_read_engagement,pages_manage_metadata,business_management");
       url.searchParams.set("state", state);
       res.json({ url: url.toString() });
     } catch (err: any) {
@@ -547,6 +508,148 @@ export default function marketing(pool: Pool) {
     }
   });
 
+  // ── Sprint M1: páginas inscritas no Lead Ads ─────────────────────────────
+  // GET /api/marketing/facebook/paginas → páginas que o token enxerga + se já recebem leads
+  protectedRouter.get("/facebook/paginas", async (req: AuthRequest, res: Response) => {
+    try {
+      const conta = await getContaMeta(pool, req.userId);
+      if (!conta) return res.status(401).json({ error: { message: "Meta não conectado" } });
+      const pags = await graphInsights(`${GRAPH_URL}/me/accounts?fields=id,name,tasks&limit=100`, conta.token, 3);
+      const { rows } = await pool.query(`SELECT page_id, inscrito_leadgen FROM meta_paginas WHERE user_id = $1`, [req.userId]);
+      const inscritas = new Set(rows.filter(r => r.inscrito_leadgen).map(r => r.page_id));
+      res.json({
+        paginas: pags.map((p: any) => ({
+          id: String(p.id), nome: p.name ?? p.id, inscrita: inscritas.has(String(p.id)),
+          // Inscrever no webhook exige a tarefa MANAGE (ou ADVERTISE) na página.
+          podeInscrever: !Array.isArray(p.tasks) || p.tasks.includes('MANAGE') || p.tasks.includes('ADVERTISE'),
+        })),
+      });
+    } catch (err: any) {
+      log.error('LEAD_ADS', 'Erro ao listar páginas', { err: err?.message });
+      respostaErroGraph(res, err);
+    }
+  });
+
+  // POST /api/marketing/facebook/paginas/:pageId/inscrever | /desinscrever
+  const alterarInscricaoPagina = (inscrever: boolean) => async (req: AuthRequest, res: Response) => {
+    try {
+      const pageId = String(req.params.pageId);
+      if (!/^\d+$/.test(pageId)) return res.status(400).json({ error: { message: "ID de página inválido." } });
+      const conta = await getContaMeta(pool, req.userId);
+      if (!conta) return res.status(401).json({ error: { message: "Meta não conectado" } });
+      // O token da página só vem por /me/accounts — e isso também prova que o usuário tem acesso a ela.
+      const pags = await graphInsights(`${GRAPH_URL}/me/accounts?fields=id,name,access_token&limit=100`, conta.token, 3);
+      const pag = pags.find((p: any) => String(p.id) === pageId);
+      if (!pag?.access_token) return res.status(403).json({ error: { message: "Esta página não está acessível com o token conectado." } });
+
+      const r = await graphRequest(
+        `${GRAPH_URL}/${pageId}/subscribed_apps${inscrever ? '?subscribed_fields=leadgen' : ''}`,
+        pag.access_token, inscrever ? 'POST' : 'DELETE'
+      );
+      if (r?.error) return respostaErroGraph(res, { graph: r.error });
+
+      await pool.query(
+        `INSERT INTO meta_paginas (user_id, page_id, nome, page_token_enc, inscrito_leadgen)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, page_id) DO UPDATE SET nome = EXCLUDED.nome, page_token_enc = EXCLUDED.page_token_enc,
+           inscrito_leadgen = EXCLUDED.inscrito_leadgen, atualizado_em = NOW()`,
+        [req.userId, pageId, pag.name ?? null, encriptarSegredoMetaOficial(pag.access_token), inscrever]
+      );
+      log.info('LEAD_ADS', inscrever ? 'Página inscrita no leadgen' : 'Página desinscrita do leadgen', { userId: req.userId, pageId });
+      res.json({ ok: true, inscrita: inscrever });
+    } catch (err: any) {
+      log.error('LEAD_ADS', 'Erro ao alterar inscrição da página', { err: err?.message });
+      respostaErroGraph(res, err);
+    }
+  };
+  protectedRouter.post("/facebook/paginas/:pageId/inscrever", alterarInscricaoPagina(true));
+  protectedRouter.post("/facebook/paginas/:pageId/desinscrever", alterarInscricaoPagina(false));
+
+  // GET /api/marketing/atribuicoes?contato_id=UUID → de quais anúncios o contato veio
+  protectedRouter.get("/atribuicoes", async (req: AuthRequest, res: Response) => {
+    try {
+      const contatoId = String(req.query.contato_id ?? "");
+      if (!/^[0-9a-f-]{36}$/i.test(contatoId)) return res.status(400).json({ error: { message: "contato_id inválido." } });
+      const r = await atribuicoesDoContato(pool, req.userId!, contatoId);
+      if (!r) return res.status(404).json({ error: { message: "Contato não encontrado." } });
+      res.json(r);
+    } catch (err: any) {
+      log.error('ATRIBUICAO', 'Erro ao listar atribuições do contato', { err: err?.message });
+      res.status(500).json({ error: { message: err?.message } });
+    }
+  });
+
+  // ── Sprint M1: páginas inscritas no Lead Ads ─────────────────────────────
+  // GET /api/marketing/facebook/paginas → páginas que o token enxerga + se já recebem leads
+  protectedRouter.get("/facebook/paginas", async (req: AuthRequest, res: Response) => {
+    try {
+      const conta = await getContaMeta(pool, req.userId);
+      if (!conta) return res.status(401).json({ error: { message: "Meta não conectado" } });
+      const pags = await graphInsights(`${GRAPH_URL}/me/accounts?fields=id,name,tasks&limit=100`, conta.token, 3);
+      const { rows } = await pool.query(`SELECT page_id, inscrito_leadgen FROM meta_paginas WHERE user_id = $1`, [req.userId]);
+      const inscritas = new Set(rows.filter(r => r.inscrito_leadgen).map(r => r.page_id));
+      res.json({
+        paginas: pags.map((p: any) => ({
+          id: String(p.id), nome: p.name ?? p.id, inscrita: inscritas.has(String(p.id)),
+          // Inscrever no webhook exige a tarefa MANAGE (ou ADVERTISE) na página.
+          podeInscrever: !Array.isArray(p.tasks) || p.tasks.includes('MANAGE') || p.tasks.includes('ADVERTISE'),
+        })),
+      });
+    } catch (err: any) {
+      log.error('LEAD_ADS', 'Erro ao listar páginas', { err: err?.message });
+      respostaErroGraph(res, err);
+    }
+  });
+
+  // POST /api/marketing/facebook/paginas/:pageId/inscrever | /desinscrever
+  const alterarInscricaoPagina = (inscrever: boolean) => async (req: AuthRequest, res: Response) => {
+    try {
+      const pageId = String(req.params.pageId);
+      if (!/^\d+$/.test(pageId)) return res.status(400).json({ error: { message: "ID de página inválido." } });
+      const conta = await getContaMeta(pool, req.userId);
+      if (!conta) return res.status(401).json({ error: { message: "Meta não conectado" } });
+      // O token da página só vem por /me/accounts — e isso também prova que o usuário tem acesso a ela.
+      const pags = await graphInsights(`${GRAPH_URL}/me/accounts?fields=id,name,access_token&limit=100`, conta.token, 3);
+      const pag = pags.find((p: any) => String(p.id) === pageId);
+      if (!pag?.access_token) return res.status(403).json({ error: { message: "Esta página não está acessível com o token conectado." } });
+
+      const r = await graphRequest(
+        `${GRAPH_URL}/${pageId}/subscribed_apps${inscrever ? '?subscribed_fields=leadgen' : ''}`,
+        pag.access_token, inscrever ? 'POST' : 'DELETE'
+      );
+      if (r?.error) return respostaErroGraph(res, { graph: r.error });
+
+      await pool.query(
+        `INSERT INTO meta_paginas (user_id, page_id, nome, page_token_enc, inscrito_leadgen)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, page_id) DO UPDATE SET nome = EXCLUDED.nome, page_token_enc = EXCLUDED.page_token_enc,
+           inscrito_leadgen = EXCLUDED.inscrito_leadgen, atualizado_em = NOW()`,
+        [req.userId, pageId, pag.name ?? null, encriptarSegredoMetaOficial(pag.access_token), inscrever]
+      );
+      log.info('LEAD_ADS', inscrever ? 'Página inscrita no leadgen' : 'Página desinscrita do leadgen', { userId: req.userId, pageId });
+      res.json({ ok: true, inscrita: inscrever });
+    } catch (err: any) {
+      log.error('LEAD_ADS', 'Erro ao alterar inscrição da página', { err: err?.message });
+      respostaErroGraph(res, err);
+    }
+  };
+  protectedRouter.post("/facebook/paginas/:pageId/inscrever", alterarInscricaoPagina(true));
+  protectedRouter.post("/facebook/paginas/:pageId/desinscrever", alterarInscricaoPagina(false));
+
+  // GET /api/marketing/atribuicoes?contato_id=UUID → de quais anúncios o contato veio
+  protectedRouter.get("/atribuicoes", async (req: AuthRequest, res: Response) => {
+    try {
+      const contatoId = String(req.query.contato_id ?? "");
+      if (!/^[0-9a-f-]{36}$/i.test(contatoId)) return res.status(400).json({ error: { message: "contato_id inválido." } });
+      const r = await atribuicoesDoContato(pool, req.userId!, contatoId);
+      if (!r) return res.status(404).json({ error: { message: "Contato não encontrado." } });
+      res.json(r);
+    } catch (err: any) {
+      log.error('ATRIBUICAO', 'Erro ao listar atribuições do contato', { err: err?.message });
+      res.status(500).json({ error: { message: err?.message } });
+    }
+  });
+
   // POST /api/marketing/leads/:id/ativar-cris
   protectedRouter.post("/leads/:id/ativar-cris", async (req: AuthRequest, res: Response) => {
     try {
@@ -668,31 +771,33 @@ export default function marketing(pool: Pool) {
   });
 
   // POST /api/marketing/webhook/leads (Leads data)
-  publicRouter.post("/webhook/leads", async (req, res) => {
+  // [AUDITORIA] BUG CORRIGIDO (Sprint M1, 2026-10-06): (1) procurava o dono em `facebook_campanhas`,
+  // tabela que nada preenche → user_id nulo → INSERT falhava (marketing_leads.user_id é NOT NULL) →
+  // 500 → a Meta reenviava para sempre e nenhum lead entrava; (2) não validava a assinatura (qualquer
+  // um podia injetar lead); (3) não buscava os dados do formulário. Agora: assinatura X-Hub-Signature-256
+  // com FACEBOOK_APP_SECRET, 200 imediato, e services/leadAds.ts roteia pelo page_id (meta_paginas),
+  // busca o lead na Graph e cria o contato.
+  publicRouter.post("/webhook/leads", async (req: Request, res: Response) => {
+    const appSecret = process.env.FACEBOOK_APP_SECRET;
+    if (!appSecret) {
+      log.warn('LEAD_ADS', 'Webhook recebido mas FACEBOOK_APP_SECRET não configurado — evento recusado');
+      return res.sendStatus(503);
+    }
+    const rawBody: Buffer | undefined = (req as any).rawBody;
+    if (!rawBody || !verificarAssinaturaWebhook(appSecret, rawBody, req.headers['x-hub-signature-256'] as string | undefined)) {
+      log.warn('LEAD_ADS', 'Assinatura inválida — evento recusado');
+      return res.sendStatus(401);
+    }
+    res.sendStatus(200);
     try {
-      const { entry } = req.body;
-      for (const e of entry ?? []) {
+      for (const e of req.body?.entry ?? []) {
         for (const change of e.changes ?? []) {
           if (change.field !== "leadgen") continue;
-          const { leadgen_id, form_id, ad_id } = change.value;
-          
-          const { rows } = await pool.query(
-            "SELECT user_id FROM facebook_contas WHERE ad_account_id = (SELECT ad_account_id FROM facebook_campanhas WHERE id = $1 LIMIT 1)",
-            [ad_id]
-          );
-          const user_id = rows[0]?.user_id;
-
-          await pool.query(`
-            INSERT INTO marketing_leads (user_id, meta_lead_id, campanha_id, formulario_id, status_crm)
-            VALUES ($1, $2, $3, $4, 'novo')
-            ON CONFLICT (meta_lead_id) DO NOTHING
-          `, [user_id, leadgen_id, ad_id, form_id]);
+          await processarLeadgen(pool, { page_id: e.id, ...change.value });
         }
       }
-      res.json({ ok: true });
     } catch (err: any) {
-      log.error('MARKETING', 'Webhook error', { err: err?.message, stack: err?.stack });
-      res.status(500).json({ message: err.message });
+      log.error('LEAD_ADS', 'Erro ao processar webhook de leads', { err: err?.message, stack: err?.stack });
     }
   });
 
