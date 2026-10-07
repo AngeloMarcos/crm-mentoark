@@ -153,28 +153,6 @@ async function tratarMensagem(pool: Pool, cfg: any, msg: any, valor: any): Promi
       payload: { ...anuncio, origem: 'meta_oficial', phone_number_id: cfg.phone_number_id },
     });
   }
-  // Sprint M1 (2026-10-06): todo toque de anúncio (não só o primeiro) com ad_id + ctwa_clid —
-  // é o que liga a conversa ao gasto da campanha (M3) e alimenta a Conversions API (M4).
-  if (anuncio) {
-    await registrarAtribuicao(pool, {
-      userId: cfg.user_id, canal: 'ctwa', contatoId, telefone,
-      ctwaClid: anuncio.ctwa_clid ?? null,
-      adId: anuncio.source_type === 'ad' ? anuncio.source_id ?? null : null,
-      sourceType: anuncio.source_type ?? null, sourceUrl: anuncio.source_url ?? null, headline: anuncio.headline ?? null,
-      payload: { ...anuncio, origem: 'meta_oficial', phone_number_id: cfg.phone_number_id },
-    });
-  }
-  // Sprint M1 (2026-10-06): todo toque de anúncio (não só o primeiro) com ad_id + ctwa_clid —
-  // é o que liga a conversa ao gasto da campanha (M3) e alimenta a Conversions API (M4).
-  if (anuncio) {
-    await registrarAtribuicao(pool, {
-      userId: cfg.user_id, canal: 'ctwa', contatoId, telefone,
-      ctwaClid: anuncio.ctwa_clid ?? null,
-      adId: anuncio.source_type === 'ad' ? anuncio.source_id ?? null : null,
-      sourceType: anuncio.source_type ?? null, sourceUrl: anuncio.source_url ?? null, headline: anuncio.headline ?? null,
-      payload: { ...anuncio, origem: 'meta_oficial', phone_number_id: cfg.phone_number_id },
-    });
-  }
   for (const [t, v] of [['wa_id', telefone], ['bsuid', bsuid], ['username', contato0.username || null]] as const) {
     if (!v || !contatoId) continue;
     await pool.query(
