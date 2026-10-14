@@ -65,14 +65,31 @@ function foiLogoutPlanejado(instancia: string): boolean {
 }
 
 // ── Eventos e fase ───────────────────────────────────────────────────────────────────────────
+// A Evolution entrega o mesmo connection.update duas vezes (mesmo milissegundo) — sem isto cada
+// queda/conexão virava 2 eventos e o score descontava em dobro. Checagem síncrona em memória
+// (o par chega junto, um SELECT antes do INSERT não pegaria).
+const eventosRecentes = new Map<string, number>();
+const JANELA_DUPLICADO_MS = 10_000;
+
 export async function registrarEvento(
   pool: Pool, numero: string | null, instancia: string | null, tipo: string,
   statusReason: number | null = null, detalhe: Record<string, any> = {}
-): Promise<void> {
+): Promise<boolean> {
+  if (tipo !== 'mudanca_fase') {
+    const chave = `${numero || ''}|${instancia || ''}|${tipo}|${statusReason ?? ''}`;
+    const agora = Date.now();
+    const ultimo = eventosRecentes.get(chave);
+    if (ultimo && agora - ultimo < JANELA_DUPLICADO_MS) return false;
+    eventosRecentes.set(chave, agora);
+    if (eventosRecentes.size > 5000) {
+      for (const [k, em] of eventosRecentes) if (agora - em >= JANELA_DUPLICADO_MS) eventosRecentes.delete(k);
+    }
+  }
   await pool.query(
     `INSERT INTO whatsapp_eventos_saude (numero, instancia, tipo, status_reason, detalhe) VALUES ($1, $2, $3, $4, $5)`,
     [numero || null, instancia || null, tipo, statusReason, JSON.stringify(detalhe)]
   ).catch(err => log.warn('SAUDE_NUMERO', 'Falha ao registrar evento', { tipo, instancia, err: err?.message }));
+  return true;
 }
 
 export async function mudarFase(pool: Pool, numero: string, nova: Fase, motivo: string, instancia: string | null = null): Promise<void> {
@@ -101,7 +118,8 @@ async function numeroDaInstancia(pool: Pool, instancia: string): Promise<string>
 
 /** Chamado depois que o número da instância foi registrado (`protecaoNumero.aoConectarInstancia`). */
 export async function aoConectarSaude(pool: Pool, instancia: string, numero: string, perfilCompleto: boolean | null): Promise<void> {
-  await registrarEvento(pool, numero, instancia, 'conectou');
+  // Conexão repetida (mesmo webhook entregue 2x) não reprocessa — senão desfaria dois bans.
+  if (!(await registrarEvento(pool, numero, instancia, 'conectou'))) return;
   // Sprint 8 (Sprint 3 / H10): reconectou → a "conta em revisão" acabou.
   await pool.query(`UPDATE whatsapp_numeros SET em_revisao_desde = NULL WHERE numero = $1 AND em_revisao_desde IS NOT NULL`, [numero]).catch(() => {});
   if (perfilCompleto !== null) {
@@ -109,10 +127,36 @@ export async function aoConectarSaude(pool: Pool, instancia: string, numero: str
   }
   const r = await pool.query(`SELECT fase FROM whatsapp_numeros WHERE numero = $1`, [numero]).catch(() => ({ rows: [] as any[] }));
   const fase: Fase | null = r.rows[0]?.fase ?? null;
+  if (fase === 'banida') await desfazerUltimoBan(pool, numero, instancia);
   if (!fase) await mudarFase(pool, numero, 'perfil', 'número conectado pela primeira vez', instancia);
   else if (fase === 'quarentena' || fase === 'banida') {
     await mudarFase(pool, numero, 'perfil', 'reconectou depois de queda suspeita de ban — recomeça o aquecimento', instancia);
   }
+}
+
+/**
+ * Número banido de verdade não volta a conectar. Se o "ban confirmado" (24h sem reconexão) voltou,
+ * aquele ban foi falso — tira de bans_total, marca o evento como revertido e recalcula
+ * ultimo_ban_em pelos bans que restaram. As quedas suspeitas continuam contando no score (7 dias).
+ */
+async function desfazerUltimoBan(pool: Pool, numero: string, instancia: string): Promise<void> {
+  const ev = await pool.query(
+    `UPDATE whatsapp_eventos_saude SET tipo = 'ban_revertido',
+            detalhe = detalhe || jsonb_build_object('revertido_em', NOW(), 'motivo_reversao', 'número reconectou')
+     WHERE id = (SELECT id FROM whatsapp_eventos_saude WHERE numero = $1 AND tipo = 'ban_confirmado'
+                 ORDER BY criado_em DESC LIMIT 1)
+     RETURNING id`,
+    [numero]
+  ).catch(() => ({ rowCount: 0 } as any));
+  if (!ev.rowCount) return;
+  await pool.query(
+    `UPDATE whatsapp_numeros SET bans_total = GREATEST(bans_total - 1, 0),
+            ultimo_ban_em = (SELECT MAX(criado_em) FROM whatsapp_eventos_saude WHERE numero = $1 AND tipo = 'ban_confirmado')
+     WHERE numero = $1`,
+    [numero]
+  ).catch(() => {});
+  await registrarEvento(pool, numero, instancia, 'ban_desfeito', null, { motivo: 'reconectou depois de ban confirmado' });
+  log.warn('SAUDE_NUMERO', 'Ban desfeito — número banido reconectou', { numero, instancia });
 }
 
 /**
@@ -200,9 +244,10 @@ export async function metricas7d(pool: Pool, instancia: string, numero: string):
          AND COALESCE(erro, '') NOT LIKE 'bloqueado_saude%'`,
       [instancia]
     ),
+    // Por segundo distinto: eventos gravados em dobro antes da deduplicação contam uma vez só.
     pool.query(
-      `SELECT COUNT(*) FILTER (WHERE tipo = 'ban_suspeito')::int AS ban,
-              COUNT(*) FILTER (WHERE tipo = 'desconectou')::int AS comum
+      `SELECT COUNT(DISTINCT date_trunc('second', criado_em)) FILTER (WHERE tipo = 'ban_suspeito')::int AS ban,
+              COUNT(DISTINCT date_trunc('second', criado_em)) FILTER (WHERE tipo = 'desconectou')::int AS comum
        FROM whatsapp_eventos_saude
        -- Pelo NÚMERO quando conhecido: o nome da instância pode ter pertencido a outro chip antes.
        WHERE (CASE WHEN $1 <> '' THEN numero = $1 ELSE instancia = $2 END)
@@ -255,7 +300,7 @@ export async function calcularScoreSaude(pool: Pool, instancia: string, numeroBr
   add('Quedas de conexão (7d)', -Math.min(15, m.quedasComuns * 3), `${m.quedasComuns} queda(s) comum(ns)`);
   // Sprint 8 (Sprint 4 / H7): limite de requisições (429) nas últimas 24h, -5 cada, até -15.
   const limites = (await pool.query(
-    `SELECT COUNT(*)::int AS n FROM whatsapp_eventos_saude
+    `SELECT COUNT(DISTINCT date_trunc('second', criado_em))::int AS n FROM whatsapp_eventos_saude
      WHERE (CASE WHEN $1 <> '' THEN numero = $1 ELSE instancia = $2 END)
        AND tipo = 'rate_limit' AND criado_em >= NOW() - INTERVAL '24 hours'`,
     [numero, instancia]
@@ -452,8 +497,8 @@ export async function avaliarFases(pool: Pool): Promise<{ avancos: number; bansC
     if (diasNaFase < (DIAS_MINIMOS[fase] ?? 0)) continue;
 
     const ev = await pool.query(
-      `SELECT COUNT(*) FILTER (WHERE tipo = 'ban_suspeito')::int AS ban,
-              COUNT(*) FILTER (WHERE tipo = 'desconectou')::int AS comum
+      `SELECT COUNT(DISTINCT date_trunc('second', criado_em)) FILTER (WHERE tipo = 'ban_suspeito')::int AS ban,
+              COUNT(DISTINCT date_trunc('second', criado_em)) FILTER (WHERE tipo = 'desconectou')::int AS comum
        FROM whatsapp_eventos_saude WHERE numero = $1 AND criado_em >= $2`,
       [n.numero, n.fase_desde]
     ).catch(() => ({ rows: [{ ban: 1, comum: 0 }] }));
