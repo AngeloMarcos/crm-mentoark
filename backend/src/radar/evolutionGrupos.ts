@@ -12,6 +12,7 @@ export interface InfoConvite {
   criadoEm: Date | null;
   somenteAdmins: boolean | null;
   aprovacaoAdmin: boolean | null;
+  comunidade: boolean;
 }
 
 export type ResultadoConvite =
@@ -37,6 +38,8 @@ export function normalizarInviteInfo(j: any): InfoConvite | null {
     criadoEm: criacao ? new Date(criacao * 1000) : null,
     somenteAdmins: typeof j.announce === 'boolean' ? j.announce : null,
     aprovacaoAdmin: typeof j.joinApprovalMode === 'boolean' ? j.joinApprovalMode : null,
+    // Convite de comunidade (grupo "pai"): não dá pra extrair leads, o Radar descarta.
+    comunidade: j.isCommunity === true,
   };
 }
 

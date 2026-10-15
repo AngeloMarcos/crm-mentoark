@@ -11,7 +11,12 @@ const pagina = (titulo: string | null, imagem = 'https://pps.whatsapp.net/v/t61/
 describe('interpretarPaginaConvite', () => {
   it('link vivo: devolve o nome decodificado e se tem foto', () => {
     const r = interpretarPaginaConvite(200, pagina('NOT&#xcd;CIAS CRECI-PE 6'));
-    expect(r).toEqual({ tipo: 'ok', nome: 'NOTÍCIAS CRECI-PE 6', temFoto: true });
+    expect(r).toEqual({ tipo: 'ok', nome: 'NOTÍCIAS CRECI-PE 6', temFoto: true, tipoConvite: null, comunidade: false });
+  });
+  it('invite_link_type_v2: PARENT = comunidade, REGULAR = grupo', () => {
+    const tipo = (t: string) => pagina('X').replace('</head>', `<meta property="invite_link_type" content="REGULAR" /><meta property="invite_link_type_v2" content="${t}" /></head>`);
+    expect(interpretarPaginaConvite(200, tipo('PARENT'))).toMatchObject({ tipo: 'ok', tipoConvite: 'PARENT', comunidade: true });
+    expect(interpretarPaginaConvite(200, tipo('REGULAR'))).toMatchObject({ tipo: 'ok', tipoConvite: 'REGULAR', comunidade: false });
   });
   it('grupo sem foto continua válido', () => {
     const r = interpretarPaginaConvite(200, pagina('Corretores SP', 'https://static.whatsapp.net/rsrc.php/v4/yO/r/x.png'));

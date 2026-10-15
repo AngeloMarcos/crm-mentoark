@@ -122,6 +122,8 @@ export async function migrarRadar(pool: Pool): Promise<void> {
     for (const c of [
       'entrada_tentativas INTEGER NOT NULL DEFAULT 0', 'entrada_erro TEXT', 'entrada_agente_id UUID',
       'entrada_tentativa_em TIMESTAMPTZ', 'entrou_em TIMESTAMPTZ', 'extracao_agendada_para TIMESTAMPTZ', 'extraido_em TIMESTAMPTZ',
+      // 2026-10-15: tipo do convite pela página pública (REGULAR = grupo, PARENT = comunidade → descartado).
+      'tipo_convite TEXT',
     ]) {
       await pool.query(`ALTER TABLE radar_grupos ADD COLUMN IF NOT EXISTS ${c}`);
     }

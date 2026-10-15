@@ -206,6 +206,25 @@ export async function pontuarTodos(pool: Pool, userId: string): Promise<number> 
 
 const dormir = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+/** Texto já legível: a tela mostra o motivo de descarte como veio quando não reconhece o código. */
+export const MOTIVO_COMUNIDADE = 'Comunidade do WhatsApp (não dá para extrair leads)';
+
+/**
+ * Convite de comunidade → descarta (`rejeitado`). Só mexe em grupo que ninguém aprovou/usou ainda
+ * (descoberto/invalido); decisão manual do usuário prevalece.
+ */
+async function descartarComunidade(pool: Pool, grupoId: string, nome: string | null, tipoConvite: string | null): Promise<void> {
+  await pool.query(
+    `UPDATE radar_grupos SET nome = COALESCE($2, nome), tipo_convite = $3, link_ativo = true, erro_validacao = NULL,
+            link_verificado_em = now(),
+            status = CASE WHEN status IN ('descoberto', 'invalido') THEN 'rejeitado' ELSE status END,
+            motivo_descarte = CASE WHEN status IN ('descoberto', 'invalido') THEN $4 ELSE motivo_descarte END,
+            updated_at = now()
+      WHERE id = $1`,
+    [grupoId, nome, tipoConvite, MOTIVO_COMUNIDADE]);
+  log.info('RADAR', 'comunidade descartada', { grupoId, nome });
+}
+
 /**
  * Verifica o link pela página pública do WhatsApp (sem instância, sem entrar). Link morto → `invalido`
  * (descartado); link vivo → grava o nome e avalia score/aderência. Bloqueio do WhatsApp pausa a verificação.
@@ -233,12 +252,16 @@ export async function verificarLinkPublico(pool: Pool, grupoId: string): Promise
       [g.id, res.motivo.slice(0, 300)]);
     return 'invalido';
   }
+  if (res.comunidade) {
+    await descartarComunidade(pool, g.id, res.nome, res.tipoConvite);
+    return 'ok';
+  }
 
   const upd = await pool.query(
-    `UPDATE radar_grupos SET nome = $2, link_ativo = true, erro_validacao = NULL, link_verificado_em = now(),
+    `UPDATE radar_grupos SET nome = $2, tipo_convite = $3, link_ativo = true, erro_validacao = NULL, link_verificado_em = now(),
             status = CASE WHEN status = 'invalido' THEN 'descoberto' ELSE status END,
             motivo_descarte = CASE WHEN status = 'invalido' THEN NULL ELSE motivo_descarte END, updated_at = now()
-      WHERE id = $1 RETURNING *`, [g.id, res.nome]);
+      WHERE id = $1 RETURNING *`, [g.id, res.nome, res.tipoConvite]);
   const pesos = await carregarPesos(pool, g.user_id);
   await pontuarEGravar(pool, upd.rows[0], pesos, await nichoDoGrupo(pool, g.user_id, g.nicho_id));
   await vincularImportados(pool, g.user_id).catch(() => {});
@@ -279,6 +302,10 @@ export async function validarGrupo(pool: Pool, grupoId: string): Promise<'ok' | 
   }
 
   const i = res.info;
+  if (i.comunidade) {
+    await descartarComunidade(pool, g.id, i.nome, 'PARENT');
+    return 'ok';
+  }
   const upd = await pool.query(
     `UPDATE radar_grupos SET jid = $2, nome = $3, descricao = $4, participantes = $5, criado_no_whatsapp = $6,
             somente_admins = $7, aprovacao_admin = $8, link_ativo = true, erro_validacao = NULL, validado_em = now(),

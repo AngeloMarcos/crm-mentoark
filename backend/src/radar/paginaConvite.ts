@@ -5,9 +5,12 @@
  * Achado empírico (2026-09-24): link vivo devolve o nome do grupo em <meta property="og:title">;
  * link revogado/falso devolve a MESMA página com og:title vazio e a imagem genérica do WhatsApp.
  * Participantes e descrição não aparecem (a og:description é fixa: "Convite para grupo do WhatsApp").
+ *
+ * Achado 2026-10-15: `<meta property="invite_link_type_v2">` diz o tipo do convite — "PARENT" é
+ * COMUNIDADE (não dá pra extrair leads), "REGULAR" é grupo comum. A og:description é igual nos dois.
  */
 export type ResultadoPagina =
-  | { tipo: 'ok'; nome: string; temFoto: boolean }
+  | { tipo: 'ok'; nome: string; temFoto: boolean; tipoConvite: string | null; comunidade: boolean }
   | { tipo: 'invalido'; motivo: string }
   | { tipo: 'indisponivel'; motivo: string; bloqueio: boolean };   // bloqueio=true → pausar a fila por um tempo
 
@@ -41,7 +44,11 @@ export function interpretarPaginaConvite(status: number, html: string): Resultad
   if (!titulo) return { tipo: 'invalido', motivo: 'Convite revogado ou inexistente (página sem nome de grupo)' };
 
   const imagem = meta(html, 'og:image') ?? '';
-  return { tipo: 'ok', nome: titulo.slice(0, 200), temFoto: /pps\.whatsapp\.net/.test(imagem) };
+  const tipoConvite = meta(html, 'invite_link_type_v2') || null;
+  return {
+    tipo: 'ok', nome: titulo.slice(0, 200), temFoto: /pps\.whatsapp\.net/.test(imagem),
+    tipoConvite, comunidade: tipoConvite?.toUpperCase() === 'PARENT',
+  };
 }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
