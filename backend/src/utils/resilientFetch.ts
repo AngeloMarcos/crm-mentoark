@@ -198,8 +198,9 @@ export async function motivoEnvioBloqueado(url: string): Promise<string | null> 
   if (!m) return null;
   const instancia = decodeURIComponent(m[1]);
   try {
-    const [{ bloqueioEnvio }, { pool }] = await Promise.all([import('../services/maturadorGlobal'), import('../db')]);
-    return await bloqueioEnvio(pool, instancia);
+    // 2026-10-15: trava geral (banida/quarentena/revisão) — fase de aquecimento não bloqueia mais.
+    const [{ bloqueioEnvioGeral }, { pool }] = await Promise.all([import('../services/maturadorGlobal'), import('../db')]);
+    return await bloqueioEnvioGeral(pool, instancia);
   } catch {
     return null; // falha ao consultar não derruba envio legítimo (o motor de cada fluxo tem a própria trava)
   }

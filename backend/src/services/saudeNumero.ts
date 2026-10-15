@@ -341,33 +341,19 @@ export interface LimiteDisparo {
   liberaEm: string | null;
 }
 
-export function limiteDisparo(fase: Fase | null, faseDesde: string | Date | null, score: number | null): LimiteDisparo {
+// Decisão do usuário (2026-10-15): disparo só bloqueia por SCORE (< 45). A fase de aquecimento e as
+// faixas Risco/Atenção deixaram de restringir — o volume fica com o limite da campanha/conta e o
+// teto de 30/h. Quarentena/banida continuam travando (número acabou de cair / não conecta).
+export const SCORE_MINIMO_DISPARO = 45;
+
+export function limiteDisparo(fase: Fase | null, _faseDesde: string | Date | null, score: number | null): LimiteDisparo {
   const f: Fase = fase ?? 'madura';
-  let limite = LIMITE_FASE[f];
-  let somenteConhecidos = f === 'aquecimento_2';
-  let motivo: string | null = null;
-  let liberaEm: string | null = null;
-
-  if (limite === 0) {
-    if (f === 'quarentena') motivo = 'Número em quarentena após queda suspeita de ban.';
-    else if (f === 'banida') motivo = 'Número banido.';
-    else {
-      // Primeira fase com disparo é aquecimento_2: perfil(1) + aq1(4) = 5 dias no mínimo.
-      const restante = f === 'perfil' ? 1 + 4 : 4;
-      const base = faseDesde ? new Date(faseDesde) : new Date();
-      liberaEm = new Date(base.getTime() + restante * 86_400_000).toISOString();
-      motivo = `Número em ${ROTULO_FASE[f]}: disparos liberados a partir de ${new Date(liberaEm).toLocaleDateString('pt-BR')}, se não houver queda.`;
-    }
-    return { limite: 0, somenteConhecidos: false, motivo, liberaEm };
+  if (f === 'quarentena') return { limite: 0, somenteConhecidos: false, motivo: 'Número em quarentena após queda suspeita de ban.', liberaEm: null };
+  if (f === 'banida') return { limite: 0, somenteConhecidos: false, motivo: 'Número banido.', liberaEm: null };
+  if (score !== null && score < SCORE_MINIMO_DISPARO) {
+    return { limite: 0, somenteConhecidos: false, motivo: `Score ${score}: disparo bloqueado (mínimo ${SCORE_MINIMO_DISPARO}).`, liberaEm: null };
   }
-
-  if (score !== null) {
-    if (score < 40) return { limite: 0, somenteConhecidos: false, motivo: `Score ${score} (Crítico): disparo bloqueado.`, liberaEm: null };
-    if (score < 65) { somenteConhecidos = true; motivo = `Score ${score} (Risco): só contatos que já conversaram com o número.`; }
-    else if (score < 85) { limite = Math.floor(limite / 2); motivo = `Score ${score} (Atenção): limite reduzido à metade.`; }
-  }
-  if (somenteConhecidos && !motivo) motivo = `${ROTULO_FASE[f]}: até ${limite}/dia, só para contatos que já conversaram com o número.`;
-  return { limite, somenteConhecidos, motivo, liberaEm };
+  return { limite: LIMITE_FASE.madura, somenteConhecidos: false, motivo: null, liberaEm: null };
 }
 
 // ── Estado de saúde por instância (tela, criação de campanha e processador) ──────────────────

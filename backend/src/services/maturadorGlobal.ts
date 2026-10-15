@@ -83,10 +83,30 @@ export function papelGlobal(n: InfoNumero, score: number | null, agora = Date.no
   return 'conversador';
 }
 
-// ── Trava de envio com cache (chamada pelo motor a cada envio) ───────────────────────────────
-let cacheBloqueio: { em: number; mapa: Map<string, string | null> } | null = null;
+/**
+ * Trava de envio GERAL (campanha, IA, envio manual — `evolutionFetch` e agentEngine). Decisão do
+ * usuário 2026-10-15: fase de aquecimento/proteção de número novo não bloqueia mais esses envios
+ * (disparo só bloqueia por score < 45, em saudeNumero.limiteDisparo); só número banido, em
+ * quarentena ou com conta em revisão. O Maturador continua usando `motivoSoRecebe` completo.
+ */
+export function motivoBloqueioGeral(n: InfoNumero | null | undefined): string | null {
+  if (!n) return null;
+  if (n.fase === 'banida') return 'número banido';
+  if (n.fase === 'quarentena') return 'número em quarentena';
+  if (n.em_revisao_desde) return 'conta em revisão';
+  return null;
+}
 
-/** Motivo de bloqueio de envio da instância, ou null. Cache de 60s. */
+// ── Trava de envio com cache (chamada pelo motor a cada envio) ───────────────────────────────
+let cacheBloqueio: { em: number; mapa: Map<string, string | null>; geral: Map<string, string | null> } | null = null;
+
+/** Trava geral (ver `motivoBloqueioGeral`). Cache de 60s compartilhado com `bloqueioEnvio`. */
+export async function bloqueioEnvioGeral(pool: Pool, instancia: string): Promise<string | null> {
+  await bloqueioEnvio(pool, instancia);
+  return cacheBloqueio?.geral.get(instancia) ?? null;
+}
+
+/** Motivo de bloqueio de envio do MATURADOR para a instância (regra completa de número novo), ou null. Cache de 60s. */
 export async function bloqueioEnvio(pool: Pool, instancia: string): Promise<string | null> {
   if (!cacheBloqueio || Date.now() - cacheBloqueio.em > 60_000) {
     const r = await pool.query(
@@ -96,8 +116,9 @@ export async function bloqueioEnvio(pool: Pool, instancia: string): Promise<stri
        WHERE a.evolution_instancia IS NOT NULL`
     ).catch(() => ({ rows: [] as any[] }));
     const mapa = new Map<string, string | null>();
-    for (const x of r.rows) mapa.set(x.evolution_instancia, motivoSoRecebe(x));
-    cacheBloqueio = { em: Date.now(), mapa };
+    const geral = new Map<string, string | null>();
+    for (const x of r.rows) { mapa.set(x.evolution_instancia, motivoSoRecebe(x)); geral.set(x.evolution_instancia, motivoBloqueioGeral(x)); }
+    cacheBloqueio = { em: Date.now(), mapa, geral };
   }
   return cacheBloqueio.mapa.get(instancia) ?? null;
 }

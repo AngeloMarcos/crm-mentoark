@@ -29,7 +29,7 @@ import { withTenantContext, pool as poolGlobal } from '../db';
 import { log } from '../logger';
 import { destinoEnvio, jidConversa } from './identidadeContato';
 import { enviarTextoMetaOficial } from './metaCloudApi';
-import { bloqueioEnvio } from './maturadorGlobal';
+import { bloqueioEnvioGeral } from './maturadorGlobal';
 
 // Sprint 7 / H6 (2026-10-06): conversa do número oficial chega com instancia `meta_oficial:<phone_number_id>`.
 export const PREFIXO_OFICIAL = 'meta_oficial:';
@@ -745,7 +745,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     }
     // Sprint 9: número novo/protegido só recebe — a IA nem gera resposta (economiza token; o envio
     // já seria barrado em evolutionFetch).
-    const soRecebe = await bloqueioEnvio(pool, entrada.instancia).catch(() => null);
+    const soRecebe = await bloqueioEnvioGeral(pool, entrada.instancia).catch(() => null);
     if (soRecebe) {
       log.info('ENGINE', 'Número só recebe — IA não responde', { instancia: entrada.instancia, motivo: soRecebe });
       return;
