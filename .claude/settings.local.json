@@ -1,6 +1,9 @@
 {
   "permissions": {
     "allow": [
+      "Bash(scripts/deploy.sh prod:*)",
+      "Bash(ssh root@147.93.9.172:*)",
+      "Bash(scp:*)",
       "PowerShell(wsl which sshpass)",
       "PowerShell(wsl apt-get install -y sshpass)",
       "PowerShell(wsl sudo apt-get install -y sshpass)",
