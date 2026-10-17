@@ -2651,8 +2651,9 @@ function StepAntiBan({ form, setForm }: any) {
   // "Selecionar todas" (uniformizado: >70 quando o toggle está ativo, >=40 caso contrário).
   const [apenasSaudaveis, setApenasSaudaveis] = useState(false);
   const [saudeInst, setSaudeInst] = useState<Record<string, any>>({});
-  const LIMIAR_SAUDAVEL = 70;
-  const LIMIAR_PADRAO = 40;
+  // 2026-10-17: mesma régua do medidor/backend — "Saudável" é 85+ e o bloqueio é abaixo de 45.
+  const LIMIAR_SAUDAVEL = 84; // filtro usa ">", então 85+
+  const LIMIAR_PADRAO = 45;
   // [AUDITORIA] BUG CORRIGIDO (achado 2026-08-10 — usuário reportou disparo bloqueado por
   // "score baixo" num número com score real 70/100): `(i.whatsapp_score || 0)` tratava
   // `whatsapp_score === null` ("nunca calculado ainda" — cron de 15min ou primeira conexão,
@@ -2761,7 +2762,7 @@ function StepAntiBan({ form, setForm }: any) {
             </Button>
             <div className="flex items-center gap-2">
               <Switch checked={apenasSaudaveis} onCheckedChange={setApenasSaudaveis} />
-              <span className="text-xs">Apenas saudáveis (&gt;70)</span>
+              <span className="text-xs">Apenas saudáveis (85+)</span>
             </div>
           </div>
         </div>

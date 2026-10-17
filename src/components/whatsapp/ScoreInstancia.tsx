@@ -5,7 +5,7 @@
  * 4 fatores de 0-25 e passou a começar em 100 e descontar sinais de risco do NÚMERO (histórico de
  * ban, quedas, idade, opt-out, resposta, falhas — ver backend/src/services/saudeNumero.ts). Os
  * descontos vêm em `fatores.itens` (`score_fatores.versao = 2`) e aparecem no detalhe. Faixas:
- * 85+ Saudável, 65-84 Atenção, 40-64 Risco, 0-39 Crítico (Crítico bloqueia disparo). Linhas ainda
+ * 85+ Saudável, 65-84 Atenção, 45-64 Risco, 0-44 Crítico (Crítico bloqueia disparo). Linhas ainda
  * no formato antigo (antes do 1º recálculo) mostram só o número, com aviso.
  *
  * Desconectado / ainda não calculado continuam com tela própria (nunca "Saudável" sem dado real).
@@ -32,15 +32,17 @@ interface ScoreInstanciaProps {
 function faixaScore(s: number): { rotulo: string; cor: string; barra: string } {
   if (s >= 85) return { rotulo: "Saudável", cor: "text-emerald-600", barra: "bg-emerald-500" };
   if (s >= 65) return { rotulo: "Atenção", cor: "text-yellow-600", barra: "bg-yellow-500" };
-  if (s >= 40) return { rotulo: "Risco", cor: "text-orange-600", barra: "bg-orange-500" };
+  if (s >= 45) return { rotulo: "Risco", cor: "text-orange-600", barra: "bg-orange-500" };
   return { rotulo: "Crítico", cor: "text-red-600", barra: "bg-red-500" };
 }
 
+// 2026-10-17: régua única com o backend (saudeNumero.limiteDisparo / rotuloScore).
 const FAIXAS = [
-  { faixa: "85-100", rotulo: "Saudável", regra: "Disparo conforme a fase do número" },
-  { faixa: "65-84", rotulo: "Atenção", regra: "Metade do limite da fase" },
-  { faixa: "40-64", rotulo: "Risco", regra: "Só contatos que já conversaram com o número" },
-  { faixa: "0-39", rotulo: "Crítico", regra: "Disparo bloqueado" },
+  { faixa: "85-100", rotulo: "Saudável", regra: "Disparo liberado" },
+  { faixa: "65-84", rotulo: "Atenção", regra: "Disparo liberado — acompanhe as respostas" },
+  { faixa: "45-64", rotulo: "Risco", regra: "Disparo liberado — reduza o volume" },
+  { faixa: "0-44", rotulo: "Crítico", regra: "Disparo bloqueado" },
+  { faixa: "Aquecimento", rotulo: "Perfil / Aquecimento 1", regra: "Só recebe e responde quem escreveu — score máximo 60" },
 ];
 
 export function ScoreInstancia({ score, fatores, desconectado, naoCalculado }: ScoreInstanciaProps) {

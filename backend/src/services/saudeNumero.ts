@@ -269,12 +269,17 @@ export async function metricas7d(pool: Pool, instancia: string, numero: string):
 export interface ItemScore { fator: string; pontos: number; info: string }
 export interface ScoreSaude { total: number; itens: ItemScore[]; rotulo: string }
 
+// Faixas alinhadas ao bloqueio de disparo (< 45) — 2026-10-17.
 export function rotuloScore(total: number): string {
   if (total >= 85) return 'Saudável';
   if (total >= 65) return 'Atenção';
-  if (total >= 40) return 'Risco';
+  if (total >= SCORE_MINIMO_DISPARO) return 'Risco';
   return 'Crítico';
 }
+
+/** Teto do score enquanto o número só recebe: não pode aparecer "Saudável" sem ter provado nada. */
+export const TETO_SCORE_AQUECIMENTO = 60;
+const FASES_COM_TETO = new Set(['perfil', 'aquecimento_1', 'quarentena']);
 
 /**
  * Score da instância a partir do número conectado. Começa em 100 e desconta cada sinal de risco;
@@ -327,9 +332,26 @@ export async function calcularScoreSaude(pool: Pool, instancia: string, numeroBr
   if (tentativas > 0 && m.falhas / tentativas > 0.05) {
     add('Falhas de envio (7d)', -10, `${((m.falhas / tentativas) * 100).toFixed(0)}% de falha`);
   }
+  // 2026-10-17: queda 401/402/403/406 até 2 min depois de um disparo sair dessa instância é o sinal
+  // mais forte que existe de que o WhatsApp não aceitou o envio a frio (os 2 números novos da conta
+  // caíram 1–2 s após disparar). -30 cada, até -45, janela de 14 dias.
+  const quedaPosDisparo = (await pool.query(
+    `SELECT COUNT(DISTINCT date_trunc('second', e.criado_em))::int AS n FROM whatsapp_eventos_saude e
+     WHERE (CASE WHEN $1 <> '' THEN e.numero = $1 ELSE e.instancia = $2 END)
+       AND e.tipo = 'ban_suspeito' AND e.criado_em >= NOW() - INTERVAL '14 days'
+       AND EXISTS (SELECT 1 FROM disparo_logs dl WHERE dl.instancia = e.instancia AND dl.status = 'sent'
+                     AND dl.enviado_at BETWEEN e.criado_em - INTERVAL '2 minutes' AND e.criado_em)`,
+    [numero, instancia]
+  ).catch(() => ({ rows: [{ n: 0 }] }))).rows[0].n;
+  add('Queda logo após disparar (14d)', -Math.min(45, quedaPosDisparo * 30), `${quedaPosDisparo} vez(es) o número caiu até 2 min depois de enviar campanha`);
+
   if (nr?.perfil_completo) add('Perfil completo', 5, 'Nome e foto configurados');
 
-  const total = Math.max(0, Math.min(100, 100 + itens.reduce((s, i) => s + i.pontos, 0)));
+  let total = Math.max(0, Math.min(100, 100 + itens.reduce((s, i) => s + i.pontos, 0)));
+  if (nr?.fase && FASES_COM_TETO.has(nr.fase) && total > TETO_SCORE_AQUECIMENTO) {
+    add('Teto do aquecimento', TETO_SCORE_AQUECIMENTO - total, `Número em ${ROTULO_FASE[nr.fase as Fase] ?? nr.fase}: score máximo ${TETO_SCORE_AQUECIMENTO} até completar o aquecimento`);
+    total = TETO_SCORE_AQUECIMENTO;
+  }
   return { total, itens, rotulo: rotuloScore(total) };
 }
 
@@ -346,10 +368,14 @@ export interface LimiteDisparo {
 // teto de 30/h. Quarentena/banida continuam travando (número acabou de cair / não conecta).
 export const SCORE_MINIMO_DISPARO = 45;
 
-export function limiteDisparo(fase: Fase | null, _faseDesde: string | Date | null, score: number | null): LimiteDisparo {
+// 2026-10-17 (decisão do usuário): número que "só recebe" (proteção de número novo, Perfil,
+// Aquecimento 1, 21 dias após ban — `maturadorGlobal.motivoSoRecebe`) volta a NÃO disparar. Achado:
+// os 2 números novos da conta caíram com 401 1–2 s depois de disparar a frio (um com 1 mensagem).
+export function limiteDisparo(fase: Fase | null, _faseDesde: string | Date | null, score: number | null, soRecebe: string | null = null): LimiteDisparo {
   const f: Fase = fase ?? 'madura';
   if (f === 'quarentena') return { limite: 0, somenteConhecidos: false, motivo: 'Número em quarentena após queda suspeita de ban.', liberaEm: null };
   if (f === 'banida') return { limite: 0, somenteConhecidos: false, motivo: 'Número banido.', liberaEm: null };
+  if (soRecebe) return { limite: 0, somenteConhecidos: false, motivo: `Número só recebe por enquanto (${soRecebe}): sem disparo até completar o aquecimento sem queda.`, liberaEm: null };
   if (score !== null && score < SCORE_MINIMO_DISPARO) {
     return { limite: 0, somenteConhecidos: false, motivo: `Score ${score}: disparo bloqueado (mínimo ${SCORE_MINIMO_DISPARO}).`, liberaEm: null };
   }
@@ -384,6 +410,7 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
     `SELECT a.id AS agente_id, a.user_id, a.evolution_instancia AS instancia, a.numero_conectado,
             a.whatsapp_score, a.score_updated_at,
             w.fase, w.fase_desde, w.bans_total, w.ultimo_ban_em, w.apto_api_oficial, w.em_revisao_desde,
+            w.protecao_ate, w.protecao_liberada_em, w.primeira_conexao_em, (w.numero IS NOT NULL) AS tem_registro,
             (SELECT COUNT(*)::int FROM disparo_logs dl WHERE dl.instancia = a.evolution_instancia AND dl.status = 'sent'
                AND dl.enviado_at >= NOW() - INTERVAL '24 hours') AS enviados_hoje,
             (SELECT COUNT(*)::int FROM disparo_logs dl WHERE dl.instancia = a.evolution_instancia AND dl.status = 'sent'
@@ -395,8 +422,11 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
      WHERE a.evolution_instancia IS NOT NULL ${where}`,
     params
   );
+  // Import dinâmico: maturadorGlobal importa este arquivo (ciclo).
+  const { motivoSoRecebe } = await import('./maturadorGlobal');
   return r.rows.map((x: any) => {
     const score = x.score_updated_at ? x.whatsapp_score : null;
+    const soRecebe = x.tem_registro ? motivoSoRecebe(x) : null;
     return {
       agente_id: x.agente_id,
       user_id: x.user_id,
@@ -413,7 +443,7 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
       score_rotulo: score === null ? null : rotuloScore(score),
       enviados_hoje: x.enviados_hoje,
       envios_ultima_hora: x.envios_ultima_hora,
-      limite: limiteDisparo(x.fase ?? null, x.fase_desde, score),
+      limite: limiteDisparo(x.fase ?? null, x.fase_desde, score, soRecebe),
     };
   });
 }

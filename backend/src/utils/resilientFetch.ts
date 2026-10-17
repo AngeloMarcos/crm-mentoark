@@ -193,14 +193,42 @@ export async function resilientFetch(
 // conta em revisão, 21 dias após ban) recebe 423 com o motivo, sem a requisição sair.
 export const ROTA_ENVIO = /\/(?:message\/send[A-Za-z]*|chat\/(?:markMessageAsRead|sendPresence|updatePresence|markChatUnread))\/([^/?#]+)/;
 
-export async function motivoEnvioBloqueado(url: string): Promise<string | null> {
+// 2026-10-17 (decisão do usuário, após 2 números novos caírem com 401 logo após disparar a frio):
+// número que "só recebe" volta a ser travado aqui, MAS pode responder quem já escreveu para ele
+// (atendimento). Banido/quarentena/revisão continuam travando tudo.
+//   - message/send* para contato que nunca mandou mensagem para a instância → bloqueia;
+//   - "lido"/"digitando" (chat/*) → libera (faz parte de responder);
+//   - status (sendStatus) e envio sem destinatário identificável → bloqueia.
+function destinoDoCorpo(body: unknown): string | null {
+  if (typeof body !== 'string') return null;
+  try {
+    const j = JSON.parse(body);
+    const alvo = j?.number ?? j?.remoteJid ?? j?.key?.remoteJid ?? null;
+    return alvo ? String(alvo) : null;
+  } catch { return null; }
+}
+
+export async function motivoEnvioBloqueado(url: string, body?: unknown): Promise<string | null> {
   const m = ROTA_ENVIO.exec(url);
   if (!m) return null;
   const instancia = decodeURIComponent(m[1]);
   try {
-    // 2026-10-15: trava geral (banida/quarentena/revisão) — fase de aquecimento não bloqueia mais.
-    const [{ bloqueioEnvioGeral }, { pool }] = await Promise.all([import('../services/maturadorGlobal'), import('../db')]);
-    return await bloqueioEnvioGeral(pool, instancia);
+    const [{ bloqueioEnvioGeral, bloqueioEnvio }, { pool, withTenantContext }] = await Promise.all([import('../services/maturadorGlobal'), import('../db')]);
+    const duro = await bloqueioEnvioGeral(pool, instancia);
+    if (duro) return duro;
+    const soRecebe = await bloqueioEnvio(pool, instancia);
+    if (!soRecebe) return null;
+    if (/\/chat\//.test(url)) return null;
+    if (/\/message\/sendStatus\//.test(url)) return soRecebe;
+    const destino = destinoDoCorpo(body);
+    const digitos = String(destino ?? '').split('@')[0].replace(/\D/g, '');
+    if (digitos.length < 8) return soRecebe;
+    // Contexto admin: em homolog whatsapp_messages tem RLS por tenant (sem contexto = 0 linhas).
+    const conversou = await withTenantContext({ isAdmin: true }, c => c.query(
+      `SELECT 1 FROM whatsapp_messages WHERE instance_name = $1 AND from_me = false AND remote_jid LIKE $2 LIMIT 1`,
+      [instancia, `%${digitos.slice(-8)}@%`]
+    )).catch(() => ({ rows: [] as any[] }));
+    return conversou.rows.length ? null : `${soRecebe} (só responde quem já escreveu para ele)`;
   } catch {
     return null; // falha ao consultar não derruba envio legítimo (o motor de cada fluxo tem a própria trava)
   }
@@ -210,7 +238,7 @@ export async function evolutionFetch(
   url: string,
   options: ResilientFetchOptions = {},
 ): Promise<Response> {
-  const bloqueio = await motivoEnvioBloqueado(url);
+  const bloqueio = await motivoEnvioBloqueado(url, options.body);
   if (bloqueio) {
     console.warn(`[ENVIO_BLOQUEADO] ${url.replace(/apikey=[^&]+/, '')} — ${bloqueio}`);
     return new Response(JSON.stringify({ message: `Envio bloqueado: ${bloqueio}.` }), {
