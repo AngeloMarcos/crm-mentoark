@@ -62,6 +62,19 @@ function dentroDaJanela(hora: number, inicio: number, fim: number): boolean {
   return inicio <= fim ? hora >= inicio && hora < fim : hora >= inicio || hora < fim;
 }
 
+/**
+ * 2026-10-17: todos os pares começavam exatamente na hora cheia (8h) — vários números no mesmo IP
+ * disparando juntos. Cada par ganha um atraso fixo de 0–55 min na 1ª hora da janela (derivado do
+ * id, estável entre dias, diferente entre pares).
+ */
+export function atrasoInicioMin(parId: string): number {
+  return [...String(parId)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 17) % 56;
+}
+
+function minutoBrasilia(): number {
+  return Number(new Intl.DateTimeFormat('en-US', { timeZone: TZ, minute: '2-digit' }).format(new Date()));
+}
+
 /** Tempo de "digitando…" proporcional ao texto — ~40 caracteres/s + tempo de pensar. */
 function delayDigitacaoMs(texto: string): number {
   return Math.min(8000, Math.round(1200 + texto.length * rand(25, 45)));
@@ -170,6 +183,7 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
       processados++;
       try {
         if (!dentroDaJanela(hora, par.hora_inicio ?? 8, par.hora_fim ?? 21)) continue;
+        if (hora === (par.hora_inicio ?? 8) && minutoBrasilia() < atrasoInicioMin(par.id)) continue;
 
         // Reset diário pela data de Brasília (contador do par, exibido na tela).
         const resetadoEm = par.contador_resetado_em ? new Date(par.contador_resetado_em).toISOString().slice(0, 10) : null;

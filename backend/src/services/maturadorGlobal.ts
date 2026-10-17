@@ -217,18 +217,66 @@ export function primeiraMensagemEm(primeiraConexao: string | Date | null, agora 
   return new Date(agora + (60 + Math.floor(Math.random() * 120)) * 60_000);
 }
 
-/** O número reconectou há menos de 3h? Enviar logo depois de conectar é sinal de risco. */
+/**
+ * O número fez uma reconexão DE RISCO há menos de 3h? Enviar logo depois disso é sinal de risco.
+ *
+ * Correção 2026-10-17: antes contava QUALQUER evento `conectou` — e a Evolution reconecta sozinha
+ * (stream:error, restart 515) a cada ~50 min em alguns números. Resultado: o número estava sempre
+ * "recém-conectado" e o Maturador nunca enviou nada em produção. Agora só conta reconexão que veio
+ * depois de queda suspeita/logout/ban (24h antes) ou o primeiro pareamento do número.
+ */
 let cacheReconexao: { em: number; mapa: Map<string, number> } | null = null;
 export async function reconectouRecente(pool: Pool, instancia: string, horas = 3): Promise<boolean> {
   if (!cacheReconexao || Date.now() - cacheReconexao.em > 60_000) {
     const r = await pool.query(
-      `SELECT instancia, MAX(criado_em) AS em FROM whatsapp_eventos_saude
-       WHERE tipo = 'conectou' AND criado_em >= NOW() - INTERVAL '24 hours' GROUP BY instancia`
+      `SELECT c.instancia, MAX(c.criado_em) AS em FROM whatsapp_eventos_saude c
+       WHERE c.tipo = 'conectou' AND c.criado_em >= NOW() - INTERVAL '24 hours'
+         AND (EXISTS (SELECT 1 FROM whatsapp_eventos_saude e
+                      WHERE e.numero = c.numero AND e.tipo IN ('ban_suspeito', 'ban_confirmado', 'logout')
+                        AND e.criado_em BETWEEN c.criado_em - INTERVAL '24 hours' AND c.criado_em)
+              OR EXISTS (SELECT 1 FROM whatsapp_numeros w
+                         WHERE w.numero = c.numero AND w.primeira_conexao_em >= c.criado_em - INTERVAL '10 minutes'))
+       GROUP BY c.instancia`
     ).catch(() => ({ rows: [] as any[] }));
     cacheReconexao = { em: Date.now(), mapa: new Map(r.rows.map((x: any) => [x.instancia, new Date(x.em).getTime()])) };
   }
   const em = cacheReconexao.mapa.get(instancia);
   return !!em && Date.now() - em < horas * 3_600_000;
+}
+
+/**
+ * Par DA CONTA pausado automaticamente por queda suspeita (`aoQuedaSaude`) volta sozinho quando os
+ * dois números estão conectados fora de quarentena/ban e nenhum teve queda suspeita nas últimas 24h.
+ * Antes ficava parado até alguém religar na tela. Par pausado à mão (sem esse motivo) não é tocado;
+ * par global é gerido por `montarRedeGlobal`. A 1ª mensagem sai espalhada em 30–120 min.
+ */
+export async function retomarParesPausadosPorQueda(pool: Pool): Promise<number> {
+  const r = await pool.query(
+    `UPDATE maturador_pares mp
+        SET ativo = true, pausado_motivo = NULL, falhas_consecutivas = 0, updated_at = NOW(),
+            proxima_mensagem_em = NOW() + make_interval(mins => 30 + floor(random() * 90)::int)
+       FROM agentes a, agentes b
+      WHERE a.id = mp.agente_a_id AND b.id = mp.agente_b_id
+        AND NOT mp.ativo AND NOT mp.global AND mp.banido_em IS NULL
+        AND mp.pausado_motivo LIKE 'Queda suspeita de ban%'
+        AND mp.updated_at <= NOW() - INTERVAL '24 hours'
+        AND a.evolution_instancia IS NOT NULL AND b.evolution_instancia IS NOT NULL
+        AND a.numero_conectado IS NOT NULL AND b.numero_conectado IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM whatsapp_numeros w
+           WHERE w.numero IN (regexp_replace(a.numero_conectado, '\\D', '', 'g'), regexp_replace(b.numero_conectado, '\\D', '', 'g'))
+             AND (w.fase IN ('quarentena', 'banida') OR w.em_revisao_desde IS NOT NULL))
+        AND NOT EXISTS (
+          SELECT 1 FROM whatsapp_eventos_saude e
+           WHERE e.numero IN (regexp_replace(a.numero_conectado, '\\D', '', 'g'), regexp_replace(b.numero_conectado, '\\D', '', 'g'))
+             AND e.tipo = 'ban_suspeito' AND e.criado_em >= NOW() - INTERVAL '24 hours')
+      RETURNING mp.id, mp.user_id`
+  ).catch(err => { log.warn('MATURADOR', 'Falha ao retomar pares pausados', { err: err?.message }); return { rows: [] as any[] }; });
+  for (const p of r.rows) {
+    invalidarNumerosMaturador(p.user_id);
+    log.info('MATURADOR', 'Par retomado após queda (24h estável)', { parId: p.id });
+  }
+  return r.rows.length;
 }
 
 /** Participantes elegíveis agora, com o motivo de quem ficou de fora (para a tela). */

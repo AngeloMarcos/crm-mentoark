@@ -8,7 +8,7 @@ import { avaliarFases } from './services/saudeNumero';
 import { recalcularAptidaoOficial } from './services/checklistOficial';
 import { verificarWebhooksParados } from './services/saudeWebhook';
 import { gerarBackupsTodas } from './services/backupInstancia';
-import { montarRedeGlobal, globalLigado } from './services/maturadorGlobal';
+import { montarRedeGlobal, globalLigado, retomarParesPausadosPorQueda } from './services/maturadorGlobal';
 import { reverificarProxies } from './services/proxyInstancia';
 import { retomarCampanhasInstanciaCaida, recalcularMetricasCampanhas } from './services/metricasDisparo';
 import { atualizarNumerosOficiais } from './routes/metaOficial';
@@ -286,6 +286,8 @@ export function initCronJobs() {
       // Auditoria: proxy reconferido a cada 6h antes de montar a rede (número sem proxy ativo sai).
       if (await globalLigado(pool)) await reverificarProxies(pool);
       await montarRedeGlobal(pool);
+      // 2026-10-17: par da conta pausado por queda volta sozinho depois de 24h estável.
+      await retomarParesPausadosPorQueda(pool);
     } catch (err: any) {
       log.error('CRON', 'Erro no Aquecimento Global', { err: err.message });
     }
