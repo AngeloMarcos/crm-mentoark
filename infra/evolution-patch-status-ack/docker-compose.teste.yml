@@ -1,0 +1,44 @@
+# Evolution de TESTE (Sprint 1 do maturador, 2026-10-17): valida a imagem com o patch Baileys #2858
+# antes de produção. Banco próprio (evolution_teste), prefixos Redis próprios, SEM webhook (não
+# conversa com o CRM), sem domínio público — acesso só pela VPS em 127.0.0.1:8099.
+# NUNCA parear aqui um número que já esteja em outra instância (mesmo número em 2 instâncias = ban).
+services:
+  evolution-teste:
+    image: mentoark/evolution-api:v2.3.7-status-ack
+    container_name: evolution-teste
+    restart: unless-stopped
+    environment:
+    - SERVER_URL=http://127.0.0.1:8099
+    - AUTHENTICATION_API_KEY=teste-status-ack-2858
+    - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=false
+    - DATABASE_ENABLED=true
+    - DATABASE_PROVIDER=postgresql
+    - DATABASE_CONNECTION_URI=postgresql://mentoark:Mentoark%402025@postgres:5432/evolution_teste
+    - DATABASE_CONNECTION_CLIENT_NAME=evolution_teste
+    - REDIS_ENABLED=true
+    - REDIS_URI=redis://evolution_redis:6379
+    - REDIS_PREFIX_KEY=evoteste
+    - CACHE_REDIS_ENABLED=true
+    - CACHE_REDIS_URI=redis://evolution_redis:6379
+    - CACHE_REDIS_PREFIX_KEY=cacheteste
+    - CACHE_LOCAL_ENABLED=false
+    - WEBHOOK_GLOBAL_ENABLED=false
+    - QRCODE_LIMIT=30
+    - DEL_INSTANCE=false
+    - LANGUAGE=pt-BR
+    - TZ=America/Sao_Paulo
+    ports:
+    - 127.0.0.1:8099:8080
+    volumes:
+    - evolution_teste_data:/evolution/instances
+    networks:
+    - proxy
+    deploy:
+      resources:
+        limits:
+          memory: 400m
+networks:
+  proxy:
+    external: true
+volumes:
+  evolution_teste_data: null
