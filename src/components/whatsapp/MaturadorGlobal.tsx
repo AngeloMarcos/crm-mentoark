@@ -94,9 +94,9 @@ export function MaturadorGlobal() {
               </div>
               {n.papel && <Badge variant="outline" className={PAPEL[n.papel].cls}>{PAPEL[n.papel].label}</Badge>}
               {n.proxy
-                ? <Badge variant="outline" className="gap-1"><ShieldCheck className="h-3 w-3" /> Proxy {n.proxy.host}</Badge>
+                ? <Badge variant="outline" className="gap-1" title={descreverSaida(n.proxy)}><ShieldCheck className="h-3 w-3" /> {n.proxy.pendente ? "Proxy (entra no próximo QR)" : `Proxy ${n.proxy.ip_saida || n.proxy.host}`}</Badge>
                 : <Badge variant="secondary">Sem proxy</Badge>}
-              <Button size="sm" variant="ghost" onClick={() => setProxyDe(n)}>{n.proxy ? "Proxy" : "Configurar proxy"}</Button>
+              <Button size="sm" variant="ghost" onClick={() => setProxyDe({ ...n, conectado: !!n.numero })}>{n.proxy ? "Proxy" : "Configurar proxy"}</Button>
             </div>
           ))}
         </div>
@@ -122,22 +122,48 @@ export function MaturadorGlobal() {
   );
 }
 
-function ProxyDialog({ numero, onFechar }: { numero: any; onFechar: () => void }) {
+/** Texto curto do IP de saída medido pelo backend (país, cidade, operadora, tipo). */
+function descreverSaida(s: any): string {
+  if (!s) return "";
+  const lugar = [s.cidade, s.regiao].filter(Boolean).join(" / ");
+  const tipo = s.hospedagem ? "datacenter" : s.movel ? "móvel (4G/5G)" : "residencial/ISP";
+  return `${s.ip_saida || s.ip} · ${s.pais}${lugar ? ` (${lugar})` : ""} · ${s.org || s.asn || "operadora desconhecida"} · ${tipo}`;
+}
+
+/**
+ * Proxy de um número. Sprint 2 do maturador (2026-10-17): testa o IP de saída antes (país BR,
+ * nada de datacenter, exclusivo por IP), só http/socks5, e explica o que acontece ao aplicar:
+ * número não pareado → vale no próximo QR; número conectado → a conexão é reiniciada uma vez.
+ * Usado no Aquecimento Global e na tela de instâncias. `numero`: { agenteId, nome, instancia, proxy, conectado? }.
+ */
+export function ProxyDialog({ numero, onFechar }: { numero: any; onFechar: () => void }) {
   const [f, setF] = useState({
     host: numero.proxy?.host || "", port: numero.proxy?.port ? String(numero.proxy.port) : "",
-    protocolo: numero.proxy?.protocolo || "http", usuario: "", senha: "",
+    protocolo: numero.proxy?.protocolo === "socks5" ? "socks5" : "http", usuario: numero.proxy?.usuario || "", senha: "",
   });
   const [salvando, setSalvando] = useState(false);
+  const [testando, setTestando] = useState(false);
+  const [teste, setTeste] = useState<{ saida: any; aceito: boolean; motivo: string | null } | null>(null);
+  const corpo = () => ({ ...f, port: Number(f.port) });
+  const testar = async () => {
+    setTestando(true); setTeste(null);
+    try { setTeste(await chamar(`/proxy/${numero.agenteId}/testar`, { method: "POST", body: corpo() })); }
+    catch (e: any) { toast.error(e.message); } finally { setTestando(false); }
+  };
   const salvar = async () => {
+    if (numero.conectado && !confirm("Este número está conectado. Para o proxy valer, a conexão será reiniciada uma vez (alguns segundos). Trocar o IP de um número em uso é um sinal leve de risco — faça isso uma vez só. Continuar?")) return;
     setSalvando(true);
     try {
-      await chamar(`/proxy/${numero.agenteId}`, { method: "PUT", body: { ...f, port: Number(f.port) } });
-      toast.success("Proxy aplicado e confirmado pela Evolution");
+      const r = await chamar(`/proxy/${numero.agenteId}`, { method: "PUT", body: corpo() });
+      toast.success(
+        r.situacao === "salvo_para_o_qr" ? "Proxy testado e salvo — ele entra quando você gerar o QR deste número"
+        : r.situacao === "aplicado_reconectado" ? "Proxy aplicado e conexão reiniciada pelo novo IP"
+        : "Proxy aplicado — vale na próxima conexão (QR) deste número");
       onFechar();
     } catch (e: any) { toast.error(e.message); } finally { setSalvando(false); }
   };
   const remover = async () => {
-    if (!confirm("Remover o proxy deste número? Ele sai do Aquecimento Global.")) return;
+    if (!confirm("Remover o proxy deste número? Ele volta a sair pelo IP da VPS e sai do Aquecimento Global.")) return;
     try { await chamar(`/proxy/${numero.agenteId}`, { method: "DELETE" }); toast.success("Proxy removido"); onFechar(); }
     catch (e: any) { toast.error(e.message); }
   };
@@ -147,26 +173,40 @@ function ProxyDialog({ numero, onFechar }: { numero: any; onFechar: () => void }
         <DialogHeader>
           <DialogTitle>Proxy de {numero.nome || numero.instancia}</DialogTitle>
           <DialogDescription>
-            Use um proxy residencial do Brasil, só deste número (dois números no mesmo proxy são recusados).
-            Configure antes de conectar o número e evite trocar depois: mudar o IP de um número já conectado também é sinal de risco.
+            Use um proxy <b>residencial/ISP estático ou 4G do Brasil</b>, com <b>IP fixo</b> e só deste número.
+            Configure <b>antes de gerar o QR</b> e não troque depois. O sistema testa o IP de saída e recusa IP de fora do Brasil,
+            de datacenter ou já usado por outro número.
           </DialogDescription>
         </DialogHeader>
+        {numero.proxy && (
+          <p className="rounded-md border p-2 text-xs">
+            {numero.proxy.pendente ? "Salvo, entra no próximo QR: " : "Em uso: "}
+            {descreverSaida(numero.proxy) || `${numero.proxy.host}:${numero.proxy.port}`}
+          </p>
+        )}
         <div className="grid gap-2 sm:grid-cols-3">
-          <div className="sm:col-span-2"><Label>Host</Label><Input value={f.host} onChange={e => setF({ ...f, host: e.target.value })} placeholder="br.proxy.exemplo.com" /></div>
-          <div><Label>Porta</Label><Input inputMode="numeric" value={f.port} onChange={e => setF({ ...f, port: e.target.value.replace(/\D/g, "") })} /></div>
+          <div className="sm:col-span-2"><Label>Host</Label><Input value={f.host} onChange={e => { setF({ ...f, host: e.target.value }); setTeste(null); }} placeholder="br.proxy.exemplo.com" /></div>
+          <div><Label>Porta</Label><Input inputMode="numeric" value={f.port} onChange={e => { setF({ ...f, port: e.target.value.replace(/\D/g, "") }); setTeste(null); }} /></div>
           <div>
             <Label>Protocolo</Label>
-            <Select value={f.protocolo} onValueChange={v => setF({ ...f, protocolo: v })}>
+            <Select value={f.protocolo} onValueChange={v => { setF({ ...f, protocolo: v }); setTeste(null); }}>
               <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{["http", "https", "socks5", "socks4"].map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+              <SelectContent>{["http", "socks5"].map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div><Label>Usuário</Label><Input value={f.usuario} onChange={e => setF({ ...f, usuario: e.target.value })} /></div>
-          <div><Label>Senha</Label><Input type="password" autoComplete="off" value={f.senha} onChange={e => setF({ ...f, senha: e.target.value })} placeholder={numero.proxy ? "•••• (mantém a atual)" : ""} /></div>
+          <div><Label>Usuário</Label><Input value={f.usuario} onChange={e => { setF({ ...f, usuario: e.target.value }); setTeste(null); }} /></div>
+          <div><Label>Senha</Label><Input type="password" autoComplete="off" value={f.senha} onChange={e => { setF({ ...f, senha: e.target.value }); setTeste(null); }} placeholder={numero.proxy ? "•••• (mantém a atual)" : ""} /></div>
         </div>
+        {teste && (
+          <p className={`rounded-md border p-2 text-xs ${teste.aceito ? "border-emerald-500/40 bg-emerald-500/10" : "border-red-500/40 bg-red-500/10"}`}>
+            {teste.aceito ? "✓ Aceito: " : "✗ Recusado: "}{descreverSaida(teste.saida)}
+            {teste.motivo && <><br />{teste.motivo}</>}
+          </p>
+        )}
         <DialogFooter className="gap-2">
           {numero.proxy && <Button variant="outline" onClick={remover}>Remover</Button>}
-          <Button onClick={salvar} disabled={salvando || !f.host || !f.port}>{salvando ? "Aplicando…" : "Aplicar proxy"}</Button>
+          <Button variant="outline" onClick={testar} disabled={testando || !f.host || !f.port}>{testando ? "Testando…" : "Testar"}</Button>
+          <Button onClick={salvar} disabled={salvando || !f.host || !f.port || (teste !== null && !teste.aceito)}>{salvando ? "Aplicando…" : "Aplicar proxy"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

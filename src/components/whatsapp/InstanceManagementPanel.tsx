@@ -69,9 +69,11 @@ import {
   X,
   Phone,
   ShieldCheck,
+  Globe,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
+import { ProxyDialog } from "./MaturadorGlobal";
 import { ChecklistApiOficial } from "./ChecklistApiOficial";
 import { BackupsInstancia } from "./BackupsInstancia";
 import {
@@ -165,6 +167,9 @@ export function InstanceManagementPanel() {
   const [phoneNumbers, setPhoneNumbers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Agente | null>(null);
+  // Sprint 2 do maturador (2026-10-17): proxy por número direto na tela de instâncias, para
+  // configurar ANTES de gerar o QR (não só no Aquecimento Global).
+  const [proxyDe, setProxyDe] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [calculating, setCalculating] = useState<string | null>(null);
   const [saude, setSaude] = useState<Record<string, SaudeInfo>>({});
@@ -981,6 +986,24 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                     <Button
                       variant="ghost"
                       size="icon"
+                      className={`h-8 w-8 shrink-0 ${(a as any).proxy_host ? "text-emerald-600" : ""}`}
+                      onClick={() => {
+                        const x: any = a;
+                        setProxyDe({
+                          agenteId: a.id, nome: a.nome, instancia: a.evolution_instancia, conectado: state === "open",
+                          proxy: x.proxy_host ? {
+                            host: x.proxy_host, port: x.proxy_port, protocolo: x.proxy_protocolo, usuario: x.proxy_usuario,
+                            pendente: !x.proxy_aplicado_em, ip_saida: x.proxy_ip_saida, pais: x.proxy_pais, org: x.proxy_org, movel: x.proxy_movel,
+                          } : null,
+                        });
+                      }}
+                      title={(a as any).proxy_host ? `Proxy: ${(a as any).proxy_ip_saida || (a as any).proxy_host}${(a as any).proxy_aplicado_em ? "" : " (entra no próximo QR)"}` : "Configurar proxy (antes do QR)"}
+                    >
+                      <Globe className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       className="h-8 w-8 shrink-0"
                       onClick={() => handleSyncHistory(a)}
                       disabled={syncing === a.id}
@@ -1169,6 +1192,7 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
               </SheetDescription>
             </SheetHeader>
 
+            {proxyDe && <ProxyDialog numero={proxyDe} onFechar={() => { setProxyDe(null); carregar(); }} />}
             {editing && (
               <div className="flex-1 overflow-y-auto p-6">
               <Tabs defaultValue="geral" className="w-full">

@@ -284,7 +284,9 @@ export function initCronJobs() {
   cron.schedule('*/30 * * * *', async () => {
     try {
       // Auditoria: proxy reconferido a cada 6h antes de montar a rede (número sem proxy ativo sai).
-      if (await globalLigado(pool)) await reverificarProxies(pool);
+      // 2026-10-17 (Sprint 2): todo número com proxy é conferido de hora em hora (IP de saída, proxy
+      // vivo, Evolution com a config) — não só quando o Aquecimento Global está ligado.
+      await reverificarProxies(pool).catch(err => log.warn('CRON', 'Falha ao reconferir proxies', { err: err?.message }));
       await montarRedeGlobal(pool);
       // 2026-10-17: par da conta pausado por queda volta sozinho depois de 24h estável.
       await retomarParesPausadosPorQueda(pool);

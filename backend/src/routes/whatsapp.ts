@@ -23,6 +23,7 @@ import { buscarPreviewLink } from '../utils/linkPreview';
 import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
 import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
 import { buscarConexoesDuplicadas, normalizarNumero, invalidarCacheProtecao, DIAS_PROTECAO } from '../services/protecaoNumero';
+import { proxyDoAgente, camposEvolution, marcarProxyAplicado } from '../services/proxyInstancia';
 import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE, invalidarCacheSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
 import { calcularChecklistOficial } from '../services/checklistOficial';
 import { webhooksParados } from '../services/saudeWebhook';
@@ -2258,6 +2259,11 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       const phoneNumber = (req.body?.phoneNumber as string | undefined)?.replace(/\D/g, '') || undefined;
+      // Sprint 2 do maturador (2026-10-17): proxy salvo para este número entra ANTES do QR — no
+      // /instance/create (a Evolution testa e grava antes de conectar) ou, se a instância já existe,
+      // via /proxy/set antes do /instance/connect (que recarrega o proxy). Ver services/proxyInstancia.ts.
+      const proxySalvo = cfg.agenteId ? await proxyDoAgente(pool, cfg.agenteId).catch(() => null) : null;
+      const camposProxy = proxySalvo ? camposEvolution(proxySalvo) : null;
       const createPayload = {
         instanceName: cfg.stableInstancia,
         token: cfg.api_key,
@@ -2280,6 +2286,10 @@ export default function whatsappRouter(pool: Pool): Router {
         readMessages: true,
         readStatus: false,
         ...(phoneNumber ? { number: phoneNumber } : {}),
+        ...(camposProxy ? {
+          proxyHost: camposProxy.host, proxyPort: camposProxy.port, proxyProtocol: camposProxy.protocol,
+          proxyUsername: camposProxy.username, proxyPassword: camposProxy.password,
+        } : {}),
         webhook: webhookInner(),
       };
 
@@ -2317,6 +2327,14 @@ export default function whatsappRouter(pool: Pool): Router {
         // fluxo de criação nova logo abaixo.
         let qrCode: string | null = null;
         let pairingCode: string | null = null;
+        if (camposProxy && cfg.agenteId) {
+          const setProxy = await evolutionFetch(`${base}/proxy/set/${cfg.stableInstancia}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
+            body: JSON.stringify({ enabled: true, ...camposProxy }),
+          }).catch(() => null);
+          if (setProxy?.ok) await marcarProxyAplicado(pool, cfg.agenteId);
+          else log.warn('PROXY', 'Evolution recusou o proxy antes do QR — conectando sem proxy', { instancia: cfg.stableInstancia, status: setProxy?.status });
+        }
         for (let attempt = 0; attempt < 5 && !qrCode; attempt++) {
           const connectRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}`, {
             headers: { apikey: cfg.api_key },
@@ -2347,14 +2365,18 @@ export default function whatsappRouter(pool: Pool): Router {
       // seguia adiante e devolvia qrPending:true com status 200, escondendo o erro real.
       if (!createRes.ok) {
         log.warn('WHATSAPP', 'Falha ao criar instância na Evolution', { status: createRes.status, message: createErrorMsg });
+        const proxyRecusado = camposProxy && /invalid proxy/i.test(createErrorMsg);
         return res.status(createRes.status || 502).json({
           state: 'close',
           error: true,
-          code: createRes.status,
-          message: createErrorMsg || `Evolution API erro (${createRes.status}) ao criar instância.`,
+          code: proxyRecusado ? 'PROXY_INVALIDO' : createRes.status,
+          message: proxyRecusado
+            ? 'A Evolution não conseguiu sair pelo proxy configurado para este número. Teste o proxy de novo (Aquecimento → Proxy) ou remova-o antes de gerar o QR.'
+            : (createErrorMsg || `Evolution API erro (${createRes.status}) ao criar instância.`),
         });
       }
 
+      if (camposProxy && cfg.agenteId) await marcarProxyAplicado(pool, cfg.agenteId);
       let qrCode = created?.qrcode?.base64 || created?.hash?.qrcode || null;
       let pairingCode = created?.qrcode?.pairingCode || created?.pairingCode || created?.hash?.pairingCode || null;
 

@@ -22,7 +22,7 @@ import { registrarEvento, mudarFase, normalizar as normalizarNumeroSaude } from 
 import { recalcularScoreAgente } from '../services/instanceScore';
 import { resolverOwnerId } from '../services/subscription';
 import { avaliarParticipantes, globalLigado, montarRedeGlobal, TERMO_GLOBAL_VERSAO, bloqueioEnvio } from '../services/maturadorGlobal';
-import { validarProxy, aplicarProxy, removerProxy } from '../services/proxyInstancia';
+import { validarProxy, aplicarProxy, removerProxy, testarProxy } from '../services/proxyInstancia';
 
 export const TERMO_GLOBAL_TEXTO =
   'Ao participar do Aquecimento Global, os números desta conta trocam mensagens curtas e neutras ' +
@@ -42,7 +42,8 @@ export default function maturadorRouter(pool: Pool): Router {
       globalLigado(pool),
       pool.query(`SELECT ativo, aceito_em, aceito_por, termo_versao FROM maturador_global_adesao WHERE user_id = $1`, [ownerId]),
       avaliarParticipantes(pool, ownerId),
-      pool.query(`SELECT id, proxy_host, proxy_port, proxy_protocolo, proxy_aplicado_em FROM agentes WHERE user_id = $1`, [ownerId]),
+      pool.query(`SELECT id, proxy_host, proxy_port, proxy_protocolo, proxy_usuario, proxy_aplicado_em, proxy_ip_saida, proxy_pais,
+                         proxy_org, proxy_movel, proxy_testado_em FROM agentes WHERE user_id = $1`, [ownerId]),
       pool.query(
         `SELECT a.id, COUNT(mp.id) FILTER (WHERE mp.ativo)::int AS vinculos,
                 (SELECT COUNT(*)::int FROM maturador_mensagens m JOIN maturador_pares p ON p.id = m.par_id AND p.global
@@ -62,7 +63,12 @@ export default function maturadorRouter(pool: Pool): Router {
         const p: any = px.get(n.agenteId) || {};
         const v: any = vv.get(n.agenteId) || {};
         return { ...n, userId: undefined,
-          proxy: p.proxy_aplicado_em ? { host: p.proxy_host, port: p.proxy_port, protocolo: p.proxy_protocolo, aplicado_em: p.proxy_aplicado_em } : null,
+          // Sprint 2: proxy salvo mas ainda não em uso (número não pareado) aparece como "pendente".
+          proxy: p.proxy_host ? {
+            host: p.proxy_host, port: p.proxy_port, protocolo: p.proxy_protocolo, usuario: p.proxy_usuario,
+            aplicado_em: p.proxy_aplicado_em, pendente: !p.proxy_aplicado_em,
+            ip_saida: p.proxy_ip_saida, pais: p.proxy_pais, org: p.proxy_org, movel: p.proxy_movel, testado_em: p.proxy_testado_em,
+          } : null,
           vinculos: v.vinculos ?? 0, enviadas_24h: v.enviadas_24h ?? 0, recebidas_24h: v.recebidas_24h ?? 0 };
       }),
     });
@@ -93,13 +99,23 @@ export default function maturadorRouter(pool: Pool): Router {
     return res.json({ ativo });
   });
 
+  // Sprint 2 (2026-10-17): só testa — mostra IP de saída, país, operadora e se seria aceito.
+  router.post('/proxy/:agenteId/testar', async (req: AuthRequest, res: Response) => {
+    const v = validarProxy(req.body);
+    if (v.erro) return res.status(400).json({ message: v.erro });
+    const t = await testarProxy(v.proxy!);
+    if (t.erro) return res.status(422).json({ message: t.erro });
+    return res.json({ saida: t.saida, aceito: !t.recusa, motivo: t.recusa ?? null });
+  });
+
   router.put('/proxy/:agenteId', async (req: AuthRequest, res: Response) => {
     const ownerId = await resolverOwnerId(pool, req.userId!);
     const v = validarProxy(req.body);
     if (v.erro) return res.status(400).json({ message: v.erro });
-    const erro = await aplicarProxy(pool, req.params.agenteId, ownerId, v.proxy!);
-    if (erro) return res.status(422).json({ message: erro });
-    return res.json({ ok: true });
+    const r = await aplicarProxy(pool, req.params.agenteId, ownerId, v.proxy!);
+    if (r.erro) return res.status(422).json({ message: r.erro, saida: r.saida ?? null });
+    void montarRedeGlobal(pool).catch(() => {});
+    return res.json({ ok: true, situacao: r.situacao, saida: r.saida });
   });
 
   router.delete('/proxy/:agenteId', async (req: AuthRequest, res: Response) => {

@@ -2448,8 +2448,12 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE maturador_pares ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'conversa'`).catch(() => {});
   await pool.query(`ALTER TABLE maturador_mensagens ADD COLUMN IF NOT EXISTS mentoria BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
   await pool.query(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS maturador_global BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  // 2026-10-17 (Sprint 2 do maturador): IP de saída medido pelo próprio proxy (exclusividade por
+  // IP real, país, operadora, se é móvel) — ver services/proxyInstancia.ts.
   for (const col of ['proxy_host TEXT', 'proxy_port INTEGER', 'proxy_protocolo TEXT', 'proxy_usuario TEXT',
-                     'proxy_senha_enc TEXT', 'proxy_aplicado_em TIMESTAMPTZ', 'proxy_verificado_em TIMESTAMPTZ']) {
+                     'proxy_senha_enc TEXT', 'proxy_aplicado_em TIMESTAMPTZ', 'proxy_verificado_em TIMESTAMPTZ',
+                     'proxy_ip_saida TEXT', 'proxy_pais TEXT', 'proxy_asn TEXT', 'proxy_org TEXT',
+                     'proxy_movel BOOLEAN', 'proxy_testado_em TIMESTAMPTZ']) {
     await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
   await pool.query(`
