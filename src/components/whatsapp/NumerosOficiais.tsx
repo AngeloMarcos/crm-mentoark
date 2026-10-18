@@ -77,7 +77,10 @@ export function NumerosOficiais() {
             Números conectados direto na Meta (sem QR Code). Disparo só com template aprovado e contato com consentimento.
           </p>
         </div>
-        <Button size="sm" onClick={() => setEditando("novo")}><Plus className="h-4 w-4 mr-1" /> Número oficial</Button>
+        <div className="flex flex-wrap gap-2">
+          <ConectarPelaMeta onConcluido={carregar} />
+          <Button size="sm" variant="outline" onClick={() => setEditando("novo")}><Plus className="h-4 w-4 mr-1" /> Cadastro manual</Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-3">
         {!configs.length && <p className="text-sm text-muted-foreground">Nenhum número oficial cadastrado.</p>}
@@ -97,6 +100,135 @@ export function NumerosOficiais() {
       )}
       {campanhaDe && <CampanhaOficial cfg={campanhaDe} onFechar={() => setCampanhaDe(null)} />}
     </Card>
+  );
+}
+
+// ── Sprint 6 do maturador (2026-10-18): cadastro pela Meta — Embedded Signup v4 ─────────────────
+// Docs Meta (18/10/2026): FB.login com config_id + response_type 'code' + extras { setup: {} }
+// (coexistência: featureType 'whatsapp_business_app_onboarding'); o resultado chega por
+// postMessage 'WA_EMBEDDED_SIGNUP' (waba_id, phone_number_id, business_id) e o `code` vale 30 s.
+declare global { interface Window { FB?: any; fbAsyncInit?: () => void } }
+
+let sdkCarregando: Promise<void> | null = null;
+function carregarSdkMeta(appId: string, versao: string): Promise<void> {
+  if (sdkCarregando) return sdkCarregando;
+  sdkCarregando = new Promise((resolve, reject) => {
+    window.fbAsyncInit = () => { window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: versao }); resolve(); };
+    const s = document.createElement("script");
+    s.src = "https://connect.facebook.net/en_US/sdk.js";
+    s.async = true; s.defer = true; s.crossOrigin = "anonymous";
+    s.onerror = () => { sdkCarregando = null; reject(new Error("Não foi possível carregar o SDK da Meta (bloqueador de anúncios?)")); };
+    document.body.appendChild(s);
+  });
+  return sdkCarregando;
+}
+
+const ROTULO_ETAPA: Record<string, string> = {
+  token: "Autorização da Meta", webhook: "Webhook do app inscrito na conta", numero: "Dados do número",
+  registrar: "Número registrado na API", sincronizar_contatos: "Sincronização de contatos", sincronizar_historico: "Sincronização do histórico",
+};
+
+function ConectarPelaMeta({ onConcluido }: { onConcluido: () => void }) {
+  const [cfg, setCfg] = useState<any>(null);
+  const [aberto, setAberto] = useState(false);
+  const [coexistencia, setCoexistencia] = useState(true);
+  const [rodando, setRodando] = useState(false);
+  const [etapas, setEtapas] = useState<{ etapa: string; ok: boolean; detalhe?: string }[] | null>(null);
+  useEffect(() => { chamar("/cadastro/config").then(setCfg).catch(() => {}); }, []);
+
+  const iniciar = async () => {
+    setEtapas(null);
+    setRodando(true);
+    try {
+      await carregarSdkMeta(cfg.appId, cfg.versao);
+      let sessao: any = null;
+      const ouvinte = (ev: MessageEvent) => {
+        if (!String(ev.origin).endsWith("facebook.com")) return;
+        try {
+          const d = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
+          if (d?.type !== "WA_EMBEDDED_SIGNUP") return;
+          if (String(d.event || "").startsWith("FINISH")) sessao = d.data;
+          else if (d.event === "CANCEL" || d.event === "ERROR") sessao = { cancelado: true, ...d.data };
+        } catch { /* mensagens de outros scripts do Facebook */ }
+      };
+      window.addEventListener("message", ouvinte);
+      const code: string | null = await new Promise(resolve => {
+        window.FB.login((resp: any) => resolve(resp?.authResponse?.code ?? null), {
+          config_id: cfg.configId,
+          response_type: "code",
+          override_default_response_type: true,
+          extras: coexistencia ? { setup: {}, featureType: "whatsapp_business_app_onboarding" } : { setup: {} },
+        });
+      });
+      // Os dados da sessão (waba_id/phone_number_id) podem chegar logo depois do code.
+      for (let i = 0; i < 25 && !sessao; i++) await new Promise(r => setTimeout(r, 200));
+      window.removeEventListener("message", ouvinte);
+      if (!code || !sessao || sessao.cancelado) {
+        toast.error(sessao?.error_message || (sessao?.current_step ? `Cadastro interrompido na etapa ${sessao.current_step}` : "Cadastro cancelado"));
+        return;
+      }
+      const r = await chamar("/cadastro/concluir", {
+        method: "POST",
+        body: { code, waba_id: sessao.waba_id, phone_number_id: sessao.phone_number_id, business_id: sessao.business_id, coexistencia },
+      }).catch((e: any) => { setEtapas(e?.data?.etapas ?? null); throw e; });
+      setEtapas(r.etapas);
+      toast.success("Número oficial conectado pela Meta");
+      onConcluido();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setRodando(false);
+    }
+  };
+
+  const indisponivel = cfg && !cfg.disponivel;
+  return (
+    <>
+      <Button size="sm" onClick={() => setAberto(true)} disabled={!cfg}
+        title={indisponivel ? `Falta configurar no servidor: ${cfg.faltando.join(", ")}` : ""}>
+        <PlugZap className="h-4 w-4 mr-1" /> Conectar pela Meta
+      </Button>
+      {aberto && (
+        <Dialog open onOpenChange={() => !rodando && setAberto(false)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Conectar número oficial pela Meta</DialogTitle>
+              <DialogDescription>
+                Abre a janela da Meta: você entra com o Facebook, escolhe (ou cria) a conta do WhatsApp Business e o número.
+                O número <b>não pode</b> estar conectado na Evolution (QR Code) — o mesmo número em dois lugares derruba a conta.
+              </DialogDescription>
+            </DialogHeader>
+            {indisponivel ? (
+              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs">
+                O cadastro pela Meta ainda não está configurado no servidor. Falta: <b>{cfg.faltando.join(", ")}</b>.
+              </p>
+            ) : (
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" className="mt-1" checked={coexistencia} onChange={e => setCoexistencia(e.target.checked)} />
+                <span>
+                  <b>Manter o app WhatsApp Business no celular</b> (coexistência) — o número continua no app e passa a usar a API
+                  junto; contatos e histórico de 6 meses vêm para o CRM. Desmarque para um número novo, só na API.
+                </span>
+              </label>
+            )}
+            {etapas && (
+              <ul className="space-y-1 text-xs">
+                {etapas.map(e => (
+                  <li key={e.etapa} className="flex items-start gap-1.5">
+                    {e.ok ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-px" /> : <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0 mt-px" />}
+                    <span>{ROTULO_ETAPA[e.etapa] || e.etapa}{e.detalhe ? ` — ${e.detalhe}` : ""}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAberto(false)} disabled={rodando}>Fechar</Button>
+              <Button onClick={iniciar} disabled={rodando || indisponivel}>{rodando ? "Conectando…" : "Abrir janela da Meta"}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
   );
 }
 

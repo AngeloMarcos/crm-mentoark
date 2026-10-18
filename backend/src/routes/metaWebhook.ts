@@ -29,6 +29,58 @@ import { processarWebhookMeta } from '../services/metaWebhookProcessor';
 export default function metaWebhookRouter(pool: Pool): Router {
   const router = Router();
 
+  // ── Sprint 6 do maturador (2026-10-18): webhook ÚNICO do app da MentoArk (Tech Provider) ──────
+  // Números cadastrados pelo Embedded Signup não têm app próprio: a Meta entrega os eventos de todos
+  // eles numa URL só, configurada uma vez no app, assinada com o App Secret da MentoArk. Cada change é
+  // roteado para a config pelo `metadata.phone_number_id` (ou pelo WABA id do entry). Registrado ANTES
+  // de '/:configId' para "app" não ser lido como id de config.
+  router.get('/app', (req: Request, res: Response) => {
+    const esperado = process.env.META_WEBHOOK_VERIFY_TOKEN;
+    if (esperado && req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === esperado) {
+      log.info('META_WEBHOOK', 'Handshake do webhook do app OK');
+      return res.status(200).send(req.query['hub.challenge']);
+    }
+    log.warn('META_WEBHOOK', 'Handshake do webhook do app falhou', { configurado: !!esperado });
+    return res.sendStatus(403);
+  });
+
+  router.post('/app', async (req: Request, res: Response) => {
+    const segredo = process.env.FACEBOOK_APP_SECRET;
+    const rawBody: Buffer | undefined = (req as any).rawBody;
+    if (!segredo || !rawBody || !verificarAssinaturaWebhook(segredo, rawBody, req.headers['x-hub-signature-256'] as string | undefined)) {
+      log.warn('META_WEBHOOK', 'Webhook do app: assinatura inválida ou App Secret ausente — recusado');
+      return res.sendStatus(401);
+    }
+    res.sendStatus(200);
+    try {
+      // Agrupa os changes por config (um entry pode trazer mais de um número da mesma WABA).
+      const porConfig = new Map<string, { cfg: any; entry: any[] }>();
+      for (const entry of req.body?.entry || []) {
+        for (const change of entry?.changes || []) {
+          const phoneId = change?.value?.metadata?.phone_number_id ? String(change.value.metadata.phone_number_id) : null;
+          const r = await pool.query(
+            `SELECT * FROM whatsapp_oficial_config
+             WHERE ativo AND ((phone_number_id = $1 AND $1 IS NOT NULL) OR ($1 IS NULL AND waba_id = $2))
+             ORDER BY (phone_number_id = $1) DESC NULLS LAST LIMIT 1`,
+            [phoneId, String(entry?.id || '')]
+          );
+          const cfg = r.rows[0];
+          if (!cfg) { log.warn('META_WEBHOOK', 'Webhook do app: número/WABA sem config ativa', { phoneId, wabaId: entry?.id, campo: change?.field }); continue; }
+          const g = porConfig.get(cfg.id) ?? { cfg, entry: [] };
+          g.entry.push({ ...entry, changes: [change] });
+          porConfig.set(cfg.id, g);
+        }
+      }
+      for (const { cfg, entry } of porConfig.values()) {
+        await pool.query(`UPDATE whatsapp_oficial_config SET ultimo_webhook_em = NOW() WHERE id = $1`, [cfg.id]).catch(() => {});
+        const r = await processarWebhookMeta(pool, cfg, { object: req.body?.object, entry });
+        log.info('META_WEBHOOK', 'Evento do app processado', { configId: cfg.id, ...r });
+      }
+    } catch (err: any) {
+      log.error('META_WEBHOOK', 'Erro ao processar evento do app', { err: err?.message, stack: err?.stack });
+    }
+  });
+
   // GET /webhook/meta/:configId — handshake de verificação (Meta chama isso UMA VEZ, ao salvar
   // a URL no dashboard, e de novo sempre que o operador clicar "Verificar e salvar" lá).
   router.get('/:configId', async (req: Request, res: Response) => {

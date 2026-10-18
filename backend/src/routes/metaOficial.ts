@@ -24,6 +24,7 @@ import {
 } from '../services/metaCloudApi';
 import { log } from '../logger';
 import { avaliarOuCriarCampanhaOficial } from '../services/disparoOficial';
+import { configuracaoCadastro, concluirCadastro } from '../services/embeddedSignup';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
 
@@ -124,6 +125,22 @@ export default function metaOficialRouter(pool: Pool): Router {
     const cfg = await buscarConfigMetaOficial(pool, req.userId!);
     if (!cfg) return res.status(404).json({ message: 'Nenhuma configuração encontrada — preencha e salve antes de testar.' });
     return res.json(await testarCompleto(cfg));
+  });
+
+  // ── Sprint 6 do maturador (2026-10-18): cadastro pela Meta (Embedded Signup v4) ─────────────
+  router.get('/cadastro/config', (_req: AuthRequest, res: Response) => {
+    const c = configuracaoCadastro();
+    return res.json({ ...c, webhook_url: `${process.env.API_PUBLIC_URL || 'https://api.mentoark.com.br'}/webhook/meta/app` });
+  });
+
+  router.post('/cadastro/concluir', async (req: AuthRequest, res: Response) => {
+    const b = req.body || {};
+    const r = await concluirCadastro(pool, req.userId!, {
+      code: String(b.code || ''), waba_id: String(b.waba_id || ''), phone_number_id: String(b.phone_number_id || ''),
+      business_id: b.business_id ? String(b.business_id) : null, coexistencia: b.coexistencia === true,
+    });
+    if (r.erro) return res.status(r.etapas.length ? 502 : 400).json({ message: r.erro, etapas: r.etapas });
+    return res.status(201).json(r);
   });
 
   // ── Vários números oficiais (Sprint 6 / H3) ────────────────────────────────────────────────

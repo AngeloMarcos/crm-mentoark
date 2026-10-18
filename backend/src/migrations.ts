@@ -2756,6 +2756,13 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // mas nunca persistido) pra aparecer na tela sem precisar clicar "Testar conexão" a cada visita.
   await pool.query(`ALTER TABLE whatsapp_oficial_config ADD COLUMN IF NOT EXISTS quality_rating TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE whatsapp_oficial_config ADD COLUMN IF NOT EXISTS messaging_limit_tier TEXT`).catch(() => {});
+  // 2026-10-18 (Sprint 6 do maturador): número cadastrado pelo Embedded Signup v4 (MentoArk como Tech
+  // Provider) — webhook único do app (/webhook/meta/app), coexistência com o app WhatsApp Business,
+  // PIN de 2 etapas gerado no registro. Ver services/embeddedSignup.ts.
+  for (const col of ["origem TEXT NOT NULL DEFAULT 'manual'", 'business_id TEXT', 'coexistencia BOOLEAN NOT NULL DEFAULT false',
+                     'pin_enc TEXT', 'cadastro_em TIMESTAMPTZ']) {
+    await pool.query(`ALTER TABLE whatsapp_oficial_config ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
 
   log.info('MIGRATIONS', 'whatsapp_oficial_config (Meta Cloud API) OK');
 
