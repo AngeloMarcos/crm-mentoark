@@ -194,6 +194,10 @@ export async function executarBusca(
 
     await pool.query(
       `UPDATE radar_buscas SET paginas_raspadas = $2 WHERE id = $1`, [busca.id, paginasRaspadas]).catch(() => {});
+    // Rodízio da busca manual: a próxima começa depois da última consulta de fato executada.
+    if (busca.rodizio && busca.nicho_id && resumo.consultasFeitas > 0) {
+      await pool.query(`UPDATE radar_nichos SET rodizio_pos = rodizio_pos + $2 WHERE id = $1`, [busca.nicho_id, resumo.consultasFeitas]).catch(() => {});
+    }
     await pool.query(
       `UPDATE radar_buscas SET status = $2, provider = $3, consultas_feitas = $4, custo_usd = $5, novos = $6,
               existentes = $7, interrompida_por = $8, aviso = $9, erro = $10, links_vistos = $11, finished_at = now() WHERE id = $1`,

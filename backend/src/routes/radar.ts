@@ -125,13 +125,17 @@ export default function radarRouter(pool: Pool): Router {
 
       // Termo customizado substitui os termos do nicho (mantém as regiões do nicho).
       const termo = String(req.body?.termo ?? '').replace(/"/g, '').trim().slice(0, 120);
-      const consultas = consultasDoNicho(nicho, { termo: termo || undefined, incluirTelegram: !!incluir_telegram, max: maxConsultas, diretorios: await diretoriosUteis(pool, userId) });
+      // Sem termo próprio, continua de onde a última busca manual do nicho parou (rodízio).
+      const consultas = consultasDoNicho(nicho, {
+        termo: termo || undefined, incluirTelegram: !!incluir_telegram, max: maxConsultas,
+        deslocamento: termo ? 0 : (nicho.rodizio_pos ?? 0), diretorios: await diretoriosUteis(pool, userId),
+      });
       if (!consultas.length) return res.status(400).json({ error: 'O nicho não tem termos de busca' });
 
       const ins = await pool.query(
-        `INSERT INTO radar_buscas (user_id, request_id, nicho_id, consultas, max_consultas)
-         VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (user_id, request_id) DO NOTHING RETURNING *`,
-        [userId, requestId, nicho.id, JSON.stringify(consultas), maxConsultas],
+        `INSERT INTO radar_buscas (user_id, request_id, nicho_id, consultas, max_consultas, rodizio)
+         VALUES ($1,$2,$3,$4::jsonb,$5,$6) ON CONFLICT (user_id, request_id) DO NOTHING RETURNING *`,
+        [userId, requestId, nicho.id, JSON.stringify(consultas), maxConsultas, !termo],
       );
       if (!ins.rows[0]) return res.status(200).json({ repetida: true });
       const modo = await enfileirarBusca(pool, ins.rows[0].id);

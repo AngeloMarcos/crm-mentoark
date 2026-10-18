@@ -92,6 +92,10 @@ export async function migrarRadar(pool: Pool): Promise<void> {
       await pool.query(`ALTER TABLE radar_nichos ADD COLUMN IF NOT EXISTS ${c}`);
     }
     await pool.query(`ALTER TABLE radar_buscas ADD COLUMN IF NOT EXISTS paginas_raspadas INTEGER NOT NULL DEFAULT 0`);
+    // Rodízio da busca MANUAL: sem isso, repetir a busca de um nicho refazia as mesmas primeiras consultas
+    // (pagando de novo por grupos já vistos). Avança pelo nº de consultas realmente executadas.
+    await pool.query(`ALTER TABLE radar_nichos ADD COLUMN IF NOT EXISTS rodizio_pos INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE radar_buscas ADD COLUMN IF NOT EXISTS rodizio BOOLEAN NOT NULL DEFAULT false`);
     // Páginas de diretório já raspadas: evita repetir e sustenta o teto diário.
     await pool.query(`
       CREATE TABLE IF NOT EXISTS radar_paginas (
