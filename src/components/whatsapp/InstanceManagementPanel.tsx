@@ -1119,6 +1119,13 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                         : sd.limite.motivo}
                       {sd.limite.limite > 0 && sd.limite.motivo && !sd.limite.somenteConhecidos ? ` ${sd.limite.motivo}` : ""}
                     </p>
+                    {/* Sprint 4/5 do maturador: freio de "sem resposta" visível antes de disparar (backend LIMITE_SEM_RESPOSTA_30D = 100). */}
+                    {(sd.sem_resposta_30d ?? 0) > 0 && (
+                      <p className={(sd.sem_resposta_30d ?? 0) >= 80 ? "font-semibold text-amber-700 dark:text-amber-400" : "text-muted-foreground"}>
+                        Campanha sem resposta (30 dias): {sd.sem_resposta_30d}/100
+                        {(sd.sem_resposta_30d ?? 0) >= 100 ? " — só contatos que já conversaram" : (sd.sem_resposta_30d ?? 0) >= 80 ? " — perto do limite" : ""}
+                      </p>
+                    )}
                     {emAquecimento && (
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => liberarProtecao(a)}>
                         Pular aquecimento (assumo o risco)
