@@ -50,7 +50,21 @@ como "prioridade A" (corretores de seguro/imóveis, corbans, integradores solar,
 5. Nichos Estética/Consórcio traziam grupos de CLIENTES (4/4 e 2/5 dos "alta") — termos/positivas/negativas trocados nos
    padrões e nos nichos das 2 contas (simulado antes com `avaliarAderencia` real), scores recalculados — `c67bebc`.
 
-**Pendente (decisão do usuário, não é bug):** nenhuma conta tem instância de prospecção conectada → `participantes` NULL em
+6. Busca manual repetida refazia sempre as mesmas primeiras consultas (mentoark/Imobiliário: 5 buscas, 79 novos x 154
+   repetidos) — rodízio por nicho (`radar_nichos.rodizio_pos`, avança pelas consultas realmente executadas) — `d4f5ea3`.
+   `rodizio_pos` inicializado pelo histórico nas 2 contas (Estética/Consórcio em 0: termos novos).
+
+**Achados não corrigidos (features faltando, não bugs de código):** (a) `extracao_agendada_para` é gravado ao entrar no
+grupo mas NENHUM job o consome — a "extração após N horas" da tela nunca roda; (b) não há entrada diária automática:
+"Entradas por dia" só limita cliques manuais em "Entrar"; (c) o cron de busca agendada pega só 5 nichos/dia no TOTAL
+(todas as contas) — com mais tenants cada nicho roda cada vez menos.
+
+**Configuração feita (2026-10-18, com aval do usuário):** prospecção mentoark = "Pessoal" 5511991909106 (madura);
+angelobispofilho = 5511948702939 (número novo, fase perfil): leitura 10/dia, cortes zerados SÓ nessa conta, entrada
+2/dia nos 13 grupos de aquecimento (2 já entraram em 18/10; os próximos via cron da sessão do Claude, que expira em 7
+dias). Busca agendada ligada em 5 nichos por conta.
+
+**Pendente (decisão do usuário, não é bug):** ~~nenhuma conta tem instância de prospecção conectada~~ (resolvido acima) → `participantes` NULL em
 todos os grupos e o score quase não discrimina. Escolher qual número vira "prospecção" é risco de banimento — não feito.
 Verificação de link pública: ~40-58 links/h e depois 429 do WhatsApp por 30 min a horas; 888 pendentes em prod.
 Deploy feito de worktree limpo no commit (a árvore principal tinha `saudeNumero.ts` não commitado de outra sessão).
