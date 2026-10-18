@@ -1,5 +1,24 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-10-17/18 — 🧪 QA do Radar de Grupos + busca em massa (angelobispofilho / mentoark) — em PRODUÇÃO
+
+Busca em massa via API real: 21 buscas, ~300 chamadas Serper (~US$0,30), ~1.130 grupos novos. 38 grupos curados
+como "prioridade A" (corretores de seguro/imóveis, corbans, integradores solar, lojistas, ISP) marcados `aprovado`.
+
+**Bugs achados e corrigidos (todos em homolog e produção, validados ao vivo):**
+1. `GET /api/radar/grupos` — filtros `aderencia`/`q`/`min_score` sem `$` no placeholder → HTTP 500 (aba Catálogo) — `2c04c91`.
+2. `searchProvider.ts` — teto de chamadas rotulado `teto_custo` (todo o histórico mostrava "teto de custo") — `5ccd3d6`.
+3. `fila.ts` — busca ficava `running` para sempre se o crm-api reiniciasse no meio; agora fecha como `falhou` no boot — `5ccd3d6`.
+4. `GET /entrada-config` — instância de prospecção desconectada não gerava aviso nenhum (leitura de convite/entrada paravam
+   em silêncio — caso real da conta mentoark, instância "Angelo Marcos") — `c67bebc`.
+5. Nichos Estética/Consórcio traziam grupos de CLIENTES (4/4 e 2/5 dos "alta") — termos/positivas/negativas trocados nos
+   padrões e nos nichos das 2 contas (simulado antes com `avaliarAderencia` real), scores recalculados — `c67bebc`.
+
+**Pendente (decisão do usuário, não é bug):** nenhuma conta tem instância de prospecção conectada → `participantes` NULL em
+todos os grupos e o score quase não discrimina. Escolher qual número vira "prospecção" é risco de banimento — não feito.
+Verificação de link pública: ~40-58 links/h e depois 429 do WhatsApp por 30 min a horas; 888 pendentes em prod.
+Deploy feito de worktree limpo no commit (a árvore principal tinha `saudeNumero.ts` não commitado de outra sessão).
+
 ## Sessão 2026-09-07 — 🆕 Estrutura base da API Oficial do WhatsApp (Meta Cloud API) — em HOMOLOG
 
 Pedido explícito do usuário: "vamos preparar para começar a estruturar a api oficial". Pesquisado antes de codar: WhatsApp Business Platform (Cloud API) da Meta — WABA, Phone Number ID, System User Access Token permanente, App Secret pra assinatura HMAC-SHA256 do webhook (`X-Hub-Signature-256`), handshake de verificação (`hub.mode`/`hub.verify_token`/`hub.challenge`), endpoints versionados da Graph API. Confirmado com o usuário antes de definir escopo: já tem Business Manager/WABA configurado; a API oficial fica **restrita a conversas 1:1 com clientes** — grupos continuam 100% na Evolution/Baileys, porque a API de Grupos da Meta é incompatível com os grupos de comunidade já existentes (máx. 8 participantes, exige Official Business Account, só grupos criados pela própria empresa).
