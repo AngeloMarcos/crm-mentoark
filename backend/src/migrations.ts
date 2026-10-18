@@ -2478,6 +2478,22 @@ export async function runMigrations(pool: Pool): Promise<void> {
       atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `).catch(() => {});
+  // 2026-10-18 (Sprint 7 do maturador v5, modelo ChipFlow): controles por chip — tudo ligado por
+  // padrão (sem linha = padrão). Ver services/maturadorControles.ts.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_controles (
+      agente_id   UUID        PRIMARY KEY REFERENCES agentes(id) ON DELETE CASCADE,
+      user_id     UUID        NOT NULL,
+      conversas   BOOLEAN     NOT NULL DEFAULT true,
+      grupos      BOOLEAN     NOT NULL DEFAULT true,
+      midia       BOOLEAN     NOT NULL DEFAULT true,
+      canais      BOOLEAN     NOT NULL DEFAULT true,
+      status      BOOLEAN     NOT NULL DEFAULT true,
+      contatos    BOOLEAN     NOT NULL DEFAULT true,
+      velocidade  TEXT        NOT NULL DEFAULT 'normal' CHECK (velocidade IN ('lenta', 'normal', 'rapida')),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
   // Sprint 8 (Sprint 4 / H10): nome (pushName) do contato que só tem LID, importado da Evolution
   // — a lista de conversas mostra o nome em vez de "Contato (número oculto)".
   await pool.query(`ALTER TABLE contato_identidades ADD COLUMN IF NOT EXISTS nome TEXT`).catch(() => {});

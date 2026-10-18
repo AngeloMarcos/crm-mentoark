@@ -445,6 +445,7 @@ export interface SaudeInstancia {
   envios_ultima_hora: number;
   sem_resposta_30d: number;
   queda_pendente_em: string | null;
+  primeira_conexao_em: string | null; // Sprint 7 do maturador v5: velocidade travada nos 2 primeiros dias
   limite: LimiteDisparo;
 }
 
@@ -579,6 +580,7 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
       envios_ultima_hora: x.envios_ultima_hora,
       sem_resposta_30d: x.sem_resposta_30d ?? 0,
       queda_pendente_em: x.queda_pendente_em ?? null,
+      primeira_conexao_em: x.primeira_conexao_em ?? null,
       limite: limiteDisparo(x.fase ?? null, x.fase_desde, score, soRecebe, x.sem_resposta_30d ?? 0),
     };
   });

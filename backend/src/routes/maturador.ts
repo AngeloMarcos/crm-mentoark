@@ -18,7 +18,11 @@ import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { SELECT_PARES_COM_CREDENCIAIS, instanciaConectada, resolverNumerosPar } from '../services/maturadorProcessor';
 import { invalidarNumerosMaturador } from '../services/maturadorFiltro';
-import { registrarEvento, mudarFase, normalizar as normalizarNumeroSaude } from '../services/saudeNumero';
+import { registrarEvento, mudarFase, normalizar as normalizarNumeroSaude, saudeDoUsuario } from '../services/saudeNumero';
+import {
+  controlesPorAgente, salvarControles, estadoControles, velocidadeEfetiva, progressoAquecimento,
+  CONTROLES_PADRAO, VELOCIDADES, TOTAL_DIAS_AQUECIMENTO,
+} from '../services/maturadorControles';
 import { recalcularScoreAgente } from '../services/instanceScore';
 import { resolverOwnerId } from '../services/subscription';
 import { avaliarParticipantes, globalLigado, montarRedeGlobal, TERMO_GLOBAL_VERSAO, bloqueioEnvio } from '../services/maturadorGlobal';
@@ -33,6 +37,47 @@ export const TERMO_GLOBAL_TEXTO =
 
 export default function maturadorRouter(pool: Pool): Router {
   const router = Router();
+
+  // ── Sprint 7 do maturador v5 (2026-10-18, modelo ChipFlow): controles por chip ──────────────
+  router.get('/controles', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const saude = await saudeDoUsuario(pool, ownerId);
+    const ctrls = await controlesPorAgente(pool);
+    const nomes = new Map((await pool.query(`SELECT id, nome FROM agentes WHERE user_id = $1`, [ownerId])).rows.map((x: any) => [x.id, x.nome]));
+    const cont = new Map((await pool.query(
+      `SELECT a.id,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.de_agente_id = a.id AND m.tipo = 'texto') AS enviadas,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.para_agente_id = a.id AND m.tipo = 'texto') AS recebidas,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.de_agente_id = a.id AND m.tipo = 'status' AND m.texto NOT LIKE '[falhou]%') AS status,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE (m.de_agente_id = a.id OR m.para_agente_id = a.id) AND m.created_at >= NOW() - INTERVAL '24 hours') AS ultimas_24h
+       FROM agentes a WHERE a.user_id = $1`, [ownerId])).rows.map((x: any) => [x.id, x]));
+    const chips = [];
+    for (const s of saude) {
+      const c = ctrls.get(s.agente_id) ?? CONTROLES_PADRAO;
+      const soRecebe = await bloqueioEnvio(pool, s.instancia);
+      chips.push({
+        agente_id: s.agente_id, nome: nomes.get(s.agente_id) ?? s.instancia, instancia: s.instancia, numero: s.numero,
+        fase: s.fase, fase_rotulo: s.fase_rotulo, so_recebe: soRecebe,
+        controles: c,
+        estado: estadoControles(c, { fase: s.fase, so_recebe: soRecebe }),
+        velocidade: { escolhido: c.velocidade, ...velocidadeEfetiva(c.velocidade, { fase: s.fase, primeira_conexao_em: s.primeira_conexao_em }) },
+        progresso: { ...progressoAquecimento(s.fase, s.fase_desde), total_dias: TOTAL_DIAS_AQUECIMENTO },
+        contadores: cont.get(s.agente_id) ?? { enviadas: 0, recebidas: 0, status: 0, ultimas_24h: 0 },
+      });
+    }
+    return res.json({ rotina: { dorme: '00:00–07:00', conversa: '07:00–24:00', status: '14:00–20:00 (1 por dia)' }, chips });
+  });
+
+  router.put('/controles/:agenteId', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const ag = await pool.query(`SELECT id FROM agentes WHERE id = $1 AND user_id = $2`, [req.params.agenteId, ownerId]);
+    if (!ag.rowCount) return res.status(404).json({ message: 'Número não encontrado nesta conta' });
+    const b = req.body || {};
+    if (b.velocidade !== undefined && !VELOCIDADES.includes(b.velocidade)) return res.status(400).json({ message: 'Velocidade inválida' });
+    const novo = await salvarControles(pool, req.params.agenteId, ownerId, b);
+    log.info('MATURADOR', 'Controles do chip alterados', { agenteId: req.params.agenteId, ...novo });
+    return res.json(novo);
+  });
 
   // ── Sprint 9 (2026-10-06): Maturador Global — adesão da conta, situação de cada número, proxy ──
   // Registradas antes das rotas `/:id` de propósito.

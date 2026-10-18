@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { MaturadorGlobal } from "./MaturadorGlobal";
+import { ControlesMaturador } from "./ControlesMaturador";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
 
@@ -236,6 +237,8 @@ export function MaturadorNumeros() {
 
   return (
     <div className="space-y-4">
+      {/* Sprint 7 do maturador v5: controles por chip, velocidade e progresso (modelo ChipFlow). */}
+      <ControlesMaturador />
       {/* Sprint 9: Maturador Global (entre contas) — adesão, situação de cada número e proxy. */}
       <MaturadorGlobal />
       <div>

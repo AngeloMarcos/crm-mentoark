@@ -30,6 +30,7 @@ import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, 
 import { bloqueioEnvio, reconectouRecente, podeResponderMaturador, MAX_MENTORIA_DIA_MENTOR, MAX_RECEBIDAS_DIA_RECEPTOR } from './maturadorGlobal';
 import { registrarIdMaturador, invalidarNumerosMaturador } from './maturadorFiltro';
 import { saudePorInstancia, MAX_ENVIOS_HORA } from './saudeNumero';
+import { controlesDe, velocidadeEfetiva, FATOR_VELOCIDADE, dormindo, horaDeStatus } from './maturadorControles';
 
 const TZ = 'America/Sao_Paulo';
 const MAX_FALHAS = 5;
@@ -182,6 +183,8 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
     for (const par of pares) {
       processados++;
       try {
+        // Sprint 7 (v5): o chip dorme 00–07 — nada sai, seja qual for a janela do par.
+        if (dormindo(hora)) continue;
         if (!dentroDaJanela(hora, par.hora_inicio ?? 8, par.hora_fim ?? 21)) continue;
         if (hora === (par.hora_inicio ?? 8) && minutoBrasilia() < atrasoInicioMin(par.id)) continue;
 
@@ -198,13 +201,19 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // envia NADA (nem no par da própria conta). Se a vez é dele, quem escreve é o outro lado em
         // "modo mentoria" (só ele fala, ritmo de ~2h, sem reação/citação/enquete/status); se os dois
         // estão travados, o par espera. Vínculo global do tipo 'mentoria': sempre a = mentor.
-        const bloqA = await bloqueioEnvio(pool, par.a_instancia);
-        const bloqB = await bloqueioEnvio(pool, par.b_instancia);
+        const soRecebeA = await bloqueioEnvio(pool, par.a_instancia);
+        const soRecebeB = await bloqueioEnvio(pool, par.b_instancia);
+        // Sprint 7 (v5): controle "Conversas" desligado = o chip não puxa conversa, só responde.
+        const ctrlA = await controlesDe(pool, par.agente_a_id);
+        const ctrlB = await controlesDe(pool, par.agente_b_id);
+        const bloqA = soRecebeA || (!ctrlA.conversas ? 'conversas desligadas pelo usuário' : null);
+        const bloqB = soRecebeB || (!ctrlB.conversas ? 'conversas desligadas pelo usuário' : null);
         // Sprint 4 (2026-10-17): lado que "só recebe" mas já está no Aquecimento 2+ pode RESPONDER
-        // (nunca iniciar) — vira conversa de mão dupla em vez de mentoria de mão única.
+        // (nunca iniciar) — vira conversa de mão dupla em vez de mentoria de mão única. Chip com
+        // conversas desligadas (e livre de trava) também só responde.
         const saudeFases = await saudePorInstancia(pool);
-        const respondeA = !!bloqA && podeResponderMaturador(saudeFases.get(par.a_instancia));
-        const respondeB = !!bloqB && podeResponderMaturador(saudeFases.get(par.b_instancia));
+        const respondeA = !!bloqA && (soRecebeA ? podeResponderMaturador(saudeFases.get(par.a_instancia)) : true);
+        const respondeB = !!bloqB && (soRecebeB ? podeResponderMaturador(saudeFases.get(par.b_instancia)) : true);
         let modoMentoria = par.tipo === 'mentoria';
         let respostaDeNovo = false;
         if (modoMentoria) {
@@ -257,7 +266,12 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // Teto diário pela fase de maturação do par, contando o que a instância REMETENTE já
         // mandou hoje em TODOS os pares dela.
         const diasRemetente = Math.max(0, Math.floor((Date.now() - new Date(par.data_inicio).getTime()) / 86_400_000));
-        const limite = limiteDiarioPorIdade(diasRemetente);
+        // Sprint 7 (v5): velocidade do chip remetente (travada em "lenta" no início) ajusta teto e pausas.
+        const ctrlDe = remetente === 'a' ? ctrlA : ctrlB;
+        const saudeDe = saudeFases.get(remetente === 'a' ? par.a_instancia : par.b_instancia);
+        const vel = velocidadeEfetiva(ctrlDe.velocidade, { fase: saudeDe?.fase ?? null, primeira_conexao_em: (saudeDe as any)?.primeira_conexao_em ?? null });
+        const fatorVel = FATOR_VELOCIDADE[vel.efetivo];
+        const limite = Math.max(1, Math.floor(limiteDiarioPorIdade(diasRemetente) * fatorVel.teto));
         const { rows: [{ total: enviadosHoje }] } = await pool.query(
           `SELECT COUNT(*)::int AS total FROM maturador_mensagens
            WHERE de_agente_id = $1 AND (created_at AT TIME ZONE '${TZ}')::date = $2::date`,
@@ -319,8 +333,10 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // Sprint 8 (Sprint 3 / H10): status de texto neutro em ~40% dos dias (sorteio fixo por
         // número+dia), 1 por dia, visível SÓ para o parceiro do par (statusJidList) — nunca
         // aparece para os contatos reais do cliente.
-        const diaDoStatus = [...`${de.id}${hoje}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 10 < 4;
-        if (diaDoStatus && !modoMentoria && !respostaDeNovo) {
+        // Sprint 7 (v5, rotina ChipFlow): status só das 14h às 20h, no máximo 1 por dia, em ~80% dos dias,
+        // e só com o controle "Publicar status" ligado.
+        const diaDoStatus = [...`${de.id}${hoje}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 10 < 8;
+        if (diaDoStatus && horaDeStatus(hora) && ctrlDe.status && !modoMentoria && !respostaDeNovo) {
           const jaPostou = (await pool.query(
             `SELECT 1 FROM maturador_mensagens WHERE de_agente_id = $1 AND tipo = 'status'
                AND (created_at AT TIME ZONE '${TZ}')::date = $2::date LIMIT 1`, [de.id, hoje]
@@ -413,7 +429,7 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // Modo mentoria: ~1 mensagem a cada 2h (100–160 min), sem sessão.
         let restantes = modoMentoria ? 0 : (par.msgs_restantes_sessao > 0 ? par.msgs_restantes_sessao : randInt(3, 7));
         if (!modoMentoria) restantes--;
-        const proximaMin = modoMentoria ? rand(100, 160) : restantes > 0 ? rand(1, 4) : rand(40, 150);
+        const proximaMin = (modoMentoria ? rand(100, 160) : restantes > 0 ? rand(1, 4) : rand(40, 150)) * fatorVel.pausa;
 
         await pool.query(
           `UPDATE maturador_pares

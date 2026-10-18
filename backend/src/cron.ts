@@ -4,7 +4,8 @@ import { log } from './logger';
 import { reconciliarInstanciasEvolution } from './services/evolutionReconciliation';
 import { retentarMidiaPendente } from './services/mediaRetry';
 import { recalcularTodosScores } from './services/instanceScore';
-import { avaliarFases } from './services/saudeNumero';
+import { avaliarFases, mudarFase } from './services/saudeNumero';
+import { reconhecerHistorico } from './services/maturadorControles';
 import { recalcularAptidaoOficial } from './services/checklistOficial';
 import { verificarWebhooksParados } from './services/saudeWebhook';
 import { gerarBackupsTodas } from './services/backupInstancia';
@@ -274,6 +275,8 @@ export function initCronJobs() {
         log.info('CRON', 'Fases de maturação avaliadas', { avancos, bansConfirmados });
       }
       await recalcularAptidaoOficial(pool); // Sprint 7: checklist "Apto para API oficial"
+      // Sprint 7 do maturador v5: número que já tinha uso antes de conectar começa adiantado.
+      await reconhecerHistorico(pool, (n, f, motivo, inst) => mudarFase(pool, n, f, motivo, inst));
     } catch (err: any) {
       log.error('CRON', 'Erro ao avaliar fases de maturação', { err: err.message });
     }
