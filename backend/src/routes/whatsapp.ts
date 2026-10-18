@@ -24,7 +24,7 @@ import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
 import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
 import { buscarConexoesDuplicadas, normalizarNumero, invalidarCacheProtecao, DIAS_PROTECAO } from '../services/protecaoNumero';
 import { proxyDoAgente, camposEvolution, marcarProxyAplicado } from '../services/proxyInstancia';
-import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE, invalidarCacheSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
+import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE, invalidarCacheSaude, registrarEvento as registrarEventoSaude, registrarEstadoCelular, painelNumero, ESTADOS_CELULAR, EstadoCelular } from '../services/saudeNumero';
 import { calcularChecklistOficial } from '../services/checklistOficial';
 import { webhooksParados } from '../services/saudeWebhook';
 import { gerarBackupInstancia, listarBackups, dirBackup } from '../services/backupInstancia';
@@ -1959,6 +1959,28 @@ export default function whatsappRouter(pool: Pool): Router {
       [numero, ag.rows[0].evolution_instancia]
     );
     return res.json(r.rows);
+  });
+
+  // Sprint 5 do maturador (2026-10-17): o operador informa o que o celular mostrou depois da queda
+  // 401 (ban / restrição / revisão / só desvinculado). Ver saudeNumero.registrarEstadoCelular.
+  router.put('/saude/:agenteId/estado-celular', async (req: AuthRequest, res: Response) => {
+    const estado = String(req.body?.estado || '');
+    if (!(ESTADOS_CELULAR as readonly string[]).includes(estado)) {
+      return res.status(400).json({ message: `Estado inválido. Use: ${ESTADOS_CELULAR.join(', ')}.` });
+    }
+    const ag = await pool.query(`SELECT evolution_instancia, numero_conectado FROM agentes WHERE id = $1 AND user_id = $2`, [req.params.agenteId, req.userId]);
+    const numero = normalizarSaude(ag.rows[0]?.numero_conectado);
+    if (!numero) return res.status(404).json({ message: 'Instância sem número registrado' });
+    await registrarEstadoCelular(pool, numero, ag.rows[0].evolution_instancia, estado as EstadoCelular);
+    return res.json({ ok: true });
+  });
+
+  // Sprint 5: histórico por dia do número (reconexões, quedas, disparos, respostas, maturador).
+  router.get('/saude/:agenteId/painel', async (req: AuthRequest, res: Response) => {
+    const ag = await pool.query(`SELECT evolution_instancia, numero_conectado FROM agentes WHERE id = $1 AND user_id = $2`, [req.params.agenteId, req.userId]);
+    if (!ag.rows[0]?.evolution_instancia) return res.status(404).json({ message: 'Instância não encontrada' });
+    const dias = Math.min(30, Math.max(7, Number(req.query.dias) || 14));
+    return res.json(await painelNumero(pool, req.params.agenteId, ag.rows[0].evolution_instancia, normalizarSaude(ag.rows[0].numero_conectado), dias));
   });
 
   // Sprint 7 (Sprint 3 / H2): checklist "Apto para API oficial" do número desta instância.

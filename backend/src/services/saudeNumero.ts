@@ -247,13 +247,18 @@ export async function metricas7d(pool: Pool, instancia: string, numero: string):
       [instancia]
     ),
     // Por segundo distinto: eventos gravados em dobro antes da deduplicação contam uma vez só.
+    // Sprint 5 (2026-10-17): queda 401 que o operador confirmou como "só desvinculado" (o app no
+    // celular está normal) não conta como queda suspeita.
     pool.query(
-      `SELECT COUNT(DISTINCT date_trunc('second', criado_em)) FILTER (WHERE tipo = 'ban_suspeito')::int AS ban,
-              COUNT(DISTINCT date_trunc('second', criado_em)) FILTER (WHERE tipo = 'desconectou')::int AS comum
-       FROM whatsapp_eventos_saude
+      `SELECT COUNT(DISTINCT date_trunc('second', e.criado_em)) FILTER (WHERE e.tipo = 'ban_suspeito' AND NOT EXISTS (
+                SELECT 1 FROM whatsapp_eventos_saude c WHERE c.numero = e.numero AND c.tipo = 'estado_celular'
+                  AND c.detalhe->>'estado' = 'desvinculado'
+                  AND c.criado_em BETWEEN e.criado_em AND e.criado_em + INTERVAL '48 hours'))::int AS ban,
+              COUNT(DISTINCT date_trunc('second', e.criado_em)) FILTER (WHERE e.tipo = 'desconectou')::int AS comum
+       FROM whatsapp_eventos_saude e
        -- Pelo NÚMERO quando conhecido: o nome da instância pode ter pertencido a outro chip antes.
-       WHERE (CASE WHEN $1 <> '' THEN numero = $1 ELSE instancia = $2 END)
-         AND criado_em >= NOW() - INTERVAL '7 days'`,
+       WHERE (CASE WHEN $1 <> '' THEN e.numero = $1 ELSE e.instancia = $2 END)
+         AND e.criado_em >= NOW() - INTERVAL '7 days'`,
       [numero, instancia]
     ),
   ]);
@@ -278,6 +283,8 @@ export function rotuloScore(total: number): string {
   if (total >= SCORE_MINIMO_DISPARO) return 'Risco';
   return 'Crítico';
 }
+
+const RECONEXOES_NORMAIS_DIA = 6;
 
 /** Teto do score enquanto o número só recebe: não pode aparecer "Saudável" sem ter provado nada. */
 export const TETO_SCORE_AQUECIMENTO = 60;
@@ -313,6 +320,24 @@ export async function calcularScoreSaude(pool: Pool, instancia: string, numeroBr
     [numero, instancia]
   ).catch(() => ({ rows: [{ n: 0 }] }))).rows[0].n;
   add('Limite de requisições (24h)', -Math.min(15, limites * 5), `${limites} vez(es) o WhatsApp limitou as consultas desta instância`);
+
+  // Sprint 5 (2026-10-17): reconexão frequente é sinal de aparelho instável para o WhatsApp (e
+  // antecede bloqueio, segundo a Green-API). Até 6 por dia é normal; acima disso, -2 cada, até -15.
+  const reconexoes = (await pool.query(
+    `SELECT COUNT(DISTINCT date_trunc('second', criado_em))::int AS n FROM whatsapp_eventos_saude
+     WHERE (CASE WHEN $1 <> '' THEN numero = $1 ELSE instancia = $2 END)
+       AND tipo = 'conectou' AND criado_em >= NOW() - INTERVAL '24 hours'`,
+    [numero, instancia]
+  ).catch(() => ({ rows: [{ n: 0 }] }))).rows[0].n;
+  add('Reconexões frequentes (24h)', -Math.min(15, Math.max(0, reconexoes - RECONEXOES_NORMAIS_DIA) * 2), `${reconexoes} reconexão(ões) nas últimas 24h`);
+
+  // Sprint 5: o que o operador viu no celular depois de uma queda 401 (últimos 30 dias).
+  const restricao = numero ? (await pool.query(
+    `SELECT MAX(criado_em) AS em FROM whatsapp_eventos_saude
+     WHERE numero = $1 AND tipo = 'estado_celular' AND detalhe->>'estado' = 'restrito' AND criado_em >= NOW() - INTERVAL '30 days'`,
+    [numero]
+  ).catch(() => ({ rows: [] as any[] }))).rows[0]?.em : null;
+  if (restricao) add('Restrição temporária (30d)', -20, `O celular mostrou restrição de envio em ${new Date(restricao).toLocaleDateString('pt-BR')}`);
 
   if (nr?.primeira_conexao_em) {
     const dias = (Date.now() - new Date(nr.primeira_conexao_em).getTime()) / 86_400_000;
@@ -419,7 +444,86 @@ export interface SaudeInstancia {
   enviados_hoje: number;
   envios_ultima_hora: number;
   sem_resposta_30d: number;
+  queda_pendente_em: string | null;
   limite: LimiteDisparo;
+}
+
+// ── Sprint 5 (2026-10-17): estado do celular após uma queda 401 e histórico por dia ──────────
+export const ESTADOS_CELULAR = ['desvinculado', 'restrito', 'revisao', 'banido'] as const;
+export type EstadoCelular = typeof ESTADOS_CELULAR[number];
+
+/**
+ * O operador informa o que o app mostrou depois da queda 401 — é o único jeito de saber se foi
+ * ban, restrição temporária, revisão ou só o aparelho desvinculado, e calibra o score com dado real:
+ *   - desvinculado: app normal, só o aparelho sumiu → a queda não conta e o número volta à fase de
+ *     antes da queda (não recomeça o aquecimento do zero);
+ *   - restrito: aviso de que não pode enviar por um tempo → -20 no score por 30 dias;
+ *   - revisao: "conta em revisão" → mesma regra de `em_revisao_desde` (não vira ban automático);
+ *   - banido: "esta conta não pode usar o WhatsApp" → ban confirmado na hora.
+ */
+export async function registrarEstadoCelular(pool: Pool, numero: string, instancia: string | null, estado: EstadoCelular): Promise<void> {
+  const queda = (await pool.query(
+    `SELECT MAX(criado_em) AS em FROM whatsapp_eventos_saude WHERE numero = $1 AND tipo = 'ban_suspeito' AND criado_em >= NOW() - INTERVAL '7 days'`,
+    [numero]
+  )).rows[0]?.em ?? null;
+  await pool.query(
+    `INSERT INTO whatsapp_eventos_saude (numero, instancia, tipo, detalhe) VALUES ($1, $2, 'estado_celular', $3)`,
+    [numero, instancia, JSON.stringify({ estado, queda_em: queda, informado_pelo_operador: true })]
+  );
+
+  if (estado === 'revisao') {
+    await pool.query(`UPDATE whatsapp_numeros SET em_revisao_desde = COALESCE(em_revisao_desde, NOW()) WHERE numero = $1`, [numero]);
+  } else if (estado === 'banido') {
+    await pool.query(`UPDATE whatsapp_numeros SET bans_total = bans_total + 1, ultimo_ban_em = NOW() WHERE numero = $1 AND fase IS DISTINCT FROM 'banida'`, [numero]);
+    await registrarEvento(pool, numero, instancia, 'ban_confirmado', null, { motivo: 'confirmado pelo operador (app: "esta conta não pode usar o WhatsApp")' });
+    await mudarFase(pool, numero, 'banida', 'ban confirmado pelo operador', instancia);
+  } else if (estado === 'desvinculado' && queda) {
+    const atual = (await pool.query(`SELECT fase FROM whatsapp_numeros WHERE numero = $1`, [numero])).rows[0]?.fase;
+    const antes = (await pool.query(
+      `SELECT detalhe->>'fase' AS fase FROM whatsapp_eventos_saude
+       WHERE numero = $1 AND tipo = 'mudanca_fase' AND criado_em < $2 ORDER BY criado_em DESC LIMIT 1`,
+      [numero, queda]
+    )).rows[0]?.fase as Fase | undefined;
+    if (antes && (atual === 'quarentena' || atual === 'perfil') && antes !== atual && antes !== 'quarentena' && antes !== 'banida') {
+      await mudarFase(pool, numero, antes, 'operador confirmou: só desvinculado (não foi ban) — volta à fase de antes da queda', instancia);
+    }
+  }
+  invalidarCacheSaude();
+}
+
+export interface DiaPainel {
+  dia: string; reconexoes: number; quedas_401: number; quedas_comuns: number;
+  disparos: number; respondidos: number; maturador_enviadas: number; maturador_recebidas: number;
+}
+
+/** Histórico por dia (Brasília) do número/instância — painel da tela de instâncias. */
+export async function painelNumero(pool: Pool, agenteId: string, instancia: string, numero: string, dias = 14): Promise<DiaPainel[]> {
+  const r = await pool.query(
+    `WITH d AS (SELECT generate_series((NOW() AT TIME ZONE 'America/Sao_Paulo')::date - ($4::int - 1), (NOW() AT TIME ZONE 'America/Sao_Paulo')::date, '1 day')::date AS dia),
+     ev AS (SELECT (criado_em AT TIME ZONE 'America/Sao_Paulo')::date AS dia, tipo, date_trunc('second', criado_em) AS s
+              FROM whatsapp_eventos_saude
+             WHERE (CASE WHEN $3 <> '' THEN numero = $3 ELSE instancia = $2 END)
+               AND criado_em >= NOW() - make_interval(days => $4::int)),
+     dl AS (SELECT (enviado_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia,
+                   EXISTS (SELECT 1 FROM contato_respostas r WHERE r.user_id = x.user_id AND r.contato_id = x.contato_id
+                             AND r.categoria <> 'auto_resposta' AND r.respondido_em > x.enviado_at
+                             AND r.respondido_em < x.enviado_at + INTERVAL '72 hours') AS resp
+              FROM disparo_logs x WHERE x.instancia = $2 AND x.status = 'sent' AND x.enviado_at >= NOW() - make_interval(days => $4::int)),
+     mm AS (SELECT (created_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia, de_agente_id = $1 AS enviada
+              FROM maturador_mensagens WHERE tipo = 'texto' AND (de_agente_id = $1 OR para_agente_id = $1)
+               AND created_at >= NOW() - make_interval(days => $4::int))
+     SELECT to_char(d.dia, 'YYYY-MM-DD') AS dia,
+            (SELECT COUNT(DISTINCT s) FROM ev WHERE ev.dia = d.dia AND tipo = 'conectou')::int AS reconexoes,
+            (SELECT COUNT(DISTINCT s) FROM ev WHERE ev.dia = d.dia AND tipo = 'ban_suspeito')::int AS quedas_401,
+            (SELECT COUNT(DISTINCT s) FROM ev WHERE ev.dia = d.dia AND tipo = 'desconectou')::int AS quedas_comuns,
+            (SELECT COUNT(*) FROM dl WHERE dl.dia = d.dia)::int AS disparos,
+            (SELECT COUNT(*) FROM dl WHERE dl.dia = d.dia AND resp)::int AS respondidos,
+            (SELECT COUNT(*) FROM mm WHERE mm.dia = d.dia AND enviada)::int AS maturador_enviadas,
+            (SELECT COUNT(*) FROM mm WHERE mm.dia = d.dia AND NOT enviada)::int AS maturador_recebidas
+     FROM d ORDER BY d.dia DESC`,
+    [agenteId, instancia, numero, dias]
+  );
+  return r.rows;
 }
 
 let cacheSaude: { em: number; porInstancia: Map<string, SaudeInstancia> } | null = null;
@@ -441,7 +545,12 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
             (SELECT COUNT(*)::int FROM disparo_logs dl WHERE dl.instancia = a.evolution_instancia AND dl.status = 'sent'
                AND dl.enviado_at >= NOW() - INTERVAL '30 days' AND dl.contato_id IS NOT NULL
                AND NOT EXISTS (SELECT 1 FROM contato_respostas r WHERE r.user_id = dl.user_id AND r.contato_id = dl.contato_id
-                                 AND r.categoria <> 'auto_resposta' AND r.respondido_em > dl.enviado_at)) AS sem_resposta_30d
+                                 AND r.categoria <> 'auto_resposta' AND r.respondido_em > dl.enviado_at)) AS sem_resposta_30d,
+            -- Sprint 5: queda 401 dos últimos 7 dias ainda sem o estado do celular informado pelo operador.
+            (SELECT MAX(e.criado_em) FROM whatsapp_eventos_saude e
+              WHERE e.numero = w.numero AND e.tipo = 'ban_suspeito' AND e.criado_em >= NOW() - INTERVAL '7 days'
+                AND NOT EXISTS (SELECT 1 FROM whatsapp_eventos_saude c WHERE c.numero = e.numero AND c.tipo = 'estado_celular' AND c.criado_em > e.criado_em)
+            ) AS queda_pendente_em
      FROM agentes a
      LEFT JOIN whatsapp_numeros w ON w.numero = regexp_replace(a.numero_conectado, '\\D', '', 'g')
      WHERE a.evolution_instancia IS NOT NULL ${where}`,
@@ -469,6 +578,7 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
       enviados_hoje: x.enviados_hoje,
       envios_ultima_hora: x.envios_ultima_hora,
       sem_resposta_30d: x.sem_resposta_30d ?? 0,
+      queda_pendente_em: x.queda_pendente_em ?? null,
       limite: limiteDisparo(x.fase ?? null, x.fase_desde, score, soRecebe, x.sem_resposta_30d ?? 0),
     };
   });

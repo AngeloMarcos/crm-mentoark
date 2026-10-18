@@ -135,12 +135,23 @@ interface SaudeInfo {
   enviados_hoje: number;
   limite: { limite: number; somenteConhecidos: boolean; motivo: string | null; liberaEm: string | null };
   alerta: string | null;
+  sem_resposta_30d?: number;          // Sprint 4 do maturador
+  queda_pendente_em?: string | null;  // Sprint 5: queda 401 sem o estado do celular informado
 }
 
 const FASES_AQUECIMENTO = ["perfil", "aquecimento_1", "aquecimento_2", "aquecimento_3"];
-// Dia do aquecimento em que cada fase começa (perfil 1 + aq1 4 + aq2 5 + aq3 5 + pré-oficial 7 = 22 dias).
-const DIA_INICIO_FASE: Record<string, number> = { perfil: 0, aquecimento_1: 1, aquecimento_2: 5, aquecimento_3: 10, pre_oficial: 15 };
-const TOTAL_DIAS_AQUECIMENTO = 22;
+// Dia do aquecimento em que cada fase começa (Sprint 4 do maturador, 2026-10-17:
+// perfil 1 + aq1 4 + aq2 7 + aq3 7 + pré-oficial 7 = 26 dias).
+const DIA_INICIO_FASE: Record<string, number> = { perfil: 0, aquecimento_1: 1, aquecimento_2: 5, aquecimento_3: 12, pre_oficial: 19 };
+const TOTAL_DIAS_AQUECIMENTO = 26;
+
+// Sprint 5: o que o celular mostrou depois da queda 401 (backend: PUT /saude/:id/estado-celular).
+const OPCOES_ESTADO_CELULAR: { estado: string; rotulo: string; ajuda: string }[] = [
+  { estado: "desvinculado", rotulo: "App normal (só desconectou)", ajuda: "O WhatsApp abre normal no celular, só o aparelho do CRM sumiu da lista" },
+  { estado: "restrito", rotulo: "Restrição temporária", ajuda: "Aviso de que não pode enviar mensagens por um tempo" },
+  { estado: "revisao", rotulo: "Conta em revisão", ajuda: "O app mostra que a conta está em análise" },
+  { estado: "banido", rotulo: "Banido", ajuda: "\"Esta conta não pode usar o WhatsApp\"" },
+];
 
 type ConnState = "open" | "close" | "connecting" | "unauthorized";
 
@@ -170,6 +181,8 @@ export function InstanceManagementPanel() {
   // Sprint 2 do maturador (2026-10-17): proxy por número direto na tela de instâncias, para
   // configurar ANTES de gerar o QR (não só no Aquecimento Global).
   const [proxyDe, setProxyDe] = useState<any>(null);
+  // Sprint 5: histórico por dia do número.
+  const [painelDe, setPainelDe] = useState<Agente | null>(null);
   const [saving, setSaving] = useState(false);
   const [calculating, setCalculating] = useState<string | null>(null);
   const [saude, setSaude] = useState<Record<string, SaudeInfo>>({});
@@ -712,6 +725,25 @@ O CRM não vai contar como ban enquanto a revisão durar.`)) return;
     } catch (e: any) { toast.error(e.message); }
   };
 
+  // Sprint 5 do maturador: operador informa o que o celular mostrou depois da queda 401.
+  const informarEstadoCelular = async (a: Agente, estado: string, rotulo: string) => {
+    if (estado === "banido" && !confirm(`Confirmar que o número de "${a.nome}" foi BANIDO ("Esta conta não pode usar o WhatsApp")?\n\nIsso entra no histórico do número e bloqueia o uso dele no CRM.`)) return;
+    try {
+      const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+      const t = getAuthToken();
+      const res = await fetch(`${API_BASE}/api/whatsapp/saude/${a.id}/estado-celular`, {
+        method: "PUT", headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+        body: JSON.stringify({ estado }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.message || "Erro ao salvar");
+      toast.success(estado === "desvinculado"
+        ? "Registrado: só desconectou. A queda não conta como suspeita e o aquecimento volta à fase de antes."
+        : `Registrado: ${rotulo}.`);
+      carregarProtecao();
+    } catch (e: any) { toast.error(e.message); }
+  };
+
   const liberarProtecao = async (a: Agente) => {
     if (!confirm(`Pular o aquecimento do número de "${a.nome}" e liberar campanhas agora?
 
@@ -1106,6 +1138,27 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                     )}
                   </div>
                 )}
+                {/* Sprint 5 do maturador: queda 401 sem o estado do celular informado — só o celular sabe se foi ban. */}
+                {sd?.queda_pendente_em && (
+                  <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-800 dark:text-amber-300">
+                    <p className="font-semibold">
+                      Caiu em {new Date(sd.queda_pendente_em).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}. O que aparece no WhatsApp do celular?
+                    </p>
+                    <div className="grid grid-cols-2 gap-1">
+                      {OPCOES_ESTADO_CELULAR.map(o => (
+                        <Button key={o.estado} size="sm" variant="outline" className="h-auto min-h-6 whitespace-normal px-2 py-1 text-[10px]" title={o.ajuda}
+                          onClick={() => informarEstadoCelular(a, o.estado, o.rotulo)}>
+                          {o.rotulo}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {sd && (
+                  <Button size="sm" variant="ghost" className="h-6 w-full px-2 text-[10px]" onClick={() => setPainelDe(a)}>
+                    Histórico do número (14 dias)
+                  </Button>
+                )}
                 {!!sd?.bans_total && (
                   <div className="flex items-start gap-2 p-2 rounded-md bg-red-500/10 border border-red-500/30 text-[11px] text-red-700 dark:text-red-400">
                     <AlertOctagon className="h-3.5 w-3.5 shrink-0 mt-px" />
@@ -1192,7 +1245,6 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
               </SheetDescription>
             </SheetHeader>
 
-            {proxyDe && <ProxyDialog numero={proxyDe} onFechar={() => { setProxyDe(null); carregar(); }} />}
             {editing && (
               <div className="flex-1 overflow-y-auto p-6">
               <Tabs defaultValue="geral" className="w-full">
@@ -1356,6 +1408,10 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
             </SheetFooter>
           </SheetContent>
         </Sheet>
+
+        {/* Sprint 2/5 do maturador: fora do painel lateral — antes ficava dentro dele e só abria com o painel aberto. */}
+        {proxyDe && <ProxyDialog numero={proxyDe} onFechar={() => { setProxyDe(null); carregar(); }} />}
+        {painelDe && <PainelNumero agente={painelDe} onFechar={() => setPainelDe(null)} />}
 
         {/* ─── Modal: Conectar nova instância ─── */}
         <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
@@ -1590,5 +1646,74 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
         </Dialog>
       </div>
     </TooltipProvider>
+  );
+}
+
+/**
+ * Sprint 5 do maturador (2026-10-17): histórico por dia do número — reconexões, quedas, disparos,
+ * respostas e tráfego do Aquecimento. Backend: GET /api/whatsapp/saude/:id/painel.
+ */
+function PainelNumero({ agente, onFechar }: { agente: Agente; onFechar: () => void }) {
+  const [dias, setDias] = useState<any[] | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
+        const t = getAuthToken();
+        const res = await fetch(`${API_BASE}/api/whatsapp/saude/${agente.id}/painel?dias=14`, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+        const j = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(j?.message || "Erro ao carregar");
+        setDias(j);
+      } catch (e: any) { setErro(e.message); }
+    })();
+  }, [agente.id]);
+  const alerta = (v: number, limite: number) => (v > limite ? "font-bold text-red-600" : "");
+  return (
+    <Dialog open onOpenChange={onFechar}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Histórico de {agente.nome}</DialogTitle>
+          <DialogDescription>
+            Últimos 14 dias. Até 6 reconexões por dia é normal; acima disso o WhatsApp vê o aparelho como instável.
+            Queda 401 é quando o WhatsApp desconectou o aparelho (pode ser só desvinculado, restrição ou ban).
+          </DialogDescription>
+        </DialogHeader>
+        {erro && <p className="text-sm text-red-600">{erro}</p>}
+        {!dias && !erro && <p className="text-sm text-muted-foreground">Carregando…</p>}
+        {dias && (
+          <div className="max-h-[60vh] overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-background text-muted-foreground">
+                <tr className="border-b text-left">
+                  <th className="py-1 pr-2">Dia</th>
+                  <th className="py-1 pr-2 text-right">Reconexões</th>
+                  <th className="py-1 pr-2 text-right">Quedas 401</th>
+                  <th className="py-1 pr-2 text-right">Quedas comuns</th>
+                  <th className="py-1 pr-2 text-right">Disparos</th>
+                  <th className="py-1 pr-2 text-right">Responderam</th>
+                  <th className="py-1 pr-2 text-right">Aquec. enviadas</th>
+                  <th className="py-1 text-right">Aquec. recebidas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dias.map(d => (
+                  <tr key={d.dia} className="border-b last:border-0">
+                    <td className="py-1 pr-2">{new Date(`${d.dia}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit" })}</td>
+                    <td className={`py-1 pr-2 text-right ${alerta(d.reconexoes, 6)}`}>{d.reconexoes}</td>
+                    <td className={`py-1 pr-2 text-right ${alerta(d.quedas_401, 0)}`}>{d.quedas_401}</td>
+                    <td className="py-1 pr-2 text-right">{d.quedas_comuns}</td>
+                    <td className="py-1 pr-2 text-right">{d.disparos}</td>
+                    <td className="py-1 pr-2 text-right">{d.disparos ? `${d.respondidos} (${Math.round((d.respondidos / d.disparos) * 100)}%)` : "—"}</td>
+                    <td className="py-1 pr-2 text-right">{d.maturador_enviadas}</td>
+                    <td className="py-1 text-right">{d.maturador_recebidas}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
