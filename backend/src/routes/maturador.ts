@@ -202,6 +202,21 @@ export default function maturadorRouter(pool: Pool): Router {
       return res.status(403).json({ message: 'Uma ou ambas as instâncias não pertencem a este usuário' });
     }
     try {
+      // 2026-10-18: o Aquecimento Global (modo teste) pode já ter criado um par GLOBAL entre essas 2
+      // instâncias — invisível na lista da conta, mas ocupando a chave única (a, b). Antes isso
+      // virava "Já existe um par" sem par nenhum na tela. Agora o par global vira par da conta
+      // (desligado, como um par novo); montarRedeGlobal nunca converte par da conta de volta.
+      const convertido = await pool.query(
+        `UPDATE maturador_pares SET global = false, tipo = 'conversa', ativo = false, user_id = $1, pausado_motivo = NULL,
+                falhas_consecutivas = 0, data_inicio = NOW(), proxima_mensagem_em = NULL, updated_at = NOW()
+         WHERE agente_a_id = $2 AND agente_b_id = $3 AND global AND banido_em IS NULL RETURNING *`,
+        [userId, agente_a_id, agente_b_id]
+      );
+      if (convertido.rowCount) {
+        invalidarNumerosMaturador(userId);
+        log.info('MATURADOR', 'Par global convertido em par da conta', { parId: convertido.rows[0].id });
+        return res.status(201).json(convertido.rows[0]);
+      }
       const r = await pool.query(
         `INSERT INTO maturador_pares (user_id, agente_a_id, agente_b_id) VALUES ($1, $2, $3) RETURNING *`,
         [userId, agente_a_id, agente_b_id]
