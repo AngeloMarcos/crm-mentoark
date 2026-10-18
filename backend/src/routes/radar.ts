@@ -303,12 +303,20 @@ export default function radarRouter(pool: Pool): Router {
       const cfg = (await pool.query(`SELECT * FROM radar_entrada_config WHERE user_id = $1`, [userId])).rows[0];
       const instancias = await pool.query(
         `SELECT id, nome, evolution_instancia, health_score, evolution_conectado_em
-           FROM agentes WHERE user_id = $1 AND papel = 'prospeccao' AND ativo = true ORDER BY nome`, [ownerId]);
+           FROM agentes WHERE user_id = $1 AND papel = 'prospeccao' AND ativo = true
+            AND evolution_instancia IS NOT NULL ORDER BY nome`, [ownerId]);
       const instancia = await instanciaDeProspeccao(pool, userId);
+      // Escolhida mas sem instância na Evolution (desconectada/apagada): antes voltava null e a tela
+      // não mostrava aviso nenhum — leitura de convite e entrada paravam em silêncio.
+      const apta = instancia
+        ? instanciaApta(instancia, { corteDiasConectado: cfg.corte_dias_conectado, corteHealthScore: cfg.corte_health_score })
+        : cfg.agente_id
+          ? { ok: false as const, motivo: 'a instância escolhida está desconectada ou não é mais "prospecção" — reconecte-a ou escolha outra' }
+          : null;
       res.json({
         ...cfg,
         instancias_disponiveis: instancias.rows,
-        instancia_selecionada_apta: instancia ? instanciaApta(instancia, { corteDiasConectado: cfg.corte_dias_conectado, corteHealthScore: cfg.corte_health_score }) : null,
+        instancia_selecionada_apta: apta,
         entradas_hoje: await entradasHoje(pool, userId),
         consultas_hoje: await consultasConviteHoje(pool, userId),
       });
