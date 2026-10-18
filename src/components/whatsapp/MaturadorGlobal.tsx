@@ -25,7 +25,11 @@ async function chamar(path: string, opts: { method?: string; body?: any } = {}) 
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const d = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(d?.message || `Erro ${r.status}`);
+  if (!r.ok) {
+    const e: any = new Error(d?.message || `Erro ${r.status}`);
+    e.code = d?.code;
+    throw e;
+  }
   return d;
 }
 
@@ -154,7 +158,15 @@ export function ProxyDialog({ numero, onFechar }: { numero: any; onFechar: () =>
     if (numero.conectado && !confirm("Este número está conectado. Para o proxy valer, a conexão será reiniciada uma vez (alguns segundos). Trocar o IP de um número em uso é um sinal leve de risco — faça isso uma vez só. Continuar?")) return;
     setSalvando(true);
     try {
-      const r = await chamar(`/proxy/${numero.agenteId}`, { method: "PUT", body: corpo() });
+      let r: any;
+      try {
+        r = await chamar(`/proxy/${numero.agenteId}`, { method: "PUT", body: corpo() });
+      } catch (e: any) {
+        // 2026-10-18: troca de IP recente / IP que estava em outro número — só com confirmação explícita.
+        if (e?.code !== "CONFIRMAR_TROCA_IP") throw e;
+        if (!confirm(`${e.message}\n\nAplicar mesmo assim? (assumo o risco)`)) return;
+        r = await chamar(`/proxy/${numero.agenteId}`, { method: "PUT", body: { ...corpo(), confirmar_troca: true } });
+      }
       toast.success(
         r.situacao === "salvo_para_o_qr" ? "Proxy testado e salvo — ele entra quando você gerar o QR deste número"
         : r.situacao === "aplicado_reconectado" ? "Proxy aplicado e conexão reiniciada pelo novo IP"

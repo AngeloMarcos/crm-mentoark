@@ -112,7 +112,8 @@ export default function maturadorRouter(pool: Pool): Router {
     const ownerId = await resolverOwnerId(pool, req.userId!);
     const v = validarProxy(req.body);
     if (v.erro) return res.status(400).json({ message: v.erro });
-    const r = await aplicarProxy(pool, req.params.agenteId, ownerId, v.proxy!);
+    const r = await aplicarProxy(pool, req.params.agenteId, ownerId, v.proxy!, req.body?.confirmar_troca === true);
+    if (r.precisaConfirmar) return res.status(409).json({ code: 'CONFIRMAR_TROCA_IP', message: r.erro, saida: r.saida ?? null });
     if (r.erro) return res.status(422).json({ message: r.erro, saida: r.saida ?? null });
     void montarRedeGlobal(pool).catch(() => {});
     return res.json({ ok: true, situacao: r.situacao, saida: r.saida });

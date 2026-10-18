@@ -202,7 +202,44 @@ export async function testarProxy(p: ProxyEntrada): Promise<{ saida?: SaidaProxy
  * (avisado na tela). Número não pareado → fica salvo e entra no próximo QR.
  * Devolve { erro } em português, ou { situacao } para a tela.
  */
-export async function aplicarProxy(pool: Pool, agenteId: string, userId: string, entrada: ProxyEntrada): Promise<{ erro?: string; situacao?: 'aplicado_reconectado' | 'aplicado' | 'salvo_para_o_qr'; saida?: SaidaProxy }> {
+// 2026-10-18 (Sprint 3): troca de IP é o sinal que o proxy deveria evitar ("um número, um IP, para
+// sempre"). Pedido real do usuário: revezar 1 proxy entre 2 números a cada hora — cada troca reinicia a
+// conexão e o mesmo IP pulando entre números liga os dois. Sem `confirmarTroca`, recusa:
+//   - número que recebeu OUTRO IP (ou teve o proxy removido) nas últimas 72h;
+//   - IP de saída que esteve em outro número nos últimos 7 dias.
+const HORAS_SEM_TROCAR_IP = 72;
+const DIAS_IP_DE_OUTRO_NUMERO = 7;
+
+export async function motivoTrocaArriscada(pool: Pool, a: any, ip: string): Promise<string | null> {
+  const numero = String(a.numero_conectado || '').replace(/\D/g, '');
+  const ultimo = (await pool.query(
+    `SELECT tipo, detalhe->>'ip' AS ip, criado_em FROM whatsapp_eventos_saude
+     WHERE tipo IN ('proxy_aplicado', 'proxy_removido') AND (instancia = $1 OR ($2 <> '' AND numero = $2))
+       AND criado_em >= NOW() - make_interval(hours => $3)
+     ORDER BY criado_em DESC LIMIT 1`,
+    [a.evolution_instancia, numero, HORAS_SEM_TROCAR_IP]
+  ).catch(() => ({ rows: [] as any[] }))).rows[0];
+  if (ultimo && (ultimo.tipo === 'proxy_removido' || ultimo.ip !== ip)) {
+    const quando = new Date(ultimo.criado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return `Este número já mudou de IP em ${quando} (${ultimo.tipo === 'proxy_removido' ? 'proxy removido' : `IP ${ultimo.ip}`}). Trocar de novo em menos de ${HORAS_SEM_TROCAR_IP}h reinicia a conexão e é um sinal forte de risco para o WhatsApp — o recomendado é um IP fixo por número.`;
+  }
+  const outro = (await pool.query(
+    `SELECT instancia FROM whatsapp_eventos_saude
+     WHERE tipo = 'proxy_aplicado' AND detalhe->>'ip' = $1 AND instancia IS DISTINCT FROM $2
+       AND criado_em >= NOW() - make_interval(days => $3) LIMIT 1`,
+    [ip, a.evolution_instancia, DIAS_IP_DE_OUTRO_NUMERO]
+  ).catch(() => ({ rows: [] as any[] }))).rows[0];
+  if (outro) {
+    return `O IP ${ip} esteve em outro número (${outro.instancia}) nos últimos ${DIAS_IP_DE_OUTRO_NUMERO} dias. O mesmo IP passando de um número para outro faz o WhatsApp ligar os dois números ao mesmo dono.`;
+  }
+  return null;
+}
+
+async function registrarAplicacao(pool: Pool, a: any, saida: SaidaProxy, host: string, confirmouRisco: boolean): Promise<void> {
+  await eventoProxy(pool, a, 'proxy_aplicado', { ip: saida.ip, host, org: saida.org, confirmou_risco: confirmouRisco || undefined });
+}
+
+export async function aplicarProxy(pool: Pool, agenteId: string, userId: string, entrada: ProxyEntrada, confirmarTroca = false): Promise<{ erro?: string; precisaConfirmar?: boolean; situacao?: 'aplicado_reconectado' | 'aplicado' | 'salvo_para_o_qr'; saida?: SaidaProxy }> {
   const a = (await pool.query(`SELECT * FROM agentes WHERE id = $1 AND user_id = $2`, [agenteId, userId])).rows[0];
   if (!a?.evolution_instancia) return { erro: 'Instância não encontrada.' };
   const p: ProxyEntrada = {
@@ -224,6 +261,10 @@ export async function aplicarProxy(pool: Pool, agenteId: string, userId: string,
   )).rows[0];
   if (dono) return { erro: `Este proxy sai pelo mesmo IP (${saida.ip}) de outro número (${dono.nome || dono.evolution_instancia}). Cada número precisa de um IP só dele.`, saida };
 
+  const arriscado = await motivoTrocaArriscada(pool, a, saida.ip);
+  if (arriscado && !confirmarTroca) return { erro: arriscado, precisaConfirmar: true, saida };
+  if (arriscado) log.warn('PROXY', 'Troca de IP arriscada confirmada pelo usuário', { instancia: a.evolution_instancia, ip: saida.ip });
+
   await pool.query(
     `UPDATE agentes SET proxy_host = $3, proxy_port = $4, proxy_protocolo = $5, proxy_usuario = $6,
             proxy_senha_enc = COALESCE($7, proxy_senha_enc), proxy_aplicado_em = NULL,
@@ -240,6 +281,7 @@ export async function aplicarProxy(pool: Pool, agenteId: string, userId: string,
   if (estado === null) {
     // Ainda não existe na Evolution: o proxy vai junto no /instance/create do próximo QR.
     invalidarCacheBloqueio();
+    await registrarAplicacao(pool, a, saida, p.host, !!arriscado);
     log.info('PROXY', 'Proxy salvo para o próximo pareamento', { instancia: inst, ip: saida.ip });
     return { situacao: 'salvo_para_o_qr', saida };
   }
@@ -269,12 +311,14 @@ export async function aplicarProxy(pool: Pool, agenteId: string, userId: string,
       return { erro: 'O proxy foi aplicado, mas a conexão não voltou em 30 s. Confira na tela de instâncias; se não voltar, remova o proxy (o número volta a sair pelo IP da VPS).', saida };
     }
     await marcarProxyAplicado(pool, agenteId);
+    await registrarAplicacao(pool, a, saida, p.host, !!arriscado);
     log.info('PROXY', 'Proxy aplicado e conexão reiniciada', { instancia: inst, ip: saida.ip });
     return { situacao: 'aplicado_reconectado', saida };
   }
 
   // Existe na Evolution mas não está conectada: o /instance/connect do próximo QR já carrega o proxy.
   await marcarProxyAplicado(pool, agenteId);
+  await registrarAplicacao(pool, a, saida, p.host, !!arriscado);
   return { situacao: 'aplicado', saida };
 }
 
@@ -293,6 +337,7 @@ export async function removerProxy(pool: Pool, agenteId: string, userId: string)
       await evolutionFetch(`${base}/instance/restart/${encodeURIComponent(a.evolution_instancia)}`, { method: 'POST', headers: { apikey: key } }).catch(() => null);
     }
   }
+  if (a.proxy_host) await eventoProxy(pool, a, 'proxy_removido', { ip: a.proxy_ip_saida, host: a.proxy_host });
   await pool.query(
     `UPDATE agentes SET proxy_host = NULL, proxy_port = NULL, proxy_protocolo = NULL, proxy_usuario = NULL,
             proxy_senha_enc = NULL, proxy_aplicado_em = NULL, proxy_ip_saida = NULL, proxy_pais = NULL,
