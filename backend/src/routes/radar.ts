@@ -162,12 +162,12 @@ export default function radarRouter(pool: Pool): Router {
       if (status) { v.push(status); w.push(`g.status = $${v.length}`); }
       if (plataforma) { v.push(plataforma); w.push(`g.plataforma = $${v.length}`); }
       if (nicho_id && UUID_RE.test(nicho_id)) { v.push(nicho_id); w.push(`g.nicho_id = $${v.length}`); }
-      if (aderencia && ['alta', 'media', 'baixa', 'sem_dados'].includes(aderencia)) { v.push(aderencia); w.push(`g.aderencia = ${v.length}`); }
+      if (aderencia && ['alta', 'media', 'baixa', 'sem_dados'].includes(aderencia)) { v.push(aderencia); w.push(`g.aderencia = $${v.length}`); }
       if (importado === 'sim') w.push('g.importado_lista_id IS NOT NULL');
       if (importado === 'nao') w.push('g.importado_lista_id IS NULL');
       if (fonte && ['busca', 'diretorio', 'planilha'].includes(fonte)) { v.push(fonte); w.push(`g.fonte = $${v.length}`); }
-      if (q && q.trim()) { v.push(`%${q.trim().slice(0, 80)}%`); w.push(`(g.nome ILIKE ${v.length} OR g.titulo_origem ILIKE ${v.length} OR g.descricao ILIKE ${v.length})`); }
-      if (min_score && Number.isFinite(Number(min_score))) { v.push(Number(min_score)); w.push(`g.score >= ${v.length}`); }
+      if (q && q.trim()) { v.push(`%${q.trim().slice(0, 80)}%`); w.push(`(g.nome ILIKE $${v.length} OR g.titulo_origem ILIKE $${v.length} OR g.descricao ILIKE $${v.length})`); }
+      if (min_score && Number.isFinite(Number(min_score))) { v.push(Number(min_score)); w.push(`g.score >= $${v.length}`); }
       v.push(limit, offset);
       const r = await pool.query(
         `SELECT g.*, n.nome AS nicho_nome, COUNT(*) OVER()::int AS total
