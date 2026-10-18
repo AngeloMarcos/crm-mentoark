@@ -56,6 +56,13 @@ describe('coletarLinks', () => {
     expect(r.linksVistos).toBe(2);
     expect(r.interrompidaPor).toBe('teto_chamadas');
   });
+  it('teto de chamadas com teto de custo folgado é teto_chamadas (não teto_custo)', async () => {
+    const p = new SimulatedProvider({ a: resp('1'), b: resp('2'), c: resp('3') });
+    const barato: SearchProvider = { nome: 's', custoPorChamadaUsd: 0.001, buscar: c => p.buscar(c) };
+    const r = await coletarLinks(barato, ['a', 'b', 'c'], { maxChamadas: 2, maxCustoUsd: 0.5 });
+    expect(r.chamadasFeitas).toBe(2);
+    expect(r.interrompidaPor).toBe('teto_chamadas');
+  });
   it('respeita teto de custo', async () => {
     const caro: SearchProvider = { nome: 'c', custoPorChamadaUsd: 0.5, buscar: async () => ({ resultados: [], chamadas: 1 }) };
     const r = await coletarLinks(caro, ['a', 'b', 'c'], { maxChamadas: 10, maxCustoUsd: 1 });

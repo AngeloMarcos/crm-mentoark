@@ -55,9 +55,19 @@ function iniciarInterno(pool: Pool): void {
     prefix: PREFIXO(), connection: c,
     defaultJobOptions: { attempts: 1, ...limpeza }, // busca pode ser POST pago: nunca repetir automaticamente
   });
-  workers.push(new Worker(FILA_BUSCA, async job => { await executarBusca(pool, job.data.buscaId, enfileirarLinkPublico); }, {
-    connection: c, prefix: PREFIXO(), concurrency: 1, limiter: { max: 1, duration: 1000 },
-  }));
+  const wBusca = new Worker(FILA_BUSCA, async job => { await executarBusca(pool, job.data.buscaId, enfileirarLinkPublico); }, {
+    connection: c, prefix: PREFIXO(), concurrency: 1, limiter: { max: 1, duration: 1000 }, autorun: false,
+  });
+  workers.push(wBusca);
+  // Busca 'running' no boot é órfã do processo anterior (reinício no meio da execução): o BullMQ reentrega
+  // o job, mas executarBusca só reivindica 'queued' e a linha ficaria 'running' para sempre. Fecha como
+  // falha ANTES do worker consumir (não repete sozinha: as chamadas já feitas ao provider foram pagas).
+  pool.query(
+    `UPDATE radar_buscas SET status = 'falhou', erro = 'Interrompida por reinício do servidor; rode a busca de novo.', finished_at = now()
+      WHERE status = 'running'`)
+    .then(r => { if (r.rowCount) log.warn('RADAR', 'buscas órfãs encerradas no boot', { quantidade: r.rowCount }); })
+    .catch(err => log.error('RADAR', 'falha ao encerrar buscas órfãs', { err: err?.message }))
+    .finally(() => { wBusca.run().catch(err => log.error('RADAR', 'worker de busca parou', { err: err?.message })); });
 
   // Leitura de convites: só GET, então pode repetir com backoff. Ritmo baixo para poupar o número.
   const intervalo = Number(process.env.RADAR_VALIDAR_INTERVALO_MS) || 8000;

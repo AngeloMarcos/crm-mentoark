@@ -85,14 +85,14 @@ export async function coletarLinks(
 
   for (const consulta of consultas) {
     let restante = limites.maxChamadas - r.chamadasFeitas;
+    if (restante <= 0) { r.interrompidaPor = 'teto_chamadas'; break; }
     if (limites.maxCustoUsd !== undefined) {
       const porCusto = provider.custoPorChamadaUsd > 0
         ? Math.floor((limites.maxCustoUsd - r.custoUsd + 1e-9) / provider.custoPorChamadaUsd)
         : Infinity;
+      if (porCusto <= 0) { r.interrompidaPor = 'teto_custo'; break; }
       if (porCusto < restante) restante = porCusto;
-      if (restante <= 0) { r.interrompidaPor = 'teto_custo'; break; }
     }
-    if (restante <= 0) { r.interrompidaPor = 'teto_chamadas'; break; }
 
     r.consultasFeitas++;
     try {
