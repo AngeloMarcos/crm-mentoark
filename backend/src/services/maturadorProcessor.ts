@@ -27,7 +27,7 @@ import { Pool } from 'pg';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
 import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, STATUS_CORES, MENSAGENS_MENTORIA } from './maturadorDialogos';
-import { bloqueioEnvio, reconectouRecente, MAX_MENTORIA_DIA_MENTOR, MAX_RECEBIDAS_DIA_RECEPTOR } from './maturadorGlobal';
+import { bloqueioEnvio, reconectouRecente, podeResponderMaturador, MAX_MENTORIA_DIA_MENTOR, MAX_RECEBIDAS_DIA_RECEPTOR } from './maturadorGlobal';
 import { registrarIdMaturador, invalidarNumerosMaturador } from './maturadorFiltro';
 import { saudePorInstancia, MAX_ENVIOS_HORA } from './saudeNumero';
 
@@ -200,16 +200,28 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // estão travados, o par espera. Vínculo global do tipo 'mentoria': sempre a = mentor.
         const bloqA = await bloqueioEnvio(pool, par.a_instancia);
         const bloqB = await bloqueioEnvio(pool, par.b_instancia);
+        // Sprint 4 (2026-10-17): lado que "só recebe" mas já está no Aquecimento 2+ pode RESPONDER
+        // (nunca iniciar) — vira conversa de mão dupla em vez de mentoria de mão única.
+        const saudeFases = await saudePorInstancia(pool);
+        const respondeA = !!bloqA && podeResponderMaturador(saudeFases.get(par.a_instancia));
+        const respondeB = !!bloqB && podeResponderMaturador(saudeFases.get(par.b_instancia));
         let modoMentoria = par.tipo === 'mentoria';
-        if (modoMentoria) remetente = 'a';
-        else if (bloqA && bloqB) {
+        let respostaDeNovo = false;
+        if (modoMentoria) {
+          // Vínculo global de mentoria: a = mentor. O receptor responde se já pode e o mentor falou por último.
+          remetente = par.ultimo_remetente === 'a' && respondeB ? 'b' : 'a';
+          if (remetente === 'b') { modoMentoria = false; respostaDeNovo = true; }
+        } else if (bloqA && bloqB) {
           await pool.query(`UPDATE maturador_pares SET proxima_mensagem_em = NOW() + INTERVAL '60 minutes' WHERE id = $1`, [par.id]).catch(() => {});
           continue;
         } else if (bloqA || bloqB) {
-          remetente = bloqA ? 'b' : 'a';
-          modoMentoria = true;
+          const livre: 'a' | 'b' = bloqA ? 'b' : 'a';
+          const travado: 'a' | 'b' = bloqA ? 'a' : 'b';
+          const travadoResponde = bloqA ? respondeA : respondeB;
+          if (travadoResponde && par.ultimo_remetente === livre) { remetente = travado; respostaDeNovo = true; }
+          else { remetente = livre; modoMentoria = !travadoResponde; }
         }
-        if ((remetente === 'a' ? bloqA : bloqB)) continue; // mentor travado (ex.: caiu em quarentena)
+        if ((remetente === 'a' ? bloqA : bloqB) && !respostaDeNovo) continue; // mentor travado (ex.: caiu em quarentena)
         // 2026-10-06: quem acabou de (re)conectar espera 3h antes de enviar qualquer coisa.
         if (await reconectouRecente(pool, remetente === 'a' ? par.a_instancia : par.b_instancia)) {
           await pool.query(`UPDATE maturador_pares SET proxima_mensagem_em = NOW() + INTERVAL '30 minutes' WHERE id = $1`, [par.id]).catch(() => {});
@@ -308,7 +320,7 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // número+dia), 1 por dia, visível SÓ para o parceiro do par (statusJidList) — nunca
         // aparece para os contatos reais do cliente.
         const diaDoStatus = [...`${de.id}${hoje}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 10 < 4;
-        if (diaDoStatus && !modoMentoria) {
+        if (diaDoStatus && !modoMentoria && !respostaDeNovo) {
           const jaPostou = (await pool.query(
             `SELECT 1 FROM maturador_mensagens WHERE de_agente_id = $1 AND tipo = 'status'
                AND (created_at AT TIME ZONE '${TZ}')::date = $2::date LIMIT 1`, [de.id, hoje]
@@ -332,12 +344,21 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
 
         let novoTema: number | null = par.tema_atual ?? null;
         let novaLinha: number = par.linha_atual ?? 0;
-        if (novoTema === null || novoTema >= TEMAS.length || novaLinha >= TEMAS[novoTema].length) {
+        const temaAcabou = novoTema === null || novoTema >= TEMAS.length || novaLinha >= TEMAS[novoTema].length;
+        if (respostaDeNovo && temaAcabou) {
+          // Número que só responde não abre tema novo (seria iniciar conversa): passa a vez ao parceiro.
+          await pool.query(
+            `UPDATE maturador_pares SET ultimo_remetente = $2, proxima_mensagem_em = NOW() + ($3 || ' minutes')::interval WHERE id = $1`,
+            [par.id, remetente, rand(40, 150).toFixed(2)]
+          ).catch(() => {});
+          continue;
+        }
+        if (temaAcabou) {
           novoTema = sortearTema(par.tema_atual ?? null);
           novaLinha = 0;
         }
         // Sprint 8 (Sprint 3 / H10): de vez em quando (8%) abre um tema novo com uma enquete.
-        if (novaLinha === 0 && !modoMentoria && Math.random() < 0.08) {
+        if (novaLinha === 0 && !modoMentoria && !respostaDeNovo && Math.random() < 0.08) {
           const e = ENQUETES[randInt(0, ENQUETES.length - 1)];
           const rp = await evolutionFetch(`${baseUrl}/message/sendPoll/${de.instancia}`, {
             method: 'POST',

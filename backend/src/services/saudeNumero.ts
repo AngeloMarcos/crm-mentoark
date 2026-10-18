@@ -35,8 +35,10 @@ export const ROTULO_FASE: Record<Fase, string> = {
 };
 
 // Duração mínima (dias) de cada fase antes de poder avançar.
+// Sprint 4 (2026-10-17): Aquecimento 2 e 3 passaram de 5 para 7 dias — total ~26 dias até "madura",
+// alinhado ao "sinal verde" de 25–30 dias da Green-API (reports/Maturação WhatsApp e proxy 2026.md).
 const DIAS_MINIMOS: Partial<Record<Fase, number>> = {
-  perfil: 1, aquecimento_1: 4, aquecimento_2: 5, aquecimento_3: 5, pre_oficial: 7,
+  perfil: 1, aquecimento_1: 4, aquecimento_2: 7, aquecimento_3: 7, pre_oficial: 7,
 };
 const PROXIMA: Partial<Record<Fase, Fase>> = {
   perfil: 'aquecimento_1', aquecimento_1: 'aquecimento_2', aquecimento_2: 'aquecimento_3',
@@ -371,7 +373,17 @@ export const SCORE_MINIMO_DISPARO = 45;
 // 2026-10-17 (decisão do usuário): número que "só recebe" (proteção de número novo, Perfil,
 // Aquecimento 1, 21 dias após ban — `maturadorGlobal.motivoSoRecebe`) volta a NÃO disparar. Achado:
 // os 2 números novos da conta caíram com 401 1–2 s depois de disparar a frio (um com 1 mensagem).
-export function limiteDisparo(fase: Fase | null, _faseDesde: string | Date | null, score: number | null, soRecebe: string | null = null): LimiteDisparo {
+// Sprint 4 (2026-10-17): rampa de disparo pela fase — frio só a partir do Pré-oficial (~dia 19) e
+// volume cheio na Madura (~dia 26). Aquecimento 2/3 disparam só para quem já conversou com o número.
+// E o freio de "sem resposta": desde out/2025 o WhatsApp testa um teto mensal de mensagens para não
+// contatos que não respondem (valor não divulgado); passou de LIMITE_SEM_RESPOSTA_30D envios de
+// campanha sem resposta em 30 dias, o número volta a disparar só para conhecidos.
+export const LIMITE_SEM_RESPOSTA_30D = 100;
+
+export function limiteDisparo(
+  fase: Fase | null, _faseDesde: string | Date | null, score: number | null, soRecebe: string | null = null,
+  semResposta30d = 0,
+): LimiteDisparo {
   const f: Fase = fase ?? 'madura';
   if (f === 'quarentena') return { limite: 0, somenteConhecidos: false, motivo: 'Número em quarentena após queda suspeita de ban.', liberaEm: null };
   if (f === 'banida') return { limite: 0, somenteConhecidos: false, motivo: 'Número banido.', liberaEm: null };
@@ -379,7 +391,14 @@ export function limiteDisparo(fase: Fase | null, _faseDesde: string | Date | nul
   if (score !== null && score < SCORE_MINIMO_DISPARO) {
     return { limite: 0, somenteConhecidos: false, motivo: `Score ${score}: disparo bloqueado (mínimo ${SCORE_MINIMO_DISPARO}).`, liberaEm: null };
   }
-  return { limite: LIMITE_FASE.madura, somenteConhecidos: false, motivo: null, liberaEm: null };
+  const limite = LIMITE_FASE[f] || LIMITE_FASE.madura;
+  if (f === 'aquecimento_2' || f === 'aquecimento_3') {
+    return { limite, somenteConhecidos: true, motivo: `${ROTULO_FASE[f]}: até ${limite}/dia, só para contatos que já conversaram com o número (disparo frio só a partir do Pré-oficial).`, liberaEm: null };
+  }
+  if (semResposta30d >= LIMITE_SEM_RESPOSTA_30D) {
+    return { limite, somenteConhecidos: true, motivo: `${semResposta30d} mensagens de campanha sem resposta em 30 dias: o WhatsApp limita quem escreve para quem não responde — por enquanto, só contatos que já conversaram.`, liberaEm: null };
+  }
+  return { limite, somenteConhecidos: false, motivo: null, liberaEm: null };
 }
 
 // ── Estado de saúde por instância (tela, criação de campanha e processador) ──────────────────
@@ -399,6 +418,7 @@ export interface SaudeInstancia {
   score_rotulo: string | null;
   enviados_hoje: number;
   envios_ultima_hora: number;
+  sem_resposta_30d: number;
   limite: LimiteDisparo;
 }
 
@@ -416,7 +436,12 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
             (SELECT COUNT(*)::int FROM disparo_logs dl WHERE dl.instancia = a.evolution_instancia AND dl.status = 'sent'
                AND dl.enviado_at >= NOW() - INTERVAL '1 hour')
             + (SELECT COUNT(*)::int FROM maturador_mensagens mm WHERE mm.de_agente_id = a.id AND mm.tipo = 'texto'
-               AND mm.created_at >= NOW() - INTERVAL '1 hour') AS envios_ultima_hora
+               AND mm.created_at >= NOW() - INTERVAL '1 hour') AS envios_ultima_hora,
+            -- Sprint 4: envios de campanha nos últimos 30 dias que o contato nunca respondeu.
+            (SELECT COUNT(*)::int FROM disparo_logs dl WHERE dl.instancia = a.evolution_instancia AND dl.status = 'sent'
+               AND dl.enviado_at >= NOW() - INTERVAL '30 days' AND dl.contato_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM contato_respostas r WHERE r.user_id = dl.user_id AND r.contato_id = dl.contato_id
+                                 AND r.categoria <> 'auto_resposta' AND r.respondido_em > dl.enviado_at)) AS sem_resposta_30d
      FROM agentes a
      LEFT JOIN whatsapp_numeros w ON w.numero = regexp_replace(a.numero_conectado, '\\D', '', 'g')
      WHERE a.evolution_instancia IS NOT NULL ${where}`,
@@ -443,7 +468,8 @@ async function carregarSaude(pool: Pool, where: string, params: any[]): Promise<
       score_rotulo: score === null ? null : rotuloScore(score),
       enviados_hoje: x.enviados_hoje,
       envios_ultima_hora: x.envios_ultima_hora,
-      limite: limiteDisparo(x.fase ?? null, x.fase_desde, score, soRecebe),
+      sem_resposta_30d: x.sem_resposta_30d ?? 0,
+      limite: limiteDisparo(x.fase ?? null, x.fase_desde, score, soRecebe, x.sem_resposta_30d ?? 0),
     };
   });
 }

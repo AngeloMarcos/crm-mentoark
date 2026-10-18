@@ -73,6 +73,17 @@ export function motivoSoRecebe(n: InfoNumero | null | undefined, agora = Date.no
   return null;
 }
 
+/**
+ * Sprint 4 do maturador (2026-10-17, cronograma Green-API/Whapi — ver
+ * reports/Maturação WhatsApp e proxy 2026.md): dias 1–4 (Perfil, Aquecimento 1) o número novo SÓ
+ * RECEBE; a partir do Aquecimento 2 ele RESPONDE quem escreveu para ele no maturador (conversa de mão
+ * dupla, que é o que o WhatsApp valoriza), mas continua sem iniciar conversa enquanto "só recebe".
+ */
+const FASES_RESPONDEM = new Set(['aquecimento_2', 'aquecimento_3', 'pre_oficial', 'madura']);
+export function podeResponderMaturador(n: { fase?: string | null; em_revisao_desde?: string | Date | null } | null | undefined): boolean {
+  return !!n && !n.em_revisao_desde && FASES_RESPONDEM.has(String(n.fase ?? ''));
+}
+
 export const SCORE_MENTOR = 85;
 export const SCORE_MENTOR_TESTE = 60;
 

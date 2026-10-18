@@ -42,7 +42,9 @@ const FAIXAS = [
   { faixa: "65-84", rotulo: "Atenção", regra: "Disparo liberado — acompanhe as respostas" },
   { faixa: "45-64", rotulo: "Risco", regra: "Disparo liberado — reduza o volume" },
   { faixa: "0-44", rotulo: "Crítico", regra: "Disparo bloqueado" },
-  { faixa: "Aquecimento", rotulo: "Perfil / Aquecimento 1", regra: "Só recebe e responde quem escreveu — score máximo 60" },
+  { faixa: "Dias 1–5", rotulo: "Perfil / Aquecimento 1", regra: "Só recebe e responde quem escreveu — score máximo 60" },
+  { faixa: "Dias 5–19", rotulo: "Aquecimento 2 / 3", regra: "Disparo só para quem já conversou (20 e 50/dia)" },
+  { faixa: "Dia 19+", rotulo: "Pré-oficial / Madura", regra: "Disparo frio liberado (100 e 200/dia)" },
 ];
 
 export function ScoreInstancia({ score, fatores, desconectado, naoCalculado }: ScoreInstanciaProps) {
