@@ -1,5 +1,41 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-10-14/18 — 🔥 Maturador sem ban: pesquisa + Sprints 1, 2, 4 e 5 (+ regras de saúde do número) — em PRODUÇÃO
+
+Pesquisa completa em `reports/Maturação WhatsApp e proxy 2026.md` (notas em `research_notes/`). Achado central: os
+números novos caíam com 401 1–2 s após disparar a frio (Mentoark 2 com **1** mensagem); maturar mais não resolve —
+causas eram bug de protocolo, IP de datacenter compartilhado e comportamento (frio de número novo).
+
+**Regras de saúde do número (em produção):**
+- Número novo/em aquecimento **só recebe e responde quem escreveu** (trava central em `evolutionFetch` olha o
+  destinatário); disparo bloqueado até sair de Perfil/Aquecimento 1 e com score < 45 — `eb7ea85`.
+- Score: -30 por queda até 2 min após disparo, teto 60 em aquecimento, -2/reconexão acima de 6/dia; faixas 85/65/45.
+- Ban falso ao reconectar é desfeito sozinho; eventos de conexão deduplicados — `97e1c70`.
+
+**Sprint 1 — conexão estável (FECHADA):** bug Baileys #2858 (`ack class=status type=media` derrubava o socket a cada
+~50 min). Evolution de produção usa imagem própria `mentoark/evolution-api:v2.3.7-status-ack` (build em
+`/opt/evolution/patch-status-ack`, fonte em `infra/evolution-patch-status-ack/`). Pessoal: 19–31 reconexões/dia → 0.
+Rollback: voltar `image:` para `evoapicloud/evolution-api:v2.3.7`. **Não** atualizar p/ 2.4.x (exige licença).
+
+**Sprint 2 — proxy no código (`5bf5b9c`):** `/proxy/set` da Evolution só grava no banco (vale só em connectToWhatsapp).
+Agora: teste do IP de SAÍDA pelo próprio proxy (BR obrigatório, datacenter recusado, exclusivo por IP), só http/socks5,
+credenciais com encode, proxy entra no `/instance/create` (antes do QR) ou com restart se já conectado, conferência a cada
+30 min. Botão de globo em cada instância. IP da VPS = Hostinger BR, `hosting=true`.
+
+**Sprint 3 — comprar proxies: PENDENTE (usuário).** 3 IPs ISP estáticos BR (Decodo/Proxy-Cheap ~US$3), 1 número por dia.
+
+**Sprint 4 — maturador v3 (`8e5caf2`):** receptor em Aquecimento 2+ responde (mão dupla, nunca inicia); fases ~26 dias;
+rampa de disparo (Aq2/Aq3 só conhecidos 20/50, Pré-oficial 100, Madura 200); freio de 100 sem-resposta/30d; 24 temas.
+Maturador enviou as primeiras mensagens da história em 17/10 (antes: tabela vazia — `reconectouRecente` contava toda
+reconexão automática; corrigido em `8877623`, com retomada automática de par pausado).
+
+**Sprint 5 — dados (`7f3bed4`):** aviso de queda 401 pendente no card (app normal/restrição/revisão/banido — "app normal"
+devolve a fase de antes da queda), histórico de 14 dias por número, score com reconexões.
+
+**Pendências:** usuário responder o estado do celular das quedas de 15–16/10 (3 números); Sprint 3 (proxies); Sprint 6
+(Embedded Signup **v4** — v2 descontinuado em 15/10/2026 — e coexistência); chaves `FACEBOOK_APP_*` do Marketing não
+existem em nenhum `.env`. Pessoal (5511991909106) marcado `madura` manualmente = mentor do maturador da conta mentoark.
+
 ## Sessão 2026-10-17/18 — 🧪 QA do Radar de Grupos + busca em massa (angelobispofilho / mentoark) — em PRODUÇÃO
 
 Busca em massa via API real: 21 buscas, ~300 chamadas Serper (~US$0,30), ~1.130 grupos novos. 38 grupos curados
