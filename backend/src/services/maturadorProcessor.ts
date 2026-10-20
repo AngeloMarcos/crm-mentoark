@@ -28,6 +28,7 @@ import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
 import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, STATUS_CORES, MENSAGENS_MENTORIA } from './maturadorDialogos';
 import { gerarRoteiro, humanizar, personaDoChip, Roteiro } from './maturadorIA';
+import { chancesMidia, midiasHoje, TETO_DIA_CHIP, prepararFoto, gerarAudio, figurinhaAleatoria } from './maturadorMidia';
 
 /** Sprint 8 (v5): valor de `tema_atual` que indica roteiro escrito por IA (maturador_pares.roteiro_ia). */
 export const TEMA_IA = -1;
@@ -407,6 +408,38 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
           }
         }
 
+        // Sprint 9 (v5): áudio, foto e figurinha — fração cresce com a fase do remetente (0% em
+        // Perfil/Aq1), só com o controle "Fotos e áudios" ligado e dentro do teto diário do chip.
+        const chances = ctrlDe.midia && !modoMentoria ? chancesMidia(saudeDe?.fase) : chancesMidia(null);
+        const temMidia = chances.audio + chances.foto + chances.figurinha > 0;
+        const jaMandou = temMidia ? await midiasHoje(pool, de.id, hoje) : null;
+        const sortearMidia = (tipo: 'audio' | 'foto' | 'figurinha') =>
+          !!jaMandou && jaMandou[tipo] < TETO_DIA_CHIP[tipo] && Math.random() < chances[tipo];
+        const enviarExtra = async (rota: string, payload: any, tipo: string, texto: string) => {
+          const r = await evolutionFetch(`${baseUrl}/message/${rota}/${de.instancia}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: de.key },
+            body: JSON.stringify({ number: numeroDestino, ...payload }),
+          }).catch(() => null);
+          if (!r?.ok) return;
+          const id: string | null = ((await r.json().catch(() => null)) as any)?.key?.id || null;
+          registrarIdMaturador(id, par.global === true);
+          await pool.query(
+            `INSERT INTO maturador_mensagens (par_id, user_id, de_agente_id, para_agente_id, message_id, tipo, texto) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [par.id, par.user_id, de.id, para.id, id, tipo, texto]
+          ).catch(() => {});
+        };
+        // Foto só abrindo assunto (quem só responde não abre assunto).
+        if (novaLinha === 0 && !respostaDeNovo && sortearMidia('foto')) {
+          const f = await prepararFoto();
+          if (f) {
+            await enviarExtra('sendMedia', {
+              mediatype: 'image', mimetype: 'image/jpeg', media: f.url, fileName: `IMG-${hoje.replace(/-/g, '')}-WA${randInt(1000, 9999)}.jpg`,
+              caption: f.legenda, delay: randInt(2000, 5000),
+            }, 'foto', f.legenda || '[foto]');
+          }
+        }
+
         // Modo mentoria: mensagem avulsa que não pede resposta (o receptor nunca responde) — tema e
         // linha da conversa ficam como estavam.
         const texto = modoMentoria
@@ -419,11 +452,27 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         let quoted: any = undefined;
         if (par.ultima_msg_id && !modoMentoria && novaLinha > 0 && Math.random() < 0.2) {
           const anterior = (await pool.query(
-            `SELECT texto FROM maturador_mensagens WHERE message_id = $1 LIMIT 1`, [par.ultima_msg_id]
+            `SELECT texto FROM maturador_mensagens WHERE message_id = $1 AND tipo = 'texto' LIMIT 1`, [par.ultima_msg_id]
           ).catch(() => ({ rows: [] as any[] }))).rows[0]?.texto;
           if (anterior) quoted = { key: { id: par.ultima_msg_id, remoteJid: `${numeroDestino}@s.whatsapp.net`, fromMe: false }, message: { conversation: anterior } };
         }
-        const resp = await evolutionFetch(`${baseUrl}/message/sendText/${de.instancia}`, {
+        // Sprint 9 (v5): às vezes a fala vai como mensagem de voz ("gravando…" pelo tempo do áudio).
+        // A voz lê a fala SEM os erros de digitação. Falhou o áudio → vai como texto.
+        const falaLimpa = !modoMentoria && novoTema === TEMA_IA ? roteiro!.linhas[novaLinha] : texto;
+        let tipoEnviado: 'texto' | 'audio' = 'texto';
+        let resp: Response | null = null;
+        if (sortearMidia('audio')) {
+          const a = await gerarAudio(pool, par.user_id, de.id, falaLimpa);
+          if (a) {
+            const ra = await evolutionFetch(`${baseUrl}/message/sendWhatsAppAudio/${de.instancia}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', apikey: de.key },
+              body: JSON.stringify({ number: numeroDestino, audio: a.url, delay: a.segundos * 1000 }),
+            }).catch(() => null);
+            if (ra?.ok) { resp = ra; tipoEnviado = 'audio'; }
+          }
+        }
+        if (!resp) resp = await evolutionFetch(`${baseUrl}/message/sendText/${de.instancia}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', apikey: de.key },
           body: JSON.stringify({ number: numeroDestino, text: texto, delay: delayDigitacaoMs(texto), ...(quoted ? { quoted } : {}) }),
@@ -436,14 +485,19 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         const body: any = await resp.json().catch(() => null);
         const messageId: string | null = body?.key?.id || null;
         registrarIdMaturador(messageId, par.global === true);
+        const eraResposta = novaLinha > 0;
         if (!modoMentoria) novaLinha++;
         else { novoTema = par.tema_atual ?? null; novaLinha = par.linha_atual ?? 0; }
 
         await pool.query(
           `INSERT INTO maturador_mensagens (par_id, user_id, de_agente_id, para_agente_id, message_id, tipo, texto, mentoria)
-           VALUES ($1, $2, $3, $4, $5, 'texto', $6, $7)`,
-          [par.id, par.user_id, de.id, para.id, messageId, texto, modoMentoria]
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [par.id, par.user_id, de.id, para.id, messageId, tipoEnviado, tipoEnviado === 'audio' ? falaLimpa : texto, modoMentoria]
         );
+        // Sprint 9 (v5): figurinha de vez em quando logo depois de uma resposta.
+        if (eraResposta && sortearMidia('figurinha')) {
+          await enviarExtra('sendSticker', { sticker: figurinhaAleatoria(), delay: randInt(1000, 3000) }, 'figurinha', '[figurinha]');
+        }
 
         // Ritmo: sessão de 3–7 trocas com resposta em 1–4 min; acabou a sessão, pausa de 40–150 min.
         // Modo mentoria: ~1 mensagem a cada 2h (100–160 min), sem sessão.

@@ -90,6 +90,8 @@ num nível mais avançado.
 - **Teto de custo por conta/dia** e queda automática para o banco de 24 temas se a IA falhar ou estourar o teto.
 - Nunca citar empresa, produto ou dados do cliente.
 - **Pronto quando**: 100 sessões sem frase repetida, custo medido por dia, fallback testado.
+- ✅ **Feito (19/10, a1cae4d, em prod)** — `services/maturadorIA.ts`. ~US$ 0,0003/roteiro; teto 30/conta/dia.
+  Pendente: chave OpenAI do servidor e da conta mentoark dão 401 → hoje cai no banco de temas.
 
 ### Sprint 9 — Áudio, fotos e figurinhas
 - **Áudio**: TTS (ElevenLabs já integrado no CRM, ou OpenAI TTS) com **voz fixa por chip**, enviado como
@@ -100,6 +102,12 @@ num nível mais avançado.
 - Respeita o controle **Fotos e áudios** e a fase ("começa quando amadurecer").
 - Testar recebimento: o parceiro "ouve" (marca como reproduzido) e visualiza.
 - **Pronto quando**: chips trocam áudio e imagem em homolog, voz igual sempre para o mesmo chip, custo medido.
+- ✅ **Feito (20/10, em prod)** — `services/maturadorMidia.ts`. Áudio: gpt-4o-mini-tts (voz/jeito fixos por
+  chip, ~US$ 0,015/min, teto 20/conta/dia) ou ElevenLabs da conta; "gravando…" confirmado no código da Evolution.
+  Foto: Lorem Picsum re-codificada (hash único). Figurinha: Noto Emoji. Chances 8–20% a partir do Aq2; teto por
+  chip/dia 8 áudios, 3 fotos, 5 figurinhas. Ressalvas: Picsum não tem filtro de tema (pode vir foto com
+  letreiro/pessoas); "marcar áudio como ouvido" não existe na Evolution 2.3.7 (só "lido"); troca real entre chips
+  ainda não observada — homolog sem par ativo e TTS depende da chave OpenAI válida.
 
 ### Sprint 10 — Status rico
 - Por chip: até **20 imagens** e **20 textos (500 caracteres)**, publicados em sequência; sem cadastro, a IA

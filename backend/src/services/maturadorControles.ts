@@ -117,7 +117,8 @@ export function estadoControles(c: Controles, n: { fase?: string | null; so_rece
     conversas: est(c.conversas, !n.so_recebe, n.so_recebe && faseAte(fase, 'aquecimento_2')
       ? 'Respondendo — começa a puxar conversa quando o chip amadurecer' : 'Começa quando o chip amadurecer'),
     grupos: est(c.grupos, false, 'Em breve (Sprint 11)'),
-    midia: est(c.midia, false, 'Em breve (Sprint 9)'),
+    // Sprint 9 (v5): áudio/foto/figurinha a partir do Aquecimento 2 (ver maturadorMidia.chancesMidia).
+    midia: est(c.midia, !!fase && faseAte(fase, 'aquecimento_2'), 'Começa no Aquecimento 2'),
     canais: est(c.canais, false, 'Em breve (Sprint 11)'),
     status: est(c.status, !n.so_recebe, 'Começa quando o chip amadurecer'),
     contatos: est(c.contatos, false, 'Em breve (Sprint 12)'),
