@@ -45,25 +45,15 @@ describe('podeResponderMaturador', () => {
   });
 });
 
-describe('limiteDisparo — rampa por fase e freio de sem resposta', () => {
-  it('Aquecimento 2/3: só contatos que já conversaram, 20 e 50 por dia', () => {
-    expect(limiteDisparo('aquecimento_2', null, 90)).toMatchObject({ limite: 20, somenteConhecidos: true });
-    expect(limiteDisparo('aquecimento_3', null, 90)).toMatchObject({ limite: 50, somenteConhecidos: true });
+// 2026-10-20 (pedido do usuário): saúde do número não restringe mais o disparo — só banido trava.
+describe('limiteDisparo — sem trava de saúde (só banido bloqueia)', () => {
+  it('qualquer fase, score, quarentena, "só recebe" ou sem-resposta → 200/dia, disparo frio', () => {
+    for (const fase of ['perfil', 'aquecimento_1', 'aquecimento_2', 'aquecimento_3', 'pre_oficial', 'madura', 'quarentena', null] as any[]) {
+      expect(limiteDisparo(fase, null, 90)).toMatchObject({ limite: 200, somenteConhecidos: false, motivo: null });
+    }
+    expect(limiteDisparo('madura', null, 10, 'número novo', LIMITE_SEM_RESPOSTA_30D)).toMatchObject({ limite: 200, somenteConhecidos: false });
   });
-  it('Pré-oficial e Madura: disparo frio liberado (100 e 200)', () => {
-    expect(limiteDisparo('pre_oficial', null, 90)).toMatchObject({ limite: 100, somenteConhecidos: false });
-    expect(limiteDisparo('madura', null, 90)).toMatchObject({ limite: 200, somenteConhecidos: false });
-    expect(limiteDisparo(null, null, null)).toMatchObject({ limite: 200, somenteConhecidos: false });
-  });
-  it('muitas mensagens sem resposta em 30 dias → só contatos conhecidos', () => {
-    const r = limiteDisparo('madura', null, 90, null, LIMITE_SEM_RESPOSTA_30D);
-    expect(r).toMatchObject({ limite: 200, somenteConhecidos: true });
-    expect(r.motivo).toMatch(/sem resposta/);
-    expect(limiteDisparo('madura', null, 90, null, LIMITE_SEM_RESPOSTA_30D - 1).somenteConhecidos).toBe(false);
-  });
-  it('travas mais fortes continuam valendo (só recebe, score < 45, quarentena)', () => {
-    expect(limiteDisparo('madura', null, 90, 'número novo').limite).toBe(0);
-    expect(limiteDisparo('madura', null, 44).limite).toBe(0);
-    expect(limiteDisparo('quarentena', null, 90).limite).toBe(0);
+  it('número banido continua bloqueado', () => {
+    expect(limiteDisparo('banida', null, 90).limite).toBe(0);
   });
 });

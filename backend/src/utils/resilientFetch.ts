@@ -58,6 +58,8 @@ export interface ResilientFetchOptions extends RequestInit {
   retryOn?: number[];
   /** Se true, aplica sanitizeEvolutionUrl na URL. Default: true. */
   sanitizeUrl?: boolean;
+  /** Envio de campanha: só número banido trava (quarentena/"só recebe" não). Pedido do usuário 2026-10-20. */
+  envioCampanha?: boolean;
 }
 
 // ── Utilitário interno ────────────────────────────────────────────────────────
@@ -208,13 +210,15 @@ function destinoDoCorpo(body: unknown): string | null {
   } catch { return null; }
 }
 
-export async function motivoEnvioBloqueado(url: string, body?: unknown): Promise<string | null> {
+export async function motivoEnvioBloqueado(url: string, body?: unknown, envioCampanha = false): Promise<string | null> {
   const m = ROTA_ENVIO.exec(url);
   if (!m) return null;
   const instancia = decodeURIComponent(m[1]);
   try {
     const [{ bloqueioEnvioGeral, bloqueioEnvio }, { pool, withTenantContext }] = await Promise.all([import('../services/maturadorGlobal'), import('../db')]);
     const duro = await bloqueioEnvioGeral(pool, instancia);
+    // 2026-10-20 (pedido do usuário: "tirar a restrição para disparo"): campanha só trava em número banido.
+    if (envioCampanha) return duro === 'número banido' ? duro : null;
     if (duro) return duro;
     const soRecebe = await bloqueioEnvio(pool, instancia);
     if (!soRecebe) return null;
@@ -238,7 +242,8 @@ export async function evolutionFetch(
   url: string,
   options: ResilientFetchOptions = {},
 ): Promise<Response> {
-  const bloqueio = await motivoEnvioBloqueado(url, options.body);
+  const { envioCampanha, ...fetchOptions } = options;
+  const bloqueio = await motivoEnvioBloqueado(url, options.body, !!envioCampanha);
   if (bloqueio) {
     console.warn(`[ENVIO_BLOQUEADO] ${url.replace(/apikey=[^&]+/, '')} — ${bloqueio}`);
     return new Response(JSON.stringify({ message: `Envio bloqueado: ${bloqueio}.` }), {
@@ -251,7 +256,7 @@ export async function evolutionFetch(
     retryDelays: RETRY_DELAYS,
     retryOn:     [503, 504],
     sanitizeUrl: true,
-    ...options,
+    ...fetchOptions,
   });
 }
 

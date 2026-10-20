@@ -404,14 +404,20 @@ export const SCORE_MINIMO_DISPARO = 45;
 // contatos que não respondem (valor não divulgado); passou de LIMITE_SEM_RESPOSTA_30D envios de
 // campanha sem resposta em 30 dias, o número volta a disparar só para conhecidos.
 export const LIMITE_SEM_RESPOSTA_30D = 100;
+export const DISPARO_SEM_TRAVA_DE_SAUDE = true;
 
 export function limiteDisparo(
   fase: Fase | null, _faseDesde: string | Date | null, score: number | null, soRecebe: string | null = null,
   semResposta30d = 0,
 ): LimiteDisparo {
   const f: Fase = fase ?? 'madura';
-  if (f === 'quarentena') return { limite: 0, somenteConhecidos: false, motivo: 'Número em quarentena após queda suspeita de ban.', liberaEm: null };
   if (f === 'banida') return { limite: 0, somenteConhecidos: false, motivo: 'Número banido.', liberaEm: null };
+  // 2026-10-20 (pedido do usuário: "tirar a restrição para disparo"): quarentena, fase de
+  // aquecimento, "só recebe", score e freio de sem-resposta NÃO restringem mais o disparo — vale o
+  // limite da campanha/conta e o teto de 30/h. Só número banido trava. O Maturador segue com a
+  // regra própria (`motivoSoRecebe`). Regra antiga mantida abaixo, desligada.
+  if (DISPARO_SEM_TRAVA_DE_SAUDE) return { limite: LIMITE_FASE.madura, somenteConhecidos: false, motivo: null, liberaEm: null };
+  if (f === 'quarentena') return { limite: 0, somenteConhecidos: false, motivo: 'Número em quarentena após queda suspeita de ban.', liberaEm: null };
   if (soRecebe) return { limite: 0, somenteConhecidos: false, motivo: `Número só recebe por enquanto (${soRecebe}): sem disparo até completar o aquecimento sem queda.`, liberaEm: null };
   if (score !== null && score < SCORE_MINIMO_DISPARO) {
     return { limite: 0, somenteConhecidos: false, motivo: `Score ${score}: disparo bloqueado (mínimo ${SCORE_MINIMO_DISPARO}).`, liberaEm: null };

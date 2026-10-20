@@ -502,18 +502,8 @@ REGRAS ESTRITAS:
         ids = r.rows[0]?.instancias_ids || [];
       }
       if (!ids.length) return next();
-      // Sprint 8 (Sprint 4 / H8): número de prospecção (entra em grupos) e pessoal não disparam —
-      // um ban de disparo derrubaria o número que sustenta a prospecção/vida pessoal do cliente.
-      const proibidas = (await pool.query(
-        `SELECT nome, evolution_instancia, papel FROM agentes WHERE id = ANY($1::uuid[]) AND papel IN ('prospeccao', 'pessoal')`, [ids]
-      )).rows;
-      if (proibidas.length) {
-        return res.status(409).json({
-          code: 'PAPEL_INSTANCIA',
-          message: `Estas instâncias não podem disparar pela função que têm: ${proibidas.map((p: any) =>
-            `${p.nome || p.evolution_instancia} (${p.papel === 'pessoal' ? 'pessoal' : 'prospecção'})`).join(', ')}. Tire da campanha ou mude a função em Radar → Configurações.`,
-        });
-      }
+      // 2026-10-20 (pedido do usuário): removida a trava PAPEL_INSTANCIA — prospecção e pessoal
+      // também disparam quando escolhidas na campanha.
       const saude = new Map((await saudeDoUsuario(pool, req.userId)).map(s => [s.agente_id, s]));
       const avaliadas = ids.map(id => saude.get(id)).filter(Boolean) as Awaited<ReturnType<typeof saudeDoUsuario>>;
       if (avaliadas.length && avaliadas.length === ids.length && avaliadas.every(s => s.limite.limite <= 0)) {

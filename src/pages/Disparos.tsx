@@ -2651,9 +2651,8 @@ function StepAntiBan({ form, setForm }: any) {
   // "Selecionar todas" (uniformizado: >70 quando o toggle está ativo, >=40 caso contrário).
   const [apenasSaudaveis, setApenasSaudaveis] = useState(false);
   const [saudeInst, setSaudeInst] = useState<Record<string, any>>({});
-  // 2026-10-17: mesma régua do medidor/backend — "Saudável" é 85+ e o bloqueio é abaixo de 45.
+  // 2026-10-17: mesma régua do medidor/backend — "Saudável" é 85+.
   const LIMIAR_SAUDAVEL = 84; // filtro usa ">", então 85+
-  const LIMIAR_PADRAO = 45;
   // [AUDITORIA] BUG CORRIGIDO (achado 2026-08-10 — usuário reportou disparo bloqueado por
   // "score baixo" num número com score real 70/100): `(i.whatsapp_score || 0)` tratava
   // `whatsapp_score === null` ("nunca calculado ainda" — cron de 15min ou primeira conexão,
@@ -2709,10 +2708,10 @@ function StepAntiBan({ form, setForm }: any) {
   // limiar fixo de score. Sem dado de saúde (instância antiga sem número registrado), segue a regra
   // de score de antes.
   const bloqueadaPorSaude = (i: any) => {
-    // Sprint 8 (Sprint 4 / H8): prospecção e pessoal nunca disparam (o backend também recusa).
-    if (i.papel === "prospeccao" || i.papel === "pessoal") return true;
+    // 2026-10-20 (pedido do usuário): papel e score não bloqueiam mais — só número banido
+    // (o backend devolve limite 0 apenas nesse caso).
     const s = saudeInst[i.id];
-    return s ? s.limite.limite <= 0 : (scoreCalculado(i) && scoreDe(i) < LIMIAR_PADRAO);
+    return s ? s.limite.limite <= 0 : false;
   };
 
   const instanciasVisiveis = apenasSaudaveis
@@ -2788,11 +2787,7 @@ function StepAntiBan({ form, setForm }: any) {
                   <div>
                     <p className="text-sm font-bold">{inst.nome}</p>
                     <p className="text-[10px] text-muted-foreground font-mono">{inst.evolution_instancia}</p>
-                    {(inst.papel === "prospeccao" || inst.papel === "pessoal") ? (
-                      <p className="text-[10px] mt-0.5 text-red-600">
-                        Número de {inst.papel === "pessoal" ? "uso pessoal" : "prospecção (entra em grupos)"} — não dispara campanha.
-                      </p>
-                    ) : s && (
+                    {s && (
                       <p className={`text-[10px] mt-0.5 ${isBlocked ? "text-red-600" : "text-muted-foreground"}`}>
                         {isBlocked
                           ? s.limite.motivo
