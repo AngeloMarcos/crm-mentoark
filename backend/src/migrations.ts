@@ -2494,6 +2494,10 @@ export async function runMigrations(pool: Pool): Promise<void> {
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `).catch(() => {});
+  // Sprint 8 do maturador v5 (2026-10-19): roteiro da conversa gerado por IA para a sessão atual
+  // ({ assunto, linhas[] }); `tema_atual = -1` indica que o par está num roteiro de IA em vez de
+  // num tema do banco fixo. Reversível: DROP COLUMN.
+  await pool.query(`ALTER TABLE maturador_pares ADD COLUMN IF NOT EXISTS roteiro_ia JSONB`).catch(() => {});
   // Sprint 8 (Sprint 4 / H10): nome (pushName) do contato que só tem LID, importado da Evolution
   // — a lista de conversas mostra o nome em vez de "Contato (número oculto)".
   await pool.query(`ALTER TABLE contato_identidades ADD COLUMN IF NOT EXISTS nome TEXT`).catch(() => {});

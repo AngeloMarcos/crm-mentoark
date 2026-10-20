@@ -27,6 +27,10 @@ import { Pool } from 'pg';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
 import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, STATUS_CORES, MENSAGENS_MENTORIA } from './maturadorDialogos';
+import { gerarRoteiro, humanizar, personaDoChip, Roteiro } from './maturadorIA';
+
+/** Sprint 8 (v5): valor de `tema_atual` que indica roteiro escrito por IA (maturador_pares.roteiro_ia). */
+export const TEMA_IA = -1;
 import { bloqueioEnvio, reconectouRecente, podeResponderMaturador, MAX_MENTORIA_DIA_MENTOR, MAX_RECEBIDAS_DIA_RECEPTOR } from './maturadorGlobal';
 import { registrarIdMaturador, invalidarNumerosMaturador } from './maturadorFiltro';
 import { saudePorInstancia, MAX_ENVIOS_HORA } from './saudeNumero';
@@ -360,7 +364,11 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
 
         let novoTema: number | null = par.tema_atual ?? null;
         let novaLinha: number = par.linha_atual ?? 0;
-        const temaAcabou = novoTema === null || novoTema >= TEMAS.length || novaLinha >= TEMAS[novoTema].length;
+        // Sprint 8 (v5): tema -1 = roteiro escrito por IA para esta sessão (maturador_pares.roteiro_ia).
+        let roteiro: Roteiro | null = novoTema === TEMA_IA && Array.isArray(par.roteiro_ia?.linhas) ? par.roteiro_ia : null;
+        const linhasDoTema = (t: number | null): string[] | null =>
+          t === TEMA_IA ? roteiro?.linhas ?? null : t !== null && t >= 0 && t < TEMAS.length ? TEMAS[t] : null;
+        const temaAcabou = !linhasDoTema(novoTema) || novaLinha >= linhasDoTema(novoTema)!.length;
         if (respostaDeNovo && temaAcabou) {
           // Número que só responde não abre tema novo (seria iniciar conversa): passa a vez ao parceiro.
           await pool.query(
@@ -369,7 +377,17 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
           ).catch(() => {});
           continue;
         }
-        if (temaAcabou) {
+        let roteiroNovo = false;
+        if (temaAcabou && !modoMentoria) {
+          // Sprint 8 (v5): tenta um roteiro inédito por IA; qualquer falha/teto cai no banco fixo.
+          roteiro = await gerarRoteiro(pool, {
+            userId: par.user_id, agenteQueAbre: de.id, agenteQueResponde: para.id,
+            assuntoAnterior: par.roteiro_ia?.assunto ?? null,
+          });
+          roteiroNovo = !!roteiro;
+          novoTema = roteiro ? TEMA_IA : sortearTema(par.tema_atual ?? null);
+          novaLinha = 0;
+        } else if (temaAcabou) {
           novoTema = sortearTema(par.tema_atual ?? null);
           novaLinha = 0;
         }
@@ -393,7 +411,9 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // linha da conversa ficam como estavam.
         const texto = modoMentoria
           ? aplicarVariacao(MENSAGENS_MENTORIA[randInt(0, MENSAGENS_MENTORIA.length - 1)])
-          : aplicarVariacao(TEMAS[novoTema][novaLinha]);
+          : novoTema === TEMA_IA
+            ? humanizar(roteiro!.linhas[novaLinha], personaDoChip(de.id))
+            : aplicarVariacao(TEMAS[novoTema!][novaLinha]);
         // Sprint 8 (Sprint 3 / H10): ~20% das respostas citam a mensagem anterior (quoted), como
         // gente de verdade faz em conversa.
         let quoted: any = undefined;
@@ -437,9 +457,11 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
                contador_dia = $4, msgs_restantes_sessao = $5,
                proxima_mensagem_em = NOW() + ($6 || ' minutes')::interval,
                ultima_msg_id = COALESCE($7, ultima_msg_id),
-               falhas_consecutivas = 0, pausado_motivo = NULL, updated_at = NOW()
+               falhas_consecutivas = 0, pausado_motivo = NULL, updated_at = NOW(),
+               roteiro_ia = CASE WHEN $9::boolean THEN $10::jsonb ELSE roteiro_ia END
            WHERE id = $8`,
-          [remetente, novoTema, novaLinha, contadorDia + 1, restantes, proximaMin.toFixed(2), messageId, par.id]
+          [remetente, novoTema, novaLinha, contadorDia + 1, restantes, proximaMin.toFixed(2), messageId, par.id,
+           roteiroNovo, roteiroNovo ? JSON.stringify(roteiro) : null]
         );
         enviados++;
         log.info('MATURADOR', 'Mensagem de maturação enviada', { parId: par.id, de: de.instancia, para: para.instancia });
