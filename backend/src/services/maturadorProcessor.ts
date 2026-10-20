@@ -26,9 +26,10 @@
 import { Pool } from 'pg';
 import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
-import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, STATUS_TEXTOS, STATUS_CORES, MENSAGENS_MENTORIA } from './maturadorDialogos';
+import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, MENSAGENS_MENTORIA } from './maturadorDialogos';
 import { gerarRoteiro, humanizar, personaDoChip, Roteiro } from './maturadorIA';
 import { chancesMidia, midiasHoje, TETO_DIA_CHIP, prepararFoto, gerarAudio, figurinhaAleatoria } from './maturadorMidia';
+import { montarStatus, destinatariosStatus, marcarPublicado } from './maturadorStatus';
 
 /** Sprint 8 (v5): valor de `tema_atual` que indica roteiro escrito por IA (maturador_pares.roteiro_ia). */
 export const TEMA_IA = -1;
@@ -347,18 +348,19 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
                AND (created_at AT TIME ZONE '${TZ}')::date = $2::date LIMIT 1`, [de.id, hoje]
           ).catch(() => ({ rows: [1] }))).rows.length > 0;
           if (!jaPostou) {
-            const textoStatus = STATUS_TEXTOS[randInt(0, STATUS_TEXTOS.length - 1)];
+            // Sprint 10 (v5): status rico — fila de imagens/textos do chip, ou frase da IA (com foto
+            // metade das vezes); visível só para os parceiros do maturador ou para todos os contatos.
+            const st = await montarStatus(pool, { userId: par.user_id, agenteId: de.id });
+            const destinos = await destinatariosStatus(pool, de.id, ctrlDe.status_visibilidade, numeroDestino);
             const rs = await evolutionFetch(`${baseUrl}/message/sendStatus/${de.instancia}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', apikey: de.key },
-              body: JSON.stringify({
-                type: 'text', content: textoStatus, backgroundColor: STATUS_CORES[randInt(0, STATUS_CORES.length - 1)], font: 1,
-                allContacts: false, statusJidList: [`${numeroDestino}@s.whatsapp.net`],
-              }),
+              body: JSON.stringify({ ...st.payload, ...destinos }),
             }).catch(() => null);
+            if (rs?.ok && st.itemId) await marcarPublicado(pool, st.itemId);
             await pool.query(
               `INSERT INTO maturador_mensagens (par_id, user_id, de_agente_id, para_agente_id, tipo, texto) VALUES ($1, $2, $3, $4, 'status', $5)`,
-              [par.id, par.user_id, de.id, para.id, rs?.ok ? textoStatus : `[falhou] ${textoStatus}`]
+              [par.id, par.user_id, de.id, para.id, rs?.ok ? st.descricao : `[falhou] ${st.descricao}`]
             ).catch(() => {});
           }
         }

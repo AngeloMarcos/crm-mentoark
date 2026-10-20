@@ -21,8 +21,12 @@ import { invalidarNumerosMaturador } from '../services/maturadorFiltro';
 import { registrarEvento, mudarFase, normalizar as normalizarNumeroSaude, saudeDoUsuario } from '../services/saudeNumero';
 import {
   controlesPorAgente, salvarControles, estadoControles, velocidadeEfetiva, progressoAquecimento,
-  CONTROLES_PADRAO, VELOCIDADES, TOTAL_DIAS_AQUECIMENTO,
+  CONTROLES_PADRAO, VELOCIDADES, VISIBILIDADES, TOTAL_DIAS_AQUECIMENTO,
 } from '../services/maturadorControles';
+import {
+  proximoItem, adicionarTexto, adicionarImagem, removerItem, urlImagemStatus,
+  MAX_ITENS_POR_TIPO, MAX_CARACTERES_TEXTO, MAX_CARACTERES_LEGENDA,
+} from '../services/maturadorStatus';
 import { recalcularScoreAgente } from '../services/instanceScore';
 import { resolverOwnerId } from '../services/subscription';
 import { avaliarParticipantes, globalLigado, montarRedeGlobal, TERMO_GLOBAL_VERSAO, bloqueioEnvio } from '../services/maturadorGlobal';
@@ -46,9 +50,11 @@ export default function maturadorRouter(pool: Pool): Router {
     const nomes = new Map((await pool.query(`SELECT id, nome FROM agentes WHERE user_id = $1`, [ownerId])).rows.map((x: any) => [x.id, x.nome]));
     const cont = new Map((await pool.query(
       `SELECT a.id,
-              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.de_agente_id = a.id AND m.tipo = 'texto') AS enviadas,
-              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.para_agente_id = a.id AND m.tipo = 'texto') AS recebidas,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.de_agente_id = a.id AND m.tipo IN ('texto', 'audio', 'foto', 'figurinha')) AS enviadas,
+              (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.para_agente_id = a.id AND m.tipo IN ('texto', 'audio', 'foto', 'figurinha')) AS recebidas,
               (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.de_agente_id = a.id AND m.tipo = 'status' AND m.texto NOT LIKE '[falhou]%') AS status,
+              (SELECT COUNT(*)::int FROM maturador_status_itens i WHERE i.agente_id = a.id AND i.tipo = 'imagem') AS status_imagens,
+              (SELECT COUNT(*)::int FROM maturador_status_itens i WHERE i.agente_id = a.id AND i.tipo = 'texto') AS status_textos,
               (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE (m.de_agente_id = a.id OR m.para_agente_id = a.id) AND m.created_at >= NOW() - INTERVAL '24 hours') AS ultimas_24h
        FROM agentes a WHERE a.user_id = $1`, [ownerId])).rows.map((x: any) => [x.id, x]));
     const chips = [];
@@ -62,7 +68,7 @@ export default function maturadorRouter(pool: Pool): Router {
         estado: estadoControles(c, { fase: s.fase, so_recebe: soRecebe }),
         velocidade: { escolhido: c.velocidade, ...velocidadeEfetiva(c.velocidade, { fase: s.fase, primeira_conexao_em: s.primeira_conexao_em }) },
         progresso: { ...progressoAquecimento(s.fase, s.fase_desde), total_dias: TOTAL_DIAS_AQUECIMENTO },
-        contadores: cont.get(s.agente_id) ?? { enviadas: 0, recebidas: 0, status: 0, ultimas_24h: 0 },
+        contadores: cont.get(s.agente_id) ?? { enviadas: 0, recebidas: 0, status: 0, status_imagens: 0, status_textos: 0, ultimas_24h: 0 },
       });
     }
     return res.json({ rotina: { dorme: '00:00–07:00', conversa: '07:00–24:00', status: '14:00–20:00 (1 por dia)' }, chips });
@@ -74,9 +80,48 @@ export default function maturadorRouter(pool: Pool): Router {
     if (!ag.rowCount) return res.status(404).json({ message: 'Número não encontrado nesta conta' });
     const b = req.body || {};
     if (b.velocidade !== undefined && !VELOCIDADES.includes(b.velocidade)) return res.status(400).json({ message: 'Velocidade inválida' });
+    if (b.status_visibilidade !== undefined && !VISIBILIDADES.includes(b.status_visibilidade)) return res.status(400).json({ message: 'Visibilidade inválida' });
     const novo = await salvarControles(pool, req.params.agenteId, ownerId, b);
     log.info('MATURADOR', 'Controles do chip alterados', { agenteId: req.params.agenteId, ...novo });
     return res.json(novo);
+  });
+
+  // ── Sprint 10 do maturador v5 (2026-10-20): status rico — fila de imagens e textos por chip ──
+  const agenteDaConta = async (agenteId: string, ownerId: string) =>
+    (await pool.query(`SELECT id FROM agentes WHERE id = $1 AND user_id = $2`, [agenteId, ownerId])).rowCount! > 0;
+
+  router.get('/status/:agenteId', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    if (!(await agenteDaConta(req.params.agenteId, ownerId))) return res.status(404).json({ message: 'Número não encontrado nesta conta' });
+    const r = await pool.query(
+      `SELECT id, tipo, conteudo, legenda, ordem, publicado_em, vezes FROM maturador_status_itens
+       WHERE agente_id = $1 ORDER BY ordem, created_at`, [req.params.agenteId]);
+    const ctrl = (await controlesPorAgente(pool)).get(req.params.agenteId) ?? CONTROLES_PADRAO;
+    const proximo = await proximoItem(pool, req.params.agenteId);
+    return res.json({
+      visibilidade: ctrl.status_visibilidade,
+      limites: { por_tipo: MAX_ITENS_POR_TIPO, caracteres_texto: MAX_CARACTERES_TEXTO, caracteres_legenda: MAX_CARACTERES_LEGENDA },
+      proximo_id: proximo?.id ?? null,
+      itens: r.rows.map((x: any) => ({ ...x, url: x.tipo === 'imagem' ? urlImagemStatus(x.conteudo) : null })),
+    });
+  });
+
+  router.post('/status/:agenteId/itens', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    if (!(await agenteDaConta(req.params.agenteId, ownerId))) return res.status(404).json({ message: 'Número não encontrado nesta conta' });
+    const b = req.body || {};
+    if (b.tipo === 'imagem' && String(b.imagem || '').length > 15_000_000) return res.status(413).json({ message: 'Imagem grande demais (máx. ~10 MB)' });
+    const r = b.tipo === 'imagem'
+      ? await adicionarImagem(pool, ownerId, req.params.agenteId, b.imagem, b.legenda)
+      : b.tipo === 'texto' ? await adicionarTexto(pool, ownerId, req.params.agenteId, b.texto) : { erro: 'Tipo inválido' };
+    if (r.erro) return res.status(400).json({ message: r.erro });
+    return res.status(201).json(r.item);
+  });
+
+  router.delete('/status/itens/:itemId', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    if (!(await removerItem(pool, ownerId, req.params.itemId))) return res.status(404).json({ message: 'Item não encontrado' });
+    return res.json({ ok: true });
   });
 
   // ── Sprint 9 (2026-10-06): Maturador Global — adesão da conta, situação de cada número, proxy ──

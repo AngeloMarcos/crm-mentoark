@@ -171,13 +171,54 @@ export function estimativaCustoSessao(modelo = process.env.MATURADOR_IA_MODELO |
 /** Só para testes. */
 export function _zerarContadores(): void { sessoesHoje.clear(); }
 
+// ── Chamada curta (usada pelo roteiro e pelo status) ─────────────────────────────────────────
+export type ProviderIA = { provider: AIProvider; modelo: string; providerSlug: string };
+
+/**
+ * Uma chamada pequena à IA com os freios do CRM: respeita MATURADOR_IA=off e o teto global
+ * `AI_LIMITE_DIARIO_USD`, usa sempre modelo pequeno, tem timeout e registra o gasto em
+ * `ai_uso_diario`. Devolve o texto ou null (sem chave, teto, erro).
+ */
+export async function completarCurto(pool: Pool, userId: string, prompt: string, sistema: string, maxTokens: number,
+  override?: ProviderIA | null): Promise<string | null> {
+  if (iaDesligada()) return null;
+  if ((await orcamentoDiarioExcedido(pool)).excedido) return null;
+  let info = override ?? null;
+  if (!info) {
+    const p = await criarProvider(pool, userId, null).catch(() => null);
+    const envKey = process.env.OPENAI_API_KEY || '';
+    // Conta com provider próprio: usa o dela. Senão, chave do servidor.
+    if (p) info = { provider: p.provider, modelo: p.modelo, providerSlug: p.providerSlug };
+    else if (envKey) info = { provider: new OpenAIProvider(envKey), modelo: '', providerSlug: 'openai' };
+    else return null;
+  }
+  // Modelo pequeno sempre: o aquecimento não precisa do modelo caro da conta.
+  const modelo = process.env.MATURADOR_IA_MODELO || (info.providerSlug === 'claude' ? 'claude-3-5-haiku-latest' : 'gpt-4o-mini');
+  const resp = await Promise.race([
+    info.provider.complete([{ role: 'user', content: prompt }], sistema, [], { model: modelo, temperature: 1, maxTokens }),
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), TIMEOUT_MS)),
+  ]);
+  const tokensIn = resp.inputTokens ?? 0;
+  const tokensOut = resp.outputTokens ?? 0;
+  await registrarUsoIA(pool, {
+    userId, providerSlug: info.providerSlug, modelo,
+    tokensEntrada: tokensIn, tokensSaida: tokensOut, custoUsd: estimarCustoUsd(modelo, tokensIn, tokensOut),
+  });
+  return resp.text || null;
+}
+
+/** Texto curto não pode falar de negócio, link, número, dinheiro (mesma regra do roteiro). */
+export function textoPermitido(texto: string): boolean {
+  return !PROIBIDO.test(texto);
+}
+
 // ── Geração ─────────────────────────────────────────────────────────────────────────────────
 export async function gerarRoteiro(pool: Pool, params: {
   userId: string;
   agenteQueAbre: string;
   agenteQueResponde: string;
   assuntoAnterior?: string | null;
-  providerOverride?: { provider: AIProvider; modelo: string; providerSlug: string } | null;
+  providerOverride?: ProviderIA | null;
 }): Promise<Roteiro | null> {
   if (iaDesligada()) return null;
   const chave = chaveDia(params.userId);
@@ -185,39 +226,17 @@ export async function gerarRoteiro(pool: Pool, params: {
   if (usadas >= maxSessoesDia()) return null;
 
   try {
-    if ((await orcamentoDiarioExcedido(pool)).excedido) return null;
-
-    let info = params.providerOverride ?? null;
-    if (!info) {
-      const p = await criarProvider(pool, params.userId, null).catch(() => null);
-      const envKey = process.env.OPENAI_API_KEY || '';
-      // Conta com provider próprio da Anthropic/outro: usa o dela. Senão, chave do servidor.
-      if (p) info = { provider: p.provider, modelo: p.modelo, providerSlug: p.providerSlug };
-      else if (envKey) info = { provider: new OpenAIProvider(envKey), modelo: '', providerSlug: 'openai' };
-      else return null;
-    }
-    // Modelo pequeno sempre: a conversa do aquecimento não precisa do modelo caro da conta.
-    const modelo = process.env.MATURADOR_IA_MODELO || (info.providerSlug === 'claude' ? 'claude-3-5-haiku-latest' : 'gpt-4o-mini');
-
     sessoesHoje.set(chave, usadas + 1);
     const falas = MIN_FALAS + Math.floor(Math.random() * (MAX_FALAS - MIN_FALAS + 1));
     let assunto = ASSUNTOS[Math.floor(Math.random() * ASSUNTOS.length)];
     if (params.assuntoAnterior && assunto === params.assuntoAnterior) assunto = ASSUNTOS[(ASSUNTOS.indexOf(assunto) + 1) % ASSUNTOS.length];
     const prompt = montarPrompt(personaDoChip(params.agenteQueAbre), personaDoChip(params.agenteQueResponde), falas, assunto, new Date());
 
-    const resp = await Promise.race([
-      info.provider.complete([{ role: 'user', content: prompt }], 'Você escreve diálogos curtos e realistas de WhatsApp. Responde só JSON.', [],
-        { model: modelo, temperature: 1, maxTokens: 500 }),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), TIMEOUT_MS)),
-    ]);
-    const tokensIn = resp.inputTokens ?? 0;
-    const tokensOut = resp.outputTokens ?? 0;
-    await registrarUsoIA(pool, {
-      userId: params.userId, providerSlug: info.providerSlug, modelo,
-      tokensEntrada: tokensIn, tokensSaida: tokensOut, custoUsd: estimarCustoUsd(modelo, tokensIn, tokensOut),
-    });
+    const texto = await completarCurto(pool, params.userId, prompt,
+      'Você escreve diálogos curtos e realistas de WhatsApp. Responde só JSON.', 500, params.providerOverride);
+    if (texto === null) return null;
 
-    const roteiro = validarRoteiro(resp.text || '');
+    const roteiro = validarRoteiro(texto);
     if (!roteiro) { log.warn('MATURADOR_IA', 'Roteiro inválido — usando banco de temas', { userId: params.userId }); return null; }
     return { assunto: roteiro.assunto || assunto, linhas: roteiro.linhas };
   } catch (err: any) {

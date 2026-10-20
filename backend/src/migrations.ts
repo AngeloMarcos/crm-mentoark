@@ -2498,6 +2498,25 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // ({ assunto, linhas[] }); `tema_atual = -1` indica que o par está num roteiro de IA em vez de
   // num tema do banco fixo. Reversível: DROP COLUMN.
   await pool.query(`ALTER TABLE maturador_pares ADD COLUMN IF NOT EXISTS roteiro_ia JSONB`).catch(() => {});
+  // Sprint 10 do maturador v5 (2026-10-20): status rico — até 20 imagens + 20 textos por chip,
+  // publicados em sequência (o que publicou há mais tempo volta para o fim da fila), e quem vê.
+  // Reversível: DROP TABLE / DROP COLUMN.
+  await pool.query(`ALTER TABLE maturador_controles ADD COLUMN IF NOT EXISTS status_visibilidade TEXT NOT NULL DEFAULT 'parceiros'`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_status_itens (
+      id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id       UUID        NOT NULL,
+      agente_id     UUID        NOT NULL REFERENCES agentes(id) ON DELETE CASCADE,
+      tipo          TEXT        NOT NULL CHECK (tipo IN ('imagem', 'texto')),
+      conteudo      TEXT        NOT NULL,
+      legenda       TEXT,
+      ordem         INTEGER     NOT NULL DEFAULT 0,
+      publicado_em  TIMESTAMPTZ,
+      vezes         INTEGER     NOT NULL DEFAULT 0,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_status_itens_agente ON maturador_status_itens(agente_id)`).catch(() => {});
   // Sprint 8 (Sprint 4 / H10): nome (pushName) do contato que só tem LID, importado da Evolution
   // — a lista de conversas mostra o nome em vez de "Contato (número oculto)".
   await pool.query(`ALTER TABLE contato_identidades ADD COLUMN IF NOT EXISTS nome TEXT`).catch(() => {});

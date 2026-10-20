@@ -20,12 +20,19 @@ export const VELOCIDADES: Velocidade[] = ['lenta', 'normal', 'rapida'];
 export const CAMPOS_CONTROLE = ['conversas', 'grupos', 'midia', 'canais', 'status', 'contatos'] as const;
 export type CampoControle = typeof CAMPOS_CONTROLE[number];
 
+// Sprint 10 (v5): quem vê o status do chip — só os parceiros do maturador (padrão, nunca chega a
+// cliente) ou todos os contatos do número.
+export type StatusVisibilidade = 'parceiros' | 'todos';
+export const VISIBILIDADES: StatusVisibilidade[] = ['parceiros', 'todos'];
+
 export interface Controles {
   conversas: boolean; grupos: boolean; midia: boolean; canais: boolean; status: boolean; contatos: boolean;
   velocidade: Velocidade;
+  status_visibilidade: StatusVisibilidade;
 }
 export const CONTROLES_PADRAO: Controles = {
   conversas: true, grupos: true, midia: true, canais: true, status: true, contatos: true, velocidade: 'normal',
+  status_visibilidade: 'parceiros',
 };
 
 // Fatores de velocidade: pausa multiplica o descanso entre mensagens/sessões; teto multiplica o limite diário.
@@ -72,6 +79,7 @@ export async function controlesPorAgente(pool: Pool): Promise<Map<string, Contro
     mapa.set(x.agente_id, {
       conversas: x.conversas, grupos: x.grupos, midia: x.midia, canais: x.canais, status: x.status, contatos: x.contatos,
       velocidade: VELOCIDADES.includes(x.velocidade) ? x.velocidade : 'normal',
+      status_visibilidade: x.status_visibilidade === 'todos' ? 'todos' : 'parceiros',
     });
   }
   cache = { em: Date.now(), mapa };
@@ -87,12 +95,13 @@ export async function salvarControles(pool: Pool, agenteId: string, userId: stri
   const novo: Controles = { ...atual };
   for (const c of CAMPOS_CONTROLE) if (typeof (mudancas as any)[c] === 'boolean') (novo as any)[c] = (mudancas as any)[c];
   if (mudancas.velocidade && VELOCIDADES.includes(mudancas.velocidade)) novo.velocidade = mudancas.velocidade;
+  if (mudancas.status_visibilidade && VISIBILIDADES.includes(mudancas.status_visibilidade)) novo.status_visibilidade = mudancas.status_visibilidade;
   await pool.query(
-    `INSERT INTO maturador_controles (agente_id, user_id, conversas, grupos, midia, canais, status, contatos, velocidade, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+    `INSERT INTO maturador_controles (agente_id, user_id, conversas, grupos, midia, canais, status, contatos, velocidade, status_visibilidade, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
      ON CONFLICT (agente_id) DO UPDATE SET conversas = $3, grupos = $4, midia = $5, canais = $6, status = $7,
-       contatos = $8, velocidade = $9, updated_at = NOW()`,
-    [agenteId, userId, novo.conversas, novo.grupos, novo.midia, novo.canais, novo.status, novo.contatos, novo.velocidade]
+       contatos = $8, velocidade = $9, status_visibilidade = $10, updated_at = NOW()`,
+    [agenteId, userId, novo.conversas, novo.grupos, novo.midia, novo.canais, novo.status, novo.contatos, novo.velocidade, novo.status_visibilidade]
   );
   invalidarCacheControles();
   return novo;

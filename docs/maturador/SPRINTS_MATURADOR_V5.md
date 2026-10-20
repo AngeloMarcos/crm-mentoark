@@ -115,6 +115,12 @@ num nível mais avançado.
 - Janela **14–20h, 1 por dia**, só a partir da fase permitida; controle **Publicar status**.
 - Visibilidade configurável: só parceiros do maturador (atual) ou todos os contatos.
 - **Pronto quando**: status com imagem e texto saindo 1×/dia no horário, ordem respeitada.
+- ✅ **Feito (20/10, em prod)** — `services/maturadorStatus.ts`, tabela `maturador_status_itens`,
+  `maturador_controles.status_visibilidade` (padrão "parceiros"), tela "Gerenciar status" no card Controles.
+  Fila: nunca publicado primeiro, depois o mais antigo (gira sozinha). Imagem cadastrada é re-codificada a cada
+  publicação. Sem cadastro: frase da IA (mesmos freios de custo) ou banco fixo, com foto em ~50%. E2E em homolog
+  pelas rotas reais (cadastro, limites, ordem, visibilidade, remoção do arquivo); publicação real no WhatsApp
+  ainda não observada (sem par ativo).
 
 ### Sprint 11 — Grupos e canais
 - **Seus grupos**: até 5 convites por conta; só os chips da conta entram; **máx. 2 grupos/dia, ≥ 2 h**; estado
