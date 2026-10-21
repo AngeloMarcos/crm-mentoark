@@ -27,6 +27,18 @@ const DialogOverlay = React.forwardRef<
 ));
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
+// Padrão do sistema (2026-10-20, pedido do usuário): todo modal abre como PAINEL LATERAL à direita,
+// em altura total — não mais centralizado. As telas continuam passando a largura que querem
+// (`max-w-md`, `sm:max-w-[460px]`, `max-w-3xl`…); classes que só faziam sentido no modal central
+// (altura máxima, cantos arredondados, animação de zoom, posição) são descartadas aqui, num lugar
+// só, para nenhuma tela precisar ser ajustada uma a uma. Confirmações ("Tem certeza?") continuam
+// centrais — usam AlertDialog, que não passa por aqui.
+const SO_MODAL_CENTRAL = /^(?:[a-z0-9-]+:)*(?:max-h-|rounded|zoom-|slide-|duration-|animate-in$|animate-out$|w-\[\d+vw\]$|top-|left-|translate-)/;
+
+function classesDoPainel(className?: string): string | undefined {
+  return className?.split(/\s+/).filter((c) => c && !SO_MODAL_CENTRAL.test(c)).join(" ");
+}
+
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
@@ -36,8 +48,8 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
-        className,
+        "fixed inset-y-0 right-0 z-50 flex h-[100dvh] w-full max-w-lg flex-col gap-4 overflow-y-auto border-l bg-background p-6 shadow-lg transition ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right",
+        classesDoPainel(className),
       )}
       {...props}
     >
@@ -52,12 +64,13 @@ const DialogContent = React.forwardRef<
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex flex-col space-y-1.5 text-center sm:text-left", className)} {...props} />
+  <div className={cn("flex flex-col space-y-1.5 pr-8 text-left", className)} {...props} />
 );
 DialogHeader.displayName = "DialogHeader";
 
+// No painel lateral os botões ficam no rodapé do painel (mt-auto) quando o conteúdo é curto.
 const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2", className)} {...props} />
+  <div className={cn("mt-auto flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end sm:gap-0 sm:space-x-2", className)} {...props} />
 );
 DialogFooter.displayName = "DialogFooter";
 
