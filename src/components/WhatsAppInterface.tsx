@@ -1495,6 +1495,96 @@ export function WhatsAppInterface() {
   // `contatos.id` disponível — `Chat` não carrega esse campo).
   const statusEnvioPorTelefone = useStatusEnvio(activeChat?.phone ? [activeChat.phone] : []);
 
+  // 2026-10-20 (painel de detalhes): registro da conversa no CRM (`contatos`) — base do
+  // "Importar para CRM", das etiquetas e das anotações. Grupo também vira um registro (pelo JID).
+  const [crmInfo, setCrmInfo] = useState<{ id: string; tags: string[]; notas: string } | null>(null);
+  const [abrindoCrm, setAbrindoCrm] = useState(false);
+  const [tagsConta, setTagsConta] = useState<{ nome: string; cor: string | null }[]>([]);
+  const [novaTag, setNovaTag] = useState("");
+  const [editandoNotas, setEditandoNotas] = useState(false);
+  const [notasInput, setNotasInput] = useState("");
+  const [salvandoCrm, setSalvandoCrm] = useState(false);
+  const [galeriaAberta, setGaleriaAberta] = useState<'midia' | 'docs' | null>(null);
+
+  useEffect(() => {
+    setCrmInfo(null);
+    setEditandoNotas(false);
+    if (!showContactPanel || !activeChat?.phone) return;
+    let cancelado = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/whatsapp/contato/${encodeURIComponent(activeChat.phone)}/crm?grupo=${activeChat.is_group ? 'true' : 'false'}`, { headers: await apiHeaders() });
+        if (res.ok && !cancelado) setCrmInfo(await res.json());
+      } catch { /* painel funciona sem */ }
+    })();
+    return () => { cancelado = true; };
+  }, [showContactPanel, activeChat?.phone, activeChat?.is_group]);
+
+  useEffect(() => {
+    if (!showContactPanel || tagsConta.length) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/tags`, { headers: await apiHeaders() });
+        if (!res.ok) return;
+        const j = await res.json();
+        const linhas = Array.isArray(j) ? j : (j?.data ?? []);
+        setTagsConta(linhas.filter((t: any) => t?.nome).map((t: any) => ({ nome: String(t.nome), cor: t.cor ?? null })));
+      } catch { /* sem sugestões */ }
+    })();
+  }, [showContactPanel, tagsConta.length]);
+
+  const importarConversaParaCrm = async () => {
+    if (!activeChat) return;
+    if (activeChat.is_group) { setShowImportarGrupoModal(true); return; }
+    setAbrindoCrm(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/contato/${encodeURIComponent(activeChat.phone)}/crm`, {
+        method: 'POST',
+        headers: await apiHeaders(),
+        body: JSON.stringify({ grupo: false, nome: activeChat.nameIsFallback ? (cleanPushName(activeChat.push_name) || '') : activeChat.name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.id) { toast.error(data.message || 'Erro ao importar para o CRM'); return; }
+      toast.success(data.criado ? 'Contato importado para o CRM' : 'Contato já estava no CRM — abrindo');
+      navigate(`/contatos/${data.id}`);
+    } catch {
+      toast.error('Sem conexão com o servidor');
+    } finally {
+      setAbrindoCrm(false);
+    }
+  };
+
+  const salvarCrm = async (campos: { tags?: string[]; notas?: string }) => {
+    if (!activeChat) return false;
+    setSalvandoCrm(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/contato/${encodeURIComponent(activeChat.phone)}/crm`, {
+        method: 'PATCH',
+        headers: await apiHeaders(),
+        body: JSON.stringify({ grupo: !!activeChat.is_group, nome: activeChat.nameIsFallback ? '' : activeChat.name, ...campos }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(data.message || 'Erro ao salvar'); return false; }
+      setCrmInfo(data);
+      return true;
+    } catch {
+      toast.error('Sem conexão com o servidor');
+      return false;
+    } finally {
+      setSalvandoCrm(false);
+    }
+  };
+
+  const adicionarTag = async (nome: string) => {
+    const t = nome.trim();
+    if (!t) return;
+    const atuais = crmInfo?.tags ?? [];
+    if (atuais.some(x => x.toLowerCase() === t.toLowerCase())) { setNovaTag(""); return; }
+    if (await salvarCrm({ tags: [...atuais, t] })) { setNovaTag(""); toast.success(`Etiqueta "${t}" adicionada`); }
+  };
+  const removerTag = (nome: string) => salvarCrm({ tags: (crmInfo?.tags ?? []).filter(x => x !== nome) });
+  const corDaTag = (nome: string) => tagsConta.find(t => t.nome.toLowerCase() === nome.toLowerCase())?.cor || null;
+
   const filteredChats = useMemo(() => {
     let list = chats.filter(c =>
       c.name.toLowerCase().includes(globalSearchTerm.toLowerCase()) ||
@@ -1621,6 +1711,8 @@ export function WhatsAppInterface() {
             unread: Number(row.unread || (hasUnread ? 1 : 0)),
             is_pinned: row.is_pinned === true,
             is_archived: row.is_archived === true,
+            // 2026-10-20: estado salvo de "Silenciar" (antes se perdia no próximo poll)
+            is_muted: !!row.muted_until && new Date(row.muted_until).getTime() > Date.now(),
             push_name: row.push_name || undefined,
           };
         });
@@ -3007,7 +3099,7 @@ export function WhatsAppInterface() {
       await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
         method: 'POST',
         headers: await apiHeaders(),
-        body: JSON.stringify({ muted_until: nextVal ? new Date(Date.now() + 365*24*60*60*1000).toISOString() : null })
+        body: JSON.stringify({ muted_until: nextVal ? new Date(Date.now() + 365*24*60*60*1000).toISOString() : null, grupo: !!chat.is_group })
       });
     } catch {}
   };
@@ -3025,7 +3117,7 @@ export function WhatsAppInterface() {
       await fetch(`${API_BASE}/api/whatsapp/chat-prefs/${encodeURIComponent(chatId)}`, {
         method: 'POST',
         headers: await apiHeaders(),
-        body: JSON.stringify({ muted_until: until })
+        body: JSON.stringify({ muted_until: until, grupo: !!chats.find(c => c.id === chatId)?.is_group })
       });
     } catch {}
   };
@@ -5101,14 +5193,16 @@ export function WhatsAppInterface() {
 
             {/* Ações Rápidas */}
             <div className="px-5 pb-6 flex flex-col gap-2">
-              {/* [AUDITORIA] BUG: botão sem onClick — não faz nada ao clicar.
-                  [AUDITORIA] FIX PENDENTE (motivo: decisão de produto — pra onde deveria navegar?
-                  precisa de uma rota real de detalhe de contato no CRM, ex: /contatos/:id, e
-                  resolver o id do contato a partir do telefone/activeChat.id): não implementado
-                  nesta sessão, fora do escopo de "fix isolado e de baixo risco". */}
-              <Button className="w-full h-11 text-xs font-black gap-2.5 bg-primary hover:bg-primary/90 text-white rounded-2xl shadow-lg shadow-primary/20 transition-all active:scale-95">
-                <LayoutGrid className="h-4 w-4" />
-                ABRIR NO CRM
+              {/* 2026-10-20 (pedido do usuário): "Abrir no CRM" não fazia nada → "Importar para CRM".
+                  Grupo: abre o modal de leads do grupo (importar participantes / CSV / Excel).
+                  Contato: cria (ou acha) o contato no CRM e abre a ficha dele. */}
+              <Button
+                onClick={importarConversaParaCrm}
+                disabled={abrindoCrm}
+                className="w-full h-11 text-xs font-black uppercase gap-2.5 bg-violet-600 hover:bg-violet-700 text-white rounded-2xl shadow-lg shadow-violet-600/20 transition-all active:scale-95"
+              >
+                {abrindoCrm ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                Importar para CRM
               </Button>
               
               {/* [UI/UX chat, fases 6.9/6.10] Grade de 2 colunas com botões que truncam (antes
@@ -5147,15 +5241,25 @@ export function WhatsAppInterface() {
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="min-w-0 w-full flex items-center justify-center gap-2 h-11 px-2 rounded-2xl border bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted text-[10px] font-black uppercase tracking-tight transition-all active:scale-95">
+                    <button className={`min-w-0 w-full flex items-center justify-center gap-2 h-11 px-2 rounded-2xl border text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 ${
+                      activeChat.is_muted
+                        ? "bg-orange-500/10 border-orange-500/30 text-orange-600 dark:text-orange-400 hover:bg-orange-500/20"
+                        : "bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted"
+                    }`}>
                       <BellOff className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">Silenciar</span>
+                      <span className="truncate">{activeChat.is_muted ? "Silenciado" : "Silenciar"}</span>
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-xl">
                     <DropdownMenuItem onClick={() => muteChatPor(activeChat.id, 8*60*60*1000, "8 horas")} className="cursor-pointer">8 horas</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => muteChatPor(activeChat.id, 7*24*60*60*1000, "1 semana")} className="cursor-pointer">1 semana</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => muteChatPor(activeChat.id, 365*24*60*60*1000, "sempre")} className="cursor-pointer">Sempre</DropdownMenuItem>
+                    {activeChat.is_muted && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => toggleMute(activeChat.id)} className="cursor-pointer">Reativar notificações</DropdownMenuItem>
+                      </>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -5165,13 +5269,16 @@ export function WhatsAppInterface() {
                   conversa de grupo — participante de grupo é dado de terceiro sem relação
                   comercial direta, então qualquer ação em massa (importar OU exportar) exige
                   confirmação explícita no modal abaixo, nunca acontece com um clique só. */}
+              {/* 2026-10-20 (pedido do usuário): "Leads do grupo" saiu (virou o "Importar para CRM"
+                  acima) e o "Sair do grupo" do rodapé veio pra cá, em vermelho, com confirmação. */}
               {activeChat.is_group && (
                 <button
-                  onClick={() => setShowImportarGrupoModal(true)}
-                  className="w-full min-w-0 flex items-center justify-center gap-2 h-11 px-2 rounded-2xl border bg-violet-500/10 border-violet-500/30 text-violet-700 dark:text-violet-300 hover:bg-violet-500/20 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95"
+                  onClick={() => setShowSairGrupoDialog(true)}
+                  disabled={saindoDoGrupo}
+                  className="w-full min-w-0 flex items-center justify-center gap-2 h-11 px-2 rounded-2xl border bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/20 text-[10px] font-black uppercase tracking-tight transition-all active:scale-95 disabled:opacity-60"
                 >
-                  <Users className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Leads do grupo</span>
+                  {saindoDoGrupo ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <LogOut className="h-3.5 w-3.5 shrink-0" />}
+                  <span className="truncate">Sair do grupo</span>
                 </button>
               )}
               {resultadoImportacaoGrupo && (
@@ -5237,18 +5344,58 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Etiquetas</p>
-                {/* [AUDITORIA] BUG: sem onClick — não abre nenhum seletor/modal de etiqueta.
-                    [AUDITORIA] FIX PENDENTE (motivo: precisa de UI nova — modal/dropdown de
-                    seleção de tag + rota de persistência, não existe hoje neste arquivo). */}
-                <button className="p-1 rounded-md text-primary hover:bg-primary/10 transition-all">
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
+                {/* 2026-10-20: etiquetas gravadas em contatos.tags (PATCH /contato/:phone/crm),
+                    sugestões vindas das tags da conta (Tags e Funil). */}
+                <DropdownMenu onOpenChange={(o) => { if (!o) setNovaTag(""); }}>
+                  <DropdownMenuTrigger asChild>
+                    <button className="p-1 rounded-md text-primary hover:bg-primary/10 transition-all" title="Adicionar etiqueta" aria-label="Adicionar etiqueta">
+                      {salvandoCrm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56 rounded-xl shadow-xl">
+                    <div className="p-1.5" onKeyDown={e => e.stopPropagation()}>
+                      <Input
+                        value={novaTag}
+                        onChange={e => setNovaTag(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); adicionarTag(novaTag); } }}
+                        placeholder="Nova etiqueta + Enter"
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                    {tagsConta
+                      .filter(t => !(crmInfo?.tags ?? []).some(x => x.toLowerCase() === t.nome.toLowerCase()))
+                      .filter(t => !novaTag || t.nome.toLowerCase().includes(novaTag.toLowerCase()))
+                      .slice(0, 12)
+                      .map(t => (
+                        <DropdownMenuItem key={t.nome} onClick={() => adicionarTag(t.nome)} className="cursor-pointer text-xs gap-2">
+                          <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: t.cor || 'hsl(var(--muted-foreground))' }} />
+                          <span className="truncate">{t.nome}</span>
+                        </DropdownMenuItem>
+                      ))}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => navigate("/tags-funil")} className="cursor-pointer text-xs text-muted-foreground">
+                      Gerenciar etiquetas
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {activeChat.tag ? (
-                  <span className={`text-[10px] font-bold px-3 py-1 rounded-full shadow-sm border border-transparent ${TAG_COLORS[activeChat.tag] ?? "bg-gray-100 text-gray-600"}`}>
-                    {activeChat.tag}
-                  </span>
+              <div className="flex flex-wrap gap-2 min-w-0">
+                {(crmInfo?.tags ?? []).length ? (
+                  (crmInfo?.tags ?? []).map(t => {
+                    const cor = corDaTag(t);
+                    return (
+                      <span
+                        key={t}
+                        className={`group/tag inline-flex items-center gap-1 max-w-full text-[10px] font-bold pl-3 pr-1.5 py-1 rounded-full border ${cor ? "" : (TAG_COLORS[t.toUpperCase()] ?? "bg-muted text-foreground/80 border-border/50")}`}
+                        style={cor ? { background: `${cor}22`, color: cor, borderColor: `${cor}55` } : undefined}
+                      >
+                        <span className="truncate">{t}</span>
+                        <button onClick={() => removerTag(t)} className="p-0.5 rounded-full opacity-60 hover:opacity-100 hover:bg-black/10" title="Remover etiqueta" aria-label={`Remover etiqueta ${t}`}>
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    );
+                  })
                 ) : (
                   <p className="text-[10px] text-muted-foreground/40 font-medium">Nenhuma etiqueta atribuída</p>
                 )}
@@ -5259,10 +5406,7 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Mídia Compartilhada</p>
-                {/* [AUDITORIA] BUG: sem onClick — "Ver tudo" não leva a lugar nenhum.
-                    [AUDITORIA] FIX PENDENTE (motivo: precisa de uma view/modal de galeria
-                    completa, não existe hoje). */}
-                <button className="text-[10px] font-bold text-primary hover:underline">Ver tudo</button>
+                <button onClick={() => setGaleriaAberta('midia')} className="text-[10px] font-bold text-primary hover:underline">Ver tudo</button>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {activeChat.messages
@@ -5306,9 +5450,7 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60">Documentos</p>
-                {/* [AUDITORIA] BUG: sem onClick, mesma classe do "Ver tudo" de Mídia acima.
-                    [AUDITORIA] FIX PENDENTE (motivo: precisa de view de listagem completa). */}
-                <button className="text-[10px] font-bold text-primary hover:underline">Ver todos</button>
+                <button onClick={() => setGaleriaAberta('docs')} className="text-[10px] font-bold text-primary hover:underline">Ver todos</button>
               </div>
               <div className="flex flex-col gap-2">
                 {activeChat.messages
@@ -5332,22 +5474,52 @@ export function WhatsAppInterface() {
             <div className="border-t border-border/40 px-5 py-5 bg-amber-500/[0.02]">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-amber-600/70">Anotações do CRM</p>
-                {/* [AUDITORIA] BUG: sem onClick — não abre nenhuma edição, e `activeChat.notes`
-                    também nunca é escrito em lugar nenhum deste arquivo (só lido) — o campo é
-                    permanentemente somente-leitura hoje, sempre mostrando "Sem anotações".
-                    [AUDITORIA] FIX PENDENTE (motivo: precisa de UI de edição + rota de
-                    persistência, não existe hoje). */}
-                <button className="p-1 rounded-md text-amber-600/40 hover:text-amber-600 hover:bg-amber-500/10 transition-all">
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
+                {/* 2026-10-20: anotações gravadas em contatos.notas (PATCH /contato/:phone/crm). */}
+                {!editandoNotas && (
+                  <button
+                    onClick={() => { setNotasInput(crmInfo?.notas ?? ""); setEditandoNotas(true); }}
+                    className="p-1 rounded-md text-amber-600/60 hover:text-amber-600 hover:bg-amber-500/10 transition-all"
+                    title="Editar anotações"
+                    aria-label="Editar anotações"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
-              {activeChat.notes ? (
-                <p className="text-xs font-medium text-foreground/80 leading-relaxed bg-background/50 p-3 rounded-xl border border-amber-500/10 italic break-words">"{activeChat.notes}"</p>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-4 px-2 bg-muted/20 rounded-xl border border-dashed border-muted-foreground/20">
-                  <Plus className="h-4 w-4 text-muted-foreground/30 mb-1" />
-                  <p className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-tighter">Sem anotações</p>
+              {editandoNotas ? (
+                <div className="space-y-2">
+                  <textarea
+                    autoFocus
+                    value={notasInput}
+                    onChange={e => setNotasInput(e.target.value)}
+                    rows={4}
+                    maxLength={5000}
+                    placeholder="Escreva uma anotação sobre esta conversa…"
+                    className="w-full text-xs bg-background/60 border border-amber-500/20 rounded-xl p-3 outline-none focus:ring-2 focus:ring-amber-500/30 resize-y"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setEditandoNotas(false)} disabled={salvandoCrm}>Cancelar</Button>
+                    <Button
+                      size="sm"
+                      className="h-8 text-xs gap-1.5"
+                      disabled={salvandoCrm}
+                      onClick={async () => { if (await salvarCrm({ notas: notasInput })) { setEditandoNotas(false); toast.success('Anotação salva'); } }}
+                    >
+                      {salvandoCrm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      Salvar
+                    </Button>
+                  </div>
                 </div>
+              ) : crmInfo?.notas ? (
+                <p className="text-xs font-medium text-foreground/80 leading-relaxed bg-background/50 p-3 rounded-xl border border-amber-500/10 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{crmInfo.notas}</p>
+              ) : (
+                <button
+                  onClick={() => { setNotasInput(""); setEditandoNotas(true); }}
+                  className="w-full flex flex-col items-center justify-center py-4 px-2 bg-muted/20 rounded-xl border border-dashed border-muted-foreground/20 hover:bg-muted/30 transition-colors"
+                >
+                  <Plus className="h-4 w-4 text-muted-foreground/30 mb-1" />
+                  <p className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-tighter">Sem anotações — clique para adicionar</p>
+                </button>
               )}
             </div>
 
@@ -5362,20 +5534,6 @@ export function WhatsAppInterface() {
               </div>
             </details>
 
-            {/* [UI/UX chat, fase 6.9] Ação destrutiva no fim, com peso visual menor e confirmação. */}
-            {activeChat.is_group && (
-              <div className="border-t border-border/40 px-5 py-4">
-                <Button
-                  variant="ghost"
-                  className="w-full justify-center gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
-                  onClick={() => setShowSairGrupoDialog(true)}
-                  disabled={saindoDoGrupo}
-                >
-                  {saindoDoGrupo ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
-                  Sair do grupo
-                </Button>
-              </div>
-            )}
           </ScrollArea>
           </div>
         </>
@@ -5400,6 +5558,63 @@ export function WhatsAppInterface() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* 2026-10-20: "Ver tudo"/"Ver todos" do painel — todas as mídias/documentos já carregados
+          desta conversa (o painel mostra só os 6/3 últimos). */}
+      <Dialog open={galeriaAberta !== null} onOpenChange={(o) => { if (!o) setGaleriaAberta(null); }}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              {galeriaAberta === 'docs' ? <FileText className="h-4 w-4 text-primary" /> : <ImageIcon className="h-4 w-4 text-primary" />}
+              {galeriaAberta === 'docs' ? 'Documentos' : 'Mídia compartilhada'}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {activeChat?.name} — itens das mensagens já carregadas nesta conversa.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+            {galeriaAberta === 'midia' && (() => {
+              const itens = (activeChat?.messages ?? []).filter(m => ['image', 'video', 'audio'].includes(m.tipo || '')).slice().reverse();
+              if (!itens.length) return <p className="py-10 text-center text-xs text-muted-foreground">Sem mídias nesta conversa.</p>;
+              return (
+                <div className="grid grid-cols-3 gap-2">
+                  {itens.map(m => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        if (!m.midia_url) return;
+                        if (m.tipo === 'image') setPhotoModal(m.midia_url);
+                        else if (m.tipo === 'video') setVideoModal({ url: m.midia_url, mime: m.midia_mime });
+                      }}
+                      className="aspect-square rounded-xl bg-muted/30 border border-border/30 overflow-hidden flex items-center justify-center hover:bg-muted/50 transition-all"
+                    >
+                      {m.tipo === 'image' && m.midia_url ? (
+                        <AuthedImg src={m.midia_url} alt="mídia" className="w-full h-full object-cover" />
+                      ) : m.tipo === 'video' ? (
+                        <Video className="h-6 w-6 text-muted-foreground/50" />
+                      ) : (
+                        <Mic className="h-5 w-5 text-muted-foreground/40" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
+            {galeriaAberta === 'docs' && (() => {
+              const docs = (activeChat?.messages ?? []).filter(m => m.tipo === 'document' && m.midia_url).slice().reverse();
+              if (!docs.length) return <p className="py-10 text-center text-xs text-muted-foreground">Nenhum documento nesta conversa.</p>;
+              return (
+                <div className="flex flex-col gap-2 min-w-0">
+                  {docs.map(m => (
+                    <DocumentLink key={m.id} url={m.midia_url!} nome={m.midia_nome} mime={m.midia_mime} variant="panel" timestamp={m.timestamp} />
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Modal de Encaminhar */}
       <Dialog open={showForwardModal} onOpenChange={setShowForwardModal}>
@@ -5460,7 +5675,7 @@ export function WhatsAppInterface() {
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2">
               <Users className="h-4 w-4 text-violet-600" />
-              Leads do grupo
+              Importar para CRM
             </DialogTitle>
             <DialogDescription className="text-sm pt-2 leading-relaxed">
               {grupoInfoExtra?.size ? `${grupoInfoExtra.size} participantes` : 'Os participantes'} de{' '}
@@ -5494,7 +5709,7 @@ export function WhatsAppInterface() {
               <Button
                 onClick={importarContatosDoGrupo}
                 disabled={importandoGrupo || exportandoGrupo !== null}
-                className="flex-1 font-bold text-xs uppercase tracking-widest gap-2"
+                className="flex-1 min-w-0 font-bold text-xs uppercase tracking-widest gap-2 bg-violet-600 hover:bg-violet-700 text-white"
               >
                 {importandoGrupo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                 Importar
@@ -5532,10 +5747,10 @@ export function WhatsAppInterface() {
                 variant="outline"
                 onClick={iniciarResolucaoNomes}
                 disabled={importandoGrupo || exportandoGrupo !== null}
-                className="w-full font-bold text-xs uppercase tracking-widest gap-2 border-violet-200 text-violet-700 hover:bg-violet-50"
+                className="w-full h-auto min-h-10 py-2 whitespace-normal text-center leading-tight font-bold text-xs uppercase tracking-wide gap-2 border-violet-500/40 text-violet-700 dark:text-violet-300 hover:bg-violet-500/10"
               >
-                <UserSearch className="h-3.5 w-3.5" />
-                Resolver nomes via perfil (lento, mais completo)
+                <UserSearch className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0">Resolver nomes via perfil <span className="normal-case font-medium opacity-80">(lento, mais completo)</span></span>
               </Button>
             )}
 

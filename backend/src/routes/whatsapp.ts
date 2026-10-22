@@ -1221,9 +1221,11 @@ export default function whatsappRouter(pool: Pool): Router {
          -- um ID arbitrario longo, nao um telefone BR - o sufixo de 11 digitos usado acima pra
          -- contato pessoal criaria risco real de colisao entre grupos diferentes).
          grupo_unico AS (
-           SELECT telefone AS grupo_id, nome AS nome_grupo, profile_pic_url AS grupo_pic
+           SELECT DISTINCT ON (telefone) telefone AS grupo_id, nome AS nome_grupo, profile_pic_url AS grupo_pic,
+                  muted_until AS grupo_muted_until
            FROM contatos
            WHERE user_id = $1 AND telefone IS NOT NULL
+           ORDER BY telefone, updated_at DESC NULLS LAST
          )
          SELECT
            r.phone AS session_id,
@@ -1254,7 +1256,7 @@ export default function whatsappRouter(pool: Pool): Router {
            gu.grupo_pic,
            COALESCE(cu.is_pinned, false) AS is_pinned,
            COALESCE(cu.is_archived, false) AS is_archived,
-           cu.muted_until
+           COALESCE(cu.muted_until, gu.grupo_muted_until) AS muted_until
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          LEFT JOIN grupo_unico gu ON gu.grupo_id = r.phone AND r.is_group
@@ -1515,6 +1517,79 @@ export default function whatsappRouter(pool: Pool): Router {
         return res.json(ins.rows[0]);
       }
       return res.json(r.rows[0]);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // 2026-10-20 (painel de detalhes da conversa): registro do contato/grupo no CRM — "Importar para
+  // CRM", etiquetas e anotações. Grupo casa pelo JID exato (id longo, não telefone); contato pelo
+  // sufixo de 11 dígitos, mesma regra de GET /conversas.
+  async function acharContatoDaConversa(tenantId: string, phone: string, grupo: boolean) {
+    const r = await pool.query(
+      grupo
+        ? `SELECT id, nome, tags, notas FROM contatos WHERE user_id = $1 AND telefone = $2 ORDER BY updated_at DESC NULLS LAST LIMIT 1`
+        : `SELECT id, nome, tags, notas FROM contatos WHERE user_id = $1 AND RIGHT(telefone, 11) = RIGHT($2, 11) ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+      [tenantId, phone]
+    );
+    return r.rows[0] || null;
+  }
+  async function acharOuCriarContatoDaConversa(tenantId: string, phone: string, grupo: boolean, nome?: string) {
+    const existente = await acharContatoDaConversa(tenantId, phone, grupo);
+    if (existente) return { contato: existente, criado: false };
+    const ins = await pool.query(
+      `INSERT INTO contatos (user_id, nome, telefone, origem, status, atendente_pausou_ia)
+       VALUES ($1, $2, $3, $4, 'novo', false)
+       RETURNING id, nome, tags, notas`,
+      [tenantId, (nome || '').trim() || phone, phone, grupo ? 'WhatsApp (grupo)' : 'WhatsApp']
+    );
+    return { contato: ins.rows[0], criado: true };
+  }
+
+  router.get('/contato/:phone/crm', async (req: AuthRequest, res: Response) => {
+    try {
+      const tenantId = await resolveOwnerId(req.userId!);
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      const c = await acharContatoDaConversa(tenantId, phone, req.query.grupo === 'true');
+      return res.json(c ? { id: c.id, tags: c.tags || [], notas: c.notas || '' } : null);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  router.post('/contato/:phone/crm', async (req: AuthRequest, res: Response) => {
+    try {
+      const tenantId = await resolveOwnerId(req.userId!);
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      if (phone.length < 8) return res.status(400).json({ message: 'Telefone inválido' });
+      const { grupo, nome } = req.body as { grupo?: boolean; nome?: string };
+      const { contato, criado } = await acharOuCriarContatoDaConversa(tenantId, phone, !!grupo, nome);
+      return res.json({ id: contato.id, criado });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  router.patch('/contato/:phone/crm', async (req: AuthRequest, res: Response) => {
+    try {
+      const tenantId = await resolveOwnerId(req.userId!);
+      const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
+      if (phone.length < 8) return res.status(400).json({ message: 'Telefone inválido' });
+      const { grupo, nome, tags, notas } = req.body as { grupo?: boolean; nome?: string; tags?: unknown; notas?: unknown };
+      const { contato } = await acharOuCriarContatoDaConversa(tenantId, phone, !!grupo, nome);
+      const sets: string[] = [];
+      const vals: any[] = [contato.id, tenantId];
+      if (Array.isArray(tags)) {
+        const limpas = [...new Set(tags.map(t => String(t).trim()).filter(Boolean))].slice(0, 30);
+        sets.push(`tags = $${vals.length + 1}`); vals.push(limpas);
+      }
+      if (typeof notas === 'string') { sets.push(`notas = $${vals.length + 1}`); vals.push(notas.slice(0, 5000)); }
+      if (!sets.length) return res.json({ id: contato.id, tags: contato.tags || [], notas: contato.notas || '' });
+      const r = await pool.query(
+        `UPDATE contatos SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1 AND user_id = $2 RETURNING id, tags, notas`,
+        vals
+      );
+      return res.json({ id: r.rows[0].id, tags: r.rows[0].tags || [], notas: r.rows[0].notas || '' });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -3341,8 +3416,17 @@ export default function whatsappRouter(pool: Pool): Router {
   router.post('/chat-prefs/:phone', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     const phone = decodeURIComponent(req.params.phone).replace(/\D/g, '');
-    const { pinned, archived, muted_until } = req.body as any;
+    const { pinned, archived, muted_until, grupo } = req.body as any;
     const tenantId = await resolveOwnerId(userId);
+    // 2026-10-20: grupo casa pelo JID exato e ganha registro em contatos se ainda não tiver —
+    // antes o "Silenciar" de grupo não gravava nada (nenhuma linha batia).
+    if (grupo === true && muted_until !== undefined && phone.length >= 8) {
+      try {
+        const { contato } = await acharOuCriarContatoDaConversa(tenantId, phone, true);
+        await pool.query(`UPDATE contatos SET muted_until = $1, updated_at = NOW() WHERE id = $2`, [muted_until, contato.id]);
+      } catch { /* preferência visual — não derruba nada */ }
+      return res.json({ ok: true });
+    }
     const setParts: string[] = [];
     const vals: any[] = [tenantId, `%${phone.slice(-11)}`];
     if (pinned !== undefined)      { setParts.push(`is_pinned = $${vals.length + 1}`);    vals.push(pinned); }
