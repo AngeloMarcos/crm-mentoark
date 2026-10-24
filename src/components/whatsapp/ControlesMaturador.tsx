@@ -29,7 +29,7 @@ async function chamar(path: string, opts: { method?: string; body?: any } = {}) 
 
 const CONTROLES: { campo: string; titulo: string; descricao: string }[] = [
   { campo: "conversas", titulo: "Conversas", descricao: "Desligado, o chip para de puxar conversa — mas continua respondendo quem falar com ele." },
-  { campo: "grupos", titulo: "Grupos", descricao: "Entrar e conversar em grupos (máx. 2 grupos por dia, com 2h de intervalo)." },
+  { campo: "grupos", titulo: "Grupos", descricao: "Entrar e conversar nos grupos de \"Seus grupos\" (máx. 2 grupos por dia, com 2h de intervalo)." },
   { campo: "midia", titulo: "Fotos e áudios", descricao: "Fotos, áudios e figurinhas nas conversas. Desligado, manda só texto." },
   { campo: "canais", titulo: "Canais", descricao: "Seguir canais do WhatsApp." },
   { campo: "status", titulo: "Publicar status", descricao: "Um status por dia, entre 14h e 20h — das suas imagens e textos, ou escrito pelo sistema." },

@@ -14,6 +14,7 @@ import { reverificarProxies } from './services/proxyInstancia';
 import { retomarCampanhasInstanciaCaida, recalcularMetricasCampanhas } from './services/metricasDisparo';
 import { atualizarNumerosOficiais } from './routes/metaOficial';
 import { processarMaturador } from './services/maturadorProcessor';
+import { processarGruposMaturador } from './services/maturadorGrupos';
 import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
 import { enfileirarBusca, enfileirarLinkPublico } from './radar/fila';
 import { criarBuscaAgendada } from './radar/busca';
@@ -334,6 +335,17 @@ export function initCronJobs() {
       }
     } catch (err: any) {
       log.error('CRON', 'Erro no motor do Maturador de Números', { err: err.message });
+    }
+  });
+
+  // Sprint 11 do maturador v5 (2026-10-23): grupos do aquecimento — entrada aos poucos e conversa
+  // entre os chips da conta (services/maturadorGrupos.ts). Sem grupo cadastrado, não faz nada.
+  cron.schedule('*/2 * * * *', async () => {
+    try {
+      const { entradas, mensagens } = await processarGruposMaturador(pool);
+      if (entradas || mensagens) log.info('CRON', 'Maturador: grupos', { entradas, mensagens });
+    } catch (err: any) {
+      log.error('CRON', 'Erro no motor de grupos do maturador', { err: err.message });
     }
   });
 

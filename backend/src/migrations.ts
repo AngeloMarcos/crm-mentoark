@@ -2517,6 +2517,52 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_status_itens_agente ON maturador_status_itens(agente_id)`).catch(() => {});
+  // Sprint 11 do maturador v5 (2026-10-23): grupos do aquecimento — até 5 convites por conta, os
+  // chips da conta entram aos poucos (máx. 2 grupos/dia por chip, ≥ 2 h entre entradas) e conversam
+  // entre si no grupo. Reversível: DROP TABLE.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_grupos (
+      id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id        UUID        NOT NULL,
+      codigo         TEXT        NOT NULL,
+      nome           TEXT,
+      participantes  INTEGER,
+      group_jid      TEXT,
+      estado         TEXT        NOT NULL DEFAULT 'pendente'
+                     CHECK (estado IN ('pendente', 'ativo', 'cheio', 'invalido', 'comunidade')),
+      motivo         TEXT,
+      verificado_em  TIMESTAMPTZ,
+      tema_atual     INTEGER,
+      linha_atual    INTEGER     NOT NULL DEFAULT 0,
+      roteiro_ia     JSONB,
+      ultimo_agente  UUID,
+      proxima_em     TIMESTAMPTZ,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, codigo)
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_grupo_membros (
+      grupo_id     UUID        NOT NULL REFERENCES maturador_grupos(id) ON DELETE CASCADE,
+      agente_id    UUID        NOT NULL REFERENCES agentes(id) ON DELETE CASCADE,
+      estado       TEXT        NOT NULL CHECK (estado IN ('entrou', 'aguardando_aprovacao', 'falhou')),
+      erro         TEXT,
+      tentativa_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (grupo_id, agente_id)
+    )
+  `).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maturador_grupo_mensagens (
+      id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      grupo_id    UUID        NOT NULL REFERENCES maturador_grupos(id) ON DELETE CASCADE,
+      agente_id   UUID        NOT NULL REFERENCES agentes(id) ON DELETE CASCADE,
+      message_id  TEXT,
+      tipo        TEXT        NOT NULL DEFAULT 'texto',
+      texto       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_grupo_mensagens_agente ON maturador_grupo_mensagens(agente_id, created_at)`).catch(() => {});
   // Sprint 8 (Sprint 4 / H10): nome (pushName) do contato que só tem LID, importado da Evolution
   // — a lista de conversas mostra o nome em vez de "Contato (número oculto)".
   await pool.query(`ALTER TABLE contato_identidades ADD COLUMN IF NOT EXISTS nome TEXT`).catch(() => {});

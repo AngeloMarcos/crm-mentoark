@@ -27,6 +27,9 @@ import {
   proximoItem, adicionarTexto, adicionarImagem, removerItem, urlImagemStatus,
   MAX_ITENS_POR_TIPO, MAX_CARACTERES_TEXTO, MAX_CARACTERES_LEGENDA,
 } from '../services/maturadorStatus';
+import {
+  listarGrupos, adicionarGrupo, removerGrupo, MAX_GRUPOS_POR_CONTA, MAX_ENTRADAS_DIA_CHIP, HORAS_ENTRE_ENTRADAS,
+} from '../services/maturadorGrupos';
 import { recalcularScoreAgente } from '../services/instanceScore';
 import { resolverOwnerId } from '../services/subscription';
 import { avaliarParticipantes, globalLigado, montarRedeGlobal, TERMO_GLOBAL_VERSAO, bloqueioEnvio } from '../services/maturadorGlobal';
@@ -121,6 +124,28 @@ export default function maturadorRouter(pool: Pool): Router {
   router.delete('/status/itens/:itemId', async (req: AuthRequest, res: Response) => {
     const ownerId = await resolverOwnerId(pool, req.userId!);
     if (!(await removerItem(pool, ownerId, req.params.itemId))) return res.status(404).json({ message: 'Item não encontrado' });
+    return res.json({ ok: true });
+  });
+
+  // ── Sprint 11 do maturador v5 (2026-10-23): grupos do aquecimento ────────────────────────────
+  router.get('/grupos', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    return res.json({
+      limites: { grupos: MAX_GRUPOS_POR_CONTA, entradas_dia_chip: MAX_ENTRADAS_DIA_CHIP, horas_entre_entradas: HORAS_ENTRE_ENTRADAS },
+      grupos: await listarGrupos(pool, ownerId),
+    });
+  });
+
+  router.post('/grupos', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const r = await adicionarGrupo(pool, ownerId, req.body?.link);
+    if (r.erro) return res.status(400).json({ message: r.erro });
+    return res.status(201).json(r.grupo);
+  });
+
+  router.delete('/grupos/:grupoId', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    if (!(await removerGrupo(pool, ownerId, req.params.grupoId))) return res.status(404).json({ message: 'Grupo não encontrado' });
     return res.json({ ok: true });
   });
 

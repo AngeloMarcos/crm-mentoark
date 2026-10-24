@@ -131,6 +131,15 @@ num nível mais avançado.
   `newsletter follow`; se não, patch na imagem própria (mesmo esquema da Sprint 1).
 - Controle **Grupos** e **Canais**.
 - **Pronto quando**: chip entra em 1 grupo colado respeitando os limites e conversa nele.
+- ✅ **Grupos feitos (23/10, em prod)** — `services/maturadorGrupos.ts` (cron a cada 2 min), tabelas
+  `maturador_grupos`, `maturador_grupo_membros`, `maturador_grupo_mensagens`, card "Seus grupos". Reaproveita a
+  leitura/entrada/confirmação de convite do Radar. Entrada só Aq2+, controle ligado, sem trava dura; ~1 tentativa
+  a cada 30 min por conta (sorteio). Conversa só com 2+ chips da conta dentro, em turnos, roteiro por IA ou banco
+  de temas; teto 15 msgs/grupo/dia e 6/chip/dia; chip "só recebe" entra mas não fala. Remover do cadastro não
+  tira o chip do grupo. Entrada/conversa real ainda não observadas (sem grupo e 2 chips aptos em homolog).
+- ⏸ **Canais: bloqueado** — a Evolution 2.3.7 não tem rota de seguir canal (o Baileys 7 tem `newsletterFollow`).
+  Exige patch na imagem `mentoark/evolution-api` + reiniciar a Evolution de produção (todos os números
+  reconectam). Decisão do usuário.
 
 ### Sprint 12 — Visualizador, pools e contatos
 - Tela **Conversas** do maturador (P2P e grupos), só leitura.
