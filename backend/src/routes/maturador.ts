@@ -143,6 +143,71 @@ export default function maturadorRouter(pool: Pool): Router {
     return res.status(201).json(r.grupo);
   });
 
+  // ── Sprint 12 do maturador v5 (2026-10-24): pulso do dia + visualizador de conversas (só leitura) ──
+  const HOJE_BR = `(created_at AT TIME ZONE 'America/Sao_Paulo')::date = (NOW() AT TIME ZONE 'America/Sao_Paulo')::date`;
+  const paresDaConta = `SELECT mp.id FROM maturador_pares mp
+    JOIN agentes a ON a.id = mp.agente_a_id JOIN agentes b ON b.id = mp.agente_b_id
+    WHERE mp.user_id = $1 OR a.user_id = $1 OR b.user_id = $1`;
+
+  router.get('/conversas', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const [pulso, p2p, grupos] = await Promise.all([
+      pool.query(
+        `WITH meus AS (SELECT id FROM agentes WHERE user_id = $1),
+              p AS (SELECT de_agente_id, tipo, texto FROM maturador_mensagens WHERE ${HOJE_BR} AND de_agente_id IN (SELECT id FROM meus)),
+              g AS (SELECT agente_id FROM maturador_grupo_mensagens WHERE ${HOJE_BR} AND agente_id IN (SELECT id FROM meus))
+         SELECT (SELECT COUNT(*) FROM p WHERE tipo IN ('texto', 'audio', 'foto', 'figurinha'))::int AS conversa,
+                (SELECT COUNT(*) FROM g)::int AS grupo,
+                (SELECT COUNT(*) FROM p WHERE tipo = 'audio')::int AS audios,
+                (SELECT COUNT(*) FROM p WHERE tipo = 'foto')::int AS fotos,
+                (SELECT COUNT(*) FROM p WHERE tipo = 'status' AND texto NOT LIKE '[falhou]%')::int AS status,
+                (SELECT COUNT(DISTINCT x) FROM (SELECT de_agente_id AS x FROM p UNION SELECT agente_id FROM g) u)::int AS chips_ativos,
+                (SELECT COUNT(*) FROM agentes WHERE user_id = $1 AND evolution_instancia IS NOT NULL)::int AS chips_total`, [ownerId]),
+      pool.query(
+        `SELECT mp.id, a.nome AS nome_a, b.nome AS nome_b, mp.global, mp.ativo,
+                (SELECT texto FROM maturador_mensagens m WHERE m.par_id = mp.id AND m.tipo <> 'status' ORDER BY created_at DESC LIMIT 1) AS ultima,
+                (SELECT MAX(created_at) FROM maturador_mensagens m WHERE m.par_id = mp.id) AS ultima_em,
+                (SELECT COUNT(*)::int FROM maturador_mensagens m WHERE m.par_id = mp.id AND ${HOJE_BR.replace(/created_at/g, 'm.created_at')}) AS hoje
+         FROM maturador_pares mp JOIN agentes a ON a.id = mp.agente_a_id JOIN agentes b ON b.id = mp.agente_b_id
+         WHERE mp.id IN (${paresDaConta})`, [ownerId]),
+      pool.query(
+        `SELECT g.id, g.nome, g.estado,
+                (SELECT texto FROM maturador_grupo_mensagens m WHERE m.grupo_id = g.id ORDER BY created_at DESC LIMIT 1) AS ultima,
+                (SELECT MAX(created_at) FROM maturador_grupo_mensagens m WHERE m.grupo_id = g.id) AS ultima_em,
+                (SELECT COUNT(*)::int FROM maturador_grupo_mensagens m WHERE m.grupo_id = g.id AND ${HOJE_BR.replace(/created_at/g, 'm.created_at')}) AS hoje
+         FROM maturador_grupos g WHERE g.user_id = $1`, [ownerId]),
+    ]);
+    const conversas = [
+      ...p2p.rows.map((x: any) => ({ tipo: 'p2p', id: x.id, titulo: `${x.nome_a} ↔ ${x.nome_b}`, global: x.global, ativo: x.ativo, ultima: x.ultima, ultima_em: x.ultima_em, hoje: x.hoje })),
+      ...grupos.rows.map((x: any) => ({ tipo: 'grupo', id: x.id, titulo: x.nome || 'Grupo', ativo: x.estado === 'ativo', ultima: x.ultima, ultima_em: x.ultima_em, hoje: x.hoje })),
+    ].sort((a, b) => (b.ultima_em ? new Date(b.ultima_em).getTime() : 0) - (a.ultima_em ? new Date(a.ultima_em).getTime() : 0));
+    return res.json({ pulso: pulso.rows[0], conversas });
+  });
+
+  router.get('/conversas/:tipo/:id', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const { tipo, id } = req.params;
+    if (tipo === 'p2p') {
+      const ok = await pool.query(`SELECT 1 FROM (${paresDaConta}) x WHERE x.id = $2`, [ownerId, id]);
+      if (!ok.rowCount) return res.status(404).json({ message: 'Conversa não encontrada' });
+      const r = await pool.query(
+        `SELECT * FROM (SELECT m.de_agente_id, a.nome AS de_nome, m.tipo, m.texto, m.mentoria, m.created_at
+           FROM maturador_mensagens m JOIN agentes a ON a.id = m.de_agente_id
+           WHERE m.par_id = $1 ORDER BY m.created_at DESC LIMIT 150) t ORDER BY created_at`, [id]);
+      return res.json({ mensagens: r.rows });
+    }
+    if (tipo === 'grupo') {
+      const ok = await pool.query(`SELECT 1 FROM maturador_grupos WHERE id = $1 AND user_id = $2`, [id, ownerId]);
+      if (!ok.rowCount) return res.status(404).json({ message: 'Conversa não encontrada' });
+      const r = await pool.query(
+        `SELECT * FROM (SELECT m.agente_id AS de_agente_id, a.nome AS de_nome, m.tipo, m.texto, false AS mentoria, m.created_at
+           FROM maturador_grupo_mensagens m JOIN agentes a ON a.id = m.agente_id
+           WHERE m.grupo_id = $1 ORDER BY m.created_at DESC LIMIT 150) t ORDER BY created_at`, [id]);
+      return res.json({ mensagens: r.rows });
+    }
+    return res.status(400).json({ message: 'Tipo inválido' });
+  });
+
   router.delete('/grupos/:grupoId', async (req: AuthRequest, res: Response) => {
     const ownerId = await resolverOwnerId(pool, req.userId!);
     if (!(await removerGrupo(pool, ownerId, req.params.grupoId))) return res.status(404).json({ message: 'Grupo não encontrado' });

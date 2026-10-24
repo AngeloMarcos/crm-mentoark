@@ -147,6 +147,14 @@ num nível mais avançado.
 - **Contatos salvos**: investigar se dá para salvar os parceiros na agenda do chip via app-state do WhatsApp
   (Baileys); se não, marcar como manual (usuário salva no celular).
 - Painel "pulso" do maturador (mensagens hoje, P2P × grupo, chips ativos).
+- ✅ **Visualizador + pulso feitos (24/10, em prod)** — card "Pulso de hoje" no topo do Aquecimento (conversa,
+  grupos, áudios, fotos, status, chips ativos) + lista de conversas P2P e de grupo, abrindo as últimas 150
+  mensagens no painel lateral (só leitura). Rotas `GET /api/maturador/conversas` e `/conversas/:tipo/:id`.
+- ➖ **Pools**: já existem — privado = pares da conta; compartilhado = card "Aquecimento Global" (exige proxy).
+  Sem tela nova.
+- ⏸ **Contatos salvos: bloqueado, mesmo motivo dos canais** — o Baileys 7 tem `addOrEditContact` (app-state),
+  mas a Evolution 2.3.7 não expõe. Os dois (canais + contatos) entram juntos num único patch da imagem
+  `mentoark/evolution-api` + 1 reinício da Evolution de produção. Até lá: salvar no celular.
 
 ### Sprint 3 (pendente) — proxies
 Continua valendo: 1 proxy **fixo** por número (ISP estático BR). A trava de troca de IP já está em produção.

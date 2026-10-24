@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { MaturadorGlobal } from "./MaturadorGlobal";
 import { ControlesMaturador } from "./ControlesMaturador";
 import { GruposMaturador } from "./GruposMaturador";
+import { ConversasMaturador } from "./ConversasMaturador";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:3000";
 
@@ -239,6 +240,8 @@ export function MaturadorNumeros() {
   return (
     <div className="space-y-4">
       {/* Sprint 7 do maturador v5: controles por chip, velocidade e progresso (modelo ChipFlow). */}
+      {/* Sprint 12 do maturador v5: pulso do dia e conversas (só leitura). */}
+      <ConversasMaturador />
       <ControlesMaturador />
       <GruposMaturador />
       {/* Sprint 9: Maturador Global (entre contas) — adesão, situação de cada número e proxy. */}
@@ -250,7 +253,8 @@ export function MaturadorNumeros() {
         <p className="text-sm text-muted-foreground">
           Aquece número novo trocando conversas naturais com outra instância da sua conta: em
           sessões curtas com pausas, só no horário escolhido, com "digitando…", leitura e reações.
-          Ritmo gradual de 20/dia na 1ª semana, 50 na 2ª e 100 a partir da 3ª. Zero IA, zero custo de token.
+          Ritmo gradual de 20/dia na 1ª semana, 50 na 2ª e 100 a partir da 3ª. As conversas são escritas por IA
+          (com teto de custo por dia) ou, sem IA, saem de um banco de frases prontas.
         </p>
       </div>
 

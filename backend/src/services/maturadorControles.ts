@@ -129,9 +129,11 @@ export function estadoControles(c: Controles, n: { fase?: string | null; so_rece
     grupos: est(c.grupos, !!fase && faseAte(fase, 'aquecimento_2'), 'Começa no Aquecimento 2'),
     // Sprint 9 (v5): áudio/foto/figurinha a partir do Aquecimento 2 (ver maturadorMidia.chancesMidia).
     midia: est(c.midia, !!fase && faseAte(fase, 'aquecimento_2'), 'Começa no Aquecimento 2'),
-    canais: est(c.canais, false, 'Em breve (Sprint 11)'),
+    // Canais e contatos (Sprints 11/12): a Evolution 2.3.7 não tem rota para seguir canal nem para
+    // salvar contato na agenda (o Baileys tem) — depende de atualizar a imagem da Evolution.
+    canais: est(c.canais, false, 'Aguardando atualização da Evolution'),
     status: est(c.status, !n.so_recebe, 'Começa quando o chip amadurecer'),
-    contatos: est(c.contatos, false, 'Em breve (Sprint 12)'),
+    contatos: est(c.contatos, false, 'Aguardando atualização da Evolution — por enquanto salve no celular'),
   };
 }
 
