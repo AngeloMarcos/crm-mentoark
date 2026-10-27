@@ -156,6 +156,42 @@ num nível mais avançado.
   mas a Evolution 2.3.7 não expõe. Os dois (canais + contatos) entram juntos num único patch da imagem
   `mentoark/evolution-api` + 1 reinício da Evolution de produção. Até lá: salvar no celular.
 
+## 6. Segunda leitura do ChipFlow (27/10/2026, conta do usuário, só leitura)
+
+Telas novas: `/dashboard/rules` ("Como funciona") e `/dashboard/chats` (conversas reais, `GET /chats/`).
+"Como funciona" confirma o que já fizemos (rotina, 2 grupos/dia ≥ 2 h, voz fixa, pausas, histórico).
+
+**Amostra real: 20 conversas, 81 mensagens, 25–27/10.**
+- **Parceiros**: as 20 conversas foram com chips de **outras contas** (17 parceiros diferentes); nenhuma entre os
+  3 chips do próprio usuário. O ChipFlow aquece no **pool compartilhado** por padrão (pool privado só no plano
+  de R$ 2.857). Nós: par fixo dentro da conta, e o Aquecimento Global é opcional.
+- **Tipos**: texto 84%, figurinha 11% (com nome: thinking, shocked, praying, tired), **localização 2,5%**
+  (pontos aleatórios em SP), imagem 2,5%. **Nenhum áudio** em 81 mensagens.
+- **Ritmo**: intervalo entre mensagens com mediana de **4,3 min** (p25 0,7, p75 8,4, máx. 32). Tamanho alvo da
+  conversa: **3 a 13** falas (mais comum 5–6). Descanso depois da conversa até ~1 h (`cooldown_remaining_s`).
+  Nós: 1–4 min e 3–7 falas.
+- **Texto**: curto (mediana 30 caracteres). Mistura IA com **frases-molde repetidas** ("véi ta foda hj" 5×,
+  "pdp kkkkk", "véi X... pqp", "slc, X é foda kkk"), e às vezes a resposta não tem nada a ver com a pergunta.
+  Nosso roteiro por IA não repete frase.
+- **Assuntos**: bem específicos ("pedágio caro", "goteira no teto", "sinusite", "ghosting", "metrô na hora do
+  rush"). Nós: 20 assuntos amplos.
+- **Volume**: ~400–500 mensagens em 9 dias por chip (~50/dia); **1 status em 9 dias** (não 1 por dia).
+- **Grupos**: além dos 5 links do cliente, cada chip entrou em 2–3 grupos **públicos** (`official_groups`) e
+  está em **5 grupos do próprio ChipFlow** (`chipflow_groups`, onde chips de todos os clientes conversam —
+  2.758 mensagens de grupo/dia na plataforma). Os 5 links colados pelo usuário estão "tentando" há 9 dias.
+- **Canais**: 2 seguidos por chip. **Salvar contatos: indisponível no próprio ChipFlow** (`disponivel: false`).
+- **Recibo de leitura**: `read_receipts_enabled: false` — o ChipFlow não marca como lida por padrão.
+- **Fases**: `onboarding_stage` PUBLIC_ONBOARDING → GROUP_ONBOARDING → MATURE (+ `maturity_stage` 1–5).
+
+**Proposta — Sprint 13 (calibrar pelo ChipFlow)**, em ordem de valor:
+1. Assuntos: trocar os 20 amplos por ~100 específicos do dia a dia (custo zero).
+2. Ritmo: 2–9 min entre falas e conversas de 3 a 10 falas, descanso proporcional à fase.
+3. Localização (~2%) e figurinha com mais frequência (~10%), áudio mais raro.
+4. Status: cair de ~80% dos dias para ~30%.
+5. Parceiros variados: no Aquecimento Global, trocar de parceiro a cada conversa em vez de par fixo.
+6. Grupos da MentoArk: grupos próprios onde chips de todas as contas do Global conversam (como `chipflow_groups`).
+7. Recibo de leitura configurável (padrão atual: marca como lida).
+
 ### Sprint 3 (pendente) — proxies
 Continua valendo: 1 proxy **fixo** por número (ISP estático BR). A trava de troca de IP já está em produção.
 
