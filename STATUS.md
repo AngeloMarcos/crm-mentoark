@@ -1,5 +1,16 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-10-27 — 🐛 "Não vejo os grupos do número novo": grupos passam a ser salvos para QUALQUER instância — em PRODUÇÃO
+
+O número 5511948702939 foi reconectado na conta mentoark (`crm_435ee4720fc3_3`, papel `atendimento`). O webhook só
+salvava grupo de instância `prospeccao` → 6.576 mensagens de grupo descartadas/dia e grupos invisíveis no CRM (só
+entravam por rajada de sincronização de histórico). **Corrigido na raiz** (`037b2b1`): grupo é salvo para todo papel;
+interruptor de emergência `WEBHOOK_PROCESSAR_GRUPOS=false`. Antes de mudar, medido: +~6 MB/dia de banco, mídia não vai a
+disco, IA nunca responde em grupo, Whisper/Vision de grupo seguem barrados por `grupos_ia_permitidos` (0 ativos) e o
+classificador `grupoTarefaEngine` nem é chamado. Validado em homolog com mensagem sintética numa instância `atendimento`
+(gravada; teste apagado) e em prod com 0 descartes após o deploy. Instância antiga `crm_5319f0ed61b3` (angelobispofilho)
+segue `close` com o mesmo número — a proteção de número duplicado derruba ela se alguém reconectar.
+
 ## Sessão 2026-10-14/18 — 🔥 Maturador sem ban: pesquisa + Sprints 1, 2, 4 e 5 (+ regras de saúde do número) — em PRODUÇÃO
 
 Pesquisa completa em `reports/Maturação WhatsApp e proxy 2026.md` (notas em `research_notes/`). Achado central: os
