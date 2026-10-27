@@ -20,7 +20,8 @@ import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { consultarConvite } from '../radar/evolutionGrupos';
 import { aceitarConvite, confirmarParticipacao, codigoDoConvite } from '../radar/entrar';
 import { saudePorInstancia } from './saudeNumero';
-import { bloqueioEnvio, bloqueioEnvioGeral } from './maturadorGlobal';
+import { bloqueioEnvio, bloqueioEnvioGeral, globalLigado, avaliarParticipantes } from './maturadorGlobal';
+import { intervaloNaSessaoMin } from './maturadorProcessor';
 import { controlesPorAgente, CONTROLES_PADRAO, dormindo } from './maturadorControles';
 import { registrarIdMaturador } from './maturadorFiltro';
 import { gerarRoteiro, humanizar, personaDoChip } from './maturadorIA';
@@ -47,14 +48,21 @@ function horaBrasilia(): number {
 const rand = (min: number, max: number) => min + Math.random() * (max - min);
 
 // ── Cadastro ────────────────────────────────────────────────────────────────────────────────
-export async function adicionarGrupo(pool: Pool, userId: string, link: string): Promise<{ erro?: string; grupo?: any }> {
+// Sprint 13: grupos da MentoArk (`global`) — cadastrados pelo admin; todos os chips do Aquecimento Global
+// entram e conversam entre contas, como os `chipflow_groups` do ChipFlow.
+export const MAX_GRUPOS_GLOBAIS = 10;
+
+export async function adicionarGrupo(pool: Pool, userId: string, link: string, global = false): Promise<{ erro?: string; grupo?: any }> {
   const codigo = codigoDoConvite(String(link || ''));
   if (codigo.length < 10) return { erro: 'Cole o link de convite do grupo (https://chat.whatsapp.com/...)' };
-  const total = (await pool.query(`SELECT COUNT(*)::int AS n FROM maturador_grupos WHERE user_id = $1`, [userId])).rows[0].n;
-  if (total >= MAX_GRUPOS_POR_CONTA) return { erro: `Máximo de ${MAX_GRUPOS_POR_CONTA} grupos por conta` };
+  const total = (await pool.query(
+    global ? `SELECT COUNT(*)::int AS n FROM maturador_grupos WHERE global` : `SELECT COUNT(*)::int AS n FROM maturador_grupos WHERE user_id = $1 AND NOT global`,
+    global ? [] : [userId])).rows[0].n;
+  const max = global ? MAX_GRUPOS_GLOBAIS : MAX_GRUPOS_POR_CONTA;
+  if (total >= max) return { erro: global ? `Máximo de ${max} grupos da MentoArk` : `Máximo de ${max} grupos por conta` };
   const r = await pool.query(
-    `INSERT INTO maturador_grupos (user_id, codigo) VALUES ($1, $2) ON CONFLICT (user_id, codigo) DO NOTHING RETURNING *`,
-    [userId, codigo]);
+    `INSERT INTO maturador_grupos (user_id, codigo, global) VALUES ($1, $2, $3) ON CONFLICT (user_id, codigo) DO NOTHING RETURNING *`,
+    [userId, codigo, global]);
   if (!r.rowCount) return { erro: 'Esse grupo já está na lista' };
   return { grupo: r.rows[0] };
 }
@@ -63,12 +71,19 @@ export async function removerGrupo(pool: Pool, userId: string, grupoId: string):
   return ((await pool.query(`DELETE FROM maturador_grupos WHERE id = $1 AND user_id = $2`, [grupoId, userId])).rowCount ?? 0) > 0;
 }
 
-export async function listarGrupos(pool: Pool, userId: string): Promise<any[]> {
-  const g = await pool.query(`SELECT * FROM maturador_grupos WHERE user_id = $1 ORDER BY created_at`, [userId]);
+/**
+ * Grupos da conta (`global=false`) ou da MentoArk (`global=true`). Nos da MentoArk, cada conta só vê os
+ * próprios chips na lista de membros.
+ */
+export async function listarGrupos(pool: Pool, userId: string, global = false): Promise<any[]> {
+  const g = global
+    ? await pool.query(`SELECT * FROM maturador_grupos WHERE global ORDER BY created_at`)
+    : await pool.query(`SELECT * FROM maturador_grupos WHERE user_id = $1 AND NOT global ORDER BY created_at`, [userId]);
   const m = await pool.query(
     `SELECT m.grupo_id, m.agente_id, m.estado, m.erro, m.tentativa_em, a.nome
      FROM maturador_grupo_membros m JOIN agentes a ON a.id = m.agente_id
-     WHERE m.grupo_id = ANY($1::uuid[])`, [g.rows.map((x: any) => x.id)]);
+     WHERE m.grupo_id = ANY($1::uuid[]) ${global ? 'AND a.user_id = $2' : ''}`,
+    global ? [g.rows.map((x: any) => x.id), userId] : [g.rows.map((x: any) => x.id)]);
   const hoje = await pool.query(
     `SELECT grupo_id, COUNT(*)::int AS n FROM maturador_grupo_mensagens
      WHERE grupo_id = ANY($1::uuid[]) AND (created_at AT TIME ZONE '${TZ}')::date = (NOW() AT TIME ZONE '${TZ}')::date
@@ -84,12 +99,21 @@ export async function listarGrupos(pool: Pool, userId: string): Promise<any[]> {
 // ── Quem pode entrar / falar ────────────────────────────────────────────────────────────────
 type Chip = { id: string; user_id: string; instancia: string; url: string; key: string; fase: string | null };
 
-async function chipsDaConta(pool: Pool, userId: string): Promise<Chip[]> {
+async function chipsPorIds(pool: Pool, ids: string[] | null, userId?: string): Promise<Chip[]> {
   const r = await pool.query(
     `SELECT id, user_id, evolution_instancia AS instancia, evolution_server_url AS url, evolution_api_key AS key
-     FROM agentes WHERE user_id = $1 AND evolution_instancia IS NOT NULL AND evolution_server_url IS NOT NULL`, [userId]);
+     FROM agentes WHERE evolution_instancia IS NOT NULL AND evolution_server_url IS NOT NULL
+       AND ${ids ? 'id = ANY($1::uuid[])' : 'user_id = $1'}`, [ids ?? userId]);
   const saude = await saudePorInstancia(pool);
   return r.rows.map((x: any) => ({ ...x, fase: saude.get(x.instancia)?.fase ?? null }));
+}
+const chipsDaConta = (pool: Pool, userId: string) => chipsPorIds(pool, null, userId);
+
+/** Chips que participam do Aquecimento Global agora (adesão + papel; o proxy já é exigido lá). */
+async function chipsDoGlobal(pool: Pool): Promise<Chip[]> {
+  if (!(await globalLigado(pool))) return [];
+  const ids = (await avaliarParticipantes(pool)).filter((x: any) => x.papel).map((x: any) => x.agenteId);
+  return ids.length ? chipsPorIds(pool, ids) : [];
 }
 
 /** Pode ENTRAR em grupo: fase Aq2+, controle ligado, sem trava dura (ban/quarentena/revisão). */
@@ -114,14 +138,12 @@ export function liberadoParaEntrar(tentativas: { em: Date }[], agora = Date.now(
 }
 
 // ── Entrada ─────────────────────────────────────────────────────────────────────────────────
-async function tentarUmaEntrada(pool: Pool, userId: string, ctrls: Map<string, any>): Promise<string | null> {
-  const grupos = (await pool.query(
-    `SELECT * FROM maturador_grupos WHERE user_id = $1 AND estado IN ('pendente', 'ativo') ORDER BY created_at`, [userId])).rows;
-  if (!grupos.length) return null;
+async function tentarUmaEntrada(pool: Pool, grupos: any[], chips: Chip[], ctrls: Map<string, any>): Promise<string | null> {
+  if (!grupos.length || !chips.length) return null;
+  // Limite por chip vale somando TODOS os grupos (da conta e da MentoArk).
   const membros = (await pool.query(
-    `SELECT grupo_id, agente_id, estado, tentativa_em FROM maturador_grupo_membros WHERE grupo_id = ANY($1::uuid[])`,
-    [grupos.map((g: any) => g.id)])).rows;
-  const chips = await chipsDaConta(pool, userId);
+    `SELECT grupo_id, agente_id, estado, tentativa_em FROM maturador_grupo_membros WHERE agente_id = ANY($1::uuid[])`,
+    [chips.map(c => c.id)])).rows;
 
   for (const chip of chips.sort(() => Math.random() - 0.5)) {
     if (!(await podeEntrar(pool, chip, ctrls))) continue;
@@ -183,7 +205,7 @@ function delayDigitacao(texto: string): number {
   return Math.min(12000, 1500 + texto.length * rand(55, 90));
 }
 
-async function conversarNoGrupo(pool: Pool, g: any, ctrls: Map<string, any>): Promise<string | null> {
+async function conversarNoGrupo(pool: Pool, g: any, ctrls: Map<string, any>, permitidos: Set<string> | null = null): Promise<string | null> {
   if (!g.group_jid || (g.proxima_em && new Date(g.proxima_em).getTime() > Date.now())) return null;
   const hojeSQL = `(created_at AT TIME ZONE '${TZ}')::date = (NOW() AT TIME ZONE '${TZ}')::date`;
   const doGrupo = (await pool.query(`SELECT COUNT(*)::int AS n FROM maturador_grupo_mensagens WHERE grupo_id = $1 AND ${hojeSQL}`, [g.id])).rows[0].n;
@@ -197,6 +219,7 @@ async function conversarNoGrupo(pool: Pool, g: any, ctrls: Map<string, any>): Pr
   const falantes: Chip[] = [];
   for (const x of membros) {
     const c = { ...x, fase: saude.get(x.instancia)?.fase ?? null };
+    if (permitidos && !permitidos.has(c.id)) continue; // grupo da MentoArk: só quem está no Global agora
     if (!(await podeFalar(pool, c, ctrls))) continue;
     const n = (await pool.query(`SELECT COUNT(*)::int AS n FROM maturador_grupo_mensagens WHERE agente_id = $1 AND ${hojeSQL}`, [c.id])).rows[0].n;
     if (n < MAX_MSGS_DIA_CHIP_GRUPOS) falantes.push(c);
@@ -233,14 +256,16 @@ async function conversarNoGrupo(pool: Pool, g: any, ctrls: Map<string, any>): Pr
     return `falha ao falar no grupo ${g.id} (${resp?.status ?? 'rede'})`;
   }
   const id: string | null = ((await resp.json().catch(() => null)) as any)?.key?.id || null;
-  registrarIdMaturador(id);
+  // Grupo da MentoArk: marcado como global (fica fora da caixa de entrada das contas, como os pares globais).
+  registrarIdMaturador(id, g.global === true);
   await pool.query(
     `INSERT INTO maturador_grupo_mensagens (grupo_id, agente_id, message_id, texto) VALUES ($1, $2, $3, $4)`, [g.id, de.id, id, texto]);
 
   linha++;
   const acabou = linha >= linhas()!.length;
   // Sessão: 1–4 min entre falas; acabou o assunto, o grupo descansa 2–5 h.
-  const proximaMin = acabou ? rand(120, 300) : rand(1, 4);
+  // Sprint 13: mesmo ritmo das conversas entre chips (2–9 min, às vezes rápido).
+  const proximaMin = acabou ? rand(120, 300) : intervaloNaSessaoMin();
   await pool.query(
     `UPDATE maturador_grupos SET tema_atual = $2, linha_atual = $3, ultimo_agente = $4,
        proxima_em = NOW() + ($5 || ' minutes')::interval,
@@ -251,15 +276,15 @@ async function conversarNoGrupo(pool: Pool, g: any, ctrls: Map<string, any>): Pr
 }
 
 /** Chip que pediu para entrar em grupo com aprovação: confere de novo a cada ~3 h se já foi aceito. */
-async function reconferirAprovacoes(pool: Pool, userId: string): Promise<void> {
+async function reconferirAprovacoes(pool: Pool, userId: string | null): Promise<void> {
   const r = await pool.query(
     `SELECT m.grupo_id, m.agente_id, g.group_jid, a.evolution_instancia AS instancia, a.evolution_server_url AS url, a.evolution_api_key AS key
      FROM maturador_grupo_membros m
      JOIN maturador_grupos g ON g.id = m.grupo_id
      JOIN agentes a ON a.id = m.agente_id
-     WHERE g.user_id = $1 AND m.estado = 'aguardando_aprovacao' AND g.group_jid IS NOT NULL
+     WHERE ${userId ? 'g.user_id = $1 AND NOT g.global' : 'g.global'} AND m.estado = 'aguardando_aprovacao' AND g.group_jid IS NOT NULL
        AND m.tentativa_em < NOW() - INTERVAL '3 hours'
-     LIMIT 3`, [userId]);
+     LIMIT 3`, userId ? [userId] : []);
   for (const x of r.rows) {
     const conf = await confirmarParticipacao(sanitizeEvolutionUrl(x.url), x.key, x.instancia, x.group_jid, 0);
     await pool.query(
@@ -282,24 +307,41 @@ export async function processarGruposMaturador(pool: Pool): Promise<{ entradas: 
     const hora = horaBrasilia();
     if (dormindo(hora) || hora >= 22) return { entradas, mensagens };
     const ctrls = await controlesPorAgente(pool);
-    const contas = (await pool.query(`SELECT DISTINCT user_id FROM maturador_grupos WHERE estado IN ('pendente', 'ativo')`)).rows;
+    const rodada = async (grupos: any[], chips: Chip[], permitidos: Set<string> | null, quem: string) => {
+      // Entrada: sorteio por rodada para não entrar em horário cravado.
+      if (hora >= 9 && hora < 21 && Math.random() < CHANCE_ENTRADA_RODADA) {
+        const r = await tentarUmaEntrada(pool, grupos.filter(g => ['pendente', 'ativo'].includes(g.estado)), chips, ctrls);
+        if (r) { entradas++; log.info('MATURADOR_GRUPOS', r, { quem }); }
+      }
+      for (const g of grupos.filter(g => g.estado === 'ativo')) {
+        const r = await conversarNoGrupo(pool, g, ctrls, permitidos);
+        if (r && !r.startsWith('falha')) mensagens++;
+        else if (r) log.warn('MATURADOR_GRUPOS', r, { quem });
+      }
+    };
+
+    // Grupos de cada conta: só os chips da própria conta.
+    const contas = (await pool.query(`SELECT DISTINCT user_id FROM maturador_grupos WHERE NOT global AND estado IN ('pendente', 'ativo')`)).rows;
     for (const { user_id } of contas) {
       try {
-        // Entrada: sorteio por rodada para não entrar em horário cravado.
-        if (hora >= 9 && hora < 21 && Math.random() < CHANCE_ENTRADA_RODADA) {
-          const r = await tentarUmaEntrada(pool, user_id, ctrls);
-          if (r) { entradas++; log.info('MATURADOR_GRUPOS', r, { userId: user_id }); }
-        }
+        const grupos = (await pool.query(`SELECT * FROM maturador_grupos WHERE user_id = $1 AND NOT global ORDER BY created_at`, [user_id])).rows;
+        await rodada(grupos, await chipsDaConta(pool, user_id), null, user_id);
         await reconferirAprovacoes(pool, user_id);
-        const ativos = (await pool.query(`SELECT * FROM maturador_grupos WHERE user_id = $1 AND estado = 'ativo'`, [user_id])).rows;
-        for (const g of ativos) {
-          const r = await conversarNoGrupo(pool, g, ctrls);
-          if (r && !r.startsWith('falha')) mensagens++;
-          else if (r) log.warn('MATURADOR_GRUPOS', r, { userId: user_id });
-        }
       } catch (err: any) {
         log.warn('MATURADOR_GRUPOS', 'Falha na rodada da conta', { userId: user_id, err: err?.message });
       }
+    }
+
+    // Sprint 13: grupos da MentoArk — chips de todas as contas que estão no Aquecimento Global agora.
+    try {
+      const gruposG = (await pool.query(`SELECT * FROM maturador_grupos WHERE global AND estado IN ('pendente', 'ativo') ORDER BY created_at`)).rows;
+      if (gruposG.length) {
+        const chipsG = await chipsDoGlobal(pool);
+        await rodada(gruposG, chipsG, new Set(chipsG.map(c => c.id)), 'mentoark');
+        await reconferirAprovacoes(pool, null);
+      }
+    } catch (err: any) {
+      log.warn('MATURADOR_GRUPOS', 'Falha na rodada dos grupos da MentoArk', { err: err?.message });
     }
   } finally {
     rodando = false;

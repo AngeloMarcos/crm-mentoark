@@ -28,7 +28,7 @@ import {
   MAX_ITENS_POR_TIPO, MAX_CARACTERES_TEXTO, MAX_CARACTERES_LEGENDA,
 } from '../services/maturadorStatus';
 import {
-  listarGrupos, adicionarGrupo, removerGrupo, MAX_GRUPOS_POR_CONTA, MAX_ENTRADAS_DIA_CHIP, HORAS_ENTRE_ENTRADAS,
+  listarGrupos, adicionarGrupo, removerGrupo, MAX_GRUPOS_POR_CONTA, MAX_GRUPOS_GLOBAIS, MAX_ENTRADAS_DIA_CHIP, HORAS_ENTRE_ENTRADAS,
 } from '../services/maturadorGrupos';
 import { recalcularScoreAgente } from '../services/instanceScore';
 import { resolverOwnerId } from '../services/subscription';
@@ -131,14 +131,19 @@ export default function maturadorRouter(pool: Pool): Router {
   router.get('/grupos', async (req: AuthRequest, res: Response) => {
     const ownerId = await resolverOwnerId(pool, req.userId!);
     return res.json({
-      limites: { grupos: MAX_GRUPOS_POR_CONTA, entradas_dia_chip: MAX_ENTRADAS_DIA_CHIP, horas_entre_entradas: HORAS_ENTRE_ENTRADAS },
+      limites: { grupos: MAX_GRUPOS_POR_CONTA, grupos_mentoark: MAX_GRUPOS_GLOBAIS, entradas_dia_chip: MAX_ENTRADAS_DIA_CHIP, horas_entre_entradas: HORAS_ENTRE_ENTRADAS },
       grupos: await listarGrupos(pool, ownerId),
+      // Sprint 13: grupos da MentoArk (chips de todas as contas do Aquecimento Global conversam lá).
+      grupos_mentoark: await listarGrupos(pool, ownerId, true),
+      pode_gerenciar_mentoark: req.userRole === 'admin',
     });
   });
 
   router.post('/grupos', async (req: AuthRequest, res: Response) => {
     const ownerId = await resolverOwnerId(pool, req.userId!);
-    const r = await adicionarGrupo(pool, ownerId, req.body?.link);
+    const global = req.body?.global === true;
+    if (global && req.userRole !== 'admin') return res.status(403).json({ message: 'Só o admin cadastra grupos da MentoArk' });
+    const r = await adicionarGrupo(pool, ownerId, req.body?.link, global);
     if (r.erro) return res.status(400).json({ message: r.erro });
     return res.status(201).json(r.grupo);
   });

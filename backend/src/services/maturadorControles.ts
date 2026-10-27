@@ -17,7 +17,8 @@ import { log } from '../logger';
 
 export type Velocidade = 'lenta' | 'normal' | 'rapida';
 export const VELOCIDADES: Velocidade[] = ['lenta', 'normal', 'rapida'];
-export const CAMPOS_CONTROLE = ['conversas', 'grupos', 'midia', 'canais', 'status', 'contatos'] as const;
+// Sprint 13: marcar_lida — dar ou não o visto azul nas mensagens do aquecimento (o ChipFlow vem sem).
+export const CAMPOS_CONTROLE = ['conversas', 'grupos', 'midia', 'canais', 'status', 'contatos', 'marcar_lida'] as const;
 export type CampoControle = typeof CAMPOS_CONTROLE[number];
 
 // Sprint 10 (v5): quem vê o status do chip — só os parceiros do maturador (padrão, nunca chega a
@@ -27,11 +28,12 @@ export const VISIBILIDADES: StatusVisibilidade[] = ['parceiros', 'todos'];
 
 export interface Controles {
   conversas: boolean; grupos: boolean; midia: boolean; canais: boolean; status: boolean; contatos: boolean;
+  marcar_lida: boolean;
   velocidade: Velocidade;
   status_visibilidade: StatusVisibilidade;
 }
 export const CONTROLES_PADRAO: Controles = {
-  conversas: true, grupos: true, midia: true, canais: true, status: true, contatos: true, velocidade: 'normal',
+  conversas: true, grupos: true, midia: true, canais: true, status: true, contatos: true, marcar_lida: true, velocidade: 'normal',
   status_visibilidade: 'parceiros',
 };
 
@@ -77,7 +79,7 @@ export async function controlesPorAgente(pool: Pool): Promise<Map<string, Contro
   const mapa = new Map<string, Controles>();
   for (const x of r.rows) {
     mapa.set(x.agente_id, {
-      conversas: x.conversas, grupos: x.grupos, midia: x.midia, canais: x.canais, status: x.status, contatos: x.contatos,
+      conversas: x.conversas, grupos: x.grupos, midia: x.midia, canais: x.canais, status: x.status, contatos: x.contatos, marcar_lida: x.marcar_lida !== false,
       velocidade: VELOCIDADES.includes(x.velocidade) ? x.velocidade : 'normal',
       status_visibilidade: x.status_visibilidade === 'todos' ? 'todos' : 'parceiros',
     });
@@ -97,11 +99,11 @@ export async function salvarControles(pool: Pool, agenteId: string, userId: stri
   if (mudancas.velocidade && VELOCIDADES.includes(mudancas.velocidade)) novo.velocidade = mudancas.velocidade;
   if (mudancas.status_visibilidade && VISIBILIDADES.includes(mudancas.status_visibilidade)) novo.status_visibilidade = mudancas.status_visibilidade;
   await pool.query(
-    `INSERT INTO maturador_controles (agente_id, user_id, conversas, grupos, midia, canais, status, contatos, velocidade, status_visibilidade, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+    `INSERT INTO maturador_controles (agente_id, user_id, conversas, grupos, midia, canais, status, contatos, velocidade, status_visibilidade, marcar_lida, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
      ON CONFLICT (agente_id) DO UPDATE SET conversas = $3, grupos = $4, midia = $5, canais = $6, status = $7,
-       contatos = $8, velocidade = $9, status_visibilidade = $10, updated_at = NOW()`,
-    [agenteId, userId, novo.conversas, novo.grupos, novo.midia, novo.canais, novo.status, novo.contatos, novo.velocidade, novo.status_visibilidade]
+       contatos = $8, velocidade = $9, status_visibilidade = $10, marcar_lida = $11, updated_at = NOW()`,
+    [agenteId, userId, novo.conversas, novo.grupos, novo.midia, novo.canais, novo.status, novo.contatos, novo.velocidade, novo.status_visibilidade, novo.marcar_lida]
   );
   invalidarCacheControles();
   return novo;
@@ -134,6 +136,7 @@ export function estadoControles(c: Controles, n: { fase?: string | null; so_rece
     canais: est(c.canais, false, 'Aguardando atualização da Evolution'),
     status: est(c.status, !n.so_recebe, 'Começa quando o chip amadurecer'),
     contatos: est(c.contatos, false, 'Aguardando atualização da Evolution — por enquanto salve no celular'),
+    marcar_lida: est(c.marcar_lida, true, ''),
   };
 }
 

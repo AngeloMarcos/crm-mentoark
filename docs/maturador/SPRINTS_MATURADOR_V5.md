@@ -192,6 +192,19 @@ Telas novas: `/dashboard/rules` ("Como funciona") e `/dashboard/chats` (conversa
 6. Grupos da MentoArk: grupos próprios onde chips de todas as contas do Global conversam (como `chipflow_groups`).
 7. Recibo de leitura configurável (padrão atual: marca como lida).
 
+✅ **Sprint 13 feita (27/10, homolog + prod)** — os 7 itens:
+1. `maturadorIA.ASSUNTOS`: ~110 assuntos específicos; conversas de 3 a 10 falas (`MAX_FALAS`).
+2. `maturadorProcessor.intervaloNaSessaoMin` (25% 0,5–2 min, 75% 2–9 min) e `fatorDescanso` por fase
+   (perfil 1,5× … madura 0,8×); grupos no mesmo ritmo. Teto diário passou a contar a idade do CHIP, não do par.
+3. Localização (`sendLocation`, até ~3 km do centro da cidade da persona; 1–2,5%, máx. 2/dia); figurinha 8–12%
+   das respostas (máx. 8/dia); áudio 3–6% (máx. 4/dia).
+4. Status em ~30% dos dias.
+5. Rodízio no Aquecimento Global: vínculo de conversa vence em 48 h (`ROTACAO_HORAS`, coluna
+   `maturador_pares.vinculado_em`) sem conversa em andamento; quem saiu vai pro fim da fila do planejador.
+6. Grupos da MentoArk (`maturador_grupos.global`, até 10, só admin cadastra): chips de todas as contas do Global
+   entram (mesmos limites por chip, somando todos os grupos) e conversam; cada conta só vê os próprios chips.
+7. Controle "Marcar como lida" (`maturador_controles.marcar_lida`, padrão ligado).
+
 ### Sprint 3 (pendente) — proxies
 Continua valendo: 1 proxy **fixo** por número (ISP estático BR). A trava de troca de IP já está em produção.
 

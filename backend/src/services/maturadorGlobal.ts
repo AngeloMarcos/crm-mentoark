@@ -144,7 +144,7 @@ export interface Vinculo { a: string; b: string; tipo: 'conversa' | 'mentoria' }
  * estável), depois completa: receptor até 2 mentores; quem envia até 2 conversas; ninguém passa de
  * MAX_PARCEIROS. Prefere parceiros de contas diferentes e com menos vínculos.
  */
-export function planejarVinculos(participantes: Participante[], atuais: Vinculo[]): { manter: Vinculo[]; criar: Vinculo[] } {
+export function planejarVinculos(participantes: Participante[], atuais: Vinculo[], evitar: Set<string> = new Set()): { manter: Vinculo[]; criar: Vinculo[] } {
   const p = new Map(participantes.map(x => [x.agenteId, x]));
   const valido = (v: Vinculo) => {
     const a = p.get(v.a), b = p.get(v.b);
@@ -169,6 +169,8 @@ export function planejarVinculos(participantes: Participante[], atuais: Vinculo[
   const ordenar = (cands: Participante[], para: Participante) =>
     cands.sort((x, y) =>
       Number(x.userId === para.userId) - Number(y.userId === para.userId)
+      // Sprint 13: quem acabou de sair por rodízio vai pro fim da fila (parceiro novo de verdade).
+      || Number(evitar.has(chave(x.agenteId, para.agenteId))) - Number(evitar.has(chave(y.agenteId, para.agenteId)))
       || (grau.get(x.agenteId) ?? 0) - (grau.get(y.agenteId) ?? 0)
       || x.agenteId.localeCompare(y.agenteId));
 
@@ -194,6 +196,17 @@ export function planejarVinculos(participantes: Participante[], atuais: Vinculo[
     }
   }
   return { manter, criar };
+}
+
+/** Sprint 13: rodízio de parceiros no Aquecimento Global — conversa dura no máximo ~2 dias com o mesmo número. */
+export const ROTACAO_HORAS = 48;
+
+/** Ids dos vínculos de CONVERSA ativos que já venceram e não estão no meio de uma conversa. */
+export function vinculosVencidos(linhas: { id: string; ativo: boolean; tipo: string; vinculado_em: string | Date | null; msgs_restantes_sessao?: number | null }[],
+  agora = Date.now()): Set<string> {
+  return new Set(linhas.filter(x => x.ativo && x.tipo === 'conversa' && x.vinculado_em
+    && agora - new Date(x.vinculado_em).getTime() > ROTACAO_HORAS * 3_600_000
+    && (x.msgs_restantes_sessao ?? 0) <= 0).map(x => x.id));
 }
 
 // ── Execução (cron de 30 min) ────────────────────────────────────────────────────────────────
@@ -339,17 +352,24 @@ export async function montarRedeGlobal(pool: Pool): Promise<{ ligado: boolean; p
   const todos = await avaliarParticipantes(pool, undefined, cfg);
   const primConexao = new Map(todos.map(x => [x.agenteId, x.primeira_conexao_em]));
   const participantes: Participante[] = todos.filter(x => x.papel).map(x => ({ agenteId: x.agenteId, userId: x.userId, papel: x.papel! }));
-  const atuaisR = await pool.query(`SELECT id, agente_a_id, agente_b_id, tipo, ativo FROM maturador_pares WHERE global`);
+  const atuaisR = await pool.query(`SELECT id, agente_a_id, agente_b_id, tipo, ativo, vinculado_em, msgs_restantes_sessao FROM maturador_pares WHERE global`);
   const atuais: (Vinculo & { id: string; ativo: boolean })[] = atuaisR.rows.map((x: any) => ({ id: x.id, a: x.agente_a_id, b: x.agente_b_id, tipo: x.tipo, ativo: x.ativo }));
-  const { manter, criar } = planejarVinculos(participantes, atuais.filter(v => v.ativo));
+  // Sprint 13 (calibrado pelo ChipFlow, onde 20 conversas tiveram 17 parceiros diferentes): vínculo de
+  // CONVERSA vence depois de ROTACAO_HORAS e é trocado por outro parceiro — só sem conversa em andamento.
+  // Mentoria (receptor novo) fica estável.
+  const vencidos = vinculosVencidos(atuaisR.rows);
+  const chaveVinc = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const evitar = new Set(atuais.filter(v => vencidos.has(v.id)).map(v => chaveVinc(v.a, v.b)));
+  const { manter, criar } = planejarVinculos(participantes, atuais.filter(v => v.ativo && !vencidos.has(v.id)), evitar);
   const manterIds = new Set((manter as any[]).map(v => v.id));
 
   // Desativa o que deixou de valer (papel mudou, saiu da adesão, perdeu proxy, caiu…).
   let desativados = 0;
   for (const v of atuais.filter(v => v.ativo && !manterIds.has(v.id))) {
     const r = await pool.query(
-      `UPDATE maturador_pares SET ativo = false, pausado_motivo = 'Saiu do Aquecimento Global (papel, adesão ou proxy mudou)', updated_at = NOW()
-       WHERE id = $1 RETURNING user_id`, [v.id]);
+      `UPDATE maturador_pares SET ativo = false, pausado_motivo = $2, updated_at = NOW()
+       WHERE id = $1 RETURNING user_id`,
+      [v.id, vencidos.has(v.id) ? 'Troca de parceiro (rodízio do Aquecimento Global)' : 'Saiu do Aquecimento Global (papel, adesão ou proxy mudou)']);
     if (r.rowCount) { desativados++; invalidarNumerosMaturador(r.rows[0].user_id); }
   }
   // Cria (ou reativa) os vínculos novos. Primeira mensagem espalhada nas próximas 1–3h.
@@ -358,10 +378,11 @@ export async function montarRedeGlobal(pool: Pool): Promise<{ ligado: boolean; p
   for (const v of criar) {
     const r = await pool.query(
       `INSERT INTO maturador_pares (user_id, agente_a_id, agente_b_id, ativo, global, tipo, data_inicio, hora_inicio, hora_fim,
-                                    proxima_mensagem_em, ultimo_remetente)
-       VALUES ($1, $2, $3, true, true, $4, NOW(), 8, 21, $5::timestamptz, 'b')
+                                    proxima_mensagem_em, ultimo_remetente, vinculado_em)
+       VALUES ($1, $2, $3, true, true, $4, NOW(), 8, 21, $5::timestamptz, 'b', NOW())
        ON CONFLICT (agente_a_id, agente_b_id) DO UPDATE SET ativo = true, global = true, tipo = EXCLUDED.tipo,
-         pausado_motivo = NULL, falhas_consecutivas = 0, proxima_mensagem_em = EXCLUDED.proxima_mensagem_em, updated_at = NOW()
+         pausado_motivo = NULL, falhas_consecutivas = 0, proxima_mensagem_em = EXCLUDED.proxima_mensagem_em,
+         vinculado_em = NOW(), updated_at = NOW()
        WHERE maturador_pares.banido_em IS NULL AND maturador_pares.global -- nunca converte par da conta em global
        RETURNING user_id`,
       // Receptor conectado há menos de 24h: 1ª mensagem só na manhã seguinte (começa a receber no 2º dia).

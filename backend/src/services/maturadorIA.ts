@@ -29,7 +29,8 @@ import { registrarUsoIA, estimarCustoUsd, orcamentoDiarioExcedido } from '../uti
 export type Roteiro = { assunto: string; linhas: string[] };
 
 export const MIN_FALAS = 3;
-export const MAX_FALAS = 7;
+// Sprint 13: o ChipFlow faz conversas de 3 a 13 falas (mais comum 5–6); aqui 3 a 10.
+export const MAX_FALAS = 10;
 const MAX_CARACTERES_FALA = 160;
 const TIMEOUT_MS = 20_000;
 
@@ -124,13 +125,42 @@ export function validarRoteiro(bruto: string): Roteiro | null {
 }
 
 // ── Prompt ──────────────────────────────────────────────────────────────────────────────────
-const ASSUNTOS = [
-  'trânsito ou transporte de hoje', 'futebol (jogo da rodada, sem brigar)', 'o que vai comer no almoço/janta',
-  'cansaço do trabalho', 'um meme ou vídeo engraçado que viu', 'o tempo/calor/chuva', 'série ou filme que está vendo',
-  'combinar um café ou churrasco no fim de semana', 'academia ou caminhada', 'conta de luz/mercado caro',
-  'um parente ou amigo em comum (nome genérico)', 'cachorro ou gato de estimação', 'celular dando problema',
-  'música que está ouvindo', 'feriado ou fim de semana', 'receita que tentou fazer', 'dormiu mal',
-  'lembrança de quando eram mais novos', 'algo que quebrou em casa', 'novela ou reality show',
+// Sprint 13 (v5, 27/10/2026): assuntos ESPECÍFICOS do dia a dia, como os observados nas conversas reais do
+// ChipFlow ("pedágio caro", "goteira no teto", "sinusite") — assunto específico gera conversa mais variada
+// que assunto amplo ("trânsito"). ~100 itens.
+export const ASSUNTOS = [
+  // casa
+  'goteira no teto', 'chuveiro queimou', 'vizinho fazendo obra cedo', 'máquina de lavar fazendo barulho', 'geladeira vazia',
+  'conta de luz veio alta', 'internet caindo toda hora', 'faxina do fim de semana', 'planta que morreu', 'barata na cozinha',
+  'mudança de apartamento', 'condomínio aumentou', 'cachorro do vizinho latindo', 'controle remoto sumiu', 'louça acumulada',
+  // trânsito e transporte
+  'pedágio caro', 'metrô na hora do rush', 'ônibus atrasado', 'uber cancelou a corrida', 'gasolina subiu de novo',
+  'multa de velocidade', 'achar vaga pra estacionar', 'pneu furado', 'viagem de ônibus demorada', 'rodízio de carro',
+  'trânsito na marginal', 'bicicleta pro trabalho', 'mecânico careiro', 'carro fazendo barulho estranho',
+  // comida
+  'café sem açúcar', 'pedir pizza hoje', 'marmita da semana', 'churrasco de domingo', 'receita de bolo que deu errado',
+  'pastel de feira', 'açaí com tudo', 'dieta que não dura', 'mercado caro', 'feijoada de sábado', 'coxinha da padaria',
+  'restaurante novo do bairro', 'vontade de comer doce', 'café da manhã reforçado', 'lanche da madrugada',
+  // trabalho e estudo
+  'trabalhar com sono', 'home office', 'reunião que podia ser email', 'chefe mandando mensagem de noite', 'segunda-feira',
+  'entrevista de emprego', 'prova da faculdade', 'dormir na aula', 'hora extra', 'férias chegando', 'salário que não dura',
+  'colega de trabalho que fala demais', 'currículo atualizado', 'curso online parado na metade',
+  // saúde
+  'ir no dentista', 'sinusite', 'dor nas costas', 'academia depois de muito tempo', 'atestado médico', 'insônia',
+  'gripe que não passa', 'fazer exame de sangue', 'beber mais água', 'caminhada de manhã', 'alergia de tempo seco',
+  // tecnologia e redes
+  'limpar a galeria do celular', 'algoritmo do instagram', 'viciou no reels', 'bateria do celular acabando rápido',
+  'senha esquecida', 'grupo da família no whatsapp', 'figurinha nova', 'tela do celular rachada', 'notificação demais',
+  // lazer e cultura
+  'série nova', 'final do campeonato', 'jogo do time no domingo', 'show que vai ter', 'filme no cinema', 'BBB',
+  'música que não sai da cabeça', 'livro parado na cabeceira', 'videogame até tarde', 'novela das nove',
+  // tempo e passeios
+  'chuva na praia', 'calor insuportável', 'frio de repente', 'saudade de viajar pra praia', 'feriado prolongado',
+  'parque no domingo', 'acampamento', 'viagem de fim de ano', 'passeio com o cachorro',
+  // vida
+  'aniversário de amigo', 'presente de última hora', 'ghosting', 'fazer terapia', 'mãe ligando toda hora',
+  'sobrinho que não para quieto', 'reencontrar amigo antigo', 'fim do mundo segundo o tiktok', 'horóscopo do dia',
+  'promessa de começar segunda', 'organizar as finanças', 'perder as chaves',
 ];
 const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 
@@ -233,7 +263,7 @@ export async function gerarRoteiro(pool: Pool, params: {
     const prompt = montarPrompt(personaDoChip(params.agenteQueAbre), personaDoChip(params.agenteQueResponde), falas, assunto, new Date());
 
     const texto = await completarCurto(pool, params.userId, prompt,
-      'Você escreve diálogos curtos e realistas de WhatsApp. Responde só JSON.', 500, params.providerOverride);
+      'Você escreve diálogos curtos e realistas de WhatsApp. Responde só JSON.', 700, params.providerOverride);
     if (texto === null) return null;
 
     const roteiro = validarRoteiro(texto);

@@ -32,8 +32,9 @@ const CONTROLES: { campo: string; titulo: string; descricao: string }[] = [
   { campo: "grupos", titulo: "Grupos", descricao: "Entrar e conversar nos grupos de \"Seus grupos\" (máx. 2 grupos por dia, com 2h de intervalo)." },
   { campo: "midia", titulo: "Fotos e áudios", descricao: "Fotos, áudios e figurinhas nas conversas. Desligado, manda só texto." },
   { campo: "canais", titulo: "Canais", descricao: "Seguir canais do WhatsApp." },
-  { campo: "status", titulo: "Publicar status", descricao: "Um status por dia, entre 14h e 20h — das suas imagens e textos, ou escrito pelo sistema." },
+  { campo: "status", titulo: "Publicar status", descricao: "Em cerca de 1 a cada 3 dias, entre 14h e 20h — das suas imagens e textos, ou escrito pelo sistema." },
   { campo: "contatos", titulo: "Salvar contatos", descricao: "Salvar os parceiros de aquecimento na agenda do chip." },
+  { campo: "marcar_lida", titulo: "Marcar como lida", descricao: "Dar o \"visto\" azul nas mensagens do aquecimento antes de responder. Desligado, o chip responde sem marcar como lida." },
 ];
 
 const VELOCIDADES = [

@@ -26,7 +26,7 @@ afterEach(() => { delete process.env.OPENAI_API_KEY; });
 describe('chancesMidia', () => {
   it('nada de mídia em Perfil, Aquecimento 1, quarentena ou fase desconhecida', () => {
     for (const f of ['perfil', 'aquecimento_1', 'quarentena', 'banida', null, undefined]) {
-      expect(chancesMidia(f as any)).toEqual({ audio: 0, foto: 0, figurinha: 0 });
+      expect(chancesMidia(f as any)).toEqual({ audio: 0, foto: 0, figurinha: 0, localizacao: 0 });
     }
   });
   it('cresce com a fase e nunca passa de 20%', () => {

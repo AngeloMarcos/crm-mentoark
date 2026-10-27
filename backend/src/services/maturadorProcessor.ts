@@ -28,11 +28,21 @@ import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { log } from '../logger';
 import { TEMAS, REACOES, aplicarVariacao, sortearTema, ENQUETES, MENSAGENS_MENTORIA } from './maturadorDialogos';
 import { gerarRoteiro, humanizar, personaDoChip, Roteiro } from './maturadorIA';
-import { chancesMidia, midiasHoje, TETO_DIA_CHIP, prepararFoto, gerarAudio, figurinhaAleatoria } from './maturadorMidia';
+import { chancesMidia, midiasHoje, TETO_DIA_CHIP, prepararFoto, gerarAudio, figurinhaAleatoria, localizacaoDoChip, TipoMidia } from './maturadorMidia';
 import { montarStatus, destinatariosStatus, marcarPublicado } from './maturadorStatus';
 
 /** Sprint 8 (v5): valor de `tema_atual` que indica roteiro escrito por IA (maturador_pares.roteiro_ia). */
 export const TEMA_IA = -1;
+
+/** Sprint 13: intervalo entre falas na mesma conversa — 25% rápido (0,5–2 min), 75% entre 2 e 9 min. */
+export function intervaloNaSessaoMin(rnd: () => number = Math.random): number {
+  return rnd() < 0.25 ? 0.5 + rnd() * 1.5 : 2 + rnd() * 7;
+}
+
+/** Sprint 13: descanso depois da conversa — "bastante no começo, menos conforme amadurece". */
+export function fatorDescanso(fase: string | null | undefined): number {
+  return ({ perfil: 1.5, aquecimento_1: 1.4, aquecimento_2: 1.2, aquecimento_3: 1, pre_oficial: 0.9, madura: 0.8 } as Record<string, number>)[fase ?? ''] ?? 1;
+}
 import { bloqueioEnvio, reconectouRecente, podeResponderMaturador, MAX_MENTORIA_DIA_MENTOR, MAX_RECEBIDAS_DIA_RECEPTOR } from './maturadorGlobal';
 import { registrarIdMaturador, invalidarNumerosMaturador } from './maturadorFiltro';
 import { saudePorInstancia, MAX_ENVIOS_HORA } from './saudeNumero';
@@ -271,10 +281,14 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
 
         // Teto diário pela fase de maturação do par, contando o que a instância REMETENTE já
         // mandou hoje em TODOS os pares dela.
-        const diasRemetente = Math.max(0, Math.floor((Date.now() - new Date(par.data_inicio).getTime()) / 86_400_000));
         // Sprint 7 (v5): velocidade do chip remetente (travada em "lenta" no início) ajusta teto e pausas.
         const ctrlDe = remetente === 'a' ? ctrlA : ctrlB;
         const saudeDe = saudeFases.get(remetente === 'a' ? par.a_instancia : par.b_instancia);
+        // Sprint 13: a idade que vale é a do CHIP (1ª conexão), não a do par — com parceiros trocando no
+        // Aquecimento Global, contar pela idade do par zeraria o teto a cada parceiro novo.
+        const desdeChip = (saudeDe as any)?.primeira_conexao_em ? new Date((saudeDe as any).primeira_conexao_em).getTime() : NaN;
+        const inicioRef = Number.isFinite(desdeChip) ? Math.min(desdeChip, new Date(par.data_inicio).getTime()) : new Date(par.data_inicio).getTime();
+        const diasRemetente = Math.max(0, Math.floor((Date.now() - inicioRef) / 86_400_000));
         const vel = velocidadeEfetiva(ctrlDe.velocidade, { fase: saudeDe?.fase ?? null, primeira_conexao_em: (saudeDe as any)?.primeira_conexao_em ?? null });
         const fatorVel = FATOR_VELOCIDADE[vel.efetivo];
         const limite = Math.max(1, Math.floor(limiteDiarioPorIdade(diasRemetente) * fatorVel.teto));
@@ -312,7 +326,8 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
 
         // Marca como lida a última mensagem que esta ponta recebeu, antes de "responder".
         // (modo mentoria: o remetente não recebeu nada do receptor — não há o que marcar)
-        if (par.ultima_msg_id && !modoMentoria) {
+        // Sprint 13: controle "Marcar como lida" (o ChipFlow vem com isso desligado).
+        if (par.ultima_msg_id && !modoMentoria && ctrlDe.marcar_lida) {
           await evolutionFetch(`${baseUrl}/chat/markMessageAsRead/${de.instancia}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: de.key },
@@ -341,7 +356,8 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // aparece para os contatos reais do cliente.
         // Sprint 7 (v5, rotina ChipFlow): status só das 14h às 20h, no máximo 1 por dia, em ~80% dos dias,
         // e só com o controle "Publicar status" ligado.
-        const diaDoStatus = [...`${de.id}${hoje}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 10 < 8;
+        // Sprint 13: o ChipFlow publicou 1 status em 9 dias — aqui ~30% dos dias (antes ~80%).
+        const diaDoStatus = [...`${de.id}${hoje}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 10 < 3;
         if (diaDoStatus && horaDeStatus(hora) && ctrlDe.status && !modoMentoria && !respostaDeNovo) {
           const jaPostou = (await pool.query(
             `SELECT 1 FROM maturador_mensagens WHERE de_agente_id = $1 AND tipo = 'status'
@@ -413,9 +429,9 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // Sprint 9 (v5): áudio, foto e figurinha — fração cresce com a fase do remetente (0% em
         // Perfil/Aq1), só com o controle "Fotos e áudios" ligado e dentro do teto diário do chip.
         const chances = ctrlDe.midia && !modoMentoria ? chancesMidia(saudeDe?.fase) : chancesMidia(null);
-        const temMidia = chances.audio + chances.foto + chances.figurinha > 0;
+        const temMidia = chances.audio + chances.foto + chances.figurinha + chances.localizacao > 0;
         const jaMandou = temMidia ? await midiasHoje(pool, de.id, hoje) : null;
-        const sortearMidia = (tipo: 'audio' | 'foto' | 'figurinha') =>
+        const sortearMidia = (tipo: TipoMidia) =>
           !!jaMandou && jaMandou[tipo] < TETO_DIA_CHIP[tipo] && Math.random() < chances[tipo];
         const enviarExtra = async (rota: string, payload: any, tipo: string, texto: string) => {
           const r = await evolutionFetch(`${baseUrl}/message/${rota}/${de.instancia}`, {
@@ -499,13 +515,20 @@ export async function processarMaturador(pool: Pool): Promise<{ processados: num
         // Sprint 9 (v5): figurinha de vez em quando logo depois de uma resposta.
         if (eraResposta && sortearMidia('figurinha')) {
           await enviarExtra('sendSticker', { sticker: figurinhaAleatoria(), delay: randInt(1000, 3000) }, 'figurinha', '[figurinha]');
+        } else if (eraResposta && sortearMidia('localizacao')) {
+          // Sprint 13: localização de vez em quando (~2%), sempre perto da cidade da persona do chip.
+          const loc = localizacaoDoChip(personaDoChip(de.id).cidade);
+          await enviarExtra('sendLocation', { ...loc, delay: randInt(1500, 4000) }, 'localizacao', `📍 ${loc.latitude}, ${loc.longitude}`);
         }
 
-        // Ritmo: sessão de 3–7 trocas com resposta em 1–4 min; acabou a sessão, pausa de 40–150 min.
+        // Ritmo (Sprint 13, calibrado pelo ChipFlow: mediana de 4,3 min entre mensagens, conversas de
+        // 3 a 13 falas): sessão de 3–10 trocas, resposta em 2–9 min (às vezes rápida, 0,5–2 min);
+        // acabou a sessão, descanso de 40–150 min — maior no começo do aquecimento, menor quando madura.
         // Modo mentoria: ~1 mensagem a cada 2h (100–160 min), sem sessão.
-        let restantes = modoMentoria ? 0 : (par.msgs_restantes_sessao > 0 ? par.msgs_restantes_sessao : randInt(3, 7));
+        let restantes = modoMentoria ? 0 : (par.msgs_restantes_sessao > 0 ? par.msgs_restantes_sessao : randInt(3, 10));
         if (!modoMentoria) restantes--;
-        const proximaMin = (modoMentoria ? rand(100, 160) : restantes > 0 ? rand(1, 4) : rand(40, 150)) * fatorVel.pausa;
+        const proximaMin = (modoMentoria ? rand(100, 160) : restantes > 0 ? intervaloNaSessaoMin() : rand(40, 150) * fatorDescanso(saudeDe?.fase))
+          * fatorVel.pausa;
 
         await pool.query(
           `UPDATE maturador_pares

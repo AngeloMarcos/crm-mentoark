@@ -2563,6 +2563,12 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )
   `).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_maturador_grupo_mensagens_agente ON maturador_grupo_mensagens(agente_id, created_at)`).catch(() => {});
+  // Sprint 13 do maturador v5 (2026-10-27, calibrado pelo ChipFlow): controle "Marcar como lida"; grupos
+  // da MentoArk (global = todos os chips do Aquecimento Global entram); data do vínculo do par (para
+  // trocar de parceiro no Aquecimento Global a cada ~2 dias). Reversível: DROP COLUMN.
+  await pool.query(`ALTER TABLE maturador_controles ADD COLUMN IF NOT EXISTS marcar_lida BOOLEAN NOT NULL DEFAULT true`).catch(() => {});
+  await pool.query(`ALTER TABLE maturador_grupos ADD COLUMN IF NOT EXISTS global BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+  await pool.query(`ALTER TABLE maturador_pares ADD COLUMN IF NOT EXISTS vinculado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`).catch(() => {});
   // Sprint 8 (Sprint 4 / H10): nome (pushName) do contato que só tem LID, importado da Evolution
   // — a lista de conversas mostra o nome em vez de "Contato (número oculto)".
   await pool.query(`ALTER TABLE contato_identidades ADD COLUMN IF NOT EXISTS nome TEXT`).catch(() => {});

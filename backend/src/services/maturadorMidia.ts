@@ -29,14 +29,17 @@ const API_BASE_URL = process.env.API_BASE_URL || 'https://api.mentoark.com.br';
 const VARIANTES_DIR = path.join(UPLOADS_DIR, 'variantes');
 
 // ── Quanto de mídia por fase ─────────────────────────────────────────────────────────────────
-export type Chances = { audio: number; foto: number; figurinha: number };
+// Sprint 13 (27/10/2026), calibrado pelas conversas reais do ChipFlow (81 mensagens): figurinha ~11%,
+// localização ~2,5%, imagem ~2,5%, NENHUM áudio. Aqui: figurinha ~10% das respostas, localização ~2%,
+// foto em ~10% das aberturas de assunto (≈ 2% das mensagens), áudio raro.
+export type Chances = { audio: number; foto: number; figurinha: number; localizacao: number };
 const CHANCES_POR_FASE: Record<string, Chances> = {
-  aquecimento_2: { audio: 0.08, foto: 0.10, figurinha: 0.05 },
-  aquecimento_3: { audio: 0.12, foto: 0.15, figurinha: 0.07 },
-  pre_oficial:   { audio: 0.15, foto: 0.20, figurinha: 0.08 },
-  madura:        { audio: 0.15, foto: 0.20, figurinha: 0.08 },
+  aquecimento_2: { audio: 0.03, foto: 0.08, figurinha: 0.08, localizacao: 0.01 },
+  aquecimento_3: { audio: 0.05, foto: 0.10, figurinha: 0.10, localizacao: 0.02 },
+  pre_oficial:   { audio: 0.06, foto: 0.12, figurinha: 0.12, localizacao: 0.025 },
+  madura:        { audio: 0.06, foto: 0.12, figurinha: 0.12, localizacao: 0.025 },
 };
-const NENHUMA: Chances = { audio: 0, foto: 0, figurinha: 0 };
+const NENHUMA: Chances = { audio: 0, foto: 0, figurinha: 0, localizacao: 0 };
 
 /** Perfil, Aquecimento 1, quarentena, banida ou fase desconhecida: só texto. */
 export function chancesMidia(fase: string | null | undefined): Chances {
@@ -44,7 +47,8 @@ export function chancesMidia(fase: string | null | undefined): Chances {
 }
 
 // Por chip, por dia (contado em maturador_mensagens).
-export const TETO_DIA_CHIP: Record<'audio' | 'foto' | 'figurinha', number> = { audio: 8, foto: 3, figurinha: 5 };
+export type TipoMidia = 'audio' | 'foto' | 'figurinha' | 'localizacao';
+export const TETO_DIA_CHIP: Record<TipoMidia, number> = { audio: 4, foto: 3, figurinha: 8, localizacao: 2 };
 
 // ── Voz fixa por chip ────────────────────────────────────────────────────────────────────────
 function hash(s: string): number {
@@ -219,14 +223,36 @@ export function figurinhaAleatoria(): string {
 }
 
 /** Quantas mídias de cada tipo o chip já mandou hoje (horário de Brasília). */
-export async function midiasHoje(pool: Pool, agenteId: string, hoje: string): Promise<Record<'audio' | 'foto' | 'figurinha', number>> {
+export async function midiasHoje(pool: Pool, agenteId: string, hoje: string): Promise<Record<TipoMidia, number>> {
   const r = await pool.query(
     `SELECT COUNT(*) FILTER (WHERE tipo = 'audio')::int AS audio,
             COUNT(*) FILTER (WHERE tipo = 'foto')::int AS foto,
-            COUNT(*) FILTER (WHERE tipo = 'figurinha')::int AS figurinha
+            COUNT(*) FILTER (WHERE tipo = 'figurinha')::int AS figurinha,
+            COUNT(*) FILTER (WHERE tipo = 'localizacao')::int AS localizacao
      FROM maturador_mensagens
      WHERE de_agente_id = $1 AND (created_at AT TIME ZONE 'America/Sao_Paulo')::date = $2::date`,
     [agenteId, hoje]
-  ).catch(() => ({ rows: [{ audio: 99, foto: 99, figurinha: 99 }] }));
+  ).catch(() => ({ rows: [{ audio: 99, foto: 99, figurinha: 99, localizacao: 99 }] }));
   return r.rows[0];
+}
+
+// ── Localização (Sprint 13) ──────────────────────────────────────────────────────────────────
+// Ponto aleatório a até ~3 km do centro da cidade da persona do chip (mesma cidade sempre).
+const CENTRO_CIDADE: Record<string, [number, number]> = {
+  'São Paulo': [-23.5505, -46.6333], 'Campinas': [-22.9099, -47.0626], 'Santo André': [-23.6639, -46.5383],
+  'Guarulhos': [-23.4538, -46.5333], 'Belo Horizonte': [-19.9167, -43.9345], 'Curitiba': [-25.4284, -49.2733],
+  'Rio de Janeiro': [-22.9068, -43.1729], 'Sorocaba': [-23.5015, -47.4526], 'Ribeirão Preto': [-21.1775, -47.8103],
+  'Osasco': [-23.5325, -46.7917], 'Santos': [-23.9608, -46.3336], 'São José dos Campos': [-23.1896, -45.8841],
+};
+
+export function localizacaoDoChip(cidade: string, rnd: () => number = Math.random): { latitude: number; longitude: number; name: string; address: string } {
+  const [lat, lng] = CENTRO_CIDADE[cidade] ?? CENTRO_CIDADE['São Paulo'];
+  const raio = 0.027 * Math.sqrt(rnd());           // ~3 km em graus
+  const ang = rnd() * 2 * Math.PI;
+  return {
+    latitude: Number((lat + raio * Math.cos(ang)).toFixed(6)),
+    longitude: Number((lng + raio * Math.sin(ang)).toFixed(6)),
+    name: 'Localização',
+    address: `${CENTRO_CIDADE[cidade] ? cidade : 'São Paulo'}`,
+  };
 }
