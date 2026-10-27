@@ -814,14 +814,12 @@ export default function webhookRouter(pool: Pool): Router {
       if (!remoteJid) { wlog('WEBHOOK_DROP', `remoteJid vazio instance=${payload.instance}`); return; }
       if (!remoteJid.includes('@')) { wlog('WEBHOOK_DROP', `remoteJid sem @: "${remoteJid}" instance=${payload.instance}`); return; }
       const isGroup = remoteJid.endsWith('@g.us');
-      // Política do produto: por padrão o CRM não interage com grupos — nada é salvo e a IA nunca
-      // roda. Grupos eram 59% das mensagens em produção. Exceção (2026-09-28, pedido explícito do
-      // usuário): a instância marcada papel='prospeccao' (Radar de Grupos, `entrar.ts`) entra em
-      // grupo de propósito — pra essa instância especificamente, a mensagem PASSA a ser salva (o
-      // grupo aparece na lista de conversas do CRM), mas a IA continua nunca respondendo em grupo
-      // em NENHUM caso — ver o `if (isGroup) return` na seção "Motor IA" mais abaixo, que é
-      // independente desta checagem aqui. Atendimento/disparo continuam descartando grupo como
-      // sempre. A decisão de salvar ou não depende do papel da instância, resolvido logo abaixo.
+      // Política de grupos (2026-10-27, pedido do usuário: "não acontecer mais"): mensagem de grupo é
+      // SALVA para qualquer instância, de qualquer papel — antes só 'prospeccao' salvava, e um número
+      // conectado como 'atendimento' ficava com os grupos invisíveis no CRM (6.576 descartes/dia no
+      // número novo). Salvar não liga nada caro: a IA nunca responde em grupo (`if (isGroup) return`
+      // na seção "Motor IA"), Whisper/Vision de grupo seguem barrados por `grupos_ia_permitidos`, e
+      // mídia não é gravada em disco. Interruptor de emergência: WEBHOOK_PROCESSAR_GRUPOS=false.
 
       const messageId = payload.data?.key?.id || '';
       if (!messageId) return;
@@ -865,11 +863,9 @@ export default function webhookRouter(pool: Pool): Router {
         log.info('WEBHOOK', 'agentes: nenhum resultado', { traceId, instancia });
       }
 
-      // Grupo só é salvo quando a instância é de prospecção (Radar de Grupos) — atendimento/disparo
-      // continuam descartando grupo, como sempre. IA nunca responde em grupo, independente disso
-      // (ver `if (isGroup) return` na seção "Motor IA").
-      if (isGroup && papelInstancia !== 'prospeccao' && process.env.WEBHOOK_PROCESSAR_GRUPOS !== 'true') {
-        wlog('WEBHOOK_DROP', `grupo ignorado (política, papel=${papelInstancia}) instance=${instancia}`);
+      // Ver "Política de grupos" acima: só descarta se o interruptor de emergência estiver desligado.
+      if (isGroup && process.env.WEBHOOK_PROCESSAR_GRUPOS === 'false') {
+        wlog('WEBHOOK_DROP', `grupo ignorado (WEBHOOK_PROCESSAR_GRUPOS=false, papel=${papelInstancia}) instance=${instancia}`);
         return;
       }
 
@@ -1926,7 +1922,7 @@ export default function webhookRouter(pool: Pool): Router {
       // Regra de ouro, independente de papel/política de salvar acima: IA NUNCA responde em grupo.
       // Instância de prospecção pode ter a mensagem salva (aparece no CRM), mas nunca chega aqui.
       if (isGroup) {
-        wlog('WEBHOOK_DROP', `IA nunca responde em grupo (mensagem já salva se prospecção) mid=${messageId}`);
+        wlog('WEBHOOK_DROP', `IA nunca responde em grupo (mensagem de grupo já foi salva) mid=${messageId}`);
         return;
       }
       if (!userId) {
@@ -1939,8 +1935,8 @@ export default function webhookRouter(pool: Pool): Router {
       }
 
       // O CRM não encaminha mais para N8N (removido da infraestrutura) e grupo nunca chega aqui —
-      // agora por dois motivos possíveis: descartado no topo (atendimento/disparo, política padrão)
-      // ou barrado pelo `if (isGroup) return` logo acima (prospecção, mensagem já foi salva mas IA não roda).
+      // agora por dois motivos possíveis: descartado no topo (só com WEBHOOK_PROCESSAR_GRUPOS=false)
+      // ou barrado pelo `if (isGroup) return` logo acima (mensagem já foi salva, mas IA não roda).
 
       // [AUDITORIA] LÓGICA: Whitelist de segurança da IA — só em homologação (2026-07-22).
       // DATABASE_URL_MIGRATIONS só existe no .env de homolog (piloto de RLS, ver
