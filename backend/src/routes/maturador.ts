@@ -27,6 +27,7 @@ import {
   proximoItem, adicionarTexto, adicionarImagem, removerItem, urlImagemStatus,
   MAX_ITENS_POR_TIPO, MAX_CARACTERES_TEXTO, MAX_CARACTERES_LEGENDA,
 } from '../services/maturadorStatus';
+import { montarPainel, salvarAnotacao, enviarArquivoContatos } from '../services/maturadorPainel';
 import {
   listarGrupos, adicionarGrupo, removerGrupo, MAX_GRUPOS_POR_CONTA, MAX_GRUPOS_GLOBAIS, MAX_ENTRADAS_DIA_CHIP, HORAS_ENTRE_ENTRADAS,
 } from '../services/maturadorGrupos';
@@ -87,6 +88,27 @@ export default function maturadorRouter(pool: Pool): Router {
     const novo = await salvarControles(pool, req.params.agenteId, ownerId, b);
     log.info('MATURADOR', 'Controles do chip alterados', { agenteId: req.params.agenteId, ...novo });
     return res.json(novo);
+  });
+
+  // ── Painel de chips (2026-10-27, modelo ChipFlow): card por chip com conexão, atividade e ações ──
+  router.get('/painel', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    return res.json(await montarPainel(pool, ownerId));
+  });
+
+  router.put('/painel/:agenteId/anotacao', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const ag = await pool.query(`SELECT id FROM agentes WHERE id = $1 AND user_id = $2`, [req.params.agenteId, ownerId]);
+    if (!ag.rowCount) return res.status(404).json({ message: 'Número não encontrado nesta conta' });
+    await salvarAnotacao(pool, req.params.agenteId, ownerId, req.body?.anotacao);
+    return res.json({ ok: true });
+  });
+
+  router.post('/painel/:agenteId/contatos', async (req: AuthRequest, res: Response) => {
+    const ownerId = await resolverOwnerId(pool, req.userId!);
+    const r = await enviarArquivoContatos(pool, ownerId, req.params.agenteId);
+    if (r.erro) return res.status(400).json({ message: r.erro });
+    return res.json(r);
   });
 
   // ── Sprint 10 do maturador v5 (2026-10-20): status rico — fila de imagens e textos por chip ──

@@ -43,6 +43,35 @@ const VELOCIDADES = [
   { id: "rapida", rotulo: "Rápida", ajuda: "Mais conversas — mais risco de queda" },
 ];
 
+/** Liga/desliga de cada controle de um chip (usado aqui e no menu "…" do painel de chips). */
+export function ListaControles({ chip: c, desabilitado, alterar, onGerenciarStatus, ocultar = [] }: {
+  chip: any; desabilitado: boolean; alterar: (mudanca: Record<string, any>) => void; onGerenciarStatus: () => void; ocultar?: string[];
+}) {
+  return (
+    <div className="divide-y rounded-md border">
+      {CONTROLES.filter(ct => !ocultar.includes(ct.campo)).map(ct => {
+        const e = c.estado[ct.campo];
+        return (
+          <div key={ct.campo} className="flex items-start justify-between gap-3 p-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{ct.titulo}</p>
+              <p className="text-[11px] text-muted-foreground">{ct.descricao}</p>
+              <p className={`text-[11px] ${e.ativo_agora ? "font-semibold text-emerald-600" : "text-muted-foreground"}`}>{e.situacao}</p>
+              {ct.campo === "status" && (
+                <button type="button" onClick={onGerenciarStatus}
+                  className="mt-1 text-[11px] font-medium text-orange-600 underline-offset-2 hover:underline">
+                  Gerenciar status ({c.contadores.status_imagens ?? 0} imagens · {c.contadores.status_textos ?? 0} textos)
+                </button>
+              )}
+            </div>
+            <Switch checked={!!c.controles[ct.campo]} disabled={desabilitado} onCheckedChange={v => alterar({ [ct.campo]: v })} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ControlesMaturador() {
   const [d, setD] = useState<any>(null);
   const [salvando, setSalvando] = useState<string | null>(null);
@@ -114,28 +143,7 @@ export function ControlesMaturador() {
               )}
             </div>
 
-            <div className="divide-y rounded-md border">
-              {CONTROLES.map(ct => {
-                const e = c.estado[ct.campo];
-                return (
-                  <div key={ct.campo} className="flex items-start justify-between gap-3 p-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{ct.titulo}</p>
-                      <p className="text-[11px] text-muted-foreground">{ct.descricao}</p>
-                      <p className={`text-[11px] ${e.ativo_agora ? "font-semibold text-emerald-600" : "text-muted-foreground"}`}>{e.situacao}</p>
-                      {ct.campo === "status" && (
-                        <button type="button" onClick={() => setStatusChip(c)}
-                          className="mt-1 text-[11px] font-medium text-orange-600 underline-offset-2 hover:underline">
-                          Gerenciar status ({c.contadores.status_imagens ?? 0} imagens · {c.contadores.status_textos ?? 0} textos)
-                        </button>
-                      )}
-                    </div>
-                    <Switch checked={!!c.controles[ct.campo]} disabled={salvando === c.agente_id}
-                      onCheckedChange={v => alterar(c, { [ct.campo]: v })} />
-                  </div>
-                );
-              })}
-            </div>
+            <ListaControles chip={c} desabilitado={salvando === c.agente_id} alterar={(m) => alterar(c, m)} onGerenciarStatus={() => setStatusChip(c)} />
           </div>
         ))}
       </CardContent>

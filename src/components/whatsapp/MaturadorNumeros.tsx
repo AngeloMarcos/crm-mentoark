@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { MaturadorGlobal } from "./MaturadorGlobal";
-import { ControlesMaturador } from "./ControlesMaturador";
+import { PainelChips } from "./PainelChips";
 import { GruposMaturador } from "./GruposMaturador";
 import { ConversasMaturador } from "./ConversasMaturador";
 
@@ -242,7 +242,9 @@ export function MaturadorNumeros() {
       {/* Sprint 7 do maturador v5: controles por chip, velocidade e progresso (modelo ChipFlow). */}
       {/* Sprint 12 do maturador v5: pulso do dia e conversas (só leitura). */}
       <ConversasMaturador />
-      <ControlesMaturador />
+      {/* Painel de chips (2026-10-27, modelo ChipFlow): um card por número — substitui o card "Controles",
+          cujos liga/desliga agora ficam no menu "…" de cada card. */}
+      <PainelChips />
       <GruposMaturador />
       {/* Sprint 9: Maturador Global (entre contas) — adesão, situação de cada número e proxy. */}
       <MaturadorGlobal />

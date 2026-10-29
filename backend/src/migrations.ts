@@ -2569,6 +2569,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE maturador_controles ADD COLUMN IF NOT EXISTS marcar_lida BOOLEAN NOT NULL DEFAULT true`).catch(() => {});
   await pool.query(`ALTER TABLE maturador_grupos ADD COLUMN IF NOT EXISTS global BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
   await pool.query(`ALTER TABLE maturador_pares ADD COLUMN IF NOT EXISTS vinculado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()`).catch(() => {});
+  // Painel de chips (2026-10-27, modelo ChipFlow): anotação por chip e quando o arquivo de contatos foi enviado.
+  await pool.query(`ALTER TABLE maturador_controles ADD COLUMN IF NOT EXISTS anotacao TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE maturador_controles ADD COLUMN IF NOT EXISTS contatos_enviados_em TIMESTAMPTZ`).catch(() => {});
   // Sprint 8 (Sprint 4 / H10): nome (pushName) do contato que só tem LID, importado da Evolution
   // — a lista de conversas mostra o nome em vez de "Contato (número oculto)".
   await pool.query(`ALTER TABLE contato_identidades ADD COLUMN IF NOT EXISTS nome TEXT`).catch(() => {});

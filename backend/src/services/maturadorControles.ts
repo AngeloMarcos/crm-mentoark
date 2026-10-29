@@ -135,7 +135,8 @@ export function estadoControles(c: Controles, n: { fase?: string | null; so_rece
     // salvar contato na agenda (o Baileys tem) — depende de atualizar a imagem da Evolution.
     canais: est(c.canais, false, 'Aguardando atualização da Evolution'),
     status: est(c.status, !n.so_recebe, 'Começa quando o chip amadurecer'),
-    contatos: est(c.contatos, false, 'Aguardando atualização da Evolution — por enquanto salve no celular'),
+    // Painel de chips: o arquivo de contatos vai pelo botão do card; salvar na agenda é no celular.
+    contatos: est(c.contatos, false, 'Pelo card do chip: receba o arquivo de contatos e salve no celular'),
     marcar_lida: est(c.marcar_lida, true, ''),
   };
 }
