@@ -25,7 +25,9 @@ import { LeadTimeline } from "@/components/leads/LeadTimeline";
 import { LeadTarefas } from "@/components/leads/LeadTarefas";
 import {
   Search, Plus, Upload, Trash2, FolderPlus, Phone, Mail, Building2, Loader2, Pencil, FileUp, FileDown, MessageCircle, Download, ListTodo, ShieldCheck, SearchCheck,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
+import { ListasGrid, agruparListas, type ResumoLista } from "@/components/leads/ListasGrid";
 import { normalizarTelefoneBR } from "@/lib/phone";
 import { baixarModeloContatosXLSX } from "@/lib/modeloImportacao";
 import { BuscarLeadsModal } from "@/components/campanhas/BuscarLeadsModal";
@@ -53,6 +55,7 @@ interface Lista {
   nome: string;
   descricao: string | null;
   cor: string | null;
+  created_at?: string | null;
 }
 
 interface Contato {
@@ -111,17 +114,16 @@ export default function LeadsPage() {
   const [tarefasPendentes, setTarefasPendentes] = useState<Map<string, number>>(new Map());
   // Higienização: contagem real por lista e vínculo N:N contato x lista (um contato pode estar em
   // várias listas; `contatos.lista_id` guarda só a principal).
-  const [resumoListas, setResumoListas] = useState<Map<string, {
-    total: number; validos: number; sem_whatsapp: number; pendentes: number; business: number; com_nome: number;
-    score_medio: number | null; nota: "A" | "B" | "C" | "D" | null;
-  }>>(new Map());
+  const [resumoListas, setResumoListas] = useState<Map<string, ResumoLista>>(new Map());
   const [vinculos, setVinculos] = useState<Map<string, Set<string>>>(new Map());
   const [modalHigienizar, setModalHigienizar] = useState(false);
   const [modalResultados, setModalResultados] = useState(false);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("todos");
+  // "todas" | id de uma lista | "grupo:<nome>" (todas as importações do mesmo grupo de WhatsApp)
   const [listaFiltro, setListaFiltro] = useState<string>("todas");
+  const [pagina, setPagina] = useState(1);
 
   // Modais
   const [modalLista, setModalLista] = useState(false);
@@ -144,6 +146,47 @@ export default function LeadsPage() {
   const [importLista, setImportLista] = useState<string>("");
   // Sprint 7 (API oficial / H4): consentimento declarado na importação vira opt-in dos contatos.
   const [importConsentimento, setImportConsentimento] = useState(false);
+
+  // ============ LISTAS AGRUPADAS ============
+  // Membros por lista = vínculo N:N + lista principal (`contatos.lista_id`).
+  const membrosPorLista = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    vinculos.forEach((ids, listaId) => m.set(listaId, new Set(ids)));
+    contatos.forEach((c) => {
+      if (!c.lista_id) return;
+      if (!m.has(c.lista_id)) m.set(c.lista_id, new Set());
+      m.get(c.lista_id)!.add(c.id);
+    });
+    return m;
+  }, [contatos, vinculos]);
+
+  const grupos = useMemo(() => agruparListas(listas, resumoListas, membrosPorLista), [listas, resumoListas, membrosPorLista]);
+
+  const grupoPorLista = useMemo(() => {
+    const m = new Map<string, string>();
+    grupos.forEach((g) => g.importacoes.forEach((i) => m.set(i.id, g.nome)));
+    return m;
+  }, [grupos]);
+
+  const listasPorContato = useMemo(() => {
+    const m = new Map<string, string[]>();
+    membrosPorLista.forEach((ids, listaId) => ids.forEach((id) => {
+      const arr = m.get(id) ?? [];
+      arr.push(listaId);
+      m.set(id, arr);
+    }));
+    return m;
+  }, [membrosPorLista]);
+
+  // Ids das listas cobertas pelo filtro atual (grupo = mais recente primeiro).
+  const listasDoFiltro = useMemo(() => {
+    if (listaFiltro === "todas") return null;
+    const grupo = grupos.find((g) => g.key === listaFiltro);
+    if (grupo) return grupo.importacoes.map((i) => i.id);
+    return listaFiltro.startsWith("grupo:") ? [] : [listaFiltro];
+  }, [listaFiltro, grupos]);
+
+  const listaIdPadrao = listasDoFiltro?.[0] ?? listas[0]?.id ?? "";
 
   // ============ CARREGAR DADOS ============
   const carregar = async () => {
@@ -253,7 +296,7 @@ export default function LeadsPage() {
       toast({ title: "Erro", description: error.message, variant: "destructive" });
       return;
     }
-    if (listaFiltro === id) setListaFiltro("todas");
+    if (listaFiltro === id || listaFiltro.startsWith("grupo:")) setListaFiltro("todas");
     carregar();
   };
 
@@ -263,7 +306,7 @@ export default function LeadsPage() {
     setContatoForm({
       nome: "", telefone: "", email: "", empresa: "", cargo: "",
       origem: "Manual", status: "novo", tags: "", notas: "",
-      lista_id: listaFiltro !== "todas" ? listaFiltro : (listas[0]?.id ?? ""),
+      lista_id: listaIdPadrao,
     });
     setModalContato(true);
   };
@@ -380,7 +423,7 @@ export default function LeadsPage() {
       return;
     }
     const headers = rows[0].map((h) => h.replace(/"/g, "").toLowerCase().trim());
-    const listaAlvo = importLista || (listaFiltro !== "todas" ? listaFiltro : (listas[0]?.id ?? null));
+    const listaAlvo = importLista || listaIdPadrao || null;
     const novos: Array<Omit<Contato, "id" | "created_at">> = [];
     const ignorados: Array<{ linha: number; nome: string; motivo: string }> = [];
     const totalLinhas = rows.length - 1;
@@ -626,9 +669,22 @@ export default function LeadsPage() {
       (c.email ?? "").toLowerCase().includes(s) ||
       (c.empresa ?? "").toLowerCase().includes(s);
     const matchStatus = statusFilter === "todos" || c.status === statusFilter;
-    const matchLista = listaFiltro === "todas" || c.lista_id === listaFiltro || !!vinculos.get(listaFiltro)?.has(c.id);
+    const matchLista = !listasDoFiltro || listasDoFiltro.some((id) => membrosPorLista.get(id)?.has(c.id));
     return matchSearch && matchStatus && matchLista;
-  }), [contatos, search, statusFilter, listaFiltro, vinculos]);
+  }), [contatos, search, statusFilter, listasDoFiltro, membrosPorLista]);
+
+  // Renderizar os ~13 mil contatos de uma vez travava a tela — paginação só na exibição
+  // (busca, filtros e exportação continuam sobre `filtered` inteiro).
+  const POR_PAGINA = 50;
+  const totalPaginas = Math.max(1, Math.ceil(filtered.length / POR_PAGINA));
+  useEffect(() => { setPagina(1); }, [search, statusFilter, listaFiltro]);
+  const paginaAtual = Math.min(pagina, totalPaginas);
+  const visiveis = filtered.slice((paginaAtual - 1) * POR_PAGINA, paginaAtual * POR_PAGINA);
+
+  const semNome = (c: Contato) => {
+    const d = c.nome.replace(/\D/g, "");
+    return !c.nome.trim() || (d.length >= 8 && d === c.nome.replace(/[\s()+-]/g, ""));
+  };
 
   return (
     <CRMLayout>
@@ -639,7 +695,7 @@ export default function LeadsPage() {
             <h1 className="text-2xl font-bold tracking-tight">Leads & Contatos</h1>
             <p className="text-muted-foreground text-sm">
               {filtered.length} de {contatos.length} contato(s)
-              {listas.length > 0 && ` • ${listas.length} lista(s)`}
+              {listas.length > 0 && ` • ${grupos.length} grupo(s)/lista(s)`}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -691,12 +747,17 @@ export default function LeadsPage() {
           </div>
           <div className="flex gap-2 flex-wrap">
             <Select value={listaFiltro} onValueChange={setListaFiltro}>
-              <SelectTrigger className="w-full sm:w-[180px]"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-[220px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="todas">Todas as listas</SelectItem>
-                {listas.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>{l.nome}</SelectItem>
-                ))}
+                {grupos.map((g) => [
+                  <SelectItem key={g.key} value={g.key}>{g.nome} ({g.total})</SelectItem>,
+                  ...(g.importacoes.length > 1 ? g.importacoes.map((i) => (
+                    <SelectItem key={i.id} value={i.id} className="pl-8 text-xs text-muted-foreground">
+                      ↳ {i.data ?? "Sem data"} ({i.total})
+                    </SelectItem>
+                  )) : []),
+                ])}
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -711,43 +772,9 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {/* Tags rápidas das listas */}
+        {/* Grade de grupos/listas — importações repetidas do mesmo grupo viram um card só */}
         {listas.length > 0 && (
-          <div className="flex gap-2 flex-wrap">
-            {listas.map((l) => {
-              const ativo = listaFiltro === l.id;
-              const resumo = resumoListas.get(l.id);
-              const count = resumo?.total ?? contatos.filter((c) => c.lista_id === l.id).length;
-              return (
-                <Badge
-                  key={l.id}
-                  variant={ativo ? "default" : "outline"}
-                  className="cursor-pointer gap-2 py-1 pr-1"
-                  onClick={() => setListaFiltro(ativo ? "todas" : l.id)}
-                >
-                  {l.nome} <span className="opacity-70">({count})</span>
-                  {resumo?.nota && (
-                    <span
-                      className={`rounded px-1 text-[10px] font-bold ${
-                        resumo.nota === "A" ? "bg-success/20 text-success"
-                        : resumo.nota === "B" ? "bg-info/20 text-info"
-                        : resumo.nota === "C" ? "bg-warning/20 text-warning"
-                        : "bg-destructive/20 text-destructive"}`}
-                      title={`Qualidade da lista: score médio ${resumo.score_medio ?? "—"} · ${Math.round((resumo.validos / Math.max(1, resumo.total)) * 100)}% com WhatsApp · ${Math.round((resumo.business / Math.max(1, resumo.total)) * 100)}% Business · ${Math.round((resumo.com_nome / Math.max(1, resumo.total)) * 100)}% com nome`}
-                    >
-                      {resumo.nota}
-                    </span>
-                  )}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); removerLista(l.id); }}
-                    className="ml-1 rounded hover:bg-destructive/20 p-0.5"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </Badge>
-              );
-            })}
-          </div>
+          <ListasGrid grupos={grupos} filtro={listaFiltro} onFiltro={setListaFiltro} onRemoverLista={removerLista} />
         )}
 
         {/* Tabela */}
@@ -770,6 +797,7 @@ export default function LeadsPage() {
                   <TableRow>
                     <TableHead className="min-w-[160px]">Nome / Empresa</TableHead>
                     <TableHead className="min-w-[130px]">Contato</TableHead>
+                    <TableHead className="hidden lg:table-cell">Lista / Grupo</TableHead>
                     <TableHead className="hidden sm:table-cell">Origem</TableHead>
                     <TableHead className="min-w-[110px]">Status</TableHead>
                     <TableHead className="hidden md:table-cell">Tags</TableHead>
@@ -777,11 +805,13 @@ export default function LeadsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filtered.map((c) => (
+                  {visiveis.map((c) => (
                     <TableRow key={c.id} className="cursor-pointer hover:bg-muted/40" onClick={() => abrirEdicao(c)}>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <p className="font-medium">{c.nome}</p>
+                          {semNome(c)
+                            ? <p className="text-sm italic text-muted-foreground">Sem nome</p>
+                            : <p className="font-medium">{c.nome}</p>}
                           {(tarefasPendentes.get(c.id) ?? 0) > 0 && (
                             <Badge
                               className="bg-destructive text-white text-[10px] h-4 px-1 gap-0.5"
@@ -843,6 +873,18 @@ export default function LeadsPage() {
                           </p>
                         )}
                       </TableCell>
+                      <TableCell className="hidden lg:table-cell max-w-[220px]">
+                        {(() => {
+                          const nomes = [...new Set((listasPorContato.get(c.id) ?? []).map((id) => grupoPorLista.get(id)).filter(Boolean))] as string[];
+                          if (!nomes.length) return <span className="text-xs text-muted-foreground">—</span>;
+                          return (
+                            <div className="flex items-center gap-1 text-xs" title={nomes.join("\n")}>
+                              <span className="truncate">{nomes[0]}</span>
+                              {nomes.length > 1 && <Badge variant="secondary" className="text-[10px] h-4 px-1 shrink-0">+{nomes.length - 1}</Badge>}
+                            </div>
+                          );
+                        })()}
+                      </TableCell>
                       <TableCell className="hidden sm:table-cell">
                         <Badge variant="outline" className="text-xs">{c.origem ?? "Manual"}</Badge>
                       </TableCell>
@@ -875,6 +917,22 @@ export default function LeadsPage() {
                   ))}
                 </TableBody>
               </Table>
+              {totalPaginas > 1 && (
+                <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                  <span>
+                    {((paginaAtual - 1) * POR_PAGINA + 1).toLocaleString("pt-BR")}–{Math.min(paginaAtual * POR_PAGINA, filtered.length).toLocaleString("pt-BR")} de {filtered.length.toLocaleString("pt-BR")}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <Button variant="outline" size="icon" className="h-7 w-7" disabled={paginaAtual <= 1} onClick={() => setPagina(paginaAtual - 1)} aria-label="Página anterior">
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </Button>
+                    <span className="px-2 tabular-nums">{paginaAtual} / {totalPaginas}</span>
+                    <Button variant="outline" size="icon" className="h-7 w-7" disabled={paginaAtual >= totalPaginas} onClick={() => setPagina(paginaAtual + 1)} aria-label="Próxima página">
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
               </div>
             )}
           </CardContent>
