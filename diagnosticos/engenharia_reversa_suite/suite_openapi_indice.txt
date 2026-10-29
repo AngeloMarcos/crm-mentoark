@@ -1,0 +1,176 @@
+GET    /api/deals                                              Negociações | Listar negociações
+POST   /api/deals                                              Negociações | Criar negociação
+GET    /api/deals/{id}/proposals                               Negociações | Listar propostas da negociação
+GET    /api/deals/{id}                                         Negociações | Detalhar negociação
+PUT    /api/deals/{id}                                         Negociações | Atualizar negociação
+DELETE /api/deals/{id}                                         Negociações | Excluir negociação
+GET    /api/deals/async/{requestId}                            Negociações | Consultar criação assíncrona de negociação
+GET    /api/proposals                                          Propostas | Listar propostas
+POST   /api/proposals                                          Propostas | Criar proposta
+PUT    /api/proposals/{id}                                     Propostas | Atualizar proposta
+GET    /api/activities                                         Atividades | Listar atividades
+POST   /api/activities                                         Atividades | Criar atividade
+GET    /api/activities/{id}                                    Atividades | Detalhar atividade
+PUT    /api/activities/{id}                                    Atividades | Atualizar atividade
+DELETE /api/activities/{id}                                    Atividades | Excluir atividade
+GET    /api/peoples                                            Pessoas | Listar pessoas
+POST   /api/peoples                                            Pessoas | Criar pessoa
+GET    /api/peoples/{id}                                       Pessoas | Detalhar pessoa
+PUT    /api/peoples/{id}                                       Pessoas | Atualizar pessoa
+DELETE /api/peoples/{id}                                       Pessoas | Excluir pessoa
+GET    /api/organizations                                      Organizações | Listar organizações
+POST   /api/organizations                                      Organizações | Criar organização
+GET    /api/organizations/{id}                                 Organizações | Detalhar organização
+PUT    /api/organizations/{id}                                 Organizações | Atualizar organização
+DELETE /api/organizations/{id}                                 Organizações | Excluir organização
+GET    /api/templates                                          Templates | Listar templates
+POST   /api/templates                                          Templates | Criar template
+GET    /api/templates/{id}                                     Templates | Ver template
+PUT    /api/templates/{id}                                     Templates | Atualizar template
+DELETE /api/templates/{id}                                     Templates | Excluir template
+PUT    /api/templates/{id}/restore                             Templates | Restaurar template
+POST   /api/message-queues                                     Disparos em Massa | Criar disparo em massa
+GET    /api/message-queues/{id}                                Disparos em Massa | Consultar status e contadores de uma campanha
+GET    /api/message-queues/check-deals/{requestId}             Disparos em Massa | Consultar o resultado da contagem prévia
+POST   /api/message-queues/check-deals                         Disparos em Massa | Pedir a contagem prévia de destinatários
+GET    /api/annotations                                        Anotações | Listar anotações
+POST   /api/annotations                                        Anotações | Criar anotação
+POST   /api/files/import-url                                   Arquivos | Importar arquivo de outra conta
+GET    /api/users                                              Usuários | Listar usuários
+GET    /api/users/{id}                                         Usuários | Detalhar usuário
+PUT    /api/users/{id}                                         Usuários | Atualizar usuário
+GET    /api/me/modules                                         Conta | Listar módulos da empresa do token
+GET    /api/whoami                                             Conta | Identificar a chave de API
+GET    /api/pipes                                              Funis | Listar funis
+POST   /api/pipes                                              Funis | Criar funil
+GET    /api/pipes/{id}                                         Funis | Ver funil
+PUT    /api/pipes/{id}                                         Funis | Editar funil
+PUT    /api/pipes/{id}/stages-order                            Funis | Reordenar estágios do funil
+GET    /api/stages                                             Estágios | Listar estágios
+POST   /api/stages                                             Estágios | Criar estágio
+GET    /api/stages/{id}                                        Estágios | Ver estágio
+PUT    /api/stages/{id}                                        Estágios | Editar estágio
+GET    /api/filters                                            Filtros salvos | Listar filtros salvos
+POST   /api/filters                                            Filtros salvos | Criar filtro salvo
+GET    /api/filters/{id}                                       Filtros salvos | Ver filtro salvo
+PUT    /api/filters/{id}                                       Filtros salvos | Editar filtro salvo
+GET    /api/customfields                                       Campos personalizados | Listar campos personalizados
+POST   /api/customfields                                       Campos personalizados | Criar campo personalizado
+GET    /api/customfields/{id}                                  Campos personalizados | Ver campo personalizado
+PUT    /api/customfields/{id}                                  Campos personalizados | Atualizar campo personalizado
+DELETE /api/customfields/{id}                                  Campos personalizados | Excluir campo personalizado
+PUT    /api/customfields/{id}/restore                          Campos personalizados | Restaurar campo personalizado
+GET    /api/products                                           Produtos | Listar produtos
+POST   /api/products                                           Produtos | Criar produto
+GET    /api/products/{id}                                      Produtos | Ver produto
+PUT    /api/products/{id}                                      Produtos | Editar produto
+GET    /api/lostreasons                                        Motivos de Perda | Listar motivos de perda
+POST   /api/lostreasons                                        Motivos de Perda | Criar motivo de perda
+GET    /api/lostreasons/{id}                                   Motivos de Perda | Ver motivo de perda
+PUT    /api/lostreasons/{id}                                   Motivos de Perda | Editar motivo de perda
+GET    /api/categories                                         Categorias | Listar categorias
+POST   /api/categories                                         Categorias | Criar categoria
+GET    /api/categories/{id}                                    Categorias | Ver categoria
+PUT    /api/categories/{id}                                    Categorias | Editar categoria
+GET    /api/departments                                        Departamentos | Listar departamentos
+POST   /api/departments                                        Departamentos | Criar departamento
+GET    /api/departments/{id}                                   Departamentos | Ver departamento
+PUT    /api/departments/{id}                                   Departamentos | Editar departamento
+GET    /api/activity-trails                                    Trilhas de atividades | Listar trilhas de atividades
+POST   /api/activity-trails                                    Trilhas de atividades | Criar trilha de atividades
+GET    /api/activity-trails/{id}                               Trilhas de atividades | Ver trilha de atividades
+PUT    /api/activity-trails/{id}                               Trilhas de atividades | Editar trilha de atividades
+GET    /api/resolution-reasons                                 Motivos de Resolução | Listar motivos de resolução
+POST   /api/resolution-reasons                                 Motivos de Resolução | Criar motivo de resolução
+GET    /api/resolution-reasons/{id}                            Motivos de Resolução | Ver motivo de resolução
+PUT    /api/resolution-reasons/{id}                            Motivos de Resolução | Editar motivo de resolução
+GET    /api/transfer-reasons                                   Motivos de Transferência | Listar motivos de transferência
+POST   /api/transfer-reasons                                   Motivos de Transferência | Criar motivo de transferência
+GET    /api/transfer-reasons/{id}                              Motivos de Transferência | Ver motivo de transferência
+PUT    /api/transfer-reasons/{id}                              Motivos de Transferência | Editar motivo de transferência
+GET    /api/pause-reasons                                      Motivos de Pausa | Listar motivos de pausa
+POST   /api/pause-reasons                                      Motivos de Pausa | Criar motivo de pausa
+GET    /api/pause-reasons/{id}                                 Motivos de Pausa | Ver motivo de pausa
+PUT    /api/pause-reasons/{id}                                 Motivos de Pausa | Editar motivo de pausa
+GET    /api/intents                                            Intenções do Agente de IA | Listar intenções do agente de IA
+POST   /api/intents                                            Intenções do Agente de IA | Criar intenção
+GET    /api/intents/{id}                                       Intenções do Agente de IA | Ver intenção do agente de IA
+PUT    /api/intents/{id}                                       Intenções do Agente de IA | Editar intenção
+GET    /api/integrations                                       Integrações | Listar integrações
+POST   /api/integrations                                       Integrações | Criar integração (casca)
+GET    /api/integrations/{id}                                  Integrações | Ver integração
+PUT    /api/integrations/{id}                                  Integrações | Editar integração (casca)
+GET    /api/integrations/{id}/ai-models                        Integrações | Modelos de uma integração de IA
+GET    /api/oauth-credentials                                  Credenciais OAuth | Listar credenciais OAuth
+POST   /api/oauth-credentials                                  Credenciais OAuth | Criar credencial OAuth
+GET    /api/oauth-credentials/{id}                             Credenciais OAuth | Ver credencial OAuth
+PUT    /api/oauth-credentials/{id}                             Credenciais OAuth | Editar credencial OAuth
+GET    /api/mcp-connections                                    Conexões MCP | Listar conexões MCP
+GET    /api/mcp-connections/{id}                               Conexões MCP | Ver conexão MCP
+GET    /api/agents/catalog                                     Agentes de IA | Catálogo de chips e regras do agente
+GET    /api/agents                                             Agentes de IA | Listar agentes de IA
+POST   /api/agents                                             Agentes de IA | Criar agente de IA
+GET    /api/agents/{id}                                        Agentes de IA | Ver agente de IA
+PUT    /api/agents/{id}                                        Agentes de IA | Editar agente de IA
+POST   /api/agents/{id}/simulate                               Agentes de IA | Simular o agente sem efeito
+POST   /api/agents/validate                                    Agentes de IA | Validar agente novo sem gravar
+POST   /api/agents/{id}/validate                               Agentes de IA | Validar edição de agente sem gravar
+GET    /api/agent-executions                                   Agentes de IA | Listar execuções de agente
+GET    /api/agent-executions/{id}                              Agentes de IA | Ver execução de agente
+GET    /api/automation-executions                              Automações | Listar execuções de automação
+GET    /api/automation-executions/{id}                         Automações | Ver execução de automação
+GET    /api/agent-folders                                      Pastas | Listar pastas de agentes
+POST   /api/agent-folders                                      Pastas | Criar pasta de agentes
+GET    /api/agent-folders/{id}                                 Pastas | Ver pasta de agentes
+PUT    /api/agent-folders/{id}                                 Pastas | Editar pasta de agentes
+GET    /api/knowledge-base-folders                             Pastas | Listar pastas de bases
+POST   /api/knowledge-base-folders                             Pastas | Criar pasta de bases
+GET    /api/knowledge-base-folders/{id}                        Pastas | Ver pasta de bases
+PUT    /api/knowledge-base-folders/{id}                        Pastas | Editar pasta de bases
+GET    /api/automation-folders                                 Pastas | Listar pastas de automações
+POST   /api/automation-folders                                 Pastas | Criar pasta de automações
+GET    /api/automation-folders/{id}                            Pastas | Ver pasta de automações
+PUT    /api/automation-folders/{id}                            Pastas | Editar pasta de automações
+GET    /api/knowledge-bases                                    Bases de conhecimento | Listar bases de conhecimento
+POST   /api/knowledge-bases                                    Bases de conhecimento | Criar base de conhecimento
+GET    /api/knowledge-bases/{id}                               Bases de conhecimento | Ver base de conhecimento
+PUT    /api/knowledge-bases/{id}                               Bases de conhecimento | Editar base de conhecimento
+GET    /api/automations/catalog                                Automações | Catálogo de nós, gatilhos e variáveis
+GET    /api/automations                                        Automações | Listar automações
+POST   /api/automations                                        Automações | Criar automação (rascunho)
+GET    /api/automations/{id}                                   Automações | Ver automação
+PUT    /api/automations/{id}                                   Automações | Editar automação (rascunho)
+POST   /api/automations/validate                               Automações | Validar automação nova sem gravar
+POST   /api/automations/{id}/validate                          Automações | Validar edição de automação sem gravar
+POST   /api/automations/{id}/publish                           Automações | Publicar automação
+POST   /api/automations/{id}/toggle-status                     Automações | Ligar/desligar automação
+GET    /api/tags                                               Tags | Listar tags
+POST   /api/tags                                               Tags | Criar tag
+GET    /api/tags/{id}                                          Tags | Ver tag
+PUT    /api/tags/{id}                                          Tags | Editar tag
+POST   /api/tags/attach                                        Tags | Vincular tag
+POST   /api/tags/detach                                        Tags | Desvincular tag
+GET    /api/conversations                                      Conversas | Listar conversas
+GET    /api/conversations/{id}/messages                        Conversas | Listar mensagens da conversa
+GET    /api/channels                                           Canais | Listar canais
+POST   /api/channels                                           Canais | Criar canal
+GET    /api/channels/{id}                                      Canais | Ver canal
+PUT    /api/channels/{id}                                      Canais | Editar canal
+GET    /api/channels/{id}/templates                            Canais | Listar templates do canal
+POST   /api/messages/send                                      Mensagens | Enviar mensagem por um canal
+GET    /api/landings                                           Landing Pages | Listar landing pages
+POST   /api/landings                                           Landing Pages | Criar landing page em HTML
+GET    /api/landings/{id}                                      Landing Pages | Ler uma landing page
+PUT    /api/landings/{id}                                      Landing Pages | Atualizar landing page
+DELETE /api/landings/{id}                                      Landing Pages | Excluir landing page
+POST   /api/landings/assets                                    Landing Pages | Subir imagem ou vídeo da página
+GET    /api/forms                                              Formulários | Listar formulários
+POST   /api/forms                                              Formulários | Criar formulário
+GET    /api/forms/{id}                                         Formulários | Ler um formulário
+PUT    /api/forms/{id}                                         Formulários | Atualizar formulário
+DELETE /api/forms/{id}                                         Formulários | Excluir formulário
+GET    /api/domains                                            Domínios | Listar domínios
+POST   /api/domains                                            Domínios | Cadastrar domínio
+GET    /api/domains/{id}                                       Domínios | Ver domínio
+DELETE /api/domains/{id}                                       Domínios | Excluir domínio
+POST   /api/domains/{id}/verify                                Domínios | Conferir o apontamento do domínio

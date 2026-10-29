@@ -1,0 +1,5847 @@
+[
+ {
+  "name": "drive.fs.serve",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/uploads/*"
+ },
+ {
+  "name": "public.forms.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/public/forms/:publicId"
+ },
+ {
+  "name": "public.forms.submit",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/public/forms/:publicId/submissions"
+ },
+ {
+  "name": "public.forms.update",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/public/forms/:publicId/submissions"
+ },
+ {
+  "name": "public.forms.pageview",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/public/forms/:publicId/pageview"
+ },
+ {
+  "name": "public.geo.cities",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/public/geo/cities/:uf"
+ },
+ {
+  "name": "public.sdk.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/sdk/:file"
+ },
+ {
+  "name": "api.capi.track",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/capi/track"
+ },
+ {
+  "name": "api.auth.login",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/auth/login"
+ },
+ {
+  "name": "api.extension.impersonationToken",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/extension/impersonation-token"
+ },
+ {
+  "name": "api.deals.buildWhatsappMessage",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/deals/build-whatsapp-message"
+ },
+ {
+  "name": "api.deals.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/deals"
+ },
+ {
+  "name": "api.deals.feed",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deals/feed"
+ },
+ {
+  "name": "api.deals.count",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deals/count"
+ },
+ {
+  "name": "api.deals.asyncStatus",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deals/async/:requestId"
+ },
+ {
+  "name": "api.deals.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deals"
+ },
+ {
+  "name": "api.deals.conversationChannels",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deals/:id/conversation-channels"
+ },
+ {
+  "name": "api.deals.proposals",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deals/:id/proposals"
+ },
+ {
+  "name": "api.deals.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deals/:id"
+ },
+ {
+  "name": "api.deals.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/deals/:id"
+ },
+ {
+  "name": "api.deals.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/deals/:id"
+ },
+ {
+  "name": "api.deals.syncAssignee",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/deals/:id/sync-assignee"
+ },
+ {
+  "name": "api.proposals.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/proposals"
+ },
+ {
+  "name": "api.proposals.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/proposals"
+ },
+ {
+  "name": "api.proposals.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/proposals/:id"
+ },
+ {
+  "name": "api.activities.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/activities"
+ },
+ {
+  "name": "api.activities.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/activities"
+ },
+ {
+  "name": "api.activities.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/activities/:id"
+ },
+ {
+  "name": "api.activities.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/activities/:id"
+ },
+ {
+  "name": "api.activities.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/activities/:id"
+ },
+ {
+  "name": "api.peoples.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/peoples"
+ },
+ {
+  "name": "api.peoples.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/peoples"
+ },
+ {
+  "name": "api.peoples.quickCreate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/peoples/quick-create"
+ },
+ {
+  "name": "api.peoples.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/peoples/:id"
+ },
+ {
+  "name": "api.peoples.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/peoples/:id"
+ },
+ {
+  "name": "api.peoples.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/peoples/:id"
+ },
+ {
+  "name": "api.peoples.conversationChannels",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/peoples/:id/conversation-channels"
+ },
+ {
+  "name": "api.organizations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/organizations"
+ },
+ {
+  "name": "api.organizations.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/organizations"
+ },
+ {
+  "name": "api.organizations.quickCreate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/organizations/quick-create"
+ },
+ {
+  "name": "api.organizations.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/organizations/:id"
+ },
+ {
+  "name": "api.organizations.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/organizations/:id"
+ },
+ {
+  "name": "api.organizations.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/organizations/:id"
+ },
+ {
+  "name": "api.templates.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/templates"
+ },
+ {
+  "name": "api.templates.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/templates/:id"
+ },
+ {
+  "name": "api.templates.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/templates"
+ },
+ {
+  "name": "api.templates.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/templates/:id"
+ },
+ {
+  "name": "api.templates.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/templates/:id"
+ },
+ {
+  "name": "api.templates.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/templates/:id/restore"
+ },
+ {
+  "name": "api.templates.fillForDeal",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/templates/deal/:dealId"
+ },
+ {
+  "name": "api.messageQueue.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/message-queues"
+ },
+ {
+  "name": "api.messageQueue.checkDeals",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/message-queues/check-deals"
+ },
+ {
+  "name": "api.messageQueue.countResult",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/message-queues/check-deals/:requestId"
+ },
+ {
+  "name": "api.messageQueue.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/message-queues/:id"
+ },
+ {
+  "name": "api.annotations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/annotations"
+ },
+ {
+  "name": "api.annotations.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/annotations"
+ },
+ {
+  "name": "api.whatsappQueues.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/whatsappQueues"
+ },
+ {
+  "name": "api.whatsappQueue.massUpdate",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/whatsappQueue/massUpdate"
+ },
+ {
+  "name": "api.whatsappMessages.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/whatsappMessages"
+ },
+ {
+  "name": "api.files.uploadTemp",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/files/tmp"
+ },
+ {
+  "name": "api.files.importUrl",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/files/import-url"
+ },
+ {
+  "name": "api.users.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/users"
+ },
+ {
+  "name": "api.users.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/users/:id"
+ },
+ {
+  "name": "api.users.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/users/:id"
+ },
+ {
+  "name": "api.tools.maps.autocomplete",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tools/maps/autocomplete"
+ },
+ {
+  "name": "api.tools.maps.placedetail",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tools/maps/placedetail"
+ },
+ {
+  "name": "api.me.modules",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/me/modules"
+ },
+ {
+  "name": "api.whoami",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/whoami"
+ },
+ {
+  "name": "api.search",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/search"
+ },
+ {
+  "name": "api.pipes.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/pipes"
+ },
+ {
+  "name": "api.pipes.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/pipes/:id"
+ },
+ {
+  "name": "api.pipes.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/pipes"
+ },
+ {
+  "name": "api.pipes.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/pipes/:id"
+ },
+ {
+  "name": "api.pipes.stagesOrder",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/pipes/:id/stages-order"
+ },
+ {
+  "name": "api.stages.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/stages"
+ },
+ {
+  "name": "api.stages.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/stages/:id"
+ },
+ {
+  "name": "api.stages.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/stages"
+ },
+ {
+  "name": "api.stages.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/stages/:id"
+ },
+ {
+  "name": "api.filters.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/filters"
+ },
+ {
+  "name": "api.filters.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/filters/:id"
+ },
+ {
+  "name": "api.filters.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/filters"
+ },
+ {
+  "name": "api.filters.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/filters/:id"
+ },
+ {
+  "name": "api.customfields.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/customfields"
+ },
+ {
+  "name": "api.customfields.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/customfields"
+ },
+ {
+  "name": "api.customfields.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/customfields/:id"
+ },
+ {
+  "name": "api.customfields.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/customfields/:id"
+ },
+ {
+  "name": "api.customfields.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/customfields/:id"
+ },
+ {
+  "name": "api.customfields.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/customfields/:id/restore"
+ },
+ {
+  "name": "api.products.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/products"
+ },
+ {
+  "name": "api.products.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/products/:id"
+ },
+ {
+  "name": "api.products.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/products"
+ },
+ {
+  "name": "api.products.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/products/:id"
+ },
+ {
+  "name": "api.lostreasons.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/lostreasons"
+ },
+ {
+  "name": "api.lostreasons.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/lostreasons/:id"
+ },
+ {
+  "name": "api.lostreasons.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/lostreasons"
+ },
+ {
+  "name": "api.lostreasons.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/lostreasons/:id"
+ },
+ {
+  "name": "api.categories.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/categories"
+ },
+ {
+  "name": "api.categories.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/categories/:id"
+ },
+ {
+  "name": "api.categories.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/categories"
+ },
+ {
+  "name": "api.categories.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/categories/:id"
+ },
+ {
+  "name": "api.departments.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/departments"
+ },
+ {
+  "name": "api.departments.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/departments/:id"
+ },
+ {
+  "name": "api.departments.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/departments"
+ },
+ {
+  "name": "api.departments.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/departments/:id"
+ },
+ {
+  "name": "api.activityTrails.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/activity-trails"
+ },
+ {
+  "name": "api.activityTrails.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/activity-trails/:id"
+ },
+ {
+  "name": "api.activityTrails.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/activity-trails"
+ },
+ {
+  "name": "api.activityTrails.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/activity-trails/:id"
+ },
+ {
+  "name": "api.resolutionReasons.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/resolution-reasons"
+ },
+ {
+  "name": "api.resolutionReasons.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/resolution-reasons/:id"
+ },
+ {
+  "name": "api.resolutionReasons.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/resolution-reasons"
+ },
+ {
+  "name": "api.resolutionReasons.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/resolution-reasons/:id"
+ },
+ {
+  "name": "api.transferReasons.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/transfer-reasons"
+ },
+ {
+  "name": "api.transferReasons.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/transfer-reasons/:id"
+ },
+ {
+  "name": "api.transferReasons.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/transfer-reasons"
+ },
+ {
+  "name": "api.transferReasons.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/transfer-reasons/:id"
+ },
+ {
+  "name": "api.pauseReasons.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/pause-reasons"
+ },
+ {
+  "name": "api.pauseReasons.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/pause-reasons/:id"
+ },
+ {
+  "name": "api.pauseReasons.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/pause-reasons"
+ },
+ {
+  "name": "api.pauseReasons.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/pause-reasons/:id"
+ },
+ {
+  "name": "api.intents.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/intents"
+ },
+ {
+  "name": "api.intents.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/intents/:id"
+ },
+ {
+  "name": "api.intents.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/intents"
+ },
+ {
+  "name": "api.intents.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/intents/:id"
+ },
+ {
+  "name": "api.integrations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/integrations"
+ },
+ {
+  "name": "api.integrations.aiModels",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/integrations/:id/ai-models"
+ },
+ {
+  "name": "api.integrations.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/integrations/:id"
+ },
+ {
+  "name": "api.integrations.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/integrations"
+ },
+ {
+  "name": "api.integrations.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/integrations/:id"
+ },
+ {
+  "name": "api.oauthCredentials.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/oauth-credentials"
+ },
+ {
+  "name": "api.oauthCredentials.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/oauth-credentials/:id"
+ },
+ {
+  "name": "api.oauthCredentials.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/oauth-credentials/:id"
+ },
+ {
+  "name": "api.mcpConnections.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/mcp-connections"
+ },
+ {
+  "name": "api.agents.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agents"
+ },
+ {
+  "name": "api.agents.catalog",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agents/catalog"
+ },
+ {
+  "name": "api.agents.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agents/:id"
+ },
+ {
+  "name": "api.agents.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/agents"
+ },
+ {
+  "name": "api.agents.validate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/agents/validate"
+ },
+ {
+  "name": "api.agents.simulate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/agents/:id/simulate"
+ },
+ {
+  "name": "api.agents.validateExisting",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/agents/:id/validate"
+ },
+ {
+  "name": "api.agents.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/agents/:id"
+ },
+ {
+  "name": "api.agentExecutions.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agent-executions"
+ },
+ {
+  "name": "api.agentExecutions.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agent-executions/:id"
+ },
+ {
+  "name": "api.automationExecutions.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/automation-executions"
+ },
+ {
+  "name": "api.automationExecutions.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/automation-executions/:id"
+ },
+ {
+  "name": "api.agentFolders.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agent-folders"
+ },
+ {
+  "name": "api.agentFolders.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agent-folders/:id"
+ },
+ {
+  "name": "api.agentFolders.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/agent-folders"
+ },
+ {
+  "name": "api.agentFolders.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/agent-folders/:id"
+ },
+ {
+  "name": "api.knowledgeBases.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/knowledge-bases"
+ },
+ {
+  "name": "api.knowledgeBases.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/knowledge-bases/:id"
+ },
+ {
+  "name": "api.knowledgeBases.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/knowledge-bases"
+ },
+ {
+  "name": "api.knowledgeBases.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/knowledge-bases/:id"
+ },
+ {
+  "name": "api.knowledgeBaseFolders.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/knowledge-base-folders"
+ },
+ {
+  "name": "api.knowledgeBaseFolders.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/knowledge-base-folders/:id"
+ },
+ {
+  "name": "api.knowledgeBaseFolders.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/knowledge-base-folders"
+ },
+ {
+  "name": "api.knowledgeBaseFolders.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/knowledge-base-folders/:id"
+ },
+ {
+  "name": "api.automations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/automations"
+ },
+ {
+  "name": "api.automations.catalog",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/automations/catalog"
+ },
+ {
+  "name": "api.automations.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/automations/:id"
+ },
+ {
+  "name": "api.automations.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations"
+ },
+ {
+  "name": "api.automations.validate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations/validate"
+ },
+ {
+  "name": "api.automations.validateExisting",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations/:id/validate"
+ },
+ {
+  "name": "api.automations.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/automations/:id"
+ },
+ {
+  "name": "api.automations.publish",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations/:id/publish"
+ },
+ {
+  "name": "api.automations.toggleStatus",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations/:id/toggle-status"
+ },
+ {
+  "name": "api.automationFolders.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/automation-folders"
+ },
+ {
+  "name": "api.automationFolders.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/automation-folders/:id"
+ },
+ {
+  "name": "api.automationFolders.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automation-folders"
+ },
+ {
+  "name": "api.automationFolders.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/automation-folders/:id"
+ },
+ {
+  "name": "api.mcpConnections.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/mcp-connections/:id"
+ },
+ {
+  "name": "api.tags.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/tags"
+ },
+ {
+  "name": "api.tags.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/tags/:id"
+ },
+ {
+  "name": "api.tags.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tags"
+ },
+ {
+  "name": "api.tags.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/tags/:id"
+ },
+ {
+  "name": "api.tags.attach",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tags/attach"
+ },
+ {
+  "name": "api.tags.detach",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tags/detach"
+ },
+ {
+  "name": "api.conversations.syncFromDeal",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/conversations/sync-from-deal"
+ },
+ {
+  "name": "api.conversations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/conversations"
+ },
+ {
+  "name": "api.conversations.messages",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/conversations/:id/messages"
+ },
+ {
+  "name": "api.channels.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/channels"
+ },
+ {
+  "name": "api.channels.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/channels/:id"
+ },
+ {
+  "name": "api.channels.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/channels"
+ },
+ {
+  "name": "api.channels.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/channels/:id"
+ },
+ {
+  "name": "api.channels.templates",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/channels/:id/templates"
+ },
+ {
+  "name": "api.messages.send",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/messages/send"
+ },
+ {
+  "name": "api.landings.assets",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/landings/assets"
+ },
+ {
+  "name": "api.landings.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/landings"
+ },
+ {
+  "name": "api.landings.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/landings"
+ },
+ {
+  "name": "api.landings.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/landings/:id"
+ },
+ {
+  "name": "api.landings.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/landings/:id"
+ },
+ {
+  "name": "api.landings.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/landings/:id"
+ },
+ {
+  "name": "api.forms.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/forms"
+ },
+ {
+  "name": "api.forms.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/forms"
+ },
+ {
+  "name": "api.forms.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/forms/:id"
+ },
+ {
+  "name": "api.forms.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/forms/:id"
+ },
+ {
+  "name": "api.forms.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/forms/:id"
+ },
+ {
+  "name": "api.domains.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/domains"
+ },
+ {
+  "name": "api.domains.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/domains/:id"
+ },
+ {
+  "name": "api.domains.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/domains"
+ },
+ {
+  "name": "api.domains.verify",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/domains/:id/verify"
+ },
+ {
+  "name": "api.domains.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/domains/:id"
+ },
+ {
+  "name": "api.users.deletionImpact",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/users/deletion-impact"
+ },
+ {
+  "name": "api.users.theme.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/users/theme"
+ },
+ {
+  "name": "api.whatsappQueue.checkDeals",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/whatsapp-queue/check-deals"
+ },
+ {
+  "name": "api.stages.massChange",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/stages/:id/mass-change"
+ },
+ {
+  "name": "api.trash.impact",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/trash/:entity/impact"
+ },
+ {
+  "name": "api.tenant.setupPayment",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tenant/setup-payment"
+ },
+ {
+  "name": "api.tenant.setupPaymentAsaas",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tenant/setup-payment/asaas"
+ },
+ {
+  "name": "api.tenant.setupPaymentAsaasQuote",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/tenant/setup-payment/asaas/quote"
+ },
+ {
+  "name": "api.tenant.connectOnboarding",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tenant/connect-onboarding"
+ },
+ {
+  "name": "api.tenant.subscription",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/tenant/subscription"
+ },
+ {
+  "name": "api.billing.portal",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/billing/portal"
+ },
+ {
+  "name": "api.helpCenter.uploadImage",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/help-center/upload-image"
+ },
+ {
+  "name": "api.landings.uploadAsset",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/landings/upload-asset"
+ },
+ {
+  "name": "api.messages.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/messages"
+ },
+ {
+  "name": "api.messages.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/messages"
+ },
+ {
+  "name": "api.messages.upload",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/messages/upload"
+ },
+ {
+  "name": "api.integrations.validateGoogleKey",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/integrations/google-ai/validate-key"
+ },
+ {
+  "name": "api.integrations.validateOpenRouterKey",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/integrations/openrouter/validate-key"
+ },
+ {
+  "name": "api.conversations.feed",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/conversations/feed"
+ },
+ {
+  "name": "api.conversations.tabCounts",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/conversations/tab-counts"
+ },
+ {
+  "name": "api.conversations.pin",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/conversations/:id/pin"
+ },
+ {
+  "name": "api.conversations.unpin",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/conversations/:id/pin"
+ },
+ {
+  "name": "api.conversations.markUnread",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/conversations/:id/unread"
+ },
+ {
+  "name": "api.conversations.markRead",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/api/conversations/:id/unread"
+ },
+ {
+  "name": "api.conversations.templatePreview",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/conversations/:id/template-preview"
+ },
+ {
+  "name": "api.integrations.activateWhatsappBusinessWebhooks",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/integrations/:id/whatsapp-business/activate-webhooks"
+ },
+ {
+  "name": "api.agentMicrofunctions.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agent-microfunctions"
+ },
+ {
+  "name": "api.agentAllowlistSources.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/agent-allowlist-sources"
+ },
+ {
+  "name": "api.mcpConnections.enabledTools",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/api/mcp-connections/:id/enabled-tools"
+ },
+ {
+  "name": "api.followUps.cancel",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/follow-ups/cancel"
+ },
+ {
+  "name": "api.whatsapp.templates.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/whatsapp/templates"
+ },
+ {
+  "name": "api.presence.me",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/presence/me"
+ },
+ {
+  "name": "api.presence.heartbeat",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/presence/heartbeat"
+ },
+ {
+  "name": "api.deletionImpact.pipe",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/pipes/:id"
+ },
+ {
+  "name": "api.deletionImpact.stage",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/stages/:id"
+ },
+ {
+  "name": "api.deletionImpact.people",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/peoples/:id"
+ },
+ {
+  "name": "api.deletionImpact.automation",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/automations/:id"
+ },
+ {
+  "name": "api.deletionImpact.automationFolder",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/automation-folders/:id"
+ },
+ {
+  "name": "api.deletionImpact.customfield",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/customfields/:id"
+ },
+ {
+  "name": "api.deletionImpact.tag",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/tags/:id"
+ },
+ {
+  "name": "api.deletionImpact.template",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/templates/:id"
+ },
+ {
+  "name": "api.deletionImpact.knowledgeBase",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/knowledge-bases/:id"
+ },
+ {
+  "name": "api.deletionImpact.oauthCredential",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/deletion-impact/oauth-credentials/:id"
+ },
+ {
+  "name": "api.onboarding.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/onboarding"
+ },
+ {
+  "name": "api.onboarding.track",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/track"
+ },
+ {
+  "name": "api.onboarding.start",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/start"
+ },
+ {
+  "name": "api.onboarding.steps.skip",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/steps/:key/skip"
+ },
+ {
+  "name": "api.onboarding.steps.unskip",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/steps/:key/unskip"
+ },
+ {
+  "name": "api.onboarding.steps.confirm",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/steps/:key/confirm"
+ },
+ {
+  "name": "api.onboarding.steps.visit",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/steps/:key/visit"
+ },
+ {
+  "name": "api.onboarding.snooze",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/snooze"
+ },
+ {
+  "name": "api.onboarding.dismiss",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/dismiss"
+ },
+ {
+  "name": "api.onboarding.celebrated",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/onboarding/celebrated"
+ },
+ {
+  "name": "api.billing.reactivationCheckout",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/billing/reactivation-checkout"
+ },
+ {
+  "name": "api.automations.httpRequest.test",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations/http-request/test"
+ },
+ {
+  "name": "api.automations.template.preview",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations/template/preview"
+ },
+ {
+  "name": "api.conversations.group.inviteLink",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/conversations/:id/group/invite-link"
+ },
+ {
+  "name": "api.automations.whatsappGroup.resolve",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations/whatsapp-group/resolve"
+ },
+ {
+  "name": "api.automations.media.upload",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/automations/media/upload"
+ },
+ {
+  "name": "api.oauthCredentials.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/oauth-credentials"
+ },
+ {
+  "name": "api.oauthCredentials.connect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/api/oauth-credentials/:id/connect"
+ },
+ {
+  "name": "api.messageQueue.extensionPending",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/message-queues/extension/pending"
+ },
+ {
+  "name": "api.messageQueue.extensionBatchUpdate",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/api/message-queues/extension/batch-update"
+ },
+ {
+  "name": "zapi_webhook.handle",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/webhooks/zapi/:secret/:event"
+ },
+ {
+  "name": "google_lead_webhook.handle",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/webhooks/google-leads/:publicId"
+ },
+ {
+  "name": "site.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/site"
+ },
+ {
+  "name": "site.privacy",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/site/politica-de-privacidade"
+ },
+ {
+  "name": "site.terms",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/site/termos-de-uso"
+ },
+ {
+  "name": "site.dataPrivacy",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/site/privacidade-dados"
+ },
+ {
+  "name": "site.incidents",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/site/incidentes"
+ },
+ {
+  "name": "site.help-center",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/site/central-de-ajuda"
+ },
+ {
+  "name": "site.help-center.category",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/site/central-de-ajuda/:categorySlug"
+ },
+ {
+  "name": "site.help-center.article",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/site/central-de-ajuda/:categorySlug/:articleSlug"
+ },
+ {
+  "name": "onboarding.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/onboarding"
+ },
+ {
+  "name": "auth.login.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/auth/login"
+ },
+ {
+  "name": "auth.login",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/auth/login"
+ },
+ {
+  "name": "auth.signup.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/auth/signup"
+ },
+ {
+  "name": "auth.signup",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/auth/signup"
+ },
+ {
+  "name": "auth.signup.seats.clear",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/auth/signup/seats"
+ },
+ {
+  "name": "auth.signup.verify.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/auth/signup/verify"
+ },
+ {
+  "name": "auth.signup.verify",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/auth/signup/verify"
+ },
+ {
+  "name": "auth.signup.resend",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/auth/signup/resend"
+ },
+ {
+  "name": "auth.logout",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/auth/logout"
+ },
+ {
+  "name": "auth.forgot.password.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/auth/forgot-password"
+ },
+ {
+  "name": "auth.forgot.password.sendmail",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/auth/forgot-password/sendmail"
+ },
+ {
+  "name": "auth.forgot.password.finish.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/auth/forgot-password/:token"
+ },
+ {
+  "name": "auth.change.password",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/auth/change-password"
+ },
+ {
+  "name": "users.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/users"
+ },
+ {
+  "name": "users.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/users/create"
+ },
+ {
+  "name": "users.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/users"
+ },
+ {
+  "name": "users.seats.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/users/seats"
+ },
+ {
+  "name": "users.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/users/:id/edit"
+ },
+ {
+  "name": "users.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/users/:id"
+ },
+ {
+  "name": "users.password.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/users/:id/password"
+ },
+ {
+  "name": "users.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/users/:id"
+ },
+ {
+  "name": "users.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/users/:id/restore"
+ },
+ {
+  "name": "categories.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/categories"
+ },
+ {
+  "name": "categories.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/categories/create"
+ },
+ {
+  "name": "categories.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/categories"
+ },
+ {
+  "name": "categories.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/categories/bulk-delete"
+ },
+ {
+  "name": "categories.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/categories/:id/edit"
+ },
+ {
+  "name": "categories.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/categories/:id"
+ },
+ {
+  "name": "categories.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/categories/:id"
+ },
+ {
+  "name": "categories.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/categories/:id/restore"
+ },
+ {
+  "name": "organizations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/organizations"
+ },
+ {
+  "name": "organizations.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/organizations/create"
+ },
+ {
+  "name": "organizations.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/organizations"
+ },
+ {
+  "name": "organizations.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/organizations/bulk-delete"
+ },
+ {
+  "name": "organizations.bulkRestore",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/organizations/bulk-restore"
+ },
+ {
+  "name": "organizations.bulkPurge",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/organizations/bulk-purge"
+ },
+ {
+  "name": "organizations.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/organizations/:id/edit"
+ },
+ {
+  "name": "organizations.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/organizations/:id"
+ },
+ {
+  "name": "organizations.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/organizations/:id"
+ },
+ {
+  "name": "organizations.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/organizations/:id/restore"
+ },
+ {
+  "name": "organizations.purge",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/organizations/:id/purge"
+ },
+ {
+  "name": "peoples.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/peoples"
+ },
+ {
+  "name": "peoples.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/peoples/create"
+ },
+ {
+  "name": "peoples.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/peoples"
+ },
+ {
+  "name": "peoples.reconcile.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/peoples/reconcile"
+ },
+ {
+  "name": "peoples.reconcile.resolve",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/peoples/reconcile/resolve"
+ },
+ {
+  "name": "peoples.reconcile.batch",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/peoples/reconcile/batch"
+ },
+ {
+  "name": "peoples.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/peoples/bulk-delete"
+ },
+ {
+  "name": "peoples.bulkCreateDeals",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/peoples/bulk-create-deals"
+ },
+ {
+  "name": "peoples.bulkRestore",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/peoples/bulk-restore"
+ },
+ {
+  "name": "peoples.bulkPurge",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/peoples/bulk-purge"
+ },
+ {
+  "name": "peoples.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/peoples/:id/edit"
+ },
+ {
+  "name": "peoples.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/peoples/:id"
+ },
+ {
+  "name": "peoples.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/peoples/:id"
+ },
+ {
+  "name": "peoples.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/peoples/:id/restore"
+ },
+ {
+  "name": "peoples.purge",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/peoples/:id/purge"
+ },
+ {
+  "name": "peoples.openConversation",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/peoples/:id/conversation"
+ },
+ {
+  "name": "imports.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/imports"
+ },
+ {
+  "name": "imports.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/imports/create"
+ },
+ {
+  "name": "imports.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/imports"
+ },
+ {
+  "name": "imports.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/imports/bulk-delete"
+ },
+ {
+  "name": "imports.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/imports/:id"
+ },
+ {
+  "name": "imports.revertDeals",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/imports/:id/deals"
+ },
+ {
+  "name": "imports.templates.download",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/imports/templates"
+ },
+ {
+  "name": "products.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/products"
+ },
+ {
+  "name": "products.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/products/create"
+ },
+ {
+  "name": "products.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/products"
+ },
+ {
+  "name": "products.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/products/bulk-delete"
+ },
+ {
+  "name": "products.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/products/:id/edit"
+ },
+ {
+  "name": "products.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/products/:id"
+ },
+ {
+  "name": "products.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/products/:id"
+ },
+ {
+  "name": "products.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/products/:id/restore"
+ },
+ {
+  "name": "integrations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations"
+ },
+ {
+  "name": "integrations.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/create"
+ },
+ {
+  "name": "integrations.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations"
+ },
+ {
+  "name": "integrations.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/integrations/bulk-delete"
+ },
+ {
+  "name": "integrations.editWebhook",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/webhook"
+ },
+ {
+  "name": "integrations.updateWebhook",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/webhook"
+ },
+ {
+  "name": "integrations.editRd",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/rd"
+ },
+ {
+  "name": "integrations.updateRd",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/rd"
+ },
+ {
+  "name": "integrations.rdCallback",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/rd/callback"
+ },
+ {
+  "name": "integrations.rdDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/rd/disconnect"
+ },
+ {
+  "name": "integrations.editFacebook",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/facebook"
+ },
+ {
+  "name": "integrations.updateFacebook",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/facebook"
+ },
+ {
+  "name": "integrations.facebookCallback",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/facebook/callback"
+ },
+ {
+  "name": "integrations.facebookDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/facebook/disconnect"
+ },
+ {
+  "name": "integrations.facebook.selectSource",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/facebook/source"
+ },
+ {
+  "name": "integrations.editFacebookCapi",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/facebook-capi"
+ },
+ {
+  "name": "integrations.updateFacebookCapi",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/facebook-capi"
+ },
+ {
+  "name": "integrations.facebookCapiDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/facebook-capi/disconnect"
+ },
+ {
+  "name": "integrations.editCuboEmail",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/cubo-email"
+ },
+ {
+  "name": "integrations.updateCuboEmail",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/cubo-email"
+ },
+ {
+  "name": "integrations.cuboEmailDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/cubo-email/disconnect"
+ },
+ {
+  "name": "integrations.editConversas",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/conversas"
+ },
+ {
+  "name": "integrations.updateConversas",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/conversas"
+ },
+ {
+  "name": "integrations.conversasDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/conversas/disconnect"
+ },
+ {
+  "name": "integrations.editVerdata",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/verdata"
+ },
+ {
+  "name": "integrations.updateVerdata",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/verdata"
+ },
+ {
+  "name": "integrations.verdataDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/verdata/disconnect"
+ },
+ {
+  "name": "integrations.testConnectionVerdata",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/verdata/test-connection"
+ },
+ {
+  "name": "integrations.importProductsVerdata",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/verdata/import-products"
+ },
+ {
+  "name": "integrations.editGoogleAds",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/google-ads"
+ },
+ {
+  "name": "integrations.updateGoogleAds",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/google-ads"
+ },
+ {
+  "name": "integrations.googleAdsCallback",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/google-ads/callback"
+ },
+ {
+  "name": "integrations.googleAdsDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/google-ads/disconnect"
+ },
+ {
+  "name": "integrations.googleAdsCreateList",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/google-ads/lists"
+ },
+ {
+  "name": "integrations.googleAdsUpdateList",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/google-ads/lists/:listId"
+ },
+ {
+  "name": "integrations.googleAdsDeleteList",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/integrations/:id/google-ads/lists/:listId"
+ },
+ {
+  "name": "integrations.googleAdsSyncList",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/google-ads/lists/:listId/sync"
+ },
+ {
+  "name": "integrations.googleAds.selectAccount",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/google-ads/account"
+ },
+ {
+  "name": "integrations.googleLeadForms.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/google-ads/lead-forms"
+ },
+ {
+  "name": "integrations.googleLeadForms.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/google-ads/lead-forms/:formId"
+ },
+ {
+  "name": "integrations.googleLeadForms.updateMapping",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/google-ads/lead-forms/:formId/mapping"
+ },
+ {
+  "name": "integrations.googleLeadForms.regenerateKey",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/google-ads/lead-forms/:formId/key"
+ },
+ {
+  "name": "integrations.googleLeadForms.linkGoogle",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/google-ads/lead-forms/:formId/google-link"
+ },
+ {
+  "name": "integrations.googleLeadForms.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/integrations/:id/google-ads/lead-forms/:formId"
+ },
+ {
+  "name": "integrations.editWhatsappBusiness",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business"
+ },
+ {
+  "name": "integrations.whatsappBusinessCallback",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/whatsapp-business/callback"
+ },
+ {
+  "name": "integrations.connectViaSDKWhatsappBusiness",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/whatsapp-business/connect-via-sdk"
+ },
+ {
+  "name": "integrations.updateWhatsappBusiness",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business"
+ },
+ {
+  "name": "integrations.syncPhonesWhatsappBusiness",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business/sync-phones"
+ },
+ {
+  "name": "integrations.registerPhoneWhatsappBusiness",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business/register-phone"
+ },
+ {
+  "name": "integrations.updateUserMappingsWhatsappBusiness",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business/user-mappings"
+ },
+ {
+  "name": "integrations.syncTemplateWhatsappBusiness",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business/sync-template"
+ },
+ {
+  "name": "integrations.deleteTemplateWhatsappBusiness",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business/delete-template"
+ },
+ {
+  "name": "integrations.updateTemplateManualSendWhatsappBusiness",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business/template-manual-send"
+ },
+ {
+  "name": "integrations.disconnectWhatsappBusiness",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/whatsapp-business/disconnect"
+ },
+ {
+  "name": "integrations.editOpenai",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/openai"
+ },
+ {
+  "name": "integrations.updateOpenai",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/openai"
+ },
+ {
+  "name": "integrations.openaiDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/openai/disconnect"
+ },
+ {
+  "name": "integrations.editGoogleAi",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/google-ai"
+ },
+ {
+  "name": "integrations.updateGoogleAi",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/google-ai"
+ },
+ {
+  "name": "integrations.googleAiDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/google-ai/disconnect"
+ },
+ {
+  "name": "integrations.editOpenRouter",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/openrouter"
+ },
+ {
+  "name": "integrations.updateOpenRouter",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/openrouter"
+ },
+ {
+  "name": "integrations.openRouterDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/openrouter/disconnect"
+ },
+ {
+  "name": "integrations.editCalcom",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/calcom"
+ },
+ {
+  "name": "integrations.updateCalcom",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/calcom"
+ },
+ {
+  "name": "integrations.calcomDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/calcom/disconnect"
+ },
+ {
+  "name": "integrations.calcomWebhookConnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/calcom/webhook/connect"
+ },
+ {
+  "name": "integrations.calcomWebhookDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/calcom/webhook/disconnect"
+ },
+ {
+  "name": "integrations.editZapi",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/zapi"
+ },
+ {
+  "name": "integrations.updateZapi",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/zapi"
+ },
+ {
+  "name": "integrations.updateZapiCtwaFields",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/zapi/ctwa-fields"
+ },
+ {
+  "name": "integrations.zapiPhoneCode",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/zapi/phone-code"
+ },
+ {
+  "name": "integrations.zapiRestart",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/zapi/restart"
+ },
+ {
+  "name": "integrations.zapiLogout",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/zapi/logout"
+ },
+ {
+  "name": "integrations.editInstagram",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/instagram"
+ },
+ {
+  "name": "integrations.instagramCallback",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/instagram/callback"
+ },
+ {
+  "name": "integrations.instagramConnect",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/integrations/:id/instagram"
+ },
+ {
+  "name": "integrations.updateInstagram",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/integrations/:id/instagram"
+ },
+ {
+  "name": "integrations.instagramDisconnect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/instagram/disconnect"
+ },
+ {
+  "name": "integrations.toggle",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/integrations/:id/toggle"
+ },
+ {
+  "name": "integrations.logs",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/integrations/:id/logs"
+ },
+ {
+  "name": "integrations.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/integrations/:id"
+ },
+ {
+  "name": "customfields.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/customfields"
+ },
+ {
+  "name": "customfields.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/customfields/create"
+ },
+ {
+  "name": "customfields.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/customfields"
+ },
+ {
+  "name": "customfields.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/customfields/bulk-delete"
+ },
+ {
+  "name": "customfields.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/customfields/:id/edit"
+ },
+ {
+  "name": "customfields.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/customfields/:id"
+ },
+ {
+  "name": "customfields.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/customfields/:id"
+ },
+ {
+  "name": "customfields.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/customfields/:id/restore"
+ },
+ {
+  "name": "lostreasons.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/lostreasons"
+ },
+ {
+  "name": "lostreasons.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/lostreasons/create"
+ },
+ {
+  "name": "lostreasons.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/lostreasons"
+ },
+ {
+  "name": "lostreasons.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/lostreasons/bulk-delete"
+ },
+ {
+  "name": "lostreasons.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/lostreasons/:id/edit"
+ },
+ {
+  "name": "lostreasons.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/lostreasons/:id"
+ },
+ {
+  "name": "lostreasons.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/lostreasons/:id"
+ },
+ {
+  "name": "lostreasons.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/lostreasons/:id/restore"
+ },
+ {
+  "name": "resolutionReasons.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/resolution-reasons"
+ },
+ {
+  "name": "resolutionReasons.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/resolution-reasons/create"
+ },
+ {
+  "name": "resolutionReasons.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/resolution-reasons"
+ },
+ {
+  "name": "resolutionReasons.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/resolution-reasons/bulk-delete"
+ },
+ {
+  "name": "resolutionReasons.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/resolution-reasons/:id/edit"
+ },
+ {
+  "name": "resolutionReasons.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/resolution-reasons/:id"
+ },
+ {
+  "name": "resolutionReasons.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/resolution-reasons/:id"
+ },
+ {
+  "name": "resolutionReasons.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/resolution-reasons/:id/restore"
+ },
+ {
+  "name": "transferReasons.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/transfer-reasons"
+ },
+ {
+  "name": "transferReasons.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/transfer-reasons/create"
+ },
+ {
+  "name": "transferReasons.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/transfer-reasons"
+ },
+ {
+  "name": "transferReasons.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/transfer-reasons/bulk-delete"
+ },
+ {
+  "name": "transferReasons.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/transfer-reasons/:id/edit"
+ },
+ {
+  "name": "transferReasons.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/transfer-reasons/:id"
+ },
+ {
+  "name": "transferReasons.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/transfer-reasons/:id"
+ },
+ {
+  "name": "transferReasons.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/transfer-reasons/:id/restore"
+ },
+ {
+  "name": "pauseReasons.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/pause-reasons"
+ },
+ {
+  "name": "pauseReasons.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/pause-reasons/create"
+ },
+ {
+  "name": "pauseReasons.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/pause-reasons"
+ },
+ {
+  "name": "pauseReasons.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/pause-reasons/bulk-delete"
+ },
+ {
+  "name": "pauseReasons.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/pause-reasons/:id/edit"
+ },
+ {
+  "name": "pauseReasons.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/pause-reasons/:id"
+ },
+ {
+  "name": "pauseReasons.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/pause-reasons/:id"
+ },
+ {
+  "name": "pauseReasons.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/pause-reasons/:id/restore"
+ },
+ {
+  "name": "domains.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/domains"
+ },
+ {
+  "name": "domains.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/domains/create"
+ },
+ {
+  "name": "domains.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/domains"
+ },
+ {
+  "name": "domains.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/domains/bulk-delete"
+ },
+ {
+  "name": "domains.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/domains/:id/edit"
+ },
+ {
+  "name": "domains.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/domains/:id"
+ },
+ {
+  "name": "domains.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/domains/:id"
+ },
+ {
+  "name": "profile.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/profile"
+ },
+ {
+  "name": "profile.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/profile"
+ },
+ {
+  "name": "company.settings",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/company/settings"
+ },
+ {
+  "name": "company.settings.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/company/settings"
+ },
+ {
+  "name": "storage.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/settings/storage"
+ },
+ {
+  "name": "storage.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/settings/storage"
+ },
+ {
+  "name": "storage.bulkDestroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/settings/storage/bulk"
+ },
+ {
+  "name": "departments.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/settings/departments"
+ },
+ {
+  "name": "departments.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/settings/departments"
+ },
+ {
+  "name": "departments.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/settings/departments/:id"
+ },
+ {
+  "name": "departments.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/settings/departments"
+ },
+ {
+  "name": "departments.addMembers",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/settings/departments/:id/members"
+ },
+ {
+  "name": "departments.removeMember",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/settings/departments/:id/members/:userId"
+ },
+ {
+  "name": "tags.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/settings/tags"
+ },
+ {
+  "name": "tags.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/settings/tags"
+ },
+ {
+  "name": "tags.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/settings/tags/:id"
+ },
+ {
+  "name": "tags.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/settings/tags"
+ },
+ {
+  "name": "tags.attach",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/settings/tags/attach"
+ },
+ {
+  "name": "tags.detach",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/settings/tags/detach"
+ },
+ {
+  "name": "channels.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/settings/channels"
+ },
+ {
+  "name": "channels.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/settings/channels/create"
+ },
+ {
+  "name": "channels.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/settings/channels/:id/edit"
+ },
+ {
+  "name": "channels.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/settings/channels"
+ },
+ {
+  "name": "channels.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/settings/channels/:id"
+ },
+ {
+  "name": "channels.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/settings/channels"
+ },
+ {
+  "name": "channels.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/settings/channels/:id"
+ },
+ {
+  "name": "stickers.storeFromMessage",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/stickers/from-message"
+ },
+ {
+  "name": "stickers.upload",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/stickers/upload"
+ },
+ {
+  "name": "stickers.copyToCompany",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/stickers/:id/company"
+ },
+ {
+  "name": "stickers.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/conversations/stickers/:id"
+ },
+ {
+  "name": "quickReplies.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/conversations/quick-replies"
+ },
+ {
+  "name": "quickReplies.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/quick-replies"
+ },
+ {
+  "name": "quickReplies.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/conversations/quick-replies/:id"
+ },
+ {
+  "name": "quickReplies.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/conversations/quick-replies"
+ },
+ {
+  "name": "conversations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/conversations"
+ },
+ {
+  "name": "conversations.channel",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/conversations/channel/:channelId"
+ },
+ {
+  "name": "conversations.start",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/start"
+ },
+ {
+  "name": "conversations.startFromContact",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/start-from-contact"
+ },
+ {
+  "name": "conversations.applyPhoneChange",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/apply-phone-change"
+ },
+ {
+  "name": "conversations.channelShow",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/conversations/channel/:channelId/:id"
+ },
+ {
+  "name": "conversations.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/conversations/:id"
+ },
+ {
+  "name": "conversations.assign",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/assign"
+ },
+ {
+  "name": "conversations.transfer",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/transfer"
+ },
+ {
+  "name": "conversations.unassign",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/unassign"
+ },
+ {
+  "name": "conversations.resolve",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/resolve"
+ },
+ {
+  "name": "conversations.reopen",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/reopen"
+ },
+ {
+  "name": "conversations.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/conversations/:id"
+ },
+ {
+  "name": "conversations.pauseBot",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/pause-bot"
+ },
+ {
+  "name": "conversations.unpauseBot",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/unpause-bot"
+ },
+ {
+  "name": "conversations.returnToBot",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/return-to-bot"
+ },
+ {
+  "name": "conversations.sendTemplate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/send-template"
+ },
+ {
+  "name": "conversations.sendMessage",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/send-message"
+ },
+ {
+  "name": "conversations.messageReaction",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/messages/:messageId/reaction"
+ },
+ {
+  "name": "conversations.contactBlock.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/contact-block"
+ },
+ {
+  "name": "conversations.contactBlock.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/conversations/:id/contact-block"
+ },
+ {
+  "name": "conversations.group.participants.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/group/participants"
+ },
+ {
+  "name": "conversations.group.participants.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/conversations/:id/group/participants/:participantId"
+ },
+ {
+  "name": "conversations.group.participants.admin",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/group/participants/:participantId/admin"
+ },
+ {
+  "name": "conversations.group.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/conversations/:id/group"
+ },
+ {
+  "name": "conversations.group.photo",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/group/photo"
+ },
+ {
+  "name": "conversations.participants.contact",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/participants/:participantId/contact"
+ },
+ {
+  "name": "conversations.participants.open",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/participants/:participantId/open"
+ },
+ {
+  "name": "conversations.instagramComment.reply",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/messages/:messageId/instagram-comment/reply"
+ },
+ {
+  "name": "conversations.instagramComment.hide",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/messages/:messageId/instagram-comment/hide"
+ },
+ {
+  "name": "conversations.notes.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/conversations/:id/notes"
+ },
+ {
+  "name": "conversations.notes.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/conversations/notes/:id"
+ },
+ {
+  "name": "modules.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/modules"
+ },
+ {
+  "name": "modules.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/modules/:slug"
+ },
+ {
+  "name": "modules.activate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/modules/:slug/activate"
+ },
+ {
+  "name": "modules.deactivate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/modules/:slug/deactivate"
+ },
+ {
+  "name": "modules.recharge",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/modules/:slug/recharge"
+ },
+ {
+  "name": "modules.contractQuantity",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/modules/:slug/quantity"
+ },
+ {
+  "name": "modules.contractSeats",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/modules/:slug/contract-seats"
+ },
+ {
+  "name": "modules.updateAutoRecharge",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/modules/:slug/auto-recharge"
+ },
+ {
+  "name": "tenant.signup.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/signup"
+ },
+ {
+  "name": "tenant.signup.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/signup"
+ },
+ {
+  "name": "tenant.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant"
+ },
+ {
+  "name": "tenant.domains",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/domains"
+ },
+ {
+  "name": "tenant.domains.updateSubdomain",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/domains/subdomain"
+ },
+ {
+  "name": "tenant.domains.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/domains/domain"
+ },
+ {
+  "name": "tenant.domains.remove",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/tenant/domains/domain"
+ },
+ {
+  "name": "tenant.branding",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/branding"
+ },
+ {
+  "name": "tenant.branding.update",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/branding"
+ },
+ {
+  "name": "tenant.extension.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/extension"
+ },
+ {
+  "name": "tenant.extension.generate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/extension/generate"
+ },
+ {
+  "name": "tenant.extension.download",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/extension/:id/download"
+ },
+ {
+  "name": "tenant.extension.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/tenant/extension/:id"
+ },
+ {
+  "name": "tenant.companies",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/companies"
+ },
+ {
+  "name": "tenant.modules",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/modules"
+ },
+ {
+  "name": "tenant.modules.companies",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/modules/companies"
+ },
+ {
+  "name": "tenant.modules.updatePrice",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/modules/:id/price"
+ },
+ {
+  "name": "tenant.modules.updateOverrides",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/modules/:id/overrides"
+ },
+ {
+  "name": "tenant.modules.packages.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/modules/:moduleId/packages"
+ },
+ {
+  "name": "tenant.modules.packages.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/modules/:moduleId/packages"
+ },
+ {
+  "name": "tenant.modules.packages.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/modules/:moduleId/packages/:id"
+ },
+ {
+  "name": "tenant.modules.packages.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/tenant/modules/:moduleId/packages/:id"
+ },
+ {
+  "name": "tenant.finance",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/finance"
+ },
+ {
+  "name": "tenant.smtp",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/smtp"
+ },
+ {
+  "name": "tenant.smtp.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/smtp"
+ },
+ {
+  "name": "tenant.smtp.test",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/smtp/test"
+ },
+ {
+  "name": "tenant.pricing.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/pricing"
+ },
+ {
+  "name": "tenant.companyTrial.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/company-trial"
+ },
+ {
+  "name": "tenant.facebook",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/facebook"
+ },
+ {
+  "name": "tenant.facebook.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/facebook"
+ },
+ {
+  "name": "tenant.google",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/google"
+ },
+ {
+  "name": "tenant.google.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/google"
+ },
+ {
+  "name": "tenant.rapidapi",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/rapidapi"
+ },
+ {
+  "name": "tenant.rapidapi.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/rapidapi"
+ },
+ {
+  "name": "tenant.help-center.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/help-center"
+ },
+ {
+  "name": "tenant.help-center.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/help-center/create"
+ },
+ {
+  "name": "tenant.help-center.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/help-center"
+ },
+ {
+  "name": "tenant.help-center.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/help-center/:id/edit"
+ },
+ {
+  "name": "tenant.help-center.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/help-center/:id"
+ },
+ {
+  "name": "tenant.help-center.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/tenant/help-center"
+ },
+ {
+  "name": "tenant.help-center.syncFromBase",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/help-center/:id/sync-from-base"
+ },
+ {
+  "name": "tenant.help-center.categories.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/help-center/categories"
+ },
+ {
+  "name": "tenant.help-center.categories.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/help-center/categories/:id"
+ },
+ {
+  "name": "tenant.help-center.categories.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/tenant/help-center/categories"
+ },
+ {
+  "name": "tenant.help-center.base-articles",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/help-center/base-articles"
+ },
+ {
+  "name": "tenant.help-center.base-articles.copy",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/help-center/base-articles/:id/copy"
+ },
+ {
+  "name": "tenant.help-center.manage-base.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/help-center/manage-base/create"
+ },
+ {
+  "name": "tenant.help-center.manage-base.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/tenant/help-center/manage-base"
+ },
+ {
+  "name": "tenant.help-center.manage-base.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/tenant/help-center/manage-base/:id/edit"
+ },
+ {
+  "name": "tenant.help-center.manage-base.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/tenant/help-center/manage-base/:id"
+ },
+ {
+  "name": "tenant.help-center.manage-base.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/tenant/help-center/manage-base"
+ },
+ {
+  "name": "landings.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/landings"
+ },
+ {
+  "name": "landings.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/landings/create"
+ },
+ {
+  "name": "landings.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/landings"
+ },
+ {
+  "name": "landings.importForm",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/landings/import"
+ },
+ {
+  "name": "landings.import",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/landings/import"
+ },
+ {
+  "name": "landings.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/landings/bulk-delete"
+ },
+ {
+  "name": "landings.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/landings/:id/edit"
+ },
+ {
+  "name": "landings.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/landings/:id"
+ },
+ {
+  "name": "landings.duplicate",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/landings/:id/duplicate"
+ },
+ {
+  "name": "landings.storeDuplicate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/landings/:id/duplicate"
+ },
+ {
+  "name": "landings.export",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/landings/:id/export"
+ },
+ {
+  "name": "landings.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/landings/:id"
+ },
+ {
+  "name": "landings.pagebuilder",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/landings/:id/pagebuilder"
+ },
+ {
+  "name": "pipes.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/pipes"
+ },
+ {
+  "name": "pipes.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/pipes/create"
+ },
+ {
+  "name": "pipes.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/pipes/:id"
+ },
+ {
+  "name": "pipes.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/pipes"
+ },
+ {
+  "name": "pipes.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/pipes/:id/edit"
+ },
+ {
+  "name": "pipes.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/pipes/:id"
+ },
+ {
+  "name": "pipes.updateStagesOrder",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/pipes/:id/stages-orders"
+ },
+ {
+  "name": "pipes.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/pipes/:id"
+ },
+ {
+  "name": "pipes.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/pipes/:id/restore"
+ },
+ {
+  "name": "stages.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/stages/create"
+ },
+ {
+  "name": "stages.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/stages"
+ },
+ {
+  "name": "stages.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/stages/:id/edit"
+ },
+ {
+  "name": "stages.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/stages/:id"
+ },
+ {
+  "name": "stages.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/stages/:id"
+ },
+ {
+  "name": "stages.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/stages/:id/restore"
+ },
+ {
+  "name": "filters.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/filters"
+ },
+ {
+  "name": "filters.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/filters"
+ },
+ {
+  "name": "filters.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/filters/:id"
+ },
+ {
+  "name": "filters.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/filters/:id"
+ },
+ {
+  "name": "filters.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/filters/bulk-delete"
+ },
+ {
+  "name": "forms.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/forms"
+ },
+ {
+  "name": "forms.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/forms/create"
+ },
+ {
+  "name": "forms.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/forms"
+ },
+ {
+  "name": "forms.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/forms/bulk-delete"
+ },
+ {
+  "name": "forms.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/forms/:id/edit"
+ },
+ {
+  "name": "forms.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/forms/:id"
+ },
+ {
+  "name": "forms.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/forms/:id"
+ },
+ {
+  "name": "trash.restore",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/trash/:entity/restore"
+ },
+ {
+  "name": "trash.purge",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/trash/:entity/purge"
+ },
+ {
+  "name": "deals.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/deals/create"
+ },
+ {
+  "name": "deals.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/deals/:id/edit"
+ },
+ {
+  "name": "deals.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/deals"
+ },
+ {
+  "name": "deals.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/deals/:id"
+ },
+ {
+  "name": "deals.win",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/deals/:id/win"
+ },
+ {
+  "name": "deals.lose",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/deals/:id/lose"
+ },
+ {
+  "name": "deals.reopen",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/deals/:id/reopen"
+ },
+ {
+  "name": "deals.move",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/deals/:id/move"
+ },
+ {
+  "name": "deals.transshipment",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/deals/:id/transshipment"
+ },
+ {
+  "name": "deals.openConversation",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/deals/:id/conversation"
+ },
+ {
+  "name": "deals.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/deals/:id"
+ },
+ {
+  "name": "deals.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/deals/:id/restore"
+ },
+ {
+  "name": "deals.purge",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/deals/:id/purge"
+ },
+ {
+  "name": "annotations.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/annotations/:entityType/:entityId"
+ },
+ {
+  "name": "annotations.update",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/annotations/:entityType/:entityId/:id"
+ },
+ {
+  "name": "activities.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/activities"
+ },
+ {
+  "name": "activities.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/activities"
+ },
+ {
+  "name": "activities.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/activities/:id"
+ },
+ {
+  "name": "activities.bulkComplete",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/activities/bulk-complete"
+ },
+ {
+  "name": "activities.moveEvent",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/activities/:id/move"
+ },
+ {
+  "name": "activities.toggleNoShow",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/activities/:id/toggle-no-show"
+ },
+ {
+  "name": "activities.complete",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/activities/:id/complete"
+ },
+ {
+  "name": "activities.reopen",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/activities/:id/reopen"
+ },
+ {
+  "name": "activities.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/activities/:id"
+ },
+ {
+  "name": "activityShares.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/activity-shares"
+ },
+ {
+  "name": "activityShares.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/activity-shares/:id"
+ },
+ {
+  "name": "activityShares.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/activity-shares/:id"
+ },
+ {
+  "name": "activity-trails.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/activity-trails"
+ },
+ {
+  "name": "activity-trails.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/activity-trails/create"
+ },
+ {
+  "name": "activity-trails.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/activity-trails"
+ },
+ {
+  "name": "activity-trails.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/activity-trails/:id/edit"
+ },
+ {
+  "name": "activity-trails.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/activity-trails/:id"
+ },
+ {
+  "name": "activity-trails.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/activity-trails/bulk-delete"
+ },
+ {
+  "name": "activity-trails.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/activity-trails/:id"
+ },
+ {
+  "name": "activity-trails.open",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/activity-trails/open"
+ },
+ {
+  "name": "activity-trails.completeEarly",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/activity-trails/executions/:id/complete-early"
+ },
+ {
+  "name": "automations.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/automations"
+ },
+ {
+  "name": "automations.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/automations/create"
+ },
+ {
+  "name": "automations.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/automations"
+ },
+ {
+  "name": "automations.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/automations/:id/edit"
+ },
+ {
+  "name": "automations.logs",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/automations/:id/logs"
+ },
+ {
+  "name": "automations.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/automations/:id"
+ },
+ {
+  "name": "automations.toggleStatus",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/automations/:id/toggle-status"
+ },
+ {
+  "name": "automations.stopExecutions",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/automations/:id/stop-executions"
+ },
+ {
+  "name": "automations.publish",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/automations/:id/publish"
+ },
+ {
+  "name": "automations.duplicate",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/automations/:id/duplicate"
+ },
+ {
+  "name": "automations.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/automations/bulk-delete"
+ },
+ {
+  "name": "automations.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/automations/:id"
+ },
+ {
+  "name": "automation-folders.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/automation-folders"
+ },
+ {
+  "name": "automation-folders.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/automation-folders/:id"
+ },
+ {
+  "name": "automation-folders.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/automation-folders/:id"
+ },
+ {
+  "name": "proposals.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/proposals"
+ },
+ {
+  "name": "proposals.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/proposals/:id"
+ },
+ {
+  "name": "proposals.sendToVerdata",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/proposals/:id/verdata"
+ },
+ {
+  "name": "proposals.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/proposals/:id"
+ },
+ {
+  "name": "verdata.paymentConditions",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/verdata/payment-conditions"
+ },
+ {
+  "name": "verdata.shippingOptions",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/verdata/shipping-options"
+ },
+ {
+  "name": "templates.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/templates"
+ },
+ {
+  "name": "templates.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/templates/create"
+ },
+ {
+  "name": "templates.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/templates"
+ },
+ {
+  "name": "templates.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/templates/bulk-delete"
+ },
+ {
+  "name": "templates.editWhatsapp",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/templates/:id/whatsapp"
+ },
+ {
+  "name": "templates.updateWhatsapp",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/templates/:id/whatsapp"
+ },
+ {
+  "name": "templates.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/templates/:id/edit"
+ },
+ {
+  "name": "templates.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/templates/:id"
+ },
+ {
+  "name": "templates.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/templates/:id"
+ },
+ {
+  "name": "templates.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/templates/:id/restore"
+ },
+ {
+  "name": "apikeys.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/apikeys"
+ },
+ {
+  "name": "apikeys.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/apikeys/create"
+ },
+ {
+  "name": "apikeys.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/apikeys"
+ },
+ {
+  "name": "apikeys.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/apikeys/bulk-delete"
+ },
+ {
+  "name": "apikeys.reveal",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/apikeys/:id/reveal"
+ },
+ {
+  "name": "apikeys.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/apikeys/:id/edit"
+ },
+ {
+  "name": "apikeys.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/apikeys/:id"
+ },
+ {
+  "name": "apikeys.revoke",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/apikeys/:id/revoke"
+ },
+ {
+  "name": "apikeys.reactivate",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/apikeys/:id/reactivate"
+ },
+ {
+  "name": "apikeys.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/apikeys/:id"
+ },
+ {
+  "name": "apikeys.restore",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/apikeys/:id/restore"
+ },
+ {
+  "name": "exports.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/exports"
+ },
+ {
+  "name": "exports.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/exports/create"
+ },
+ {
+  "name": "exports.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/exports"
+ },
+ {
+  "name": "exports.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/exports/bulk-delete"
+ },
+ {
+  "name": "exports.download",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/exports/:id/download"
+ },
+ {
+  "name": "exports.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/exports/:id"
+ },
+ {
+  "name": "whatsapp-queue.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/whatsapp-queue"
+ },
+ {
+  "name": "whatsapp-queue.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/whatsapp-queue/create"
+ },
+ {
+  "name": "whatsapp-queue.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/whatsapp-queue"
+ },
+ {
+  "name": "whatsapp-queue.retry",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/whatsapp-queue/:id/retry"
+ },
+ {
+  "name": "whatsapp-queue.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/whatsapp-queue/bulk-delete"
+ },
+ {
+  "name": "whatsapp-queue.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/whatsapp-queue/:id"
+ },
+ {
+  "name": "message-queues.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/message-queues"
+ },
+ {
+  "name": "message-queues.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/message-queues/create"
+ },
+ {
+  "name": "message-queues.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/message-queues"
+ },
+ {
+  "name": "message-queues.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/message-queues/:id"
+ },
+ {
+  "name": "message-queues.pause",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/message-queues/:id/pause"
+ },
+ {
+  "name": "message-queues.resume",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/message-queues/:id/resume"
+ },
+ {
+  "name": "message-queues.reprocessFailed",
+  "methods": [
+   "PATCH"
+  ],
+  "pattern": "/message-queues/:id/reprocess-failed"
+ },
+ {
+  "name": "message-queues.bulkDelete",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/message-queues/bulk-delete"
+ },
+ {
+  "name": "message-queues.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/message-queues/:id"
+ },
+ {
+  "name": "billing.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/billing"
+ },
+ {
+  "name": "billing.convertTrial",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/billing/convert-trial"
+ },
+ {
+  "name": "reports.account.summary",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/account/summary"
+ },
+ {
+  "name": "reports.account.supportAccess",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/account/support-access"
+ },
+ {
+  "name": "reports.funnel.summary",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/summary"
+ },
+ {
+  "name": "reports.funnel.state",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/state"
+ },
+ {
+  "name": "reports.funnel.users",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/users"
+ },
+ {
+  "name": "reports.funnel.customfield",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/customfield"
+ },
+ {
+  "name": "reports.funnel.proposals",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/proposals"
+ },
+ {
+  "name": "reports.funnel.lostreason",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/lostreason"
+ },
+ {
+  "name": "reports.funnel.harvest",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/harvest"
+ },
+ {
+  "name": "reports.funnel.timeToClose",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/time-to-close"
+ },
+ {
+  "name": "reports.funnel.velocity",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/funnel/velocity"
+ },
+ {
+  "name": "reports.conversations.summary",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/conversations/summary"
+ },
+ {
+  "name": "reports.conversations.liveops",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/conversations/liveops"
+ },
+ {
+  "name": "reports.conversations.agents",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/conversations/agents"
+ },
+ {
+  "name": "reports.conversations.distribution",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/conversations/distribution"
+ },
+ {
+  "name": "reports.conversations.reopens",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/conversations/reopens"
+ },
+ {
+  "name": "reports.conversations.timeline",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/reports/conversations/timeline"
+ },
+ {
+  "name": "docs.show",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/docs"
+ },
+ {
+  "name": "docs.spec",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/docs/openapi.json"
+ },
+ {
+  "name": "docs.theme",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/docs/theme.css"
+ },
+ {
+  "name": "agents.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/agents"
+ },
+ {
+  "name": "agents.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/agents/create"
+ },
+ {
+  "name": "agents.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/agents"
+ },
+ {
+  "name": "agents.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/agents/:id/edit"
+ },
+ {
+  "name": "agents.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/agents/:id"
+ },
+ {
+  "name": "agents.bulkDestroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/agents/bulk-delete"
+ },
+ {
+  "name": "agents.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/agents/:id"
+ },
+ {
+  "name": "agents.executions.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/agents/executions"
+ },
+ {
+  "name": "agents.executions.export",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/agents/executions/export"
+ },
+ {
+  "name": "agents.playground.run",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/agents/playground/run"
+ },
+ {
+  "name": "agents.executions.rerun",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/agents/:id/executions/:executionId/rerun"
+ },
+ {
+  "name": "agents.handoffTargets.update",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/agents/:id/handoff-targets"
+ },
+ {
+  "name": "agents.followUp.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/agents/:id/follow-up"
+ },
+ {
+  "name": "agents.knowledge.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/agents/:agentId/knowledge-bases"
+ },
+ {
+  "name": "agents.knowledge.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/agents/:agentId/knowledge-bases/:knowledgeBaseId"
+ },
+ {
+  "name": "agents.knowledge.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/agents/:agentId/knowledge-bases/:knowledgeBaseId"
+ },
+ {
+  "name": "mcp-connections.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/mcp-connections"
+ },
+ {
+  "name": "mcp-connections.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/mcp-connections/create"
+ },
+ {
+  "name": "mcp-connections.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/mcp-connections/:id/edit"
+ },
+ {
+  "name": "mcp-connections.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/mcp-connections/:id"
+ },
+ {
+  "name": "mcp-connections.bulkDestroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/mcp-connections/bulk-destroy"
+ },
+ {
+  "name": "mcp-connections.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/mcp-connections/:id"
+ },
+ {
+  "name": "mcp-connections.test",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/mcp-connections/:id/test"
+ },
+ {
+  "name": "mcp-connections.oauth.start",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/mcp-connections/oauth/start"
+ },
+ {
+  "name": "mcp-connections.oauth.callback",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/oauth/mcp/callback"
+ },
+ {
+  "name": "oauth-credentials.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/oauth-credentials"
+ },
+ {
+  "name": "oauth-credentials.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/oauth-credentials/create"
+ },
+ {
+  "name": "oauth-credentials.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/oauth-credentials/:id/edit"
+ },
+ {
+  "name": "oauth-credentials.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/oauth-credentials"
+ },
+ {
+  "name": "oauth-credentials.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/oauth-credentials/:id"
+ },
+ {
+  "name": "oauth-credentials.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/oauth-credentials/:id"
+ },
+ {
+  "name": "oauth-credentials.connect",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/oauth-credentials/:id/connect"
+ },
+ {
+  "name": "oauth-credentials.callback",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/oauth/callback"
+ },
+ {
+  "name": "knowledge-bases.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/knowledge-bases"
+ },
+ {
+  "name": "knowledge-bases.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/knowledge-bases/create"
+ },
+ {
+  "name": "knowledge-bases.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/knowledge-bases"
+ },
+ {
+  "name": "knowledge-bases.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/knowledge-bases/:id/edit"
+ },
+ {
+  "name": "knowledge-bases.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/knowledge-bases/:id"
+ },
+ {
+  "name": "knowledge-bases.bulk-destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/knowledge-bases/bulk-delete"
+ },
+ {
+  "name": "knowledge-bases.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/knowledge-bases/:id"
+ },
+ {
+  "name": "knowledge-base-folders.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/knowledge-base-folders"
+ },
+ {
+  "name": "knowledge-base-folders.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/knowledge-base-folders/:id"
+ },
+ {
+  "name": "knowledge-base-folders.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/knowledge-base-folders/:id"
+ },
+ {
+  "name": "agent-folders.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/agent-folders"
+ },
+ {
+  "name": "agent-folders.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/agent-folders/:id"
+ },
+ {
+  "name": "agent-folders.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/agent-folders/:id"
+ },
+ {
+  "name": "custom-intents.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/custom-intents"
+ },
+ {
+  "name": "custom-intents.create",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/custom-intents/create"
+ },
+ {
+  "name": "custom-intents.store",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/custom-intents"
+ },
+ {
+  "name": "custom-intents.test",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/custom-intents/test"
+ },
+ {
+  "name": "custom-intents.edit",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/custom-intents/:id/edit"
+ },
+ {
+  "name": "custom-intents.update",
+  "methods": [
+   "PUT"
+  ],
+  "pattern": "/custom-intents/:id"
+ },
+ {
+  "name": "custom-intents.bulkDestroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/custom-intents/bulk-delete"
+ },
+ {
+  "name": "custom-intents.destroy",
+  "methods": [
+   "DELETE"
+  ],
+  "pattern": "/custom-intents/:id"
+ },
+ {
+  "name": "super-admin.impersonation",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/super-admin/personificar"
+ },
+ {
+  "name": "api.impersonation.targets",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/api/impersonation/targets"
+ },
+ {
+  "name": "super-admin.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/super-admin"
+ },
+ {
+  "name": "super-admin.onboarding",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/super-admin/onboarding"
+ },
+ {
+  "name": "super-admin.operation",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/super-admin/operations/:key"
+ },
+ {
+  "name": "super-admin.run",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/super-admin/operations/:key/run"
+ },
+ {
+  "name": "super-admin.findings.ignore",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/super-admin/findings/:id/ignore"
+ },
+ {
+  "name": "super-admin.findings.reopen",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/super-admin/findings/:id/reopen"
+ },
+ {
+  "name": "impersonation.stop",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/impersonation/stop"
+ },
+ {
+  "name": "impersonation.suspend",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/impersonation/suspend"
+ },
+ {
+  "name": "impersonation.resume",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/impersonation/resume"
+ },
+ {
+  "name": "impersonation.start",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/impersonation/:userId"
+ },
+ {
+  "name": "follow-ups.index",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/follow-ups"
+ },
+ {
+  "name": "facebook_webhook.verify",
+  "methods": [
+   "GET"
+  ],
+  "pattern": "/webhooks/facebook"
+ },
+ {
+  "name": "facebook_webhook.handle",
+  "methods": [
+   "POST"
+  ],
+  "pattern": "/webhooks/facebook"
+ }
+]
