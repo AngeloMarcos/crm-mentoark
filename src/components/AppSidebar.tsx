@@ -120,14 +120,17 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: "IA & Automação",
+    // 2026-10-30 (modelo Cubo: "Agentes de IA" → Meus agentes · Execuções · Bases de conhecimento):
+    // agente = cérebro; canal = número que aponta para o agente; base = o que ele sabe.
+    label: "Agentes de IA",
     icon: Bot,
     color: "text-teal-500",
     items: [
-      { title: "Agentes de IA", url: "/agentes", icon: Bot, modulo: "agentes", color: "text-teal-500" },
-      { title: "Configuração da IA", url: "/cerebro", icon: Brain, modulo: "cerebro", color: "text-purple-400" },
-      { title: "Workflows", url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500" },
+      { title: "Meus agentes", url: "/agentes", icon: Bot, modulo: "agentes", color: "text-teal-500" },
+      { title: "Canais", url: "/canais", icon: MessageCircle, modulo: "agentes", color: "text-green-500" },
+      { title: "Bases de conhecimento", url: "/cerebro", icon: Brain, modulo: "cerebro", color: "text-purple-400" },
       { title: "Uso de IA", url: "/uso-ia", icon: Activity, modulo: "agentes", color: "text-pink-500" },
+      { title: "Workflows", url: "/workflows", icon: GitBranch, modulo: "workflows", color: "text-violet-500" },
     ],
   },
   {

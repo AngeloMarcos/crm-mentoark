@@ -4,8 +4,9 @@
  * (backend/src/services/agenteConversa.ts) mantém o comportamento de antes.
  */
 import type { ReactNode } from "react";
-import { History, MessageSquareText, Scissors, UserCog } from "lucide-react";
+import { History, MessageSquareText, Scissors, UserCog, Volume2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -23,13 +24,16 @@ export interface ConversaAgente {
   assinatura_texto: string | null;
   idioma_forcado: string | null;
   mensagem_erro: string | null;
+  // 2026-10-30: voz saiu do /cerebro (gravava num agente qualquer) para cá — colunas que o motor lê.
+  resposta_voz_habilitada: boolean;
+  voice_id: string | null;
 }
 
 export const CONVERSA_PADRAO: ConversaAgente = {
   tempo_espera_mensagem: null, historico_mensagens: null, historico_max_tokens: null,
   divisao_ativa: null, divisao_modo: null, divisao_tamanho: null, divisao_intervalo_ms: null,
   emoji_politica: null, assinatura_ativa: null, assinatura_texto: null, idioma_forcado: null,
-  mensagem_erro: null,
+  mensagem_erro: null, resposta_voz_habilitada: false, voice_id: null,
 };
 
 /** Lê da linha do agente (colunas ausentes ou NULL = padrão). */
@@ -45,7 +49,10 @@ export function conversaDoAgente(a: Partial<Record<keyof ConversaAgente, unknown
 /** Para o payload de gravação: texto vazio vira NULL. */
 export function conversaParaSalvar(c: ConversaAgente): ConversaAgente {
   const t = (v: string | null) => (v && v.trim() ? v.trim() : null);
-  return { ...c, assinatura_texto: t(c.assinatura_texto), idioma_forcado: t(c.idioma_forcado), mensagem_erro: t(c.mensagem_erro) };
+  return {
+    ...c, assinatura_texto: t(c.assinatura_texto), idioma_forcado: t(c.idioma_forcado), mensagem_erro: t(c.mensagem_erro),
+    voice_id: t(c.voice_id),
+  };
 }
 
 const numOuNulo = (v: string) => (v.trim() === "" ? null : Math.max(0, Number(v)));
@@ -194,6 +201,22 @@ export function SecoesConversaAgente({ valor, onChange }: { valor: ConversaAgent
             value={valor.mensagem_erro ?? ""}
             onChange={(e) => set("mensagem_erro", e.target.value)} />
         </Campo>
+      </Secao>
+
+      <Secao icone={<Volume2 className="h-5 w-5" />} titulo="Resposta em áudio" descricao="Quando o contato manda um áudio, o agente responde em áudio com a voz escolhida (ElevenLabs). Se a voz falhar, a resposta sai em texto.">
+        <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+          <div>
+            <p className="text-sm font-medium">Responder áudio com áudio</p>
+            <p className="text-xs text-muted-foreground">Precisa da integração ElevenLabs em Integrações.</p>
+          </div>
+          <Switch checked={valor.resposta_voz_habilitada} onCheckedChange={(v) => set("resposta_voz_habilitada", v)} />
+        </div>
+        {valor.resposta_voz_habilitada && (
+          <Campo label="ID da voz (ElevenLabs)" ajuda="Copie o Voice ID na biblioteca de vozes da ElevenLabs. Sem ele, o agente responde em texto.">
+            <Input placeholder="ex.: 21m00Tcm4TlvDq8ikWAM" value={valor.voice_id ?? ""}
+              onChange={(e) => set("voice_id", e.target.value)} />
+          </Campo>
+        )}
       </Secao>
     </>
   );

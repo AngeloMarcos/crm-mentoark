@@ -30,6 +30,7 @@ import DisparoTemplateEditorPage from "./pages/DisparoTemplateEditor";
 import CampanhasPage from "./pages/Campanhas";
 import IntegracoesPage from "./pages/Integracoes";
 import IntegracoesHubPage from "./pages/IntegracoesHub";
+import CanaisPage from "./pages/Canais";
 import CerebroPage from "./pages/Cerebro";
 import AgentesPage from "./pages/Agentes";
 import UsoIAPage from "./pages/UsoIA";
@@ -107,6 +108,7 @@ const App = () => (
               <Route path="/integracoes"  element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesHubPage /></ProtectedRoute>} />
               <Route path="/integracoes/conectores" element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />
               <Route path="/cerebro"      element={<ProtectedRoute requireModulo="cerebro">     <CerebroPage /></ProtectedRoute>} />
+              <Route path="/canais"       element={<ProtectedRoute requireModulo="agentes">     <CanaisPage /></ProtectedRoute>} />
               <Route path="/agentes"      element={<ProtectedRoute requireModulo="agentes">     <AgentesPage /></ProtectedRoute>} />
               <Route path="/uso-ia"       element={<ProtectedRoute requireModulo="agentes">     <UsoIAPage /></ProtectedRoute>} />
               <Route path="/kanban"       element={<ProtectedRoute requireModulo="leads">       <KanbanPage /></ProtectedRoute>} />

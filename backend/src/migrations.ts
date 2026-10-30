@@ -3307,5 +3307,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
     await pool.query(`ALTER TABLE ai_providers ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
 
+  // 2026-10-30 (Canais, modelo Cubo): número QR Code aponta para o agente cujo cérebro responde.
+  // NULL = a própria linha responde (comportamento anterior). Ver services/canais.ts.
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS agente_resposta_id UUID REFERENCES agentes(id) ON DELETE SET NULL`).catch(() => {});
+
   log.info('MIGRATIONS', 'OK');
 }

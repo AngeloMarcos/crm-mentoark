@@ -75,6 +75,7 @@ import metaWebhookRouter from './routes/metaWebhook';
 import smartLinksRouter, { smartLinkPublico } from './routes/smartLinks';
 import aiProvidersRouter from './routes/ai-providers';
 import integracoesHubRouter from './routes/integracoesHub';
+import canaisRouter from './routes/canais';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
 import n8nRouter, { n8nSecretMiddleware } from './routes/n8n';
@@ -496,6 +497,7 @@ app.use('/api/funis', funisRouter(pool));
 app.use('/api/conversas', conversasRouter(pool));
 app.use('/api/ai-providers', aiProvidersRouter(pool));
 app.use('/api/integracoes', integracoesHubRouter(pool)); // 2026-10-29: integrações num lugar só (modelo Cubo)
+app.use('/api/canais', canaisRouter(pool)); // 2026-10-30: número de WhatsApp → agente que responde (modelo Cubo)
 app.use('/api/meta-oficial', metaOficialRouter(pool));
 app.use('/api/smart-links', smartLinksRouter(pool));
 app.use('/api/ai', aiUsoRouter(pool));

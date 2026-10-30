@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
+import { aplicarCerebro } from './canais';
 import {
   ConfigConversa, esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
   intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro,
@@ -802,6 +803,20 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   if (!agenteRows.length) {
     log.warn('ENGINE', 'Nenhum agente encontrado', { instancia: entrada.instancia, userId: entrada.userId });
     return;
+  }
+
+  // Canais (2026-10-30, modelo Cubo): o número QR Code pode apontar para outro agente
+  // (`agente_resposta_id`). O cérebro vem dele; o transporte continua sendo este número.
+  const respostaId = agenteRows[0].agente_resposta_id;
+  if (respostaId && respostaId !== agenteRows[0].id) {
+    const cerebro = (await pool.query(
+      `SELECT * FROM agentes WHERE id = $1 AND user_id = $2 AND ativo = true`, [respostaId, agenteRows[0].user_id]
+    )).rows[0];
+    if (!cerebro) {
+      log.warn('ENGINE', 'Agente escolhido para o número está inativo ou foi removido — IA não responde', { instancia: entrada.instancia });
+      return;
+    }
+    agenteRows = [aplicarCerebro(agenteRows[0], cerebro)];
   }
 
   const agente = { ...agenteRows[0] };

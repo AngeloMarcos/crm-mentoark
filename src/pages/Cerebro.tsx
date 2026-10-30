@@ -9,17 +9,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database, MessageCircle, FileCode, Settings, Loader2, RefreshCw, Wand2, Search, Upload, Volume2, Copy, Bot, Play } from "lucide-react";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
+import { Brain, Download, Plus, Trash2, Pencil, User, Building2, HelpCircle, Shield, FileText, Database, Loader2, RefreshCw, Wand2, Search, Upload, Copy } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
-import { TestarAgente } from "@/components/cerebro/TestarAgente";
-import { PromptAgente } from "@/components/cerebro/PromptAgente";
-import { Configuracoes } from "@/components/cerebro/Configuracoes";
 // GeradorPrompt removido pois agora está integrado no SetupAgente
 import { SetupAgente } from "@/components/cerebro/SetupAgente";
 import { api } from "@/integrations/database/client";
@@ -511,143 +505,6 @@ function ScriptsEditor({ items, onSave, onDelete, onOpenBuilder }: EditorProps &
   );
 }
 
-// ============ VOZ DO AGENTE ============
-function VozAgente() {
-  const { user } = useAuth();
-  const [provider, setProvider] = useState("Nenhum");
-  const [voiceId, setVoiceId] = useState("");
-  const [stability, setStability] = useState(65);
-  const [similarity, setSimilarity] = useState(75);
-  const [speakerBoost, setSpeakerBoost] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!user) return;
-    (api as any)
-      .from("agentes")
-      .select("voice_provider, voice_id, voice_stability, voice_similarity, voice_speaker_boost")
-      .eq("user_id", user.id)
-      .maybeSingle()
-      .then(({ data }: { data: any }) => {
-        if (data) {
-          setProvider(data.voice_provider || "Nenhum");
-          setVoiceId(data.voice_id || "");
-          setStability(data.voice_stability ?? 65);
-          setSimilarity(data.voice_similarity ?? 75);
-          setSpeakerBoost(data.voice_speaker_boost ?? false);
-        }
-      })
-      .finally(() => setLoading(false));
-  }, [user]);
-
-  const salvar = async () => {
-    if (!user) return;
-    setSaving(true);
-    try {
-      const payload = { voice_provider: provider, voice_id: voiceId, voice_stability: stability, voice_similarity: similarity, voice_speaker_boost: speakerBoost };
-      const { data: agente } = await (api as any).from("agentes").select("id").eq("user_id", user.id).maybeSingle();
-      if (agente) await (api as any).from("agentes").update(payload).eq("id", agente.id);
-      else await (api as any).from("agentes").insert({ user_id: user.id, nome: "Agente", ativo: true, ...payload });
-      toast.success("Configuração de voz salva!");
-    } catch {
-      toast.error("Erro ao salvar configuração de voz");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (loading) return <Card><CardContent className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-primary" /></CardContent></Card>;
-
-  return (
-    <div className="space-y-4">
-      <Card className="border-l-4 border-l-primary bg-primary/5">
-        <CardContent className="pt-4 pb-3">
-          <div className="flex items-start gap-3">
-            <Volume2 className="h-5 w-5 text-primary mt-0.5 shrink-0" />
-            <p className="text-sm text-muted-foreground">
-              Configure a voz do seu agente. O <strong className="text-foreground">Voice ID</strong> é obtido diretamente no
-              painel do ElevenLabs após criar ou clonar uma voz.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="pt-6 space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div className="space-y-2">
-              <Label>Provider</Label>
-              <Select value={provider} onValueChange={setProvider}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ElevenLabs">ElevenLabs</SelectItem>
-                  <SelectItem value="OpenAI TTS">OpenAI TTS</SelectItem>
-                  <SelectItem value="Nenhum">Nenhum</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Voice ID</Label>
-              <Input
-                placeholder="Ex: 21m00Tcm4TlvDq8ikWAM"
-                value={voiceId}
-                onChange={e => setVoiceId(e.target.value)}
-                disabled={provider === "Nenhum"}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <Label>Stability</Label>
-                <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{stability}</span>
-              </div>
-              <Slider
-                value={[stability]}
-                min={0} max={100} step={1}
-                onValueChange={([v]) => setStability(v)}
-                disabled={provider !== "ElevenLabs"}
-              />
-              <p className="text-[11px] text-muted-foreground">Valores altos = mais consistente. Baixos = mais expressivo.</p>
-            </div>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <Label>Similarity</Label>
-                <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{similarity}</span>
-              </div>
-              <Slider
-                value={[similarity]}
-                min={0} max={100} step={1}
-                onValueChange={([v]) => setSimilarity(v)}
-                disabled={provider !== "ElevenLabs"}
-              />
-              <p className="text-[11px] text-muted-foreground">Fidelidade à voz original clonada.</p>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-lg border p-4">
-            <div>
-              <Label className="text-sm font-medium">Speaker Boost</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">Melhora clareza em ambientes ruidosos (apenas ElevenLabs).</p>
-            </div>
-            <Switch
-              checked={speakerBoost}
-              onCheckedChange={setSpeakerBoost}
-              disabled={provider !== "ElevenLabs"}
-            />
-          </div>
-
-          <Button onClick={salvar} disabled={saving} className="w-full">
-            {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Salvando...</> : <><Volume2 className="h-4 w-4 mr-2" /> Salvar configuração de voz</>}
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
 // ============ MAIN PAGE ============
 export default function CerebroPage() {
   const { user } = useAuth();
@@ -674,29 +531,6 @@ export default function CerebroPage() {
   }, [user]);
 
   useEffect(() => { carregar(); }, [carregar]);
-
-  // RAG sync — defina VITE_N8N_WEBHOOK_RAG no .env com a URL real do webhook do n8n
-  const [sincronizando, setSincronizando] = useState(false);
-  const sincronizarRAG = async () => {
-    const url = import.meta.env.VITE_N8N_WEBHOOK_RAG as string | undefined;
-    if (!url) return toast.error("Configure VITE_N8N_WEBHOOK_RAG no .env");
-    if (!user) return toast.error("Faça login");
-    setSincronizando(true);
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: user.id, source: "cerebro-crm" }),
-      });
-      if (res.ok) toast.success("✅ Sincronização enviada! O RAG será atualizado em instantes.");
-      else toast.error("❌ Erro ao sincronizar. Verifique o webhook do n8n.");
-    } catch {
-      toast.error("❌ Erro ao sincronizar. Verifique o webhook do n8n.");
-    } finally {
-      setSincronizando(false);
-      carregar();
-    }
-  };
 
   const makeHandlers = (tipo: TipoConhecimento) => ({
     items: itens.filter((i) => i.tipo === tipo),
@@ -831,12 +665,16 @@ export default function CerebroPage() {
     <CRMLayout>
       <div className="space-y-6">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold flex items-center gap-3">
-              <Brain className="h-8 w-8 text-primary" />
-              Configuração da IA
-            </h1>
-            <p className="text-muted-foreground mt-1">Base de conhecimento que alimenta a IA via N8N</p>
+          {/* 2026-10-30 (modelo Cubo): esta página é só a BASE DE CONHECIMENTO. Prompt, modelo,
+              teste e voz ficam no agente (/agentes); o número→agente fica em /canais. */}
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
+              <Brain className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Bases de conhecimento</h1>
+              <p className="text-muted-foreground text-sm">O que os seus agentes de IA sabem sobre a empresa, os produtos e as objeções.</p>
+            </div>
           </div>
           <div className="flex gap-2 flex-wrap">
             <input
@@ -849,25 +687,17 @@ export default function CerebroPage() {
                 if (f) importarArquivo(f);
               }}
             />
-            <Button onClick={() => setSetupOpen(true)} size="lg" className="gap-2">
-              <Wand2 className="h-4 w-4" /> Configurar Agente
-            </Button>
-            <Button variant="outline" onClick={carregar} size="lg" disabled={loading}>
+            <Button variant="outline" onClick={carregar} disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Atualizar
             </Button>
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={importando}
-            >
-              {importando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Importar CSV
+            <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={importando}>
+              {importando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Importar
             </Button>
-            <Button onClick={sincronizarRAG} size="lg" disabled={sincronizando}>
-              {sincronizando ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Sincronizar RAG
+            <Button variant="outline" onClick={() => exportCSV(itens)} disabled={itens.length === 0}>
+              <Download className="h-4 w-4" /> Exportar
             </Button>
-            <Button onClick={() => exportCSV(itens)} size="lg" disabled={itens.length === 0}>
-              <Download className="h-4 w-4" /> Exportar CSV
+            <Button onClick={() => setSetupOpen(true)} className="gap-2">
+              <Wand2 className="h-4 w-4" /> Preencher com assistente
             </Button>
           </div>
         </div>
@@ -931,59 +761,18 @@ export default function CerebroPage() {
             </CardContent>
           </Card>
         ) : (
-          <Tabs defaultValue="fluxo">
-            {/* Grupo Agente */}
-            <div className="space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Agente</p>
-              <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 h-auto p-1">
-                <TabsTrigger value="fluxo" className="gap-2"><Bot className="h-4 w-4" /> Fluxo IA</TabsTrigger>
-                <TabsTrigger value="testar" className="gap-2"><MessageCircle className="h-4 w-4" /> Testar</TabsTrigger>
-                <TabsTrigger value="prompt" className="gap-2"><FileCode className="h-4 w-4" /> Prompt</TabsTrigger>
-                <TabsTrigger value="config" className="gap-2"><Settings className="h-4 w-4" /> Configs</TabsTrigger>
-              </TabsList>
-            </div>
+          <Tabs defaultValue="personalidade">
+            {/* 2026-10-30 (modelo Cubo): uma linha só de abas, só conhecimento. As abas de agente
+                (Fluxo IA, Testar, Prompt, Configs) e a Voz ficam no próprio agente, em /agentes. */}
+            <TabsList className="grid w-full grid-cols-3 md:grid-cols-6 h-auto p-1">
+              <TabsTrigger value="personalidade" className="gap-2"><User className="h-4 w-4" /> Persona</TabsTrigger>
+              <TabsTrigger value="negocio" className="gap-2"><Building2 className="h-4 w-4" /> Negócio</TabsTrigger>
+              <TabsTrigger value="faqs" className="gap-2"><HelpCircle className="h-4 w-4" /> FAQs</TabsTrigger>
+              <TabsTrigger value="objecoes" className="gap-2"><Shield className="h-4 w-4" /> Objeções</TabsTrigger>
+              <TabsTrigger value="scripts" className="gap-2"><FileText className="h-4 w-4" /> Scripts</TabsTrigger>
+              <TabsTrigger value="vetorial" className="gap-2"><Database className="h-4 w-4" /> Documentos</TabsTrigger>
+            </TabsList>
 
-            {/* Grupo Conteúdo */}
-            <div className="space-y-2 mt-3">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Conhecimento</p>
-              <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 h-auto p-1">
-                <TabsTrigger value="personalidade" className="gap-2"><User className="h-4 w-4" /> Persona</TabsTrigger>
-                <TabsTrigger value="negocio" className="gap-2"><Building2 className="h-4 w-4" /> Negócio</TabsTrigger>
-                <TabsTrigger value="faqs" className="gap-2"><HelpCircle className="h-4 w-4" /> FAQs</TabsTrigger>
-                <TabsTrigger value="objecoes" className="gap-2"><Shield className="h-4 w-4" /> Objeções</TabsTrigger>
-                <TabsTrigger value="scripts" className="gap-2"><FileText className="h-4 w-4" /> Scripts</TabsTrigger>
-              </TabsList>
-            </div>
-
-            {/* Grupo Ferramentas */}
-            <div className="space-y-2 mt-3">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Avançado</p>
-              <TabsList className="grid w-full grid-cols-2 h-auto p-1">
-                <TabsTrigger value="vetorial" className="gap-2"><Database className="h-4 w-4" /> Base Vetorial</TabsTrigger>
-                <TabsTrigger value="voz" className="gap-2"><Volume2 className="h-4 w-4" /> Voz</TabsTrigger>
-              </TabsList>
-            </div>
-
-            <TabsContent value="fluxo" className="mt-4">
-              {/* [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): ConfigAgenteIA aposentada
-                  aqui — configuração de agente unificada na tela /agentes (ver
-                  diagnosticos/SPRINT_UNIFICAR_CONFIGURACAO_AGENTE_IA.md). O componente em si não
-                  foi apagado (só parou de ser renderizado), pra não perder o histórico de fixes
-                  documentados nele caso seja preciso consultar depois. */}
-              <Card>
-                <CardContent className="py-10 text-center space-y-3">
-                  <Bot className="h-10 w-10 mx-auto text-muted-foreground" />
-                  <p className="font-medium">Esta tela foi unificada com a página de Agentes</p>
-                  <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                    Prompt, modelo, mensagens automáticas e ferramentas MCP agora são configurados
-                    num só lugar, por agente.
-                  </p>
-                  <Button asChild>
-                    <a href="/agentes">Ir para Agentes</a>
-                  </Button>
-                </CardContent>
-              </Card>
-            </TabsContent>
             <TabsContent value="personalidade" className="mt-4">
               <KeyValueEditor {...personalidade} labelCampo="Atributo" />
             </TabsContent>
@@ -1001,18 +790,6 @@ export default function CerebroPage() {
             </TabsContent>
             <TabsContent value="vetorial" className="mt-4">
               <BaseVetorial />
-            </TabsContent>
-            <TabsContent value="testar" className="mt-4">
-              <TestarAgente />
-            </TabsContent>
-            <TabsContent value="prompt" className="mt-4">
-              <PromptAgente />
-            </TabsContent>
-            <TabsContent value="voz" className="mt-4">
-              <VozAgente />
-            </TabsContent>
-            <TabsContent value="config" className="mt-4">
-              <Configuracoes />
             </TabsContent>
           </Tabs>
         )}
