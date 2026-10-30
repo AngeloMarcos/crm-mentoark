@@ -123,8 +123,6 @@ app.use(cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     if (staticOrigins.includes(origin)) return cb(null, true);
-    if (/\.lovable\.app$/.test(new URL(origin).hostname)) return cb(null, true);
-    if (/\.lovableproject\.com$/.test(new URL(origin).hostname)) return cb(null, true);
     if (process.env.NODE_ENV !== 'production' && /^https?:\/\/localhost(:\d+)?$/.test(origin)) return cb(null, true);
     return cb(new Error(`CORS bloqueado: ${origin}`));
   },
