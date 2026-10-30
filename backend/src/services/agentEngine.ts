@@ -18,6 +18,10 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
+import {
+  ConfigConversa, esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
+  intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro,
+} from './agenteConversa';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
 import { sintetizarVoz } from '../utils/elevenlabs';
@@ -391,8 +395,9 @@ async function salvarHistorico(
 // ── Parser nativo — sem segunda chamada à API (zero custo, zero latência) ──────
 // A IA deve usar [QUEBRA] no prompt para indicar onde dividir mensagens.
 // Também detecta o sinal de pausa 251213 no texto.
-function parsearRespostaNativo(texto: string, sinalPausa: string): { messages: string[]; pausar: boolean } {
-  const SEPARADOR = '[QUEBRA]';
+// Sprint IA-1 (2026-10-29): a divisão em partes saiu daqui pra `dividirResposta` (agenteConversa.ts),
+// configurável por agente; NULL mantém a regra antiga de até 2 partes.
+function parsearRespostaNativo(texto: string, sinalPausa: string, cfg: ConfigConversa): { messages: string[]; pausar: boolean } {
   const pausar = texto.includes('251213') || (sinalPausa !== '251213' && texto.includes(sinalPausa));
   const limpo = texto
     .replace(/251213/g, '')
@@ -401,12 +406,8 @@ function parsearRespostaNativo(texto: string, sinalPausa: string): { messages: s
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  const partes = limpo.split(SEPARADOR).map(p => p.trim()).filter(Boolean);
-  // Máximo 2 partes; se não usou [QUEBRA], tenta dividir em parágrafos naturais
-  if (partes.length >= 2) return { messages: partes.slice(0, 2), pausar };
-  const paragrafos = limpo.split(/\n\n+/).filter(p => p.trim());
-  if (paragrafos.length >= 2) return { messages: [paragrafos.slice(0,-1).join('\n\n'), paragrafos[paragrafos.length-1]], pausar };
-  return { messages: [limpo], pausar };
+  const messages = dividirResposta(limpo, cfg);
+  return { messages: messages.length ? messages : [limpo], pausar };
 }
 
 // ── Upsert de contato ─────────────────────────────────────────────────────────
@@ -1072,7 +1073,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
-    instrucaoNome + instrucaoEscopo;
+    instrucaoNome + instrucaoEscopo + instrucoesComportamento(agente);
 
   // [AUDITORIA] LÓGICA (Sprint 7, 2026-07-23 — verificação de ordem do histórico enviado à
   // LLM, pedida pelo usuário): `ORDER BY created_at DESC` abaixo busca as 20 mais recentes
@@ -1087,10 +1088,10 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   const histRes = await pool.query(
     `SELECT message FROM n8n_chat_histories
      WHERE session_id = $1 AND user_id = $2
-     ORDER BY created_at DESC LIMIT 20`,
-    [histSessionId, userIdFinal]
+     ORDER BY created_at DESC LIMIT $3`,
+    [histSessionId, userIdFinal, limiteHistorico(agente)] // Sprint IA-1: configurável (padrão 20)
   );
-  const historico: AIMessage[] = histRes.rows.reverse().flatMap((r: any) => {
+  const historicoBruto: AIMessage[] = histRes.rows.reverse().flatMap((r: any) => {
     try {
       const m = typeof r.message === 'string' ? JSON.parse(r.message) : r.message;
       const content = (m.content || m.text || '').trim();
@@ -1107,6 +1108,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       return []; // JSON inválido — descartar sem travar
     }
   });
+  const historico = cortarHistoricoPorTokens(historicoBruto, agente);
 
   const mensagens: AIMessage[] = [
     ...historico,
@@ -1115,7 +1117,9 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   // 8. Finalizar configuração do provider
   const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
-  const modelo = providerInfo?.modelo || agente.modelo || 'gpt-4o-mini';
+  // Integrações (2026-10-29): integração escolhida no agente (`provider_id`) → vale o modelo do
+  // AGENTE (antes ele era ignorado). Sem escolha, a integração padrão da conta mantém o modelo dela.
+  const modelo = (providerInfo?.explicito ? agente.modelo || providerInfo.modelo : providerInfo?.modelo || agente.modelo) || 'gpt-4o-mini';
   const providerSlug = providerInfo?.providerSlug || 'openai';
   log.info('ENGINE', 'Provider selecionado', {
     provider: providerInfo ? providerSlug + '/' + modelo : 'FALLBACK env',
@@ -1198,6 +1202,15 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       // efeito prático era `processarComDebounce` logar o mesmo erro de novo antes de o
       // `finally` de `processarMensagem` liberar o lock. Cliente ficava sem resposta e sem
       // ninguém do lado humano ser avisado. Ver `pausarPorFalhaLLM` (declarada acima).
+      // Sprint IA-1: erro transitório (exceção) pode avisar o contato com a "Mensagem de erro"
+      // do agente. 401/429 (bloco `!resp` abaixo) seguem sem mensagem — como no Cubo.
+      const msgErro = mensagemDeErro(agente);
+      if (msgErro && agente.evolution_server_url && agente.evolution_api_key) {
+        await enviarResposta(
+          userIdFinal, agente.evolution_server_url, agente.evolution_api_key,
+          agente.evolution_instancia || entrada.instancia, entrada.telefone, msgErro,
+        ).catch(e => log.warn('ENGINE', 'Falha ao enviar mensagem de erro ao contato', { err: e?.message }));
+      }
       await pausarPorFalhaLLM(pool, userIdFinal, entrada, err?.message || 'erro desconhecido na chamada à LLM');
       registrarExecucao('erro', { erroMsg: err?.message || 'erro desconhecido na chamada à LLM' });
       return;
@@ -1289,7 +1302,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   let parserPausou = false;
 
   if (respostaFinal) {
-    const parsed = parsearRespostaNativo(respostaFinal, sinalPausa);
+    const parsed = parsearRespostaNativo(respostaFinal, sinalPausa, agente);
     parserMessages = parsed.messages;
     parserPausou = parsed.pausar;
     if (parserPausou) pausaAtivada = true;
@@ -1347,7 +1360,8 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     }
     registrarTurnoIA(userIdFinal, entrada.telefone);
 
-    if (!historico.some(h => h.role === 'assistant')) {
+    // `historicoBruto` (antes do corte por tokens): o corte não pode fazer a IA se reapresentar.
+    if (!historicoBruto.some(h => h.role === 'assistant')) {
       const empresa = String(agente.empresa_nome || '').trim();
       await enviarResposta(
         userIdFinal, agente.evolution_server_url, agente.evolution_api_key,
@@ -1387,9 +1401,10 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
     // Fallback obrigatório: texto normal quando voz não foi tentada ou falhou por qualquer motivo.
     if (!vozEnviada) {
+      const intervaloMs = intervaloEntrePartesMs(agente);
       for (let i = 0; i < parserMessages.length; i++) {
-        if (i > 0) await new Promise(r => setTimeout(r, 3000));
-        const textoFormatado = nomeExibicao ? `*${nomeExibicao}*\n${parserMessages[i]}` : parserMessages[i];
+        if (i > 0) await new Promise(r => setTimeout(r, intervaloMs));
+        const textoFormatado = formatarParte(parserMessages[i], agente, nomeExibicao);
         await enviarResposta(
           userIdFinal,
           agente.evolution_server_url,
@@ -1544,6 +1559,8 @@ export interface ResultadoTeste {
   modelo: string;
   trace: any[];
   erro?: string;
+  partes?: string[];     // Sprint IA-1: como sairia no WhatsApp (divisão + assinatura)
+  intervaloMs?: number;
 }
 
 export async function testarAgentePlayground(
@@ -1575,7 +1592,8 @@ export async function testarAgentePlayground(
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
     `\n\n[MODO TESTE] Você está sendo testado por um operador do CRM através da tela de configuração ` +
-    `do agente — não é uma conversa real com cliente. Responda normalmente, seguindo suas instruções.`;
+    `do agente — não é uma conversa real com cliente. Responda normalmente, seguindo suas instruções.` +
+    instrucoesComportamento(agente);
 
   const mcpToolsHabilitadas = agente.mcp_tools == null
     ? MCP_TOOLS
@@ -1584,7 +1602,9 @@ export async function testarAgentePlayground(
   const providerInfo = await criarProvider(pool, userId, agente.provider_id ?? null);
   const envKey = process.env.OPENAI_API_KEY || '';
   const provider = providerInfo?.provider ?? new OpenAIProvider(envKey);
-  const modelo = providerInfo?.modelo || agente.modelo || 'gpt-4o-mini';
+  // Integrações (2026-10-29): integração escolhida no agente (`provider_id`) → vale o modelo do
+  // AGENTE (antes ele era ignorado). Sem escolha, a integração padrão da conta mantém o modelo dela.
+  const modelo = (providerInfo?.explicito ? agente.modelo || providerInfo.modelo : providerInfo?.modelo || agente.modelo) || 'gpt-4o-mini';
   const providerSlug = providerInfo?.providerSlug || 'openai';
   modeloUsado = modelo;
 
@@ -1665,13 +1685,44 @@ export async function testarAgentePlayground(
   const respostaExibida = respostaFinal || (pausaAtivada ? '(o agente sinalizou pausa/transferência para atendimento humano — nada mais seria enviado ao cliente)' : '');
   registrarExecucaoTeste('sucesso', { saidaTexto: respostaExibida || null });
 
-  return { resposta: respostaExibida, tokensEntrada, tokensSaida, custoUsd, latenciaMs, modelo: modeloUsado, trace: traceLoop };
+  // Sprint IA-1: as partes exatamente como sairiam no WhatsApp (divisão + assinatura do agente).
+  const partes = respostaFinal
+    ? parsearRespostaNativo(respostaFinal, agente.sinal_pausa || '251213', agente).messages
+        .map(p => formatarParte(p, agente, String(agente.nome_exibicao || '').trim()))
+    : [];
+  return { resposta: respostaExibida, partes, intervaloMs: intervaloEntrePartesMs(agente), tokensEntrada, tokensSaida, custoUsd, latenciaMs, modelo: modeloUsado, trace: traceLoop };
 }
 
 // ── Debounce — agrupa mensagens picotadas do mesmo contato ───────────────────
+// Sprint IA-1 (2026-10-29): `tempo_espera_mensagem` (tela do agente, em segundos) passa a valer —
+// antes a espera era sempre 3 s. O agente ainda não foi resolvido neste ponto, então busca só esse
+// campo, pelo agente explícito (número oficial) ou pela instância, com cache de 60 s.
+const cacheEspera = new Map<string, { ms: number; ate: number }>();
+async function esperaDoAgente(pool: Pool, entrada: MensagemEntrada): Promise<number> {
+  const chave = entrada.agenteId ? `id:${entrada.agenteId}` : `inst:${entrada.userId ?? ''}:${entrada.instancia.toLowerCase()}`;
+  const c = cacheEspera.get(chave);
+  if (c && c.ate > Date.now()) return c.ms;
+  let ms = 3000;
+  try {
+    const r = entrada.agenteId
+      ? await pool.query(`SELECT tempo_espera_mensagem FROM agentes WHERE id = $1`, [entrada.agenteId])
+      : await pool.query(
+          `SELECT tempo_espera_mensagem FROM agentes
+            WHERE LOWER(evolution_instancia) = LOWER($1) AND ($2::uuid IS NULL OR user_id = $2::uuid)
+            ORDER BY ativo DESC, updated_at DESC LIMIT 1`,
+          [entrada.instancia, entrada.userId ?? null]);
+    ms = esperaAgruparMs(r.rows[0]);
+  } catch (err: any) {
+    log.warn('ENGINE', 'Falha ao ler espera do agente — usando 3 s', { err: err?.message });
+  }
+  cacheEspera.set(chave, { ms, ate: Date.now() + 60_000 });
+  return ms;
+}
+
+const geracaoDebounce = new Map<string, number>();
+
 export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada): Promise<void> {
   const chave = `${entrada.instancia}:${entrada.telefone}`;
-  const DEBOUNCE_MS = 3000;
 
   const existente = bufferMensagens.get(chave);
   if (existente) {
@@ -1694,15 +1745,23 @@ export async function processarComDebounce(pool: Pool, entrada: MensagemEntrada)
     });
   }
 
+  // O buffer acima é montado de forma síncrona (ordem de chegada preservada); só o agendamento
+  // espera a leitura da configuração. Se outra mensagem chegou nesse meio-tempo, ela agenda.
   const buf = bufferMensagens.get(chave)!;
+  const vez = (geracaoDebounce.get(chave) ?? 0) + 1;
+  geracaoDebounce.set(chave, vez);
+  const esperaMs = await esperaDoAgente(pool, entrada);
+  if (geracaoDebounce.get(chave) !== vez || bufferMensagens.get(chave) !== buf) return;
+  clearTimeout(buf.timeout);
   buf.timeout = setTimeout(async () => {
+    geracaoDebounce.delete(chave);
     bufferMensagens.delete(chave);
     const entradaFinal = { ...buf.entradaBase };
     if (buf.mensagens.length) entradaFinal.texto = buf.mensagens.join(' ');
     await processarMensagem(pool, entradaFinal).catch(err =>
       log.error('ENGINE', 'Erro', { err: err?.message, stack: err?.stack })
     );
-  }, DEBOUNCE_MS);
+  }, esperaMs);
 }
 
 export { processarMensagem };

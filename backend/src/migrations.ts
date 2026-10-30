@@ -3290,5 +3290,22 @@ export async function runMigrations(pool: Pool): Promise<void> {
     log.error('MIGRATIONS', 'Falha na migration da Sprint M1 (atribuição de anúncio)', { err: err?.message });
   }
 
+  // 2026-10-29 (Sprint IA-1, repaginada da IA — ver diagnosticos/engenharia_reversa_suite/
+  // RELATORIO_IA_E_META_CUBO.md): comportamento de conversa configurável por agente, no modelo do
+  // Cubo. Tudo NULL = comportamento de antes (histórico 20, até 2 partes com 3 s, sem instrução de
+  // emoji/idioma, assinatura = nome de exibição, silêncio no erro).
+  for (const col of ['historico_mensagens INTEGER', 'historico_max_tokens INTEGER',
+                     'divisao_ativa BOOLEAN', 'divisao_modo TEXT', 'divisao_tamanho INTEGER',
+                     'divisao_intervalo_ms INTEGER', 'emoji_politica TEXT', 'assinatura_ativa BOOLEAN',
+                     'assinatura_texto TEXT', 'idioma_forcado TEXT', 'mensagem_erro TEXT']) {
+    await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+
+  // 2026-10-29 (Integrações num lugar só, modelo Cubo): resultado do último teste da chave de IA,
+  // para a tela mostrar "chave recusada" em vez de a IA ficar muda sem explicação.
+  for (const col of ['ultimo_teste_em TIMESTAMPTZ', 'ultimo_status TEXT', 'ultimo_erro TEXT']) {
+    await pool.query(`ALTER TABLE ai_providers ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+
   log.info('MIGRATIONS', 'OK');
 }

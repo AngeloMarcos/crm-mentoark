@@ -8,6 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ContatosIgnoradosIA } from "@/components/agentes/ContatosIgnoradosIA";
+import {
+  SecoesConversaAgente, CONVERSA_PADRAO, conversaDoAgente, conversaParaSalvar,
+} from "@/components/agentes/SecoesConversaAgente";
+import { SeletorIntegracaoModelo } from "@/components/agentes/SeletorIntegracaoModelo";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -125,6 +129,19 @@ interface Agente {
   max_tokens_prompt_sistema?: number | null;
   limite_passos?: number | null;
   fallback_transcricao_falha?: string | null;
+  // Sprint IA-1 (2026-10-29): conversa/histórico/formato/persona — ver SecoesConversaAgente
+  historico_mensagens?: number | null;
+  historico_max_tokens?: number | null;
+  divisao_ativa?: boolean | null;
+  divisao_modo?: string | null;
+  divisao_tamanho?: number | null;
+  divisao_intervalo_ms?: number | null;
+  emoji_politica?: string | null;
+  assinatura_ativa?: boolean | null;
+  assinatura_texto?: string | null;
+  idioma_forcado?: string | null;
+  mensagem_erro?: string | null;
+  provider_id?: string | null;
 }
 
 // Ícones fixos pra identidade visual do agente (renderizado na listagem, `AgenteIcone` abaixo) —
@@ -209,6 +226,7 @@ interface ResultadoTeste {
   modelo: string;
   trace: TracePasso[];
   erro?: string;
+  partes?: string[]; // Sprint IA-1: como chegaria no WhatsApp (divisão + assinatura)
 }
 
 const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
@@ -312,6 +330,8 @@ const formInicial = {
   max_tokens_prompt_sistema: 40000,
   limite_passos: 5,
   fallback_transcricao_falha: "",
+  conversa: CONVERSA_PADRAO,
+  provider_id: "",
 };
 
 function formatarData(iso: string) {
@@ -347,7 +367,7 @@ export default function AgentesPage() {
   const [loadingExecucoes, setLoadingExecucoes] = useState(false);
   const [traceAberto, setTraceAberto] = useState<Execucao | null>(null);
   // Aba "Teste" (playground — mesma fase)
-  const [chatTeste, setChatTeste] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [chatTeste, setChatTeste] = useState<{ role: "user" | "assistant"; content: string; partes?: string[] }[]>([]);
   const [mensagemTeste, setMensagemTeste] = useState("");
   const [enviandoTeste, setEnviandoTeste] = useState(false);
   const [ultimaMetricaTeste, setUltimaMetricaTeste] = useState<ResultadoTeste | null>(null);
@@ -435,6 +455,8 @@ export default function AgentesPage() {
       max_tokens_prompt_sistema: a.max_tokens_prompt_sistema ?? 40000,
       limite_passos: a.limite_passos ?? 5,
       fallback_transcricao_falha: a.fallback_transcricao_falha ?? "",
+      conversa: conversaDoAgente(a as Parameters<typeof conversaDoAgente>[0]),
+      provider_id: a.provider_id ?? "",
     });
     setShowKey(false);
     setModal(true);
@@ -504,6 +526,10 @@ export default function AgentesPage() {
       max_tokens_prompt_sistema: form.max_tokens_prompt_sistema || null,
       limite_passos: form.limite_passos || null,
       fallback_transcricao_falha: form.fallback_transcricao_falha.trim() || null,
+      // Sprint IA-1: inclui `tempo_espera_mensagem` (antes na aba Comportamento, sem efeito no motor)
+      ...conversaParaSalvar(form.conversa),
+      // Integrações (2026-10-29): vazio = padrão da conta (comportamento antigo)
+      provider_id: form.provider_id || null,
     };
 
     if (editing) {
@@ -634,7 +660,7 @@ export default function AgentesPage() {
         setChatTeste(novoHistorico); // mantém a mensagem do operador visível mesmo sem resposta
         return;
       }
-      setChatTeste([...novoHistorico, { role: "assistant", content: data.resposta || "(sem resposta de texto — só ação de ferramenta)" }]);
+      setChatTeste([...novoHistorico, { role: "assistant", content: data.resposta || "(sem resposta de texto — só ação de ferramenta)", partes: data.partes }]);
       setUltimaMetricaTeste(data);
     } catch (e: any) {
       toast.error(`Erro: ${e?.message ?? "sem resposta do servidor"}`);
@@ -866,70 +892,16 @@ export default function AgentesPage() {
                   e Modelo moveram pra cá (antes na aba Motor) — são identidade do agente tanto
                   quanto o nome, faz mais sentido junto do resto do "quem é este agente" do que ao
                   lado de modalidades/ferramentas MCP. */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Integração de IA</Label>
-                  <Select
-                    value={form.provider}
-                    onValueChange={(v) => {
-                      const p = PROVIDERS.find((x) => x.id === v);
-                      const novoModelo = p?.modelos[0]?.id ?? form.modelo_id;
-                      setForm({ ...form, provider: v, modelo_id: novoModelo });
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PROVIDERS.map((p) => (
-                        <SelectItem key={p.id} value={p.id}>
-                          {p.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Modelo</Label>
-                  {/* [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas, 2026-09-04): `modelo`
-                      é texto livre no banco (sem CHECK) — um agente configurado direto no banco
-                      com um modelo fora desta lista curada (caso real confirmado em produção,
-                      "Stella" com `gpt-4.1-mini-2025-04-14`) não bate com nenhum `SelectItem`
-                      existente e o Select ficaria em branco, arriscando trocar silenciosamente
-                      pro primeiro modelo da lista no próximo save sem o operador notar. Injeta uma
-                      opção sintética com o valor real gravado quando ele não está na lista, pra
-                      nunca ficar em branco nem se perder sem escolha deliberada. */}
-                  <Select
-                    value={form.modelo_id}
-                    onValueChange={(v) => setForm({ ...form, modelo_id: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {!PROVIDERS.find((p) => p.id === form.provider)?.modelos.some((m) => m.id === form.modelo_id) && form.modelo_id && (
-                        <SelectItem value={form.modelo_id}>{form.modelo_id} (atual, fora da lista)</SelectItem>
-                      )}
-                      {(PROVIDERS.find((p) => p.id === form.provider)?.modelos ?? []).map((m) => (
-                        <SelectItem key={m.id} value={m.id}>
-                          {m.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              {(() => {
-                const m = PROVIDERS.find((p) => p.id === form.provider)?.modelos.find(
-                  (mm) => mm.id === form.modelo_id,
-                );
-                return m ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline" className="text-xs">Custo estimado: {m.custo}</Badge>
-                    <Badge variant="outline" className="text-xs">ID: {m.id}</Badge>
-                  </div>
-                ) : null;
-              })()}
+              {/* Integrações (2026-10-29, modelo Cubo): a chave vem de uma integração em
+                  /integracoes e o modelo da lista que ESSA chave libera (antes: lista fixa, e o
+                  modelo escolhido aqui era ignorado pelo motor quando a conta tinha chave própria). */}
+              <SeletorIntegracaoModelo
+                providerId={form.provider_id}
+                modelo={form.modelo_id}
+                onChange={({ providerId, modelo, slug }) =>
+                  setForm({ ...form, provider_id: providerId, modelo_id: modelo, provider: slug ?? form.provider })
+                }
+              />
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <Label>Prompt do Sistema {form.ativo && "*"}</Label>
@@ -1181,6 +1153,11 @@ export default function AgentesPage() {
                   </p>
                 </div>
               </div>
+
+              <SecoesConversaAgente
+                valor={form.conversa}
+                onChange={(conversa) => setForm({ ...form, conversa })}
+              />
             </TabsContent>
 
             {/* [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04):
@@ -1265,15 +1242,18 @@ export default function AgentesPage() {
                         Envie uma mensagem pra ver como o agente responde, com o prompt e as configurações atuais.
                       </p>
                     )}
-                    {chatTeste.map((m, i) => (
-                      <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                        <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
-                          m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
-                        }`}>
-                          {m.content}
+                    {/* Sprint IA-1: resposta da IA em balões separados, como chegaria no WhatsApp. */}
+                    {chatTeste.flatMap((m, i) =>
+                      (m.role === "assistant" && m.partes?.length ? m.partes : [m.content]).map((texto, j) => (
+                        <div key={`${i}-${j}`} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                          <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                            m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
+                          }`}>
+                            {texto}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                     {enviandoTeste && (
                       <div className="flex justify-start">
                         <div className="rounded-lg px-3 py-2 bg-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" /></div>
@@ -1420,15 +1400,9 @@ export default function AgentesPage() {
                   />
                 </div>
               </div>
+              {/* Sprint IA-1: "Espera antes de responder" foi para Configurações → Conversa
+                  ("Espera para agrupar mensagens") — aqui ele nunca chegava ao motor. */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label>Espera antes de responder (segundos)</Label>
-                  <Input
-                    type="number" min={0}
-                    value={form.tempo_espera_mensagem ?? 0}
-                    onChange={(e) => setForm({ ...form, tempo_espera_mensagem: Number(e.target.value) })}
-                  />
-                </div>
                 <div className="space-y-1.5">
                   <Label>Grupo de Notificação (JID, opcional)</Label>
                   <Input

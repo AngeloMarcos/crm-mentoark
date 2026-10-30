@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Pool } from 'pg';
 import { AuthRequest } from '../middleware';
 import crypto from 'crypto';
+import { TIPOS_IA, TipoIA, ehTipoIA, infoTipoIA, listarModelosIA } from '../services/integracoesIA';
 
 function encryptApiKey(apiKey: string): string {
   const encKey = process.env.ENCRYPTION_KEY;
@@ -30,12 +31,63 @@ const MODELOS_SUGERIDOS: Record<string, string[]> = {
   gemini:  ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'],
 };
 
+const COLUNAS = `id, nome, slug, modelo, base_url, suporta_visao, suporta_audio,
+  custo_input_mtok, custo_output_mtok, ativo, created_at, updated_at,
+  ultimo_teste_em, ultimo_status, ultimo_erro,
+  (SELECT count(*)::int FROM agentes a WHERE a.provider_id = ai_providers.id) AS agentes_usando`;
+
 export default function aiProviders(pool: Pool): Router {
   const router = Router();
+
+  /** Testa a chave listando os modelos (2026-10-29) e grava o resultado na integração. */
+  async function testarEGravar(id: string, slug: string, apiKey: string, baseUrl: string | null) {
+    const r = await listarModelosIA(slug as TipoIA, apiKey, baseUrl);
+    await pool.query(
+      `UPDATE ai_providers SET ultimo_teste_em = NOW(), ultimo_status = $2, ultimo_erro = $3 WHERE id = $1`,
+      [id, r.ok ? 'ok' : 'erro', r.ok ? null : r.erro || `Erro ${r.status}`]
+    );
+    return r;
+  }
+
+  async function chaveDa(id: string, userId: string) {
+    const r = await pool.query(`SELECT slug, base_url, api_key_enc FROM ai_providers WHERE id = $1 AND user_id = $2`, [id, userId]);
+    const row = r.rows[0];
+    if (!row) return null;
+    return { slug: row.slug as string, baseUrl: row.base_url as string | null, apiKey: row.api_key_enc ? decryptApiKey(row.api_key_enc) : '' };
+  }
+
+  // GET /api/ai-providers/tipos — catálogo das integrações de IA (Integrações, 2026-10-29)
+  router.get('/tipos', (_req: AuthRequest, res: Response) => res.json(TIPOS_IA));
 
   // GET /api/ai-providers/modelos — lista hardcoded de modelos por slug
   router.get('/modelos', (_req: AuthRequest, res: Response) => {
     return res.json(MODELOS_SUGERIDOS);
+  });
+
+  // GET /api/ai-providers/:id/modelos — modelos que a CHAVE desta integração enxerga, ao vivo
+  // (modelo Cubo). Também atualiza o status do teste da chave.
+  router.get('/:id/modelos', async (req: AuthRequest, res: Response) => {
+    try {
+      const c = await chaveDa(req.params.id, req.userId!);
+      if (!c) return res.status(404).json({ message: 'Integração não encontrada' });
+      const r = await testarEGravar(req.params.id, c.slug, c.apiKey, c.baseUrl);
+      if (!r.ok) return res.status(422).json({ message: r.erro, modelos: [] });
+      return res.json({ modelos: r.modelos });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/ai-providers/:id/testar — testa a chave gravada e guarda o resultado
+  router.post('/:id/testar', async (req: AuthRequest, res: Response) => {
+    try {
+      const c = await chaveDa(req.params.id, req.userId!);
+      if (!c) return res.status(404).json({ message: 'Integração não encontrada' });
+      const r = await testarEGravar(req.params.id, c.slug, c.apiKey, c.baseUrl);
+      return res.json({ ok: r.ok, status: r.status, erro: r.erro ?? null, total_modelos: r.modelos.length });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, message: err.message });
+    }
   });
 
   // POST /api/ai-providers/testar — valida a api_key com o provedor real
@@ -73,12 +125,9 @@ export default function aiProviders(pool: Pool): Router {
         });
         return res.json({ ok: r.ok, status: r.status });
       }
-      if (slug === 'gemini') {
-        const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models?key=${api_key}`,
-          { signal: controller.signal }
-        );
-        return res.json({ ok: r.ok, status: r.status });
+      if (slug === 'gemini' || slug === 'openrouter') {
+        const r = await listarModelosIA(slug, api_key, req.body.base_url || null);
+        return res.json({ ok: r.ok, status: r.status, message: r.erro });
       }
       return res.json({ ok: false, message: 'Provider não suportado' });
     } catch (e: any) {
@@ -92,9 +141,7 @@ export default function aiProviders(pool: Pool): Router {
   router.get('/', async (req: AuthRequest, res: Response) => {
     try {
       const r = await pool.query(
-        `SELECT id, nome, slug, modelo, base_url, suporta_visao, suporta_audio,
-                custo_input_mtok, custo_output_mtok, ativo, created_at
-         FROM ai_providers WHERE user_id = $1 ORDER BY created_at`,
+        `SELECT ${COLUNAS} FROM ai_providers WHERE user_id = $1 ORDER BY created_at`,
         [req.userId]
       );
       return res.json(r.rows);
@@ -112,9 +159,13 @@ export default function aiProviders(pool: Pool): Router {
         custo_input_mtok, custo_output_mtok,
       } = req.body;
 
-      if (!nome || !slug || !modelo || !api_key) {
-        return res.status(400).json({ message: 'nome, slug, modelo e api_key são obrigatórios' });
+      // Integrações (2026-10-29): o modelo sai da integração (o agente escolhe); aqui fica só o
+      // padrão de quem ainda não escolheu, preenchido com o sugerido do tipo quando vier vazio.
+      if (!nome || !slug || !api_key) {
+        return res.status(400).json({ message: 'nome, tipo e chave de API são obrigatórios' });
       }
+      if (!ehTipoIA(slug)) return res.status(400).json({ message: 'Tipo de integração de IA não suportado' });
+      const modeloPadrao = modelo || infoTipoIA(slug)!.modeloSugerido;
 
       let api_key_enc: string;
       try {
@@ -128,10 +179,9 @@ export default function aiProviders(pool: Pool): Router {
            (user_id, nome, slug, modelo, api_key_enc, base_url,
             suporta_visao, suporta_audio, custo_input_mtok, custo_output_mtok)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         RETURNING id, nome, slug, modelo, base_url, suporta_visao, suporta_audio,
-                   custo_input_mtok, custo_output_mtok, ativo, created_at`,
+         RETURNING id`,
         [
-          req.userId, nome, slug, modelo, api_key_enc,
+          req.userId, nome, slug, modeloPadrao, api_key_enc,
           base_url || null,
           suporta_visao ?? false,
           suporta_audio ?? false,
@@ -139,7 +189,10 @@ export default function aiProviders(pool: Pool): Router {
           custo_output_mtok || null,
         ]
       );
-      return res.status(201).json(r.rows[0]);
+      const id = r.rows[0].id;
+      const teste = await testarEGravar(id, slug, api_key, base_url || null);
+      const linha = await pool.query(`SELECT ${COLUNAS} FROM ai_providers WHERE id = $1`, [id]);
+      return res.status(201).json({ ...linha.rows[0], teste: { ok: teste.ok, erro: teste.erro ?? null } });
     } catch (err: any) {
       if (err.code === '23505') return res.status(409).json({ message: 'Provider com esse slug já existe para esse usuário' });
       return res.status(500).json({ message: err.message });
@@ -188,11 +241,17 @@ export default function aiProviders(pool: Pool): Router {
       const r = await pool.query(
         `UPDATE ai_providers SET ${sets.join(', ')}
          WHERE id = $${idx} AND user_id = $${idx + 1}
-         RETURNING id, nome, slug, modelo, base_url, suporta_visao, suporta_audio,
-                   custo_input_mtok, custo_output_mtok, ativo, updated_at`,
+         RETURNING id, slug, base_url`,
         vals
       );
-      return res.json(r.rows[0]);
+      // Chave nova → testa na hora e guarda o resultado (2026-10-29).
+      let teste: { ok: boolean; erro: string | null } | undefined;
+      if (api_key) {
+        const t = await testarEGravar(id, r.rows[0].slug, api_key, r.rows[0].base_url);
+        teste = { ok: t.ok, erro: t.erro ?? null };
+      }
+      const linha = await pool.query(`SELECT ${COLUNAS} FROM ai_providers WHERE id = $1`, [id]);
+      return res.json({ ...linha.rows[0], ...(teste ? { teste } : {}) });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

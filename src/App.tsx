@@ -29,6 +29,7 @@ import DisparoTemplatesPage from "./pages/DisparoTemplates";
 import DisparoTemplateEditorPage from "./pages/DisparoTemplateEditor";
 import CampanhasPage from "./pages/Campanhas";
 import IntegracoesPage from "./pages/Integracoes";
+import IntegracoesHubPage from "./pages/IntegracoesHub";
 import CerebroPage from "./pages/Cerebro";
 import AgentesPage from "./pages/Agentes";
 import UsoIAPage from "./pages/UsoIA";
@@ -102,7 +103,9 @@ const App = () => (
               <Route path="/disparos/templates/:id" element={<ProtectedRoute requireModulo="disparos"> <DisparoTemplateEditorPage /></ProtectedRoute>} />
               <Route path="/campanhas"    element={<ProtectedRoute requireModulo="campanhas">   <CampanhasPage /></ProtectedRoute>} />
               <Route path="/marketing-digital" element={<ProtectedRoute requireModulo="campanhas"> <MarketingDigitalPage /></ProtectedRoute>} />
-              <Route path="/integracoes"  element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />
+              {/* 2026-10-29: integrações num lugar só (modelo Cubo); a tela antiga virou "Conectores avançados". */}
+              <Route path="/integracoes"  element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesHubPage /></ProtectedRoute>} />
+              <Route path="/integracoes/conectores" element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />
               <Route path="/cerebro"      element={<ProtectedRoute requireModulo="cerebro">     <CerebroPage /></ProtectedRoute>} />
               <Route path="/agentes"      element={<ProtectedRoute requireModulo="agentes">     <AgentesPage /></ProtectedRoute>} />
               <Route path="/uso-ia"       element={<ProtectedRoute requireModulo="agentes">     <UsoIAPage /></ProtectedRoute>} />

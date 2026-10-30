@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { Pool } from 'pg';
 import type { MCPTool } from '../mcp/tools';
 import { log } from '../../logger';
+import { baseUrlDoTipo } from '../integracoesIA';
 
 export interface AIMessage {
   role: 'user' | 'assistant' | 'system';
@@ -104,16 +105,26 @@ export class ClaudeProvider implements AIProvider {
   }
 }
 
+/** Modelos de raciocínio da OpenAI (o1/o3/o4 e toda a família gpt-5, com ou sem prefixo de rota). */
+export function modeloDeRaciocinio(modelo: string | null | undefined): boolean {
+  const m = String(modelo || '').replace(/^openai\//i, '');
+  return /^(o1|o3|o4)(-|$)/i.test(m) || /^gpt-5/i.test(m);
+}
+
 // ── OpenAI Provider ──────────────────────────────────────────────────────────
 export class OpenAIProvider implements AIProvider {
   private client: OpenAI;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, baseURL?: string | null) {
     // [AUDITORIA] LÓGICA (correção de segurança pós-incidente 2026-07-28/31): maxRetries: 1 em
     // vez do default do SDK (2) — evita triplicar tráfego/custo em 429/5xx sustentado, mantendo
     // 1 retentativa pra falha transitória legítima. Ver mesmo comentário em agentEngine.ts.
-    this.client = new OpenAI({ apiKey, maxRetries: 1 });
+    // Integrações (2026-10-29): `baseURL` atende OpenRouter e Gemini, que falam a mesma API.
+    this.client = new OpenAI({ apiKey, maxRetries: 1, ...(baseURL ? { baseURL } : {}) });
+    this.apiDaOpenAI = !baseURL;
   }
+
+  private apiDaOpenAI: boolean;
 
   async complete(
     messages: AIMessage[],
@@ -150,11 +161,15 @@ export class OpenAIProvider implements AIProvider {
     // fica gravado no banco (pronto pra quando o seletor ganhar um modelo reasoning) mas não é
     // enviado — mesmo espírito de "não quebra call existente" que motivou o campo opcional na
     // interface. `service_tier` já é aceito por qualquer modelo desta API, sem essa restrição.
-    const ehModeloRaciocinio = /^(o1|o3|o4)(-|$)/i.test(opts.model) || /gpt-5.*thinking/i.test(opts.model);
+    // Integrações (2026-10-29): a família gpt-5 também é de raciocínio e, como o1/o3/o4, recusa
+    // `max_tokens` e `temperature` diferente de 1 (400 "Unsupported parameter") — usa
+    // `max_completion_tokens` e deixa a temperatura no padrão. Só vale para a API da OpenAI.
+    const ehModeloRaciocinio = this.apiDaOpenAI && modeloDeRaciocinio(opts.model);
     const resp = await this.client.chat.completions.create({
       model: opts.model || 'gpt-4o-mini',
-      temperature: opts.temperature ?? 0.7,
-      max_tokens: opts.maxTokens || 1024,
+      ...(ehModeloRaciocinio
+        ? { max_completion_tokens: opts.maxTokens || 1024 }
+        : { temperature: opts.temperature ?? 0.7, max_tokens: opts.maxTokens || 1024 }),
       messages: allMessages,
       tools: openaiTools.length ? openaiTools : undefined,
       ...(opts.serviceTier ? { service_tier: opts.serviceTier as any } : {}),
@@ -184,7 +199,7 @@ export async function criarProvider(
   pool: Pool,
   userId: string,
   providerId?: string | null
-): Promise<{ provider: AIProvider; modelo: string; providerSlug: string; apiKey: string } | null> {
+): Promise<{ provider: AIProvider; modelo: string; providerSlug: string; apiKey: string; explicito: boolean } | null> {
   const query = providerId
     ? `SELECT * FROM ai_providers WHERE id = $1 AND user_id = $2 AND ativo = true LIMIT 1`
     : `SELECT * FROM ai_providers WHERE user_id = $1 AND ativo = true ORDER BY created_at LIMIT 1`;
@@ -210,15 +225,12 @@ export async function criarProvider(
     apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '';
   }
 
-  let provider: AIProvider;
-  switch (cfg.slug) {
-    case 'claude':
-      provider = new ClaudeProvider(apiKey);
-      break;
-    case 'openai':
-    default:
-      provider = new OpenAIProvider(apiKey);
-  }
+  // Integrações (2026-10-29): Gemini e OpenRouter falam a API da OpenAI num endereço próprio.
+  const provider: AIProvider = cfg.slug === 'claude'
+    ? new ClaudeProvider(apiKey)
+    : new OpenAIProvider(apiKey, baseUrlDoTipo(cfg.slug, cfg.base_url));
 
-  return { provider, modelo: cfg.modelo, providerSlug: cfg.slug, apiKey };
+  // `explicito`: o agente escolheu esta integração. Aí o modelo é o do agente; na integração
+  // padrão da conta (sem escolha) continua valendo o modelo gravado nela, como antes.
+  return { provider, modelo: cfg.modelo, providerSlug: cfg.slug, apiKey, explicito: !!providerId };
 }

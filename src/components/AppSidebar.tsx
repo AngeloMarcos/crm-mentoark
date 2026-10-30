@@ -138,7 +138,7 @@ const navGroups: NavGroup[] = [
       { title: "Usuários", url: "/usuarios", icon: ShieldCheck, modulo: "usuarios", color: "text-teal-600", adminOnly: true },
       { title: "Assinaturas", url: "/admin/assinaturas", icon: CreditCard, modulo: "usuarios", color: "text-emerald-500", adminOnly: true, masterOnly: true },
       { title: "Segurança", url: "/seguranca", icon: Lock, modulo: "usuarios", color: "text-red-400", adminOnly: true },
-      { title: "Conectores", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
+      { title: "Integrações", url: "/integracoes", icon: Plug, modulo: "integracoes", color: "text-amber-500" },
     ],
   },
 ];
