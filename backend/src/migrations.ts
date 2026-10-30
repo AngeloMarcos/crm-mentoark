@@ -3311,5 +3311,18 @@ export async function runMigrations(pool: Pool): Promise<void> {
   // NULL = a própria linha responde (comportamento anterior). Ver services/canais.ts.
   await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS agente_resposta_id UUID REFERENCES agentes(id) ON DELETE SET NULL`).catch(() => {});
 
+  // 2026-10-30 (Base de conhecimento que indexa sozinha, modelo Cubo — services/indexacao.ts):
+  // conhecimento por agente (NULL = todos os agentes) e status de indexação visível na tela.
+  // Agente excluído → o conhecimento dele vira compartilhado (SET NULL), não é apagado.
+  for (const col of ['agente_id UUID REFERENCES agentes(id) ON DELETE SET NULL', 'status_indexacao TEXT',
+                     'erro_indexacao TEXT', 'indexado_em TIMESTAMPTZ']) {
+    await pool.query(`ALTER TABLE conhecimento ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  for (const col of ['conhecimento_id UUID REFERENCES conhecimento(id) ON DELETE CASCADE',
+                     'agente_id UUID REFERENCES agentes(id) ON DELETE SET NULL', 'status_indexacao TEXT', 'erro_indexacao TEXT']) {
+    await pool.query(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_documents_conhecimento ON documents (conhecimento_id)`).catch(() => {});
+
   log.info('MIGRATIONS', 'OK');
 }

@@ -146,6 +146,20 @@ export function formatarParte(parte: string, cfg: ConfigConversa | null | undefi
   return assinatura ? `${parte}\n\n${assinatura}` : parte;
 }
 
+/**
+ * RAG do agente (aba Conhecimento): ligado, quantos trechos e limiar de semelhança.
+ * NULL nos campos = ligado, 5 trechos, sem limiar.
+ */
+export function ragDoAgente(a: { rag_ativo?: boolean | null; rag_resultados?: number | null; rag_threshold?: number | string | null }) {
+  const resultados = Number(a.rag_resultados);
+  const limiar = Number(a.rag_threshold);
+  return {
+    ativo: a.rag_ativo !== false,
+    resultados: Number.isFinite(resultados) && resultados > 0 ? limitar(Math.round(resultados), 1, 10) : 5,
+    limiar: Number.isFinite(limiar) && limiar > 0 ? limitar(limiar, 0, 1) : 0,
+  };
+}
+
 /** Mensagem a mandar ao contato quando a IA falha por erro transitório (vazio = não manda nada). */
 export function mensagemDeErro(cfg: ConfigConversa | null | undefined): string | null {
   const m = String(cfg?.mensagem_erro || '').trim();

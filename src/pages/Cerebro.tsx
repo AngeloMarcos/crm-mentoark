@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, createContext, useContext } from "react";
 import { CRMLayout } from "@/components/CRMLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import { BaseVetorial } from "@/components/cerebro/BaseVetorial";
 import { SetupAgente } from "@/components/cerebro/SetupAgente";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
+import { StatusIndexacao, indexarConhecimentoAgora, reindexarConhecimento, statusIndexacao } from "@/lib/baseConhecimento";
 
 // ============ TYPES ============
 type TipoConhecimento = "personalidade" | "negocio" | "faq" | "objecao" | "script";
@@ -30,29 +31,42 @@ interface ConhecimentoItem {
   conteudo: string;
   contexto: string | null;
   indexado: boolean;
+  // 2026-10-30: indexação automática (backend/src/services/indexacao.ts) e base por agente
+  status_indexacao?: "pendente" | "indexando" | "indexado" | "erro" | null;
+  erro_indexacao?: string | null;
+  agente_id?: string | null;
 }
 
-// Helper for index badge
-function IndexBadge({ indexado }: { indexado: boolean }) {
+/** Nome dos agentes, para o selo mostrar de quem é cada item (vazio = todos os agentes). */
+const NomesAgentesContext = createContext<Map<string, string>>(new Map());
+
+const STATUS_INDEXACAO = {
+  pendente: { rotulo: "Aguardando", estilo: "bg-warning/15 text-warning", ajuda: "Na fila: em até 2 minutos fica disponível para a IA." },
+  indexando: { rotulo: "Indexando", estilo: "bg-primary/15 text-primary", ajuda: "Gerando a busca inteligente deste item agora." },
+  indexado: { rotulo: "Indexado", estilo: "bg-success/15 text-success", ajuda: "Disponível para a IA consultar." },
+  erro: { rotulo: "Erro", estilo: "bg-destructive/15 text-destructive", ajuda: "" },
+} as const;
+
+function IndexBadge({ item }: { item: ConhecimentoItem }) {
+  const nomes = useContext(NomesAgentesContext);
+  const st = item.status_indexacao ?? (item.indexado ? "indexado" : "pendente");
+  const info = STATUS_INDEXACAO[st];
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {indexado ? (
-            <Badge className="bg-success/15 text-success border-0 cursor-help">Indexado</Badge>
-          ) : (
-            <Badge className="bg-warning/15 text-warning border-0 cursor-help">Pendente</Badge>
-          )}
-        </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-xs">
-          <p className="text-xs">
-            <strong>Indexado</strong> = disponível para o agente
-            <br />
-            <strong>Pendente</strong> = aguardando sincronização RAG
-          </p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <span className="inline-flex items-center gap-1.5 flex-wrap">
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge className={`${info.estilo} border-0 cursor-help`}>{info.rotulo}</Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs">
+            <p className="text-xs">{st === "erro" ? item.erro_indexacao || "Falha ao indexar." : info.ajuda}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      {item.agente_id && (
+        <Badge variant="outline" className="text-xs">Só {nomes.get(item.agente_id) ?? "um agente"}</Badge>
+      )}
+    </span>
   );
 }
 
@@ -134,7 +148,7 @@ function KeyValueEditor({ items, onSave, onDelete, labelCampo }: EditorProps & {
               <TableRow key={it.id}>
                 <TableCell className="font-medium">{it.campo}</TableCell>
                 <TableCell className="text-muted-foreground">{it.conteudo}</TableCell>
-                <TableCell><IndexBadge indexado={it.indexado} /></TableCell>
+                <TableCell><IndexBadge item={it} /></TableCell>
                 <TableCell className="text-right">
                   <Button variant="ghost" size="icon" onClick={() => openDialog(it)}><Pencil className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="icon" onClick={() => onDelete(it.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
@@ -215,7 +229,7 @@ function FaqEditor({ items, onSave, onDelete }: EditorProps) {
                 <div className="flex-1 space-y-2">
                   <div className="flex items-center gap-2">
                     {f.categoria && <Badge variant="secondary">{f.categoria}</Badge>}
-                    <IndexBadge indexado={f.indexado} />
+                    <IndexBadge item={f} />
                   </div>
                   <h4 className="font-semibold">{f.campo}</h4>
                   <p className="text-sm text-muted-foreground">{f.conteudo}</p>
@@ -294,7 +308,7 @@ function ObjecoesEditor({ items, onSave, onDelete }: EditorProps) {
                 <div className="flex-1 space-y-2">
                   <div className="flex items-center gap-2">
                     <h4 className="font-semibold text-accent">"{o.campo}"</h4>
-                    <IndexBadge indexado={o.indexado} />
+                    <IndexBadge item={o} />
                   </div>
                   <p className="text-sm">{o.conteudo}</p>
                   {o.contexto && <p className="text-xs text-muted-foreground italic">Contexto: {o.contexto}</p>}
@@ -437,7 +451,7 @@ function ScriptsEditor({ items, onSave, onDelete, onOpenBuilder }: EditorProps &
                     {s.categoria && (
                       <Badge className={categoriaCor(s.categoria)}>{s.categoria}</Badge>
                     )}
-                    <IndexBadge indexado={s.indexado} />
+                    <IndexBadge item={s} />
                   </div>
                   <h4 className="font-semibold truncate">{s.campo}</h4>
                   <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{s.conteudo}</p>
@@ -513,27 +527,64 @@ export default function CerebroPage() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupInitialStep, setSetupInitialStep] = useState(1);
 
+  // 2026-10-30 (modelo Cubo): base por agente + indexação automática com status.
+  const [agentes, setAgentes] = useState<{ id: string; nome: string }[]>([]);
+  const [agenteAlvo, setAgenteAlvo] = useState<string>(""); // "" = todos os agentes (compartilhado)
+  const [statusIdx, setStatusIdx] = useState<StatusIndexacao | null>(null);
+  const [indexando, setIndexando] = useState(false);
+  const nomesAgentes = useMemo(() => new Map(agentes.map((a) => [a.id, a.nome])), [agentes]);
+
+  const carregarStatus = useCallback(async () => {
+    try { setStatusIdx(await statusIndexacao()); } catch { /* faixa some, a lista continua */ }
+  }, []);
+
   const carregar = useCallback(async () => {
     if (!user) return;
     setLoading(true);
-    const { data, error } = await (api as any)
-      .from("conhecimento")
-      .select("id, tipo, categoria, campo, conteudo, contexto, indexado")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: true });
+    const [{ data, error }, ags] = await Promise.all([
+      (api as any)
+        .from("conhecimento")
+        .select("id, tipo, categoria, campo, conteudo, contexto, indexado, status_indexacao, erro_indexacao, agente_id")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true }),
+      (api as any).from("agentes").select("id, nome").eq("user_id", user.id).order("nome", { ascending: true }),
+    ]);
     if (error) {
       toast.error("Erro ao carregar conhecimento: " + error.message);
       setItens([]);
     } else {
       setItens((data ?? []) as ConhecimentoItem[]);
     }
+    setAgentes((ags?.data ?? []) as { id: string; nome: string }[]);
     setLoading(false);
-  }, [user]);
+    carregarStatus();
+  }, [user, carregarStatus]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
+  /** Indexa já (sem esperar o ciclo de 2 min) e recarrega a lista com o status novo. */
+  const indexarAgora = useCallback(async (reindexarErros = false) => {
+    setIndexando(true);
+    try {
+      const r = reindexarErros ? await reindexarConhecimento({ so_erros: true }) : await indexarConhecimentoAgora();
+      if (r.erros) toast.error(`${r.erros} ${r.erros === 1 ? "item não foi indexado" : "itens não foram indexados"}. Passe o mouse no selo "Erro" para ver o motivo.`);
+      else if (r.indexados) toast.success(`${r.indexados} ${r.indexados === 1 ? "item indexado" : "itens indexados"}.`);
+    } catch (e: unknown) {
+      toast.error((e as Error).message);
+    } finally {
+      setIndexando(false);
+      carregar();
+    }
+  }, [carregar]);
+
+  // Com um agente escolhido, mostra o que ELE usa: os itens dele + os compartilhados.
+  const itensVisiveis = useMemo(
+    () => (agenteAlvo ? itens.filter((i) => !i.agente_id || i.agente_id === agenteAlvo) : itens),
+    [itens, agenteAlvo],
+  );
+
   const makeHandlers = (tipo: TipoConhecimento) => ({
-    items: itens.filter((i) => i.tipo === tipo),
+    items: itensVisiveis.filter((i) => i.tipo === tipo),
     onSave: async (item: Partial<ConhecimentoItem> & { id?: string }) => {
       if (!user) return toast.error("Faça login");
       if (item.id) {
@@ -545,6 +596,7 @@ export default function CerebroPage() {
             conteudo: item.conteudo ?? "",
             contexto: item.contexto ?? null,
             indexado: false,
+            status_indexacao: "pendente",
           })
           .eq("id", item.id);
         if (error) return toast.error(error.message);
@@ -558,11 +610,13 @@ export default function CerebroPage() {
           conteudo: item.conteudo ?? "",
           contexto: item.contexto ?? null,
           indexado: false,
+          status_indexacao: "pendente",
+          agente_id: agenteAlvo || null, // item novo vale para o agente escolhido no topo
         });
         if (error) return toast.error(error.message);
         toast.success("Adicionado");
       }
-      carregar();
+      indexarAgora();
     },
     onDelete: async (id: string) => {
       const { error } = await (api as any).from("conhecimento").delete().eq("id", id);
@@ -662,6 +716,7 @@ export default function CerebroPage() {
   };
 
   return (
+    <NomesAgentesContext.Provider value={nomesAgentes}>
     <CRMLayout>
       <div className="space-y-6">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -701,6 +756,49 @@ export default function CerebroPage() {
             </Button>
           </div>
         </div>
+
+        {/* 2026-10-30 (modelo Cubo): base por agente + status da indexação automática. */}
+        <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground whitespace-nowrap">Agente:</span>
+            <Select value={agenteAlvo || "__todos"} onValueChange={(v) => setAgenteAlvo(v === "__todos" ? "" : v)}>
+              <SelectTrigger className="w-[260px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__todos">Todos os agentes (compartilhado)</SelectItem>
+                {agentes.map((a) => <SelectItem key={a.id} value={a.id}>{a.nome}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          {statusIdx && (
+            <div className="flex-1 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border px-3 py-2 text-sm">
+              <span><strong>{statusIdx.status.indexado}</strong> indexados</span>
+              {statusIdx.status.pendente + statusIdx.status.indexando > 0 && (
+                <span className="text-warning"><strong>{statusIdx.status.pendente + statusIdx.status.indexando}</strong> aguardando</span>
+              )}
+              {statusIdx.status.erro > 0 && (
+                <span className="text-destructive"><strong>{statusIdx.status.erro}</strong> com erro</span>
+              )}
+              <span className="text-muted-foreground text-xs">A IA consulta só o que está indexado. Itens novos entram sozinhos em até 2 minutos.</span>
+              <div className="ml-auto flex gap-2">
+                {statusIdx.status.erro > 0 && (
+                  <Button size="sm" variant="outline" onClick={() => indexarAgora(true)} disabled={indexando}>
+                    {indexando ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Tentar de novo
+                  </Button>
+                )}
+                {statusIdx.status.pendente + statusIdx.trechos.pendentes > 0 && (
+                  <Button size="sm" onClick={() => indexarAgora(false)} disabled={indexando}>
+                    {indexando ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Database className="h-3.5 w-3.5" />} Indexar agora
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        {agenteAlvo && (
+          <p className="text-xs text-muted-foreground -mt-3">
+            Mostrando o que {nomesAgentes.get(agenteAlvo)} usa: os itens só dele e os compartilhados. Itens criados agora valem só para ele.
+          </p>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {stats.map((s) => (
@@ -750,7 +848,7 @@ export default function CerebroPage() {
                       <div className="flex items-center gap-2 flex-wrap mb-1">
                         <Badge variant="outline" className="text-xs">{tipoLabel[r.tipo]}</Badge>
                         {r.categoria && <Badge variant="secondary" className="text-xs">{r.categoria}</Badge>}
-                        <IndexBadge indexado={r.indexado} />
+                        <IndexBadge item={r} />
                       </div>
                       {r.campo && <p className="font-medium text-sm">{r.campo}</p>}
                       <p className="text-sm text-muted-foreground line-clamp-2 mt-0.5">{r.conteudo}</p>
@@ -797,5 +895,6 @@ export default function CerebroPage() {
 
       <SetupAgente open={setupOpen} onClose={() => setSetupOpen(false)} onConcluir={carregar} initialStep={setupInitialStep} />
     </CRMLayout>
+    </NomesAgentesContext.Provider>
   );
 }

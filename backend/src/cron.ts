@@ -8,6 +8,7 @@ import { avaliarFases, mudarFase } from './services/saudeNumero';
 import { reconhecerHistorico } from './services/maturadorControles';
 import { recalcularAptidaoOficial } from './services/checklistOficial';
 import { verificarWebhooksParados } from './services/saudeWebhook';
+import { varrerIndexacao } from './services/indexacao';
 import { gerarBackupsTodas } from './services/backupInstancia';
 import { montarRedeGlobal, globalLigado, retomarParesPausadosPorQueda } from './services/maturadorGlobal';
 import { reverificarProxies } from './services/proxyInstancia';
@@ -118,6 +119,16 @@ export function initCronJobs() {
       }
     } catch (err: any) {
       log.error('CRON', 'Erro na limpeza de variações de imagem', { err: err.message });
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // 2026-10-30: base de conhecimento indexa sozinha (antes dependia do n8n, desligado).
+  // Pega itens novos/editados e documentos sem embedding; item com erro só volta se editado.
+  cron.schedule('*/2 * * * *', async () => {
+    try {
+      await varrerIndexacao(pool);
+    } catch (err: any) {
+      log.error('CRON', 'Erro na indexação da base de conhecimento', { err: err.message });
     }
   }, { timezone: 'America/Sao_Paulo' });
 

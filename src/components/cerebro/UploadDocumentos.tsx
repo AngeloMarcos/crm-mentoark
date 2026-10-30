@@ -157,7 +157,7 @@ export function UploadDocumentos({ open, onOpenChange, onUploaded }: Props) {
       if (erros > 0) {
         toast.warning(`${totalInseridos} chunks indexados, ${erros} falharam`);
       } else {
-        toast.success(`✅ ${totalInseridos} chunks indexados! Lembre-se de reindexar via n8n para gerar embeddings.`);
+        toast.success(`✅ ${totalInseridos} trechos enviados! Eles são indexados sozinhos em até 2 minutos.`);
       }
 
       // Reset

@@ -13,6 +13,7 @@ import {
   CriarCorridaArgsSchema,
 } from '../functionCallingSecurity';
 import { gerarEmbedding } from '../../utils/embeddings';
+import { chaveEmbedding } from '../indexacao';
 import { enviarCorridaParaSistemaCliente } from '../corridasService';
 import { registrarUsoIA, estimarCustoUsd } from '../../utils/aiCusto';
 import { log } from '../../logger';
@@ -25,6 +26,10 @@ export interface ContextoConversa {
   telefone?: string;
   contatoId?: string | null;
   nomeContato?: string | null;
+  // 2026-10-30 (base por agente): busca só no conhecimento deste agente + o compartilhado, com o
+  // RAG configurado nele. Ausente = busca em toda a conta (comportamento anterior).
+  agenteId?: string | null;
+  rag?: { ativo: boolean; resultados: number; limiar: number } | null;
 }
 
 export interface MCPTool {
@@ -356,21 +361,28 @@ export async function executarFerramenta(
         // embedding — se não tem, retorna direto pra IA sem gastar nada (a IA simplesmente não
         // tem base de conhecimento pra consultar ainda; o caminho volta a funcionar sozinho
         // assim que o tenant subir o primeiro documento, nenhuma reativação manual necessária).
+        // 2026-10-30: RAG desligado no agente → a ferramenta não consulta nada.
+        if (contexto?.rag && !contexto.rag.ativo) {
+          return 'A base de conhecimento está desligada para este agente.';
+        }
+        // Base do agente = itens dele + os compartilhados (agente_id NULL). Sem agente no
+        // contexto, toda a conta (comportamento anterior).
+        const agenteId = contexto?.agenteId ?? null;
         const temDocumentos = await pool.query(
-          `SELECT 1 FROM documents WHERE user_id = $1 LIMIT 1`,
-          [userId]
+          `SELECT 1 FROM documents WHERE user_id = $1 AND embedding IS NOT NULL
+             AND ($2::uuid IS NULL OR agente_id IS NULL OR agente_id = $2::uuid) LIMIT 1`,
+          [userId, agenteId]
         ).catch(() => ({ rows: [] as any[] }));
         if (!temDocumentos.rows.length) {
           return 'Nenhum documento cadastrado na base de conhecimento ainda.';
         }
 
-        // [AUDITORIA] LÓGICA: usa a OPENAI_API_KEY global do ambiente (não a chave por-tenant
-        // de ai_providers) para gerar o embedding — decisão explícita: o RAG do CRM roda sobre
-        // um único modelo de embeddings fixo, independente de qual provider/modelo o tenant
-        // tenha configurado para a conversa (Claude, GPT, etc.).
-        const apiKey = process.env.OPENAI_API_KEY;
+        // [AUDITORIA] LÓGICA (2026-10-30): o embedding usa o MESMO modelo fixo de sempre
+        // (text-embedding-3-large/1536, igual ao da indexação), mas com a chave da integração
+        // OpenAI DA CONTA — a do servidor ficou só como reserva (estava recusada com 401).
+        const apiKey = await chaveEmbedding(pool, userId);
         if (!apiKey) {
-          return 'Busca de documentos indisponível: OPENAI_API_KEY não configurada no servidor.';
+          return 'Busca de documentos indisponível: conecte uma integração OpenAI em Integrações.';
         }
 
         const resultadoEmbedding = await gerarEmbedding(validatedArgs.query, apiKey);
@@ -388,16 +400,28 @@ export async function executarFerramenta(
         // Distância cosseno via pgvector (<=>), isolamento estrito por user_id — mesmo padrão
         // de todas as outras ferramentas deste arquivo.
         const vectorStr = `[${resultadoEmbedding.embedding.join(',')}]`;
+        // 2026-10-30: quantidade e limiar de semelhança vêm do agente (aba Conhecimento);
+        // limiar 0 = sem corte. Sem agente, o limite pedido pela IA, como antes.
+        const limite = contexto?.rag ? Math.min(Math.max(contexto.rag.resultados, 1), 10) : validatedArgs.limite;
+        const limiar = contexto?.rag?.limiar ?? 0;
         const r = await pool.query(
-          `SELECT content FROM documents
-           WHERE user_id = $1
+          `SELECT content, 1 - (embedding <=> $2::vector) AS semelhanca FROM documents
+           WHERE user_id = $1 AND embedding IS NOT NULL
+             AND ($4::uuid IS NULL OR agente_id IS NULL OR agente_id = $4::uuid)
            ORDER BY embedding <=> $2::vector
            LIMIT $3`,
-          [userId, vectorStr, validatedArgs.limite]
+          [userId, vectorStr, limite, agenteId]
         );
 
         if (!r.rows.length) return 'Nenhum documento correspondente encontrado na base de conhecimento.';
-        return r.rows
+        // O limiar padrão gravado nos agentes (0,70–0,75) é alto para o text-embedding-3: trecho
+        // relevante costuma ficar entre 0,3 e 0,6. Se nada passar, devolve o mais parecido marcado
+        // como de baixa semelhança, para a IA decidir — em vez de responder "não sei".
+        const passam = r.rows.filter((row: any) => Number(row.semelhanca) >= limiar);
+        if (!passam.length) {
+          return `[Trecho de baixa semelhança — use só se responder à pergunta]: ${r.rows[0].content}`;
+        }
+        return passam
           .map((row: any, idx: number) => `[Trecho ${idx + 1}]: ${row.content}`)
           .join('\n\n');
       }

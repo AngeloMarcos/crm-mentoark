@@ -194,6 +194,14 @@ export class OpenAIProvider implements AIProvider {
   }
 }
 
+/** Decifra `ai_providers.api_key_enc` (AES-256-CBC com ENCRYPTION_KEY, formato `iv:dados` em hex). */
+export function decifrarChaveIA(apiKeyEnc: string): string {
+  const keyBuf = Buffer.from(process.env.ENCRYPTION_KEY || '', 'hex');
+  const [ivHex, encHex] = apiKeyEnc.split(':');
+  const decipher = crypto.createDecipheriv('aes-256-cbc', keyBuf, Buffer.from(ivHex, 'hex'));
+  return Buffer.concat([decipher.update(Buffer.from(encHex, 'hex')), decipher.final()]).toString();
+}
+
 // ── Factory: criar provider pelo slug configurado no banco ───────────────────
 export async function criarProvider(
   pool: Pool,
@@ -212,14 +220,7 @@ export async function criarProvider(
 
   let apiKey: string;
   try {
-    const encKey = process.env.ENCRYPTION_KEY || '';
-    const keyBuf = Buffer.from(encKey, 'hex');
-    const [ivHex, encHex] = cfg.api_key_enc.split(':');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', keyBuf, Buffer.from(ivHex, 'hex'));
-    apiKey = Buffer.concat([
-      decipher.update(Buffer.from(encHex, 'hex')),
-      decipher.final(),
-    ]).toString();
+    apiKey = decifrarChaveIA(cfg.api_key_enc);
   } catch {
     log.warn('PROVIDER', 'Falha ao descriptografar api_key — usando variável de ambiente');
     apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '';

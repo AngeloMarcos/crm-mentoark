@@ -21,7 +21,7 @@ import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { aplicarCerebro } from './canais';
 import {
   ConfigConversa, esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
-  intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro,
+  intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro, ragDoAgente,
 } from './agenteConversa';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
@@ -1283,6 +1283,8 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         telefone: entrada.telefone,
         contatoId: contato.id,
         nomeContato: entrada.pushName || null,
+        agenteId: agente.id,            // 2026-10-30: base do agente + compartilhada
+        rag: ragDoAgente(agente),
       });
 
       if (resultado.startsWith('PAUSA_ATIVADA:')) {
@@ -1678,7 +1680,7 @@ export async function testarAgentePlayground(
       }
       const resultado = await executarFerramenta(
         pool, userId, tc.name, tc.input,
-        { contatoId: null, nomeContato: 'Operador (modo teste)' },
+        { contatoId: null, nomeContato: 'Operador (modo teste)', agenteId: agente.id, rag: ragDoAgente(agente) },
         { dryRun: true },
       );
       if (resultado.startsWith('PAUSA_ATIVADA:')) {
