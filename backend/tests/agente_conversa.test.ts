@@ -6,7 +6,36 @@ import { describe, it, expect } from 'vitest';
 import {
   esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
   intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro,
+  tempoDigitacaoMs, tempoLeituraMs, intervaloComVariacaoMs, comVariacao, normalizarParaRepeticao,
+  digitacaoAtiva, marcarLidaAtivo,
 } from '../src/services/agenteConversa';
+
+describe('conversa humana / anti-banimento (2026-10-31)', () => {
+  const meio = () => 0.5; // sem variação
+  it('digitando proporcional ao tamanho, com piso e teto', () => {
+    expect(tempoDigitacaoMs('ok', {}, meio)).toBe(1500);                     // curto → piso 1,5 s
+    expect(tempoDigitacaoMs('x'.repeat(130), {}, meio)).toBe(20_000 > 12_000 ? 12_000 : 20_000); // 130/6,5 = 20 s → teto 12 s
+    expect(tempoDigitacaoMs('x'.repeat(39), {}, meio)).toBe(6000);           // 39/6,5 = 6 s
+    expect(tempoDigitacaoMs('x'.repeat(39), { digitacao_velocidade: 'rapida' }, meio)).toBe(4333);
+  });
+  it('desligado volta ao 1,2 s fixo de antes', () => {
+    expect(tempoDigitacaoMs('x'.repeat(200), { digitacao_ativa: false })).toBe(1200);
+  });
+  it('variação fica dentro de ±fração', () => {
+    expect(comVariacao(1000, 0.25, () => 0)).toBe(750);
+    expect(comVariacao(1000, 0.25, () => 1)).toBe(1250);
+    expect(intervaloComVariacaoMs({ divisao_intervalo_ms: 0 })).toBe(0);
+  });
+  it('leitura entre 0,8 e 3 s', () => {
+    expect(tempoLeituraMs(() => 0)).toBe(800);
+    expect(tempoLeituraMs(() => 1)).toBe(3000);
+  });
+  it('padrões ligados; repetição ignora caixa, espaços e pontuação final', () => {
+    expect(digitacaoAtiva({})).toBe(true);
+    expect(marcarLidaAtivo({ marcar_lida: false })).toBe(false);
+    expect(normalizarParaRepeticao('Olá,  tudo bem?!')).toBe(normalizarParaRepeticao('olá, tudo bem'));
+  });
+});
 
 describe('padrões (tudo NULL = antes da sprint)', () => {
   it('espera 3 s, histórico 20, intervalo 3 s, sem instrução, sem mensagem de erro', () => {

@@ -4,7 +4,7 @@
  * (backend/src/services/agenteConversa.ts) mantém o comportamento de antes.
  */
 import type { ReactNode } from "react";
-import { History, MessageSquareText, Scissors, UserCog, Volume2 } from "lucide-react";
+import { History, MessageSquareText, Scissors, ShieldCheck, UserCog, Volume2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -27,6 +27,10 @@ export interface ConversaAgente {
   // 2026-10-30: voz saiu do /cerebro (gravava num agente qualquer) para cá — colunas que o motor lê.
   resposta_voz_habilitada: boolean;
   voice_id: string | null;
+  // 2026-10-31: conversa humana / anti-banimento (NULL = ligado, velocidade normal)
+  digitacao_ativa: boolean | null;
+  digitacao_velocidade: "lenta" | "normal" | "rapida" | null;
+  marcar_lida: boolean | null;
 }
 
 export const CONVERSA_PADRAO: ConversaAgente = {
@@ -34,6 +38,7 @@ export const CONVERSA_PADRAO: ConversaAgente = {
   divisao_ativa: null, divisao_modo: null, divisao_tamanho: null, divisao_intervalo_ms: null,
   emoji_politica: null, assinatura_ativa: null, assinatura_texto: null, idioma_forcado: null,
   mensagem_erro: null, resposta_voz_habilitada: false, voice_id: null,
+  digitacao_ativa: null, digitacao_velocidade: null, marcar_lida: null,
 };
 
 /** Lê da linha do agente (colunas ausentes ou NULL = padrão). */
@@ -114,6 +119,39 @@ export function SecoesConversaAgente({ valor, onChange }: { valor: ConversaAgent
               onChange={(e) => set("historico_max_tokens", numOuNulo(e.target.value))} />
           </Campo>
         </div>
+      </Secao>
+
+      <Secao icone={<ShieldCheck className="h-5 w-5" />} titulo="Comportamento humano (anti-banimento)"
+        descricao="Ritmo fixo é a principal assinatura de robô no WhatsApp. Com isto ligado, o agente lê a mensagem, mostra “digitando…” pelo tempo que uma pessoa levaria e varia o intervalo entre as mensagens.">
+        <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+          <div>
+            <p className="text-sm font-medium">Mostrar “digitando…” proporcional ao texto</p>
+            <p className="text-xs text-muted-foreground">Mensagem curta: ~1,5 s. Mensagem longa: até 12 s. Desligado: 1,2 s fixo em toda mensagem.</p>
+          </div>
+          <Switch checked={valor.digitacao_ativa !== false} onCheckedChange={(v) => set("digitacao_ativa", v ? null : false)} />
+        </div>
+        {valor.digitacao_ativa !== false && (
+          <Campo label="Velocidade de digitação" ajuda="Normal = cerca de 6 caracteres por segundo, como alguém digitando no celular.">
+            <Select value={valor.digitacao_velocidade ?? "normal"} onValueChange={(v) => set("digitacao_velocidade", v === "normal" ? null : (v as ConversaAgente["digitacao_velocidade"]))}>
+              <SelectTrigger className="sm:w-[240px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="lenta">Lenta</SelectItem>
+                <SelectItem value="normal">Normal (recomendado)</SelectItem>
+                <SelectItem value="rapida">Rápida</SelectItem>
+              </SelectContent>
+            </Select>
+          </Campo>
+        )}
+        <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+          <div>
+            <p className="text-sm font-medium">Marcar como lida antes de responder</p>
+            <p className="text-xs text-muted-foreground">O contato vê os dois tiques azuis 1–3 s antes do “digitando…”, como numa conversa real.</p>
+          </div>
+          <Switch checked={valor.marcar_lida !== false} onCheckedChange={(v) => set("marcar_lida", v ? null : false)} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Sempre ativos: no máximo 1 resposta a cada 20 s por contato, freio contra loop entre robôs e nenhuma mensagem idêntica repetida ao mesmo contato em 15 minutos.
+        </p>
       </Secao>
 
       <Secao icone={<Scissors className="h-5 w-5" />} titulo="Formato da resposta" descricao="Como a resposta chega no WhatsApp. Várias mensagens curtas parecem mais naturais que um textão.">

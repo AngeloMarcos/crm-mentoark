@@ -3324,5 +3324,11 @@ export async function runMigrations(pool: Pool): Promise<void> {
   }
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_documents_conhecimento ON documents (conhecimento_id)`).catch(() => {});
 
+  // 2026-10-31 (conversa humana / anti-banimento — services/agenteConversa.ts): "digitando…"
+  // proporcional ao texto, velocidade e marcar como lida antes de responder. NULL = ligado/normal.
+  for (const col of ['digitacao_ativa BOOLEAN', 'digitacao_velocidade TEXT', 'marcar_lida BOOLEAN']) {
+    await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+
   log.info('MIGRATIONS', 'OK');
 }

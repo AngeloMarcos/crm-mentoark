@@ -22,6 +22,7 @@ import { aplicarCerebro } from './canais';
 import {
   ConfigConversa, esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
   intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro, ragDoAgente,
+  tempoDigitacaoMs, tempoLeituraMs, intervaloComVariacaoMs, marcarLidaAtivo, normalizarParaRepeticao,
 } from './agenteConversa';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
@@ -33,7 +34,7 @@ import { analisarImagem } from '../utils/vision';
 import { withTenantContext, pool as poolGlobal } from '../db';
 import { log } from '../logger';
 import { destinoEnvio, jidConversa } from './identidadeContato';
-import { enviarTextoMetaOficial } from './metaCloudApi';
+import { enviarTextoMetaOficial, marcarLidaMetaOficial } from './metaCloudApi';
 import { bloqueioEnvioGeral } from './maturadorGlobal';
 
 // Sprint 7 / H6 (2026-10-06): conversa do número oficial chega com instancia `meta_oficial:<phone_number_id>`.
@@ -233,9 +234,57 @@ export const botMessageIds = new Set<string>();
 export const botSentTexts  = new Set<string>();
 
 // ── Envio via Evolution API ───────────────────────────────────────────────────
+/**
+ * 2026-10-31 (anti-banimento): marca a mensagem do cliente como lida, como uma pessoa faz ao
+ * abrir a conversa. No número oficial, o mesmo pedido liga o indicador "digitando…" da Meta
+ * (dura até a resposta ou 25 s). Falha aqui nunca impede a resposta.
+ */
+async function marcarComoLida(
+  userId: string, serverUrl: string, apiKey: string, instancia: string, telefone: string, messageId: string,
+): Promise<void> {
+  if (!messageId || process.env.IA_TEST_MODE === 'true') return;
+  try {
+    if (ehInstanciaOficial(instancia)) {
+      const cfg = (await poolGlobal.query(
+        `SELECT * FROM whatsapp_oficial_config WHERE user_id = $1 AND phone_number_id = $2 AND ativo = true LIMIT 1`,
+        [userId, instancia.slice(PREFIXO_OFICIAL.length)]
+      )).rows[0];
+      if (cfg) await marcarLidaMetaOficial(cfg, messageId, true);
+      return;
+    }
+    await evolutionFetch(`${sanitizeEvolutionUrl(serverUrl)}/chat/markMessageAsRead/${instancia}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      body: JSON.stringify({ readMessages: [{ remoteJid: jidConversa(telefone), fromMe: false, id: messageId }] }),
+    });
+  } catch (err: any) {
+    log.warn('ENGINE', 'Falha ao marcar mensagem como lida (segue a resposta)', { err: err?.message });
+  }
+}
+
+// Últimas mensagens enviadas pela IA por contato (anti-repetição): mandar o mesmo texto de novo
+// ao mesmo contato em pouco tempo é padrão de spam/robô. Memória curta, só deste processo.
+const JANELA_REPETICAO_MS = 15 * 60_000;
+const ultimasDoBot = new Map<string, { texto: string; em: number }[]>();
+function jaEnviadoRecentemente(userId: string, telefone: string, texto: string): boolean {
+  const chave = `${userId}:${telefone}`;
+  const agora = Date.now();
+  const lista = (ultimasDoBot.get(chave) || []).filter(m => agora - m.em < JANELA_REPETICAO_MS);
+  ultimasDoBot.set(chave, lista);
+  return lista.some(m => m.texto === normalizarParaRepeticao(texto));
+}
+function lembrarEnviado(userId: string, telefone: string, texto: string): void {
+  const chave = `${userId}:${telefone}`;
+  const lista = ultimasDoBot.get(chave) || [];
+  lista.push({ texto: normalizarParaRepeticao(texto), em: Date.now() });
+  ultimasDoBot.set(chave, lista.slice(-20));
+}
+
 async function enviarResposta(
   userId: string, serverUrl: string, apiKey: string,
-  instancia: string, telefone: string, texto: string
+  instancia: string, telefone: string, texto: string,
+  // 2026-10-31: quanto tempo a Evolution mostra "digitando…" antes de entregar (antes: 1200 fixo).
+  digitandoMs = 1200,
 ): Promise<void> {
   // [AUDITORIA] LÓGICA: registra o envio para o circuit breaker anti-loop (ver
   // enviosPorContato/registrarEnvioBot, declarados acima) mesmo em IA_TEST_MODE — a chamada de
@@ -283,7 +332,7 @@ async function enviarResposta(
   const r = await evolutionFetch(`${base}/message/sendText/${instancia}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: apiKey },
-    body: JSON.stringify({ number: destinoEnvio(telefone), text: texto, delay: 1200 }),
+    body: JSON.stringify({ number: destinoEnvio(telefone), text: texto, delay: digitandoMs }),
   });
   if (!r.ok) throw new Error(`Evolution: ${r.status} ${await r.text()}`);
   // Registra o ID real do WhatsApp para o webhook não pausar a IA
@@ -1377,16 +1426,26 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     }
     registrarTurnoIA(userIdFinal, entrada.telefone);
 
+    // 2026-10-31 (anti-banimento): "lê" a mensagem antes de começar a digitar, como uma pessoa.
+    if (marcarLidaAtivo(agente)) {
+      await new Promise(r => setTimeout(r, tempoLeituraMs()));
+      await marcarComoLida(
+        userIdFinal, agente.evolution_server_url, agente.evolution_api_key,
+        agente.evolution_instancia || entrada.instancia, entrada.telefone, entrada.messageId,
+      );
+    }
+
     // `historicoBruto` (antes do corte por tokens): o corte não pode fazer a IA se reapresentar.
     if (!historicoBruto.some(h => h.role === 'assistant')) {
       const empresa = String(agente.empresa_nome || '').trim();
+      const identificacao = `Olá! Sou ${nomeExibicao || 'o assistente virtual'}${nomeExibicao ? ', o assistente virtual' : ''}${empresa ? ` da ${empresa}` : ''}. ` +
+        `Se preferir falar com uma pessoa da equipe, é só escrever *atendente*.`;
       await enviarResposta(
         userIdFinal, agente.evolution_server_url, agente.evolution_api_key,
         agente.evolution_instancia || entrada.instancia, entrada.telefone,
-        `Olá! Sou ${nomeExibicao || 'o assistente virtual'}${nomeExibicao ? ', o assistente virtual' : ''}${empresa ? ` da ${empresa}` : ''}. ` +
-        `Se preferir falar com uma pessoa da equipe, é só escrever *atendente*.`
+        identificacao, tempoDigitacaoMs(identificacao, agente),
       ).catch(err => log.warn('ENGINE', 'Falha ao enviar identificação da IA', { err: err?.message }));
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, intervaloComVariacaoMs({ divisao_intervalo_ms: 1500 })));
     }
 
     // [AUDITORIA] LÓGICA (Sprint TTS): resposta em voz é opt-in por agente
@@ -1418,9 +1477,15 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
     // Fallback obrigatório: texto normal quando voz não foi tentada ou falhou por qualquer motivo.
     if (!vozEnviada) {
-      const intervaloMs = intervaloEntrePartesMs(agente);
+      // 2026-10-31 (anti-banimento): "digitando…" proporcional ao tamanho de cada parte, intervalo
+      // com variação e nada de mandar de novo um texto idêntico ao contato em 15 min.
+      let enviouAlguma = false;
       for (let i = 0; i < parserMessages.length; i++) {
-        if (i > 0) await new Promise(r => setTimeout(r, intervaloMs));
+        if (jaEnviadoRecentemente(userIdFinal, entrada.telefone, parserMessages[i])) {
+          log.info('ENGINE', 'Parte idêntica já enviada há pouco a este contato — não repetida', { telefone: entrada.telefone });
+          continue;
+        }
+        if (enviouAlguma) await new Promise(r => setTimeout(r, intervaloComVariacaoMs(agente)));
         const textoFormatado = formatarParte(parserMessages[i], agente, nomeExibicao);
         await enviarResposta(
           userIdFinal,
@@ -1428,8 +1493,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
           agente.evolution_api_key,
           agente.evolution_instancia || entrada.instancia,
           entrada.telefone,
-          textoFormatado
+          textoFormatado,
+          tempoDigitacaoMs(parserMessages[i], agente),
         );
+        lembrarEnviado(userIdFinal, entrada.telefone, parserMessages[i]);
+        enviouAlguma = true;
       }
     }
   }
@@ -1578,6 +1646,8 @@ export interface ResultadoTeste {
   erro?: string;
   partes?: string[];     // Sprint IA-1: como sairia no WhatsApp (divisão + assinatura)
   intervaloMs?: number;
+  digitandoMs?: number[]; // 2026-10-31: "digitando…" de cada parte
+
 }
 
 export async function testarAgentePlayground(
@@ -1707,7 +1777,9 @@ export async function testarAgentePlayground(
     ? parsearRespostaNativo(respostaFinal, agente.sinal_pausa || '251213', agente).messages
         .map(p => formatarParte(p, agente, String(agente.nome_exibicao || '').trim()))
     : [];
-  return { resposta: respostaExibida, partes, intervaloMs: intervaloEntrePartesMs(agente), tokensEntrada, tokensSaida, custoUsd, latenciaMs, modelo: modeloUsado, trace: traceLoop };
+  // 2026-10-31: quanto cada parte ficaria em "digitando…" no WhatsApp, para o Teste simular o ritmo real.
+  const digitandoMs = partes.map(p => tempoDigitacaoMs(p, agente));
+  return { resposta: respostaExibida, partes, digitandoMs, intervaloMs: intervaloEntrePartesMs(agente), tokensEntrada, tokensSaida, custoUsd, latenciaMs, modelo: modeloUsado, trace: traceLoop };
 }
 
 // ── Debounce — agrupa mensagens picotadas do mesmo contato ───────────────────

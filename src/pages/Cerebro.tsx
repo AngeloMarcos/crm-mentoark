@@ -19,6 +19,7 @@ import { SetupAgente } from "@/components/cerebro/SetupAgente";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
 import { StatusIndexacao, indexarConhecimentoAgora, reindexarConhecimento, statusIndexacao } from "@/lib/baseConhecimento";
+import { AgentesModuloNav } from "@/components/agentes/AgentesModuloNav";
 
 // ============ TYPES ============
 type TipoConhecimento = "personalidade" | "negocio" | "faq" | "objecao" | "script";
@@ -719,6 +720,7 @@ export default function CerebroPage() {
     <NomesAgentesContext.Provider value={nomesAgentes}>
     <CRMLayout>
       <div className="space-y-6">
+        <AgentesModuloNav />
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           {/* 2026-10-30 (modelo Cubo): esta página é só a BASE DE CONHECIMENTO. Prompt, modelo,
               teste e voz ficam no agente (/agentes); o número→agente fica em /canais. */}

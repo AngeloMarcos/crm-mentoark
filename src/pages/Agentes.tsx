@@ -12,6 +12,7 @@ import {
   SecoesConversaAgente, CONVERSA_PADRAO, conversaDoAgente, conversaParaSalvar,
 } from "@/components/agentes/SecoesConversaAgente";
 import { SeletorIntegracaoModelo } from "@/components/agentes/SeletorIntegracaoModelo";
+import { AgentesModuloNav } from "@/components/agentes/AgentesModuloNav";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -645,6 +646,7 @@ export default function AgentesPage() {
     <CRMLayout>
       {!modal && (
       <div className="space-y-6">
+        <AgentesModuloNav />
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
@@ -765,6 +767,7 @@ export default function AgentesPage() {
           (ativo, datas) foi para o cabeçalho. */}
       {modal && (
         <div className="space-y-5">
+          <AgentesModuloNav />
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="flex items-start gap-3 min-w-0">
               <Button variant="ghost" size="icon" onClick={voltarParaLista} title="Voltar para os agentes">

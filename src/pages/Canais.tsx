@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AgenteOpcao, Canal, atualizarCanal, listarCanais } from "@/lib/canais";
+import { AgentesModuloNav } from "@/components/agentes/AgentesModuloNav";
 
 const NENHUM = "__nenhum";
 
@@ -76,6 +77,7 @@ export default function CanaisPage() {
   return (
     <CRMLayout>
       <div className="space-y-6">
+        <AgentesModuloNav />
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">

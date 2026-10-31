@@ -49,6 +49,7 @@ import {
   Legend,
 } from "recharts";
 import { useUltimasExecucoes, useUsoIA } from "@/hooks/useUsoIA";
+import { AgentesModuloNav } from "@/components/agentes/AgentesModuloNav";
 
 const RANGES = [
   { id: "7",  label: "Últimos 7 dias"  },
@@ -123,6 +124,7 @@ export default function UsoIAPage() {
   return (
     <CRMLayout>
       <div className="space-y-6">
+        <AgentesModuloNav />
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">

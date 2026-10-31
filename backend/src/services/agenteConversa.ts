@@ -19,6 +19,10 @@ export interface ConfigConversa {
   assinatura_texto?: string | null;
   idioma_forcado?: string | null;
   mensagem_erro?: string | null;
+  // 2026-10-31: comportamento humano / anti-banimento (NULL = ligado, velocidade normal)
+  digitacao_ativa?: boolean | null;
+  digitacao_velocidade?: string | null;
+  marcar_lida?: boolean | null;
 }
 
 const limitar = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
@@ -117,6 +121,50 @@ export function intervaloEntrePartesMs(cfg: ConfigConversa | null | undefined): 
   const ms = Number(cfg?.divisao_intervalo_ms);
   return Number.isFinite(ms) && ms >= 0 ? limitar(Math.round(ms), 0, 15_000) : 3000;
 }
+
+// ── Comportamento humano / anti-banimento (2026-10-31) ─────────────────────────────────────
+// Ritmo fixo é assinatura de robô: o motor mostrava "digitando…" por 1,2 s em TODA resposta e
+// nunca marcava a mensagem do cliente como lida. Aqui o tempo varia com o tamanho do texto e com
+// um ruído aleatório, como uma pessoa digitando no celular.
+
+/** Caracteres por segundo de cada velocidade (pessoa digitando no celular: ~4–8 cps). */
+const CPS: Record<string, number> = { lenta: 4.5, normal: 6.5, rapida: 9 };
+
+/** Variação aleatória de ±fração (padrão ±25%). `aleatorio` é injetável para teste. */
+export function comVariacao(ms: number, fracao = 0.25, aleatorio: () => number = Math.random): number {
+  return Math.round(ms * (1 - fracao + aleatorio() * 2 * fracao));
+}
+
+/** A IA mostra "digitando…" antes de cada parte? (NULL = sim) */
+export const digitacaoAtiva = (cfg: ConfigConversa | null | undefined) => cfg?.digitacao_ativa !== false;
+/** Marca a mensagem do cliente como lida antes de responder? (NULL = sim) */
+export const marcarLidaAtivo = (cfg: ConfigConversa | null | undefined) => cfg?.marcar_lida !== false;
+
+/**
+ * Quanto tempo mostrar "digitando…" para esta parte: proporcional ao tamanho, com variação,
+ * entre 1,5 s e 12 s (a Evolution mantém o indicador pelo tempo do `delay`). Desligado = 1,2 s,
+ * o valor fixo de antes.
+ */
+export function tempoDigitacaoMs(texto: string, cfg: ConfigConversa | null | undefined, aleatorio: () => number = Math.random): number {
+  if (!digitacaoAtiva(cfg)) return 1200;
+  const cps = CPS[String(cfg?.digitacao_velocidade || 'normal')] ?? CPS.normal;
+  const base = (texto.trim().length / cps) * 1000;
+  return limitar(comVariacao(base, 0.25, aleatorio), 1500, 12_000);
+}
+
+/** Atraso entre "ler" a mensagem do cliente e começar a digitar (0,8–3 s). */
+export function tempoLeituraMs(aleatorio: () => number = Math.random): number {
+  return Math.round(800 + aleatorio() * 2200);
+}
+
+/** Intervalo entre partes com variação (sem ela, o espaçamento idêntico também denuncia robô). */
+export function intervaloComVariacaoMs(cfg: ConfigConversa | null | undefined, aleatorio: () => number = Math.random): number {
+  const base = intervaloEntrePartesMs(cfg);
+  return base === 0 ? 0 : comVariacao(base, 0.3, aleatorio);
+}
+
+/** Normaliza para comparar mensagens repetidas (caixa, espaços e pontuação final). */
+export const normalizarParaRepeticao = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').replace(/[.!?…\s]+$/, '').trim();
 
 const EMOJI: Record<string, string> = {
   off: 'Não use emojis em nenhuma resposta.',

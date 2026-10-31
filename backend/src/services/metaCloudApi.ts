@@ -188,6 +188,27 @@ export async function enviarTextoMetaOficial(cfg: MetaOficialConfig, numeroDesti
   }
 }
 
+/**
+ * 2026-10-31 (conversa humana): marca a mensagem recebida como lida e, com `digitando`, liga o
+ * indicador "digitando…" (a Meta o mantém até a resposta sair ou por até 25 s).
+ */
+export async function marcarLidaMetaOficial(cfg: MetaOficialConfig, messageId: string, digitando = false): Promise<boolean> {
+  if (!cfg.access_token_enc || !cfg.phone_number_id || !messageId) return false;
+  try {
+    const resp = await fetch(graphUrl(cfg, `${cfg.phone_number_id}/messages`), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${decriptar(cfg.access_token_enc)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp', status: 'read', message_id: messageId,
+        ...(digitando ? { typing_indicator: { type: 'text' } } : {}),
+      }),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 // [AUDITORIA] LÓGICA: verificação de assinatura do webhook (`X-Hub-Signature-256`) — a Meta
 // assina o corpo cru da requisição com HMAC-SHA256 usando o App Secret; sem essa checagem,
 // qualquer requisição POST pra essa URL (pública, sem JWT — a Meta não manda nosso token)

@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AgentesModuloNav } from "@/components/agentes/AgentesModuloNav";
 import {
   CategoriaIntegracao, IntegracaoIA, ItemIntegracao, ROTULO_CATEGORIA, ROTULO_STATUS, StatusIntegracao,
   TipoCatalogo, TipoIAInfo, atualizarIntegracaoIA, criarIntegracaoIA, excluirIntegracaoIA,
@@ -173,6 +174,7 @@ export default function IntegracoesHubPage() {
   return (
     <CRMLayout>
       <div className="space-y-6">
+        <AgentesModuloNav />
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
