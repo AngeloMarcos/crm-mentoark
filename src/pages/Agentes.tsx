@@ -224,7 +224,31 @@ interface ResultadoTeste {
   partes?: string[]; // Sprint IA-1: como chegaria no WhatsApp (divisão + assinatura)
 }
 
-const TONS = ["profissional", "amigável", "consultivo", "formal", "descontraído"];
+// 2026-10-31: Assistente de prompt — campos que antes ficavam soltos (e a IA nunca lia) viram
+// blocos inseridos NO prompt do sistema, que é o único texto que o motor segue.
+type CampoBlocoPrompt = "saudacao_inicial" | "bloco_qualificacao" | "mensagem_encaminhamento" | "mensagem_encerramento";
+const BLOCOS_PROMPT: { campo: CampoBlocoPrompt; rotulo: string; titulo: string; instrucao: string; exemplo: string }[] = [
+  { campo: "saudacao_inicial", rotulo: "Saudação inicial", titulo: "SAUDAÇÃO",
+    instrucao: "Na primeira mensagem da conversa, cumprimente assim (adapte com naturalidade, sem copiar sempre igual):",
+    exemplo: "Olá! Aqui é a Ana, da Mentoark 😊 Como posso te ajudar?" },
+  { campo: "bloco_qualificacao", rotulo: "Qualificação", titulo: "QUALIFICAÇÃO",
+    instrucao: "Antes de apresentar soluções, descubra estas informações ao longo da conversa, uma pergunta por vez:",
+    exemplo: "Nome, empresa, segmento, quantos atendentes tem e qual o maior problema hoje." },
+  { campo: "mensagem_encaminhamento", rotulo: "Quando passar para um humano", titulo: "ENCAMINHAMENTO PARA HUMANO",
+    instrucao: "Encaminhe para um atendente nestas situações, avisando o cliente com esta mensagem:",
+    exemplo: "Pedido de desconto, reclamação ou quando o cliente pedir. Mensagem: Vou te passar para o Angelo, ele já te responde!" },
+  { campo: "mensagem_encerramento", rotulo: "Encerramento", titulo: "ENCERRAMENTO",
+    instrucao: "Ao finalizar o atendimento, despeça-se assim:",
+    exemplo: "Foi um prazer te atender! Qualquer coisa é só chamar aqui 😉" },
+];
+
+/** Acrescenta (ou troca, se já existir) a seção `### TÍTULO` no fim do prompt. */
+function inserirBlocoNoPrompt(prompt: string, titulo: string, instrucao: string, texto: string): string {
+  const secao = `### ${titulo}\n${instrucao}\n${texto.trim()}`;
+  const re = new RegExp(`### ${titulo}\\n[\\s\\S]*?(?=\\n### |$)`);
+  if (re.test(prompt)) return prompt.replace(re, secao);
+  return `${prompt.trimEnd()}${prompt.trim() ? "\n\n" : ""}${secao}`;
+}
 
 // Motor nativo — providers e modelos disponíveis
 export const PROVIDERS = [
@@ -818,168 +842,137 @@ export default function AgentesPage() {
               <TabsTrigger value="teste" disabled={!editing}>Teste</TabsTrigger>
             </TabsList>
 
+            {/* 2026-10-31 (modelo Cubo): Perfil numa tela só, em cartões. Saíram os campos que a IA
+                NUNCA leu (Persona, Tom de voz, Idioma, Objetivo, Boas-vindas, Regras, Grupo de
+                notificação) — os dados continuam no banco. Saudação, qualificação, encaminhamento e
+                encerramento viraram o "Assistente de prompt": entram NO prompt com um clique. */}
             <TabsContent value="perfil" className="space-y-4 pt-4">
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4">
-                <div className="space-y-1.5">
-                  <Label>Nome do Agente *</Label>
-                  <Input
-                    value={form.nome}
-                    onChange={(e) => setForm({ ...form, nome: e.target.value })}
-                    placeholder="Ex: Ana – Atendente Digital"
-                  />
+              <div className="rounded-lg border p-4 space-y-4">
+                <div>
+                  <h3 className="font-semibold">Identidade</h3>
+                  <p className="text-xs text-muted-foreground">Como o agente aparece no CRM. Não muda o que a IA responde.</p>
                 </div>
-                {/* [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas, 2026-09-04):
-                    ícone/cor são só identidade visual — usados na listagem de agentes
-                    (`AGENTE_ICONES`/`estiloIconeAgente` no topo do arquivo), não afetam o
-                    comportamento da IA em nada. */}
-                <div className="space-y-1.5">
-                  <Label>Ícone e cor</Label>
-                  <div className="flex items-center gap-2">
-                    <Select value={form.icone} onValueChange={(v) => setForm({ ...form, icone: v })}>
-                      <SelectTrigger className="w-[72px]">
-                        {(() => { const Icon = iconeDoAgente(form.icone); return <Icon className="h-4 w-4" style={{ color: form.cor }} />; })()}
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Object.entries(AGENTE_ICONES).map(([id, Icon]) => (
-                          <SelectItem key={id} value={id}>
-                            <div className="flex items-center gap-2"><Icon className="h-4 w-4" /> {id}</div>
-                          </SelectItem>
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Nome do agente *</Label>
+                    <Input
+                      value={form.nome}
+                      onChange={(e) => setForm({ ...form, nome: e.target.value })}
+                      placeholder="Ex: Ana – Atendente Digital"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Ícone e cor</Label>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Select value={form.icone} onValueChange={(v) => setForm({ ...form, icone: v })}>
+                        <SelectTrigger className="w-[72px]">
+                          {(() => { const Icon = iconeDoAgente(form.icone); return <Icon className="h-4 w-4" style={{ color: form.cor }} />; })()}
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(AGENTE_ICONES).map(([id, Icon]) => (
+                            <SelectItem key={id} value={id}>
+                              <div className="flex items-center gap-2"><Icon className="h-4 w-4" /> {id}</div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <div className="flex items-center gap-1">
+                        {AGENTE_CORES.map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            title={c}
+                            onClick={() => setForm({ ...form, cor: c })}
+                            className="h-6 w-6 rounded-full flex items-center justify-center ring-offset-1 ring-offset-background"
+                            style={{ backgroundColor: c, boxShadow: form.cor === c ? `0 0 0 2px ${c}` : undefined }}
+                          >
+                            {form.cor === c && <Check className="h-3.5 w-3.5 text-white" />}
+                          </button>
                         ))}
-                      </SelectContent>
-                    </Select>
-                    <div className="flex items-center gap-1">
-                      {AGENTE_CORES.map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          title={c}
-                          onClick={() => setForm({ ...form, cor: c })}
-                          className="h-6 w-6 rounded-full flex items-center justify-center ring-offset-1 ring-offset-background"
-                          style={{ backgroundColor: c, boxShadow: form.cor === c ? `0 0 0 2px ${c}` : undefined }}
-                        >
-                          {form.cor === c && <Check className="h-3.5 w-3.5 text-white" />}
-                        </button>
-                      ))}
+                      </div>
                     </div>
                   </div>
                 </div>
+                <div className="space-y-1.5">
+                  <Label>Descrição</Label>
+                  <Textarea
+                    value={form.descricao}
+                    onChange={(e) => setForm({ ...form, descricao: e.target.value })}
+                    placeholder="Ex: Agente de vendas para WhatsApp"
+                    rows={2}
+                  />
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label>Descrição</Label>
-                <Textarea
-                  value={form.descricao}
-                  onChange={(e) =>
-                    setForm({ ...form, descricao: e.target.value })
+
+              <div className="rounded-lg border p-4 space-y-3">
+                <div>
+                  <h3 className="font-semibold">Inteligência</h3>
+                  <p className="text-xs text-muted-foreground">Qual chave de IA o agente usa e com qual modelo. As chaves ficam em Integrações.</p>
+                </div>
+                <SeletorIntegracaoModelo
+                  providerId={form.provider_id}
+                  modelo={form.modelo_id}
+                  onChange={({ providerId, modelo, slug }) =>
+                    setForm({ ...form, provider_id: providerId, modelo_id: modelo, provider: slug ?? form.provider })
                   }
-                  placeholder="Ex: Agente de vendas para WhatsApp"
-                  rows={2}
                 />
               </div>
-              {/* [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas, 2026-09-04): Provedor
-                  e Modelo moveram pra cá (antes na aba Motor) — são identidade do agente tanto
-                  quanto o nome, faz mais sentido junto do resto do "quem é este agente" do que ao
-                  lado de modalidades/ferramentas MCP. */}
-              {/* Integrações (2026-10-29, modelo Cubo): a chave vem de uma integração em
-                  /integracoes e o modelo da lista que ESSA chave libera (antes: lista fixa, e o
-                  modelo escolhido aqui era ignorado pelo motor quando a conta tinha chave própria). */}
-              <SeletorIntegracaoModelo
-                providerId={form.provider_id}
-                modelo={form.modelo_id}
-                onChange={({ providerId, modelo, slug }) =>
-                  setForm({ ...form, provider_id: providerId, modelo_id: modelo, provider: slug ?? form.provider })
-                }
-              />
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label>Prompt do Sistema {form.ativo && "*"}</Label>
-                  <span
-                    className={`text-xs ${
-                      form.prompt_sistema.length > (form.max_tokens_prompt_sistema || 40000)
-                        ? "text-destructive font-medium"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {form.prompt_sistema.length} / {form.max_tokens_prompt_sistema || 40000}
+
+              <div className="rounded-lg border p-4 space-y-3">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div>
+                    <h3 className="font-semibold">Prompt do sistema {form.ativo && <span className="text-destructive">*</span>}</h3>
+                    <p className="text-xs text-muted-foreground">
+                      O texto que a IA realmente segue. Sem ele, o agente não responde ninguém (proposital: nunca sai no ar com uma persona genérica).
+                    </p>
+                  </div>
+                  <span className={`text-xs ${form.prompt_sistema.length > (form.max_tokens_prompt_sistema || 40000) ? "text-destructive font-medium" : "text-muted-foreground"}`}>
+                    {form.prompt_sistema.length.toLocaleString("pt-BR")} / {(form.max_tokens_prompt_sistema || 40000).toLocaleString("pt-BR")}
                   </span>
                 </div>
                 <Textarea
                   value={form.prompt_sistema}
                   onChange={(e) => setForm({ ...form, prompt_sistema: e.target.value })}
                   placeholder="Ex: Você é Ana, atendente da Mentoark. Seja simpática, objetiva, e sempre..."
-                  rows={10}
+                  rows={14}
                   className="font-mono text-sm"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Este é o texto que a IA realmente recebe e usa pra responder (config unificada,
-                  antes ficava numa tela separada). Sem isso preenchido, um agente ativo não
-                  responde — é proposital, pra nunca sair no ar com uma persona genérica ou de
-                  outro cliente. O limite de caracteres ao lado é configurável na aba
-                  Configurações.
-                </p>
-              </div>
-              {/* [AUDITORIA] LÓGICA (Sprint 1 unificação, 2026-08-07): Persona/Objetivo abaixo
-                  NUNCA foram lidos por agentEngine.ts (confirmado no código) — são só anotação
-                  interna, não vão pra IA. Mantidos por não apagar dado já preenchido por quem já
-                  usava; Prompt do Sistema acima é o campo que de fato importa. */}
-              <div className="space-y-1.5">
-                <Label className="text-muted-foreground">Persona (anotação interna, não é enviada pra IA)</Label>
-                <Textarea
-                  value={form.persona}
-                  onChange={(e) => setForm({ ...form, persona: e.target.value })}
-                  placeholder="Ex: Você é Ana, uma atendente simpática e profissional..."
-                  rows={3}
-                />
-              </div>
-              {/* [AUDITORIA] FIX APLICADO (achado 2026-07-28 — auditoria de responsividade):
-                  2 colunas fixas ficavam apertadas pros rótulos dos Select num celular
-                  (dialog já é `w-[95vw]`, sobra pouco por coluna); empilha abaixo de `sm`. */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label>Tom de Voz</Label>
-                  <Select
-                    value={form.tom}
-                    onValueChange={(v) => setForm({ ...form, tom: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TONS.map((t) => (
-                        <SelectItem key={t} value={t}>
-                          {t}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Idioma</Label>
-                  <Select
-                    value={form.idioma || "Português BR"}
-                    onValueChange={(v) => setForm({ ...form, idioma: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Português BR">Português BR</SelectItem>
-                      <SelectItem value="Português PT">Português PT</SelectItem>
-                      <SelectItem value="Espanhol">Espanhol</SelectItem>
-                      <SelectItem value="Inglês">Inglês</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-muted-foreground">Objetivo Principal (anotação interna, não é enviado pra IA)</Label>
-                <Textarea
-                  value={form.objetivo}
-                  onChange={(e) =>
-                    setForm({ ...form, objetivo: e.target.value })
-                  }
-                  placeholder="Ex: Qualificar leads e agendar demonstrações"
-                  rows={2}
-                />
+                {form.ativo && !form.prompt_sistema.trim() && (
+                  <p className="text-xs text-destructive flex items-start gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    Agente ativo sem prompt não responde. Escreva o prompt ou use o assistente abaixo.
+                  </p>
+                )}
+
+                <details className="rounded-md border bg-muted/20 group">
+                  <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-primary" /> Assistente de prompt
+                    <span className="text-xs font-normal text-muted-foreground">— monte partes do prompt e insira com um clique</span>
+                  </summary>
+                  <div className="p-3 pt-1 space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Estes blocos só valem quando inseridos no prompt acima. Preencha, clique em “Inserir” e ajuste o texto do prompt como quiser.
+                    </p>
+                    {BLOCOS_PROMPT.map((b) => (
+                      <div key={b.campo} className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label>{b.rotulo}</Label>
+                          <Button type="button" size="sm" variant="outline" className="h-7 text-xs"
+                            disabled={!String(form[b.campo] || "").trim()}
+                            onClick={() => setForm({ ...form, prompt_sistema: inserirBlocoNoPrompt(form.prompt_sistema, b.titulo, b.instrucao, String(form[b.campo])) })}>
+                            Inserir no prompt
+                          </Button>
+                        </div>
+                        <Textarea
+                          rows={2}
+                          placeholder={b.exemplo}
+                          value={String(form[b.campo] || "")}
+                          onChange={(e) => setForm({ ...form, [b.campo]: e.target.value })}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </details>
               </div>
             </TabsContent>
 
@@ -1302,32 +1295,34 @@ export default function AgentesPage() {
               </div>
             </TabsContent>
 
-            {/* 2026-10-31: antiga aba "Comportamento", agora parte do Perfil. */}
-            <TabsContent value="perfil" className="space-y-4 pt-2">
-              <div className="border-t pt-5">
-                <h3 className="font-semibold">Identidade e mensagens</h3>
-                <p className="text-xs text-muted-foreground">Como o agente se apresenta, o que ele atende e as mensagens fixas.</p>
-              </div>
-              {/* Sprint 3 / H9 (2026-10-05): política de IA da Meta — agente de tarefa específica,
-                  identificado na 1ª resposta e com saída para atendente humano ("atendente"). */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Nome de exibição</Label>
-                  <Input
-                    value={form.nome_exibicao}
-                    onChange={(e) => setForm({ ...form, nome_exibicao: e.target.value })}
-                    placeholder="Ex: Stella | MentoArk"
-                  />
-                  <p className="text-[11px] text-muted-foreground">Assinatura que o contato vê. Sem ele, mensagens saem sem assinatura.</p>
+            {/* 2026-10-31: só o que o motor/webhook realmente usa (agentEngine.ts e webhook.ts). */}
+            <TabsContent value="perfil" className="space-y-4 pt-0">
+              <div className="rounded-lg border p-4 space-y-4">
+                <div>
+                  <h3 className="font-semibold">Regras fixas da IA</h3>
+                  <p className="text-xs text-muted-foreground">Aplicadas pelo sistema em toda conversa, além do prompt.</p>
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Nome da empresa</Label>
-                  <Input
-                    value={form.empresa_nome}
-                    onChange={(e) => setForm({ ...form, empresa_nome: e.target.value })}
-                    placeholder="Ex: Mentoark"
-                  />
-                  <p className="text-[11px] text-muted-foreground">Usado na 1ª resposta: "Sou o assistente virtual da …".</p>
+                {/* Sprint 3 / H9 (2026-10-05): política de IA da Meta — agente de tarefa específica,
+                    identificado na 1ª resposta e com saída para atendente humano ("atendente"). */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Nome de exibição</Label>
+                    <Input
+                      value={form.nome_exibicao}
+                      onChange={(e) => setForm({ ...form, nome_exibicao: e.target.value })}
+                      placeholder="Ex: Stella | MentoArk"
+                    />
+                    <p className="text-xs text-muted-foreground">Como o agente se apresenta e assina as mensagens.</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Nome da empresa</Label>
+                    <Input
+                      value={form.empresa_nome}
+                      onChange={(e) => setForm({ ...form, empresa_nome: e.target.value })}
+                      placeholder="Ex: Mentoark"
+                    />
+                    <p className="text-xs text-muted-foreground">Usado na apresentação automática: “Sou o assistente virtual da …”.</p>
+                  </div>
                 </div>
                 <div className="space-y-1.5">
                   <Label>Escopo do agente</Label>
@@ -1336,97 +1331,34 @@ export default function AgentesPage() {
                     onChange={(e) => setForm({ ...form, escopo_ia: e.target.value })}
                     placeholder="Ex: atendimento imobiliário e agendamento de visitas"
                   />
-                  <p className="text-[11px] text-muted-foreground">A IA só fala desse tema e oferece atendente fora dele. Obrigatório para a API oficial.</p>
+                  <p className="text-xs text-muted-foreground">
+                    A IA só fala desse tema e oferece um atendente fora dele. <strong>Obrigatório no número oficial</strong> (regra da Meta para IA no WhatsApp).
+                  </p>
                 </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Saudação Inicial</Label>
-                <Textarea
-                  value={form.saudacao_inicial}
-                  onChange={(e) => setForm({ ...form, saudacao_inicial: e.target.value })}
-                  placeholder="Ex: Olá! Aqui é a Ana da Mentoark 😊"
-                  rows={2}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Bloco de Qualificação</Label>
-                <Textarea
-                  value={form.bloco_qualificacao}
-                  onChange={(e) => setForm({ ...form, bloco_qualificacao: e.target.value })}
-                  rows={3}
-                />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label>Mensagem de Encaminhamento</Label>
-                  <Textarea
-                    value={form.mensagem_encaminhamento}
-                    onChange={(e) => setForm({ ...form, mensagem_encaminhamento: e.target.value })}
-                    rows={2}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Palavra que reativa a IA</Label>
+                    <Input
+                      value={form.palavra_reativar}
+                      onChange={(e) => setForm({ ...form, palavra_reativar: e.target.value })}
+                      placeholder="atendimento finalizado"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Quando um atendente assume, a IA pausa. Ao enviar esta frase na conversa, a IA volta a atender o contato.
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Sinal de pausa</Label>
+                    <Input
+                      value={form.sinal_pausa}
+                      onChange={(e) => setForm({ ...form, sinal_pausa: e.target.value })}
+                      placeholder="251213"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Código que o prompt manda a IA escrever quando deve passar para um humano. O sistema apaga o código da mensagem e pausa a IA.
+                    </p>
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Mensagem de Encerramento</Label>
-                  <Textarea
-                    value={form.mensagem_encerramento}
-                    onChange={(e) => setForm({ ...form, mensagem_encerramento: e.target.value })}
-                    rows={2}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label>Palavra pra Reativar a IA</Label>
-                  <Input
-                    value={form.palavra_reativar}
-                    onChange={(e) => setForm({ ...form, palavra_reativar: e.target.value })}
-                    placeholder="atendimento finalizado"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Sinal de Pausa (código interno)</Label>
-                  <Input
-                    value={form.sinal_pausa}
-                    onChange={(e) => setForm({ ...form, sinal_pausa: e.target.value })}
-                    placeholder="251213"
-                  />
-                </div>
-              </div>
-              {/* Sprint IA-1: "Espera antes de responder" foi para Configurações → Conversa
-                  ("Espera para agrupar mensagens") — aqui ele nunca chegava ao motor. */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label>Grupo de Notificação (JID, opcional)</Label>
-                  <Input
-                    value={form.grupo_notificacao}
-                    onChange={(e) => setForm({ ...form, grupo_notificacao: e.target.value })}
-                    placeholder="120363...@g.us"
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-muted-foreground">Mensagem de Boas-Vindas (anotação interna, não é enviada pra IA)</Label>
-                <Textarea
-                  value={form.mensagem_boas_vindas}
-                  onChange={(e) =>
-                    setForm({ ...form, mensagem_boas_vindas: e.target.value })
-                  }
-                  rows={2}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-muted-foreground">Regras e Restrições (anotação interna, não é enviada pra IA)</Label>
-                <Textarea
-                  value={form.regras}
-                  onChange={(e) => setForm({ ...form, regras: e.target.value })}
-                  placeholder="Ex: Não mencionar concorrentes. Não inventar preços."
-                  rows={2}
-                />
-              </div>
-              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground bg-muted/30">
-                Provedor/modelo estão na aba <strong>Perfil</strong>; temperatura, tokens e outros
-                parâmetros de execução ficam na aba <strong>Configurações</strong>; modalidades
-                (áudio/imagem) e ferramentas MCP ficam na aba <strong>Motor</strong>.
               </div>
             </TabsContent>
 

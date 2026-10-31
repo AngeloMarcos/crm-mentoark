@@ -3,6 +3,7 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { AppHeader } from "@/components/AppHeader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HealthCheck } from "./HealthCheck";
+import { AvisoNovaVersao } from "./AvisoNovaVersao";
 import { AssinaturaBanner } from "@/components/AssinaturaBanner";
 import { AssinaturaProvider } from "@/hooks/useAssinatura";
 
@@ -33,6 +34,7 @@ export function CRMLayout({ children, fullHeight = false }: { children: React.Re
             <ErrorBoundary>{children}</ErrorBoundary>
           </main>
           <HealthCheck />
+          <AvisoNovaVersao />
         </div>
       </div>
     </SidebarProvider>
