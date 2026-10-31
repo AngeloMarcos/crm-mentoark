@@ -109,6 +109,8 @@ const App = () => (
               <Route path="/integracoes/conectores" element={<ProtectedRoute requireModulo="integracoes"> <IntegracoesPage /></ProtectedRoute>} />
               <Route path="/cerebro"      element={<ProtectedRoute requireModulo="cerebro">     <CerebroPage /></ProtectedRoute>} />
               <Route path="/canais"       element={<ProtectedRoute requireModulo="agentes">     <CanaisPage /></ProtectedRoute>} />
+              {/* 2026-10-31 (modelo Cubo): agente em página própria — /agentes/novo e /agentes/:id */}
+              <Route path="/agentes/:id"  element={<ProtectedRoute requireModulo="agentes">     <AgentesPage /></ProtectedRoute>} />
               <Route path="/agentes"      element={<ProtectedRoute requireModulo="agentes">     <AgentesPage /></ProtectedRoute>} />
               <Route path="/uso-ia"       element={<ProtectedRoute requireModulo="agentes">     <UsoIAPage /></ProtectedRoute>} />
               <Route path="/kanban"       element={<ProtectedRoute requireModulo="leads">       <KanbanPage /></ProtectedRoute>} />

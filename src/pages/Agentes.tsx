@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { CRMLayout } from "@/components/CRMLayout";
 import { api } from "@/integrations/database/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -24,14 +24,6 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-  SheetFooter,
-} from "@/components/ui/sheet";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -44,6 +36,7 @@ import {
   Plus,
   Pencil,
   Trash2,
+  ArrowLeft,
   Loader2,
   Eye,
   EyeOff,
@@ -142,6 +135,7 @@ interface Agente {
   idioma_forcado?: string | null;
   mensagem_erro?: string | null;
   provider_id?: string | null;
+  numero_conectado?: string | null;
 }
 
 // Ícones fixos pra identidade visual do agente (renderizado na listagem, `AgenteIcone` abaixo) —
@@ -355,12 +349,12 @@ function msgErroAgente(msg: string, acao: string): string {
 export default function AgentesPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { id: idRota } = useParams<{ id: string }>();
   const [agentes, setAgentes] = useState<Agente[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState<Agente | null>(null);
   const [salvando, setSalvando] = useState(false);
-  const [testando, setTestando] = useState(false);
   const [showKey, setShowKey] = useState(false);
   // Aba "Execuções" (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04)
   const [execucoes, setExecucoes] = useState<Execucao[]>([]);
@@ -393,6 +387,24 @@ export default function AgentesPage() {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+
+  // 2026-10-31 (modelo Cubo): o editor é uma página própria, aberta pela URL —
+  // /agentes/novo cria, /agentes/:id edita, /agentes volta para a lista.
+  useEffect(() => {
+    if (!idRota) {
+      if (modal) { setModal(false); setEditing(null); setForm(formInicial); }
+      return;
+    }
+    if (idRota === "novo") {
+      if (!modal || editing) abrirCriar();
+      return;
+    }
+    const a = agentes.find((x) => x.id === idRota);
+    if (a && editing?.id !== a.id) abrirEditar(a);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idRota, agentes]);
+
+  const voltarParaLista = () => navigate("/agentes");
 
   const abrirCriar = () => {
     setEditing(null);
@@ -553,66 +565,26 @@ export default function AgentesPage() {
         return;
       }
       toast.success("✅ Agente criado!");
+      // Criado: volta para a lista (o agente novo aparece lá para abrir).
+      carregar();
+      voltarParaLista();
+      return;
     }
-    setModal(false);
-    setEditing(null);
-    setForm(formInicial);
+    // Editado: continua na página do agente, como no Cubo; recarrega para refletir o salvo.
     carregar();
   };
 
-  const remover = async (a: Agente) => {
-    if (!confirm(`Remover o agente "${a.nome}"?`)) return;
+  // Devolve true quando removeu (a página do agente só volta para a lista nesse caso).
+  const remover = async (a: Agente): Promise<boolean> => {
+    if (!confirm(`Remover o agente "${a.nome}"?`)) return false;
     const { error } = await api.from("agentes").delete().eq("id", a.id);
     if (error) {
       toast.error(`Erro ao remover: ${error.message}`);
-      return;
+      return false;
     }
     toast.success("Agente removido");
     carregar();
-  };
-
-  // [AUDITORIA] BUG: testarEvolution() exige que form.evolution_instancia esteja
-  // preenchido (linha abaixo), mas NUNCA envia esse valor pro backend — GET
-  // /api/whatsapp/status não recebe instancia como parâmetro, então o backend
-  // resolve e retorna o status de QUALQUER instância que ele conseguir achar pro
-  // userId (via a mesma cadeia de fallback agent_configs → agentes →
-  // [AUDITORIA] BUG (achado na Sprint Diagnóstico Config Conta IA+Disparo, 2026-07-31):
-  // confirmado ao vivo (curl) que esta função sempre falhava — mandava `fetch()` sem
-  // `method`, ou seja GET, mas `/api/whatsapp/status` só existe como `router.post(...)`
-  // no backend (whatsapp.ts). Resultado: 404 GARANTIDO em toda chamada, então o botão
-  // SEMPRE mostrava "❌ Falha na conexão", mesmo com a instância genuinamente conectada
-  // — o oposto do falso positivo que a nota antiga (abaixo) descrevia, e pior: falso
-  // negativo permanente. [AUDITORIA] FIX APLICADO: troca pra POST + Content-Type, e
-  // aproveita que o backend JÁ aceita `instancia` no body com checagem de ownership
-  // (whatsapp.ts, achado 2026-07-22) pra resolver de vez a nota antiga também — testa a
-  // instância ESPECÍFICA deste agente, não mais "qualquer instância que o backend
-  // resolver primeiro pro usuário". Sucesso agora é decidido por `data.state === 'open'`
-  // (a rota sempre responde 200 com o estado real, não só pelo HTTP status).
-  const testarEvolution = async () => {
-    if (!form.evolution_instancia) {
-      toast.error("Informe o nome da instância antes de testar.");
-      return;
-    }
-    setTestando(true);
-    try {
-      const token = localStorage.getItem("crm_access_token");
-      const API_URL = import.meta.env.VITE_API_URL || "https://api.mentoark.com.br";
-      const res = await fetch(`${API_URL}/api/whatsapp/status`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ instancia: form.evolution_instancia }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.state === "open") {
-        toast.success(`✅ Evolution conectada — instância: ${data.instancia ?? form.evolution_instancia}`);
-      } else {
-        toast.error(`❌ Instância desconectada (${data.state ?? "erro"}) — ${data.message ?? "reconecte em Conectores"}`);
-      }
-    } catch (e: any) {
-      toast.error(`❌ Erro: ${e?.message ?? "sem resposta do servidor"}`);
-    } finally {
-      setTestando(false);
-    }
+    return true;
   };
 
   // [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): busca
@@ -671,6 +643,7 @@ export default function AgentesPage() {
 
   return (
     <CRMLayout>
+      {!modal && (
       <div className="space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
@@ -684,7 +657,7 @@ export default function AgentesPage() {
               </p>
             </div>
           </div>
-          <Button onClick={abrirCriar}>
+          <Button onClick={() => navigate("/agentes/novo")}>
             <Plus className="h-4 w-4" /> Novo Agente
           </Button>
         </div>
@@ -708,7 +681,7 @@ export default function AgentesPage() {
                   Crie seu primeiro agente de atendimento para começar.
                 </p>
               </div>
-              <Button onClick={abrirCriar}>Criar primeiro agente</Button>
+              <Button onClick={() => navigate("/agentes/novo")}>Criar primeiro agente</Button>
             </CardContent>
           </Card>
         ) : (
@@ -765,7 +738,7 @@ export default function AgentesPage() {
                       variant="outline"
                       size="sm"
                       className="flex-1"
-                      onClick={() => abrirEditar(a)}
+                      onClick={() => navigate(`/agentes/${a.id}`)}
                     >
                       <Pencil className="h-4 w-4" /> Editar
                     </Button>
@@ -783,52 +756,63 @@ export default function AgentesPage() {
           </div>
         )}
       </div>
+      )}
 
-      {/* [AUDITORIA] LÓGICA: Sheet lateral em vez de Dialog centralizado — mesmo padrão já
-          aplicado em kanban/ModalTarefa e InstanceManagementPanel ("Configurar Instância").
-          Com 10 abas e ~100 campos, um Dialog centralizado arrisca perder preenchimento com um
-          clique fora sem querer; o Sheet não fecha em onInteractOutside e mantém o rodapé
-          (Cancelar/Salvar) sempre visível, sem depender de rolar até o fim. */}
-      <Sheet
-        open={modal}
-        onOpenChange={(o) => {
-          setModal(o);
-          if (!o) {
-            setEditing(null);
-            setForm(formInicial);
-          }
-        }}
-      >
-        <SheetContent
-          side="right"
-          onInteractOutside={(e) => e.preventDefault()}
-          className="w-full sm:max-w-3xl flex flex-col p-0 gap-0"
-        >
-          <SheetHeader className="p-6 pb-4 border-b text-left">
-            <SheetTitle>
-              {editing ? "Editar agente" : "Novo agente"}
-            </SheetTitle>
-            <SheetDescription>
-              Configure perfil, parâmetros de execução, comportamento, integração e status.
-            </SheetDescription>
-          </SheetHeader>
+      {/* 2026-10-31 (modelo Cubo `/agents/:id/edit`): o agente abre em página própria com 4
+          abas — Perfil · Configurações · Execuções · Teste. Antes era um painel lateral com 10
+          abas misturando o "cérebro" com o número (instância, webhook); o número agora fica em
+          Canais. Comportamento foi para Perfil; Motor e Conhecimento para Configurações; o status
+          (ativo, datas) foi para o cabeçalho. */}
+      {modal && (
+        <div className="space-y-5">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="flex items-start gap-3 min-w-0">
+              <Button variant="ghost" size="icon" onClick={voltarParaLista} title="Voltar para os agentes">
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+              <div
+                className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${form.cor ? "" : "bg-primary/10 text-primary"}`}
+                style={estiloIconeAgente(form.cor)}
+              >
+                {(() => { const Icon = iconeDoAgente(form.icone); return <Icon className="h-5 w-5" />; })()}
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-bold tracking-tight truncate">{form.nome || (editing ? "Agente" : "Novo agente")}</h1>
+                <p className="text-sm text-muted-foreground">
+                  {/* Sem integração escolhida, vale o modelo da integração padrão da conta. */}
+                  {form.provider_id ? (form.modelo_id || form.modelo) : "modelo da integração padrão"}
+                  {editing && <> · criado em {formatarData(editing.created_at)} · atualizado em {formatarData(editing.updated_at)}</>}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <label className="flex items-center gap-2 text-sm">
+                <Switch checked={form.ativo} onCheckedChange={(v) => setForm({ ...form, ativo: v })} />
+                {form.ativo ? "Ativo" : "Desligado"}
+              </label>
+              {editing?.evolution_instancia && (
+                <Button variant="outline" size="sm"
+                  onClick={() => navigate(`/whatsapp?instancia=${encodeURIComponent(editing.evolution_instancia!)}`)}>
+                  <MessageCircle className="h-4 w-4" /> Conversas
+                </Button>
+              )}
+              {editing && (
+                <Button variant="ghost" size="sm" onClick={async () => { if (await remover(editing)) voltarParaLista(); }}>
+                  <Trash2 className="h-4 w-4 text-destructive" /> Excluir
+                </Button>
+              )}
+            </div>
+          </div>
 
-          <div className="flex-1 overflow-y-auto p-6">
           <Tabs
             defaultValue="perfil"
             onValueChange={(v) => { if (v === "execucoes" && !execucoes.length) carregarExecucoes(); }}
           >
-            <TabsList className="grid grid-cols-3 sm:grid-cols-10 w-full">
+            <TabsList className="grid grid-cols-2 sm:grid-cols-4 w-full sm:w-auto sm:inline-grid">
               <TabsTrigger value="perfil">Perfil</TabsTrigger>
               <TabsTrigger value="configuracoes">Configurações</TabsTrigger>
               <TabsTrigger value="execucoes" disabled={!editing}>Execuções</TabsTrigger>
               <TabsTrigger value="teste" disabled={!editing}>Teste</TabsTrigger>
-              <TabsTrigger value="comportamento">Comportamento</TabsTrigger>
-              <TabsTrigger value="motor">Motor</TabsTrigger>
-              <TabsTrigger value="conhecimento">Conhecimento</TabsTrigger>
-              <TabsTrigger value="whatsapp">WhatsApp</TabsTrigger>
-              <TabsTrigger value="integracao">Integração</TabsTrigger>
-              <TabsTrigger value="status">Status</TabsTrigger>
             </TabsList>
 
             <TabsContent value="perfil" className="space-y-4 pt-4">
@@ -1049,9 +1033,9 @@ export default function AgentesPage() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      Quanto o modelo pensa antes de responder. Só tem efeito em modelos com
-                      raciocínio (o1/o3/o4, gpt-5-thinking) — nenhum dos modelos oferecidos hoje
-                      (aba Perfil) é dessa família, então fica sem efeito até isso mudar.
+                      Quanto o modelo pensa antes de responder. Só vale para modelos de raciocínio
+                      da OpenAI (família gpt-5 e o1/o3/o4); nos demais é ignorado. Mínimo/baixo
+                      responde rápido, ideal para chat.
                     </p>
                   </div>
 
@@ -1069,7 +1053,7 @@ export default function AgentesPage() {
                     </Select>
                     <p className="text-xs text-muted-foreground">
                       Quando ativo, imagens enviadas pelo cliente entram como parte multimodal da
-                      mensagem. Nunca se aplica a mensagens de grupo (ver aba Motor).
+                      mensagem. Nunca se aplica a mensagens de grupo (ver "Modalidades" mais abaixo).
                     </p>
                   </div>
                 </div>
@@ -1315,7 +1299,12 @@ export default function AgentesPage() {
               </div>
             </TabsContent>
 
-            <TabsContent value="comportamento" className="space-y-4 pt-4">
+            {/* 2026-10-31: antiga aba "Comportamento", agora parte do Perfil. */}
+            <TabsContent value="perfil" className="space-y-4 pt-2">
+              <div className="border-t pt-5">
+                <h3 className="font-semibold">Identidade e mensagens</h3>
+                <p className="text-xs text-muted-foreground">Como o agente se apresenta, o que ele atende e as mensagens fixas.</p>
+              </div>
               {/* Sprint 3 / H9 (2026-10-05): política de IA da Meta — agente de tarefa específica,
                   identificado na 1ª resposta e com saída para atendente humano ("atendente"). */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1438,7 +1427,8 @@ export default function AgentesPage() {
               </div>
             </TabsContent>
 
-            <TabsContent value="motor" className="space-y-5 pt-4">
+            {/* 2026-10-31: antiga aba "Motor", agora parte de Configurações. */}
+            <TabsContent value="configuracoes" className="space-y-5 pt-2">
               <div className="rounded-lg border p-4 bg-muted/20 space-y-3">
                 <div className="flex items-center gap-2 text-primary">
                   <Mic className="h-5 w-5" />
@@ -1537,7 +1527,8 @@ export default function AgentesPage() {
               </div>
             </TabsContent>
 
-            <TabsContent value="conhecimento" className="space-y-4 pt-4">
+            {/* 2026-10-31: antiga aba "Conhecimento", agora parte de Configurações. */}
+            <TabsContent value="configuracoes" className="space-y-4 pt-2">
 
               <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
                 <div className="flex items-center gap-2 text-primary">
@@ -1590,125 +1581,75 @@ export default function AgentesPage() {
               </div>
             </TabsContent>
 
-            <TabsContent value="whatsapp" className="space-y-4 pt-4">
-              <div className="rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-700 dark:text-blue-300 flex items-start gap-2">
-                <span className="mt-0.5">🔗</span>
-                <span>
-                  A URL e API Key da Evolution são configuradas globalmente em{" "}
-                  <a href="/integracoes" className="font-semibold underline underline-offset-2 hover:text-blue-900 dark:hover:text-blue-100">
-                    Conectores
-                  </a>
-                  . Aqui você define apenas o nome da instância usada por este agente.
-                </span>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Nome da Instância</Label>
-                <Input
-                  value={form.evolution_instancia}
-                  onChange={(e) =>
-                    setForm({ ...form, evolution_instancia: e.target.value })
-                  }
-                  placeholder="ex: mentoark-principal"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>URL do Webhook n8n</Label>
-                <Input
-                  placeholder="https://seu-n8n.com/webhook/..."
-                  value={form.n8n_webhook_url}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, n8n_webhook_url: e.target.value }))
-                  }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Quando preenchido, mensagens são processadas pelo n8n em vez da IA interna.
-                </p>
-              </div>
-              <Button
-                variant="secondary"
-                className="w-full"
-                onClick={testarEvolution}
-                disabled={testando}
-              >
-                {testando ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Plug className="h-4 w-4" />
-                )}
-                Testar conexão
-              </Button>
-            </TabsContent>
-
-            <TabsContent value="integracao" className="space-y-4 pt-4">
-              <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
+            {/* 2026-10-31: antigas abas WhatsApp/Integração/Status. O número (instância, conexão)
+                saiu do agente e fica em Canais; aqui fica só QUEM processa as mensagens. */}
+            <TabsContent value="configuracoes" className="space-y-4 pt-2">
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-4">
                 <div className="flex items-center gap-2 text-primary">
                   <Webhook className="h-5 w-5" />
-                  <h3 className="font-semibold">Integrações externas</h3>
+                  <h3 className="font-semibold">Motor de atendimento</h3>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Quem responde as mensagens</Label>
+                  <Select
+                    value={form.n8n_webhook_url ? "n8n" : "interno"}
+                    onValueChange={(v) => setForm((f) => ({ ...f, n8n_webhook_url: v === "interno" ? "" : f.n8n_webhook_url || "https://" }))}
+                  >
+                    <SelectTrigger className="sm:w-[320px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="interno">IA interna do CRM (recomendado)</SelectItem>
+                      <SelectItem value="n8n">Fluxo externo no n8n (webhook)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Na IA interna valem o prompt, o modelo e todas as configurações desta página. No n8n, as mensagens vão para o webhook e o fluxo responde.
+                  </p>
+                </div>
+                {form.n8n_webhook_url && (
+                  <div className="space-y-1.5">
+                    <Label>URL do webhook do n8n</Label>
+                    <Input
+                      placeholder="https://seu-n8n.com/webhook/..."
+                      value={form.n8n_webhook_url}
+                      onChange={(e) => setForm((f) => ({ ...f, n8n_webhook_url: e.target.value }))}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
+                <div className="flex items-center gap-2 text-primary">
+                  <MessageCircle className="h-5 w-5" />
+                  <h3 className="font-semibold">Em quais números este agente responde</h3>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  O webhook n8n agora é configurado diretamente na aba <strong>WhatsApp</strong>, junto da instância Evolution.
+                  {editing?.evolution_instancia
+                    ? <>Este agente está ligado ao número <strong>{editing.numero_conectado ? `+${editing.numero_conectado}` : editing.evolution_instancia}</strong>. </>
+                    : "Este agente ainda não atende nenhum número. "}
+                  Para escolher o agente de cada número (QR Code ou API oficial), use a página Canais.
                 </p>
-              </div>
-            </TabsContent>
-
-
-            <TabsContent value="status" className="space-y-4 pt-4">
-              <div className="flex items-center justify-between rounded-md border p-3">
-                <div>
-                  <p className="font-medium text-sm">Agente ativo</p>
-                  <p className="text-xs text-muted-foreground">
-                    Quando inativo, não responde mensagens.
-                  </p>
-                </div>
-                <Switch
-                  checked={form.ativo}
-                  onCheckedChange={(v) => setForm({ ...form, ativo: v })}
-                />
-              </div>
-
-              {editing && (
-                <div className="rounded-md border p-3 space-y-1 text-sm">
-                  <p>
-                    <span className="text-muted-foreground">Criado em: </span>
-                    {formatarData(editing.created_at)}
-                  </p>
-                  <p>
-                    <span className="text-muted-foreground">Última atualização: </span>
-                    {formatarData(editing.updated_at)}
-                  </p>
-                </div>
-              )}
-
-              {editing?.evolution_instancia && (
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={() =>
-                    navigate(
-                      `/whatsapp?instancia=${encodeURIComponent(
-                        editing.evolution_instancia!,
-                      )}`,
-                    )
-                  }
-                >
-                  <MessageCircle className="h-4 w-4" /> Ver Histórico WhatsApp
+                <Button variant="outline" size="sm" onClick={() => navigate("/canais")}>
+                  <MessageCircle className="h-4 w-4" /> Abrir Canais
                 </Button>
-              )}
+              </div>
             </TabsContent>
           </Tabs>
-          </div>
 
-          <SheetFooter className="p-6 pt-4 border-t bg-muted/30 sm:justify-between">
-            <Button variant="outline" onClick={() => setModal(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={salvar} disabled={salvando}>
-              {salvando && <Loader2 className="h-4 w-4 animate-spin" />}
-              {editing ? "Salvar alterações" : "Criar agente"}
-            </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+          {/* Barra de salvar presa ao fim da coluna de conteúdo (sticky, não fixed: não cobre o menu). */}
+          {/* Margens negativas = padding do <main> do CRMLayout (p-2 sm:p-3 md:p-4 lg:p-6), para encostar nas bordas. */}
+          <div className="sticky bottom-0 z-30 -mx-2 sm:-mx-3 md:-mx-4 lg:-mx-6 -mb-2 sm:-mb-3 md:-mb-4 lg:-mb-6 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <div className="px-2 sm:px-3 md:px-4 lg:px-6 py-3 flex items-center justify-between gap-3">
+              <Button variant="outline" onClick={voltarParaLista}>
+                <ArrowLeft className="h-4 w-4" /> Voltar
+              </Button>
+              <Button onClick={salvar} disabled={salvando}>
+                {salvando && <Loader2 className="h-4 w-4 animate-spin" />}
+                {editing ? "Salvar alterações" : "Criar agente"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* [AUDITORIA] LÓGICA (Sprint Agentes Configurações Avançadas — fase 2, 2026-09-04): "Ver
           trace" da aba Execuções — resumo por iteração do loop agêntico (texto parcial + tool
