@@ -84,6 +84,7 @@ import { registrarRespostaDeDisparo } from '../services/respostas';
 import { garantirDonoDaInstancia } from '../services/tenantInstancia';
 import { resolverOwnerId as resolverContaRaiz } from '../services/subscription';
 import { registrarLogoutEvent, verificarLoopDeLogout } from '../services/logoutCircuitBreaker';
+import { ehPedidoOptOut } from '../services/optOut';
 
 const MIDIA_TIPOS = new Set(['image', 'audio', 'video', 'document', 'sticker']);
 
@@ -160,11 +161,8 @@ interface EvolutionPayload {
   };
 }
 
-// [AUDITORIA] LÓGICA: Dicionário em Set para busca O(1) de palavras-chave que disparam a desativação da automação (opt-out).
-const OPT_OUT_KEYWORDS = new Set([
-  'sair', 'stop', 'parar', 'pare', 'cancelar', 'remover', 'não quero', 'nao quero',
-  'spam', 'descadastrar', 'me tira da lista', 'não quero mais', 'nao quero mais',
-]);
+// 2026-11-01: a lista exata de palavras de opt-out foi para services/optOut.ts (ehPedidoOptOut),
+// que reconhece também frases.
 
 // [AUDITORIA] LÓGICA: Dicionário em Set para busca rápida de comandos que reativam o bot de inteligência artificial.
 const REATIVAR_COMANDOS = new Set([
@@ -1846,7 +1844,9 @@ export default function webhookRouter(pool: Pool): Router {
       const textoNorm = (texto || '').trim().toLowerCase();
       if (!isGroup && userId) {
         // [AUDITORIA] LÓGICA: Se o cliente enviar palavras de parada, adiciona-o à lista negra e envia a confirmação do desligamento.
-        if (OPT_OUT_KEYWORDS.has(textoNorm)) {
+        // 2026-11-01: reconhece também FRASES ("para de me mandar mensagem", "me tira da lista"),
+        // não só a palavra exata — ver services/optOut.ts.
+        if (ehPedidoOptOut(texto)) {
           await pool.query(
             `UPDATE contatos SET opt_out = true, updated_at = NOW()
              WHERE user_id = $1 AND telefone ILIKE $2`,
@@ -1861,13 +1861,16 @@ export default function webhookRouter(pool: Pool): Router {
           void marcarRespostaNoEnvio(pool, userId, telefone, true); // Sprint 4 / H3: opt-out na métrica da campanha
           // Enviar confirmação via Evolution (busca config do agente)
           try {
+            // 2026-11-01: a confirmação sai pelo MESMO número que recebeu o pedido. Antes saía pelo
+            // último agente ativo da conta — a pessoa pedia para sair no número A e recebia a
+            // resposta de um número B que nunca falou com ela (reforça a sensação de spam).
             const cfgOptOut = await pool.query(
               `SELECT COALESCE(evolution_server_url, $2) AS url,
                       COALESCE(evolution_api_key, $3)    AS api_key,
-                      COALESCE(evolution_instancia, $4)  AS instancia
+                      $4::text                           AS instancia
                FROM agentes
-               WHERE user_id = $1 AND ativo = true
-               ORDER BY updated_at DESC LIMIT 1`,
+               WHERE user_id = $1
+               ORDER BY (LOWER(evolution_instancia) = LOWER($4)) DESC, ativo DESC, updated_at DESC LIMIT 1`,
               [userId,
                process.env.EVOLUTION_API_URL || 'https://disparo.mentoark.com.br',
                process.env.EVOLUTION_API_KEY || '',
@@ -1890,7 +1893,7 @@ export default function webhookRouter(pool: Pool): Router {
               await fetch(`${base}/message/sendText/${evoInst}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', apikey: evoApiKey },
-                body: JSON.stringify({ number: telefone, text: 'Você foi removido da nossa lista. Para se reinscrever, envie "reativar".' }),
+                body: JSON.stringify({ number: telefone, text: 'Pronto, você não vai mais receber nossas mensagens. Desculpe o incômodo! Se mudar de ideia, é só escrever "reativar".' }),
                 signal: optOutController.signal,
               })
                 .catch(() => {})

@@ -837,6 +837,20 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     agenteRows = r1.rows;
   }
 
+  // 2026-11-01 (Canais): número cadastrado com a IA DESLIGADA fica em silêncio. Antes caía no
+  // fallback abaixo e respondia com outro agente ativo da conta — o que, com agentes "cérebro"
+  // (sem número próprio), faria a IA responder justamente num número que o dono desligou.
+  if (!agenteRows.length && entrada.userId && !ehInstanciaOficial(entrada.instancia)) {
+    const desligado = (await pool.query(
+      `SELECT 1 FROM agentes WHERE LOWER(evolution_instancia) = LOWER($1) AND user_id = $2 AND ativo = false LIMIT 1`,
+      [entrada.instancia, entrada.userId]
+    ).catch(() => ({ rows: [] as any[] }))).rows.length > 0;
+    if (desligado) {
+      log.info('ENGINE', 'IA desligada neste número (Canais) — não responde', { instancia: entrada.instancia });
+      return;
+    }
+  }
+
   if (!agenteRows.length && entrada.userId) {
     const r2 = await pool.query(
       `SELECT * FROM agentes
@@ -1376,6 +1390,17 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     respostaFinal = parserMessages.join('\n\n');
   }
 
+  // 2026-11-01: ao passar para um humano, o cliente PRECISA saber. Antes, com a pausa (ferramenta
+  // registrar_pausa ou sinal de pausa) o motor não enviava nada — o cliente ficava no vácuo
+  // justamente no momento de transferência. Agora vai o texto que a IA escreveu ou, se ela só
+  // chamou a ferramenta, a mensagem de encaminhamento do agente (ou uma padrão curta).
+  if (pausaAtivada && !parserMessages.some(m => m && m.trim())) {
+    const aviso = String(agente.mensagem_encaminhamento || '').trim()
+      || 'Vou te passar para alguém da nossa equipe, que continua daqui com você. 😊';
+    parserMessages = [aviso];
+    respostaFinal = aviso;
+  }
+
   // 10. Persistir histórico — session_id sempre dígitos puros
   // Passa tokens_consumidos somente na linha do assistente (custo real da chamada)
   await salvarHistorico(pool, histSessionId, userIdFinal, entrada.instancia, 'user', textoFinal);
@@ -1392,7 +1417,8 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   let tipoEnviado: 'text' | 'audio' = 'text';
   let mediaUrlEnviada: string | null = null;
 
-  if (!pausaAtivada && parserMessages.length) {
+  // 2026-11-01: envia também quando houve pausa (mensagem de encaminhamento — ver acima).
+  if (parserMessages.some(m => m && m.trim())) {
     // Correção 1 — Validar telefone antes de enviar
     const telefoneDigitos = entrada.telefone.replace(/\D/g, '');
     // Sprint 3 / H1: contato só-LID (sem telefone conhecido) responde pelo JID @lid
