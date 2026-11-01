@@ -7,8 +7,27 @@ import {
   esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
   intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro,
   tempoDigitacaoMs, tempoLeituraMs, intervaloComVariacaoMs, comVariacao, normalizarParaRepeticao,
-  digitacaoAtiva, marcarLidaAtivo,
+  digitacaoAtiva, marcarLidaAtivo, aplicarConfigDeTeste,
 } from '../src/services/agenteConversa';
+
+describe('aplicarConfigDeTeste (aba Teste usa o que está na tela)', () => {
+  const doBanco = { id: 'a1', user_id: 'u1', prompt_sistema: 'antigo', modelo: 'gpt-4o-mini', evolution_api_key: 'k', ativo: true };
+  it('sobrescreve só campos de comportamento da IA', () => {
+    const r = aplicarConfigDeTeste(doBanco, {
+      prompt_sistema: 'novo', modelo: 'gpt-5-nano',
+      user_id: 'outro', evolution_api_key: 'roubada', ativo: false, id: 'x',
+    });
+    expect(r.prompt_sistema).toBe('novo');
+    expect(r.modelo).toBe('gpt-5-nano');
+    expect(r.user_id).toBe('u1');
+    expect(r.evolution_api_key).toBe('k');
+    expect(r.ativo).toBe(true);
+    expect(r.id).toBe('a1');
+  });
+  it('sem config devolve o agente do banco', () => {
+    expect(aplicarConfigDeTeste(doBanco, null)).toBe(doBanco);
+  });
+});
 
 describe('conversa humana / anti-banimento (2026-10-31)', () => {
   const meio = () => 0.5; // sem variação

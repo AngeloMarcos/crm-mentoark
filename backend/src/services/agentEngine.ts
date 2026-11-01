@@ -23,6 +23,7 @@ import {
   ConfigConversa, esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
   intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro, ragDoAgente,
   tempoDigitacaoMs, tempoLeituraMs, intervaloComVariacaoMs, marcarLidaAtivo, normalizarParaRepeticao,
+  aplicarConfigDeTeste,
 } from './agenteConversa';
 import { criarProvider, OpenAIProvider, AIMessage } from './providers/index';
 import { evolutionFetch, sanitizeEvolutionUrl, withAiFallback } from '../utils/resilientFetch';
@@ -1655,6 +1656,7 @@ export async function testarAgentePlayground(
   userId: string,
   agenteId: string,
   historico: { role: 'user' | 'assistant'; content: string }[],
+  sobrescrever?: Record<string, unknown> | null,
 ): Promise<ResultadoTeste> {
   const inicio = Date.now();
   const traceLoop: any[] = [];
@@ -1666,8 +1668,9 @@ export async function testarAgentePlayground(
     ({ resposta: '', tokensEntrada: 0, tokensSaida: 0, custoUsd: 0, latenciaMs: Date.now() - inicio, modelo, trace: [], erro });
 
   const agenteRes = await pool.query(`SELECT * FROM agentes WHERE id = $1 AND user_id = $2`, [agenteId, userId]);
-  const agente = agenteRes.rows[0];
-  if (!agente) return vazio('Agente não encontrado.');
+  if (!agenteRes.rows[0]) return vazio('Agente não encontrado.');
+  // 2026-11-01: testa com o que está NA TELA (ainda não salvo), só para esta chamada.
+  const agente = aplicarConfigDeTeste(agenteRes.rows[0], sobrescrever);
 
   let systemPromptBase: string | null = agente.prompt_sistema || null;
   if (!systemPromptBase) {

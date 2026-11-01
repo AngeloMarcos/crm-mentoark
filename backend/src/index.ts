@@ -419,7 +419,9 @@ app.post('/api/agentes/:id/testar', async (req: AuthRequest, res) => {
   const historico = Array.isArray(req.body?.historico) ? req.body.historico : [];
   if (!historico.length) return res.status(400).json({ message: 'Envie ao menos uma mensagem no histórico.' });
   try {
-    const resultado = await testarAgentePlayground(pool, userId, req.params.id, historico);
+    // 2026-11-01: `config` = o que está na tela (ainda não salvo); só campos de comportamento da IA.
+    const config = req.body?.config && typeof req.body.config === 'object' ? req.body.config : null;
+    const resultado = await testarAgentePlayground(pool, userId, req.params.id, historico, config);
     return res.json(resultado);
   } catch (err: any) {
     log.error('AGENTES TESTE', 'Falha ao rodar playground', { err: err?.message, stack: err?.stack });

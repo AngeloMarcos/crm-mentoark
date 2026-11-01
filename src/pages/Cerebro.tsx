@@ -530,7 +530,8 @@ export default function CerebroPage() {
 
   // 2026-10-30 (modelo Cubo): base por agente + indexação automática com status.
   const [agentes, setAgentes] = useState<{ id: string; nome: string }[]>([]);
-  const [agenteAlvo, setAgenteAlvo] = useState<string>(""); // "" = todos os agentes (compartilhado)
+  // "" = todos os agentes (compartilhado). Vindo da página do agente (?agente=ID), já abre filtrado.
+  const [agenteAlvo, setAgenteAlvo] = useState<string>(() => new URLSearchParams(window.location.search).get("agente") ?? "");
   const [statusIdx, setStatusIdx] = useState<StatusIndexacao | null>(null);
   const [indexando, setIndexando] = useState(false);
   const nomesAgentes = useMemo(() => new Map(agentes.map((a) => [a.id, a.nome])), [agentes]);

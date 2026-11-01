@@ -208,6 +208,29 @@ export function ragDoAgente(a: { rag_ativo?: boolean | null; rag_resultados?: nu
   };
 }
 
+/**
+ * Campos que a aba Teste pode sobrescrever com o que está na tela (sem salvar). Lista fechada:
+ * só comportamento da IA — nada de dono, número, credencial ou status.
+ */
+export const CAMPOS_TESTAVEIS = [
+  'prompt_sistema', 'modelo', 'provider_id', 'temperatura', 'max_tokens', 'esforco_raciocinio', 'tier_servico',
+  'limite_passos', 'mcp_tools', 'escopo_ia', 'nome_exibicao', 'empresa_nome', 'sinal_pausa',
+  'rag_ativo', 'rag_resultados', 'rag_threshold', 'modalidade_imagem',
+  'historico_mensagens', 'historico_max_tokens', 'divisao_ativa', 'divisao_modo', 'divisao_tamanho',
+  'divisao_intervalo_ms', 'emoji_politica', 'assinatura_ativa', 'assinatura_texto', 'idioma_forcado',
+  'digitacao_ativa', 'digitacao_velocidade',
+] as const;
+
+/** Agente do banco + os campos testáveis vindos da tela (ignora qualquer outra chave). */
+export function aplicarConfigDeTeste<T extends Record<string, any>>(agente: T, sobrescrever?: Record<string, unknown> | null): T {
+  if (!sobrescrever || typeof sobrescrever !== 'object') return agente;
+  const resultado: Record<string, any> = { ...agente };
+  for (const campo of CAMPOS_TESTAVEIS) {
+    if (Object.prototype.hasOwnProperty.call(sobrescrever, campo)) resultado[campo] = sobrescrever[campo];
+  }
+  return resultado as T;
+}
+
 /** Mensagem a mandar ao contato quando a IA falha por erro transitório (vazio = não manda nada). */
 export function mensagemDeErro(cfg: ConfigConversa | null | undefined): string | null {
   const m = String(cfg?.mensagem_erro || '').trim();
