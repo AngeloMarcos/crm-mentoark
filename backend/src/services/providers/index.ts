@@ -165,6 +165,10 @@ export class OpenAIProvider implements AIProvider {
     // `max_tokens` e `temperature` diferente de 1 (400 "Unsupported parameter") — usa
     // `max_completion_tokens` e deixa a temperatura no padrão. Só vale para a API da OpenAI.
     const ehModeloRaciocinio = this.apiDaOpenAI && modeloDeRaciocinio(opts.model);
+    // 2026-11-01 (teste real com gpt-5.4-mini): na família gpt-5.1+ a OpenAI recusa ferramentas
+    // junto com `reasoning_effort` nesta API (400 "Function tools with reasoning_effort are not
+    // supported"). Com ferramentas, o esforço não é enviado (o modelo usa o padrão dele).
+    const enviaEsforco = ehModeloRaciocinio && !(openaiTools.length && /^gpt-5\.[1-9]/i.test(String(opts.model || '').replace(/^openai\//i, '')));
     const resp = await this.client.chat.completions.create({
       model: opts.model || 'gpt-4o-mini',
       ...(ehModeloRaciocinio
@@ -173,7 +177,7 @@ export class OpenAIProvider implements AIProvider {
       messages: allMessages,
       tools: openaiTools.length ? openaiTools : undefined,
       ...(opts.serviceTier ? { service_tier: opts.serviceTier as any } : {}),
-      ...(opts.reasoningEffort && ehModeloRaciocinio ? { reasoning_effort: opts.reasoningEffort as any } : {}),
+      ...(opts.reasoningEffort && enviaEsforco ? { reasoning_effort: opts.reasoningEffort as any } : {}),
     });
 
     const choice = resp.choices[0];
