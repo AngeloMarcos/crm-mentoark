@@ -3330,5 +3330,47 @@ export async function runMigrations(pool: Pool): Promise<void> {
     await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
 
+  // 2026-11-02 (API pública /v1, modelo Cubo `X-API-Key` — services/apiKeys.ts): só o SHA-256 da
+  // chave é gravado; `prefixo` identifica a chave na tela. A chave age como o usuário que a criou.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      titulo TEXT NOT NULL,
+      prefixo TEXT NOT NULL,
+      hash_sha256 TEXT NOT NULL UNIQUE,
+      scopes JSONB NOT NULL DEFAULT '{}'::jsonb,
+      full_access BOOLEAN NOT NULL DEFAULT false,
+      ativo BOOLEAN NOT NULL DEFAULT true,
+      last_used_at TIMESTAMPTZ,
+      expira_em TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(err => log.warn('MIGRATIONS', 'api_keys', { err: err?.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id)`).catch(() => {});
+
+  // 2026-11-02 (funil que anda sozinho, modelo atendIA — services/funilAuto.ts): etapa ganha tipo
+  // (aberta/ganho/perdido) e automações de entrada; contato guarda quando entrou na etapa; todo
+  // movimento (feito ou recusado) fica em funil_eventos; agente guarda as etapas liberadas à IA.
+  await pool.query(`ALTER TABLE funil_estagios ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'aberta'`).catch(() => {});
+  await pool.query(`ALTER TABLE funil_estagios ADD COLUMN IF NOT EXISTS automacoes JSONB NOT NULL DEFAULT '[]'::jsonb`).catch(() => {});
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS funil_entrou_em TIMESTAMPTZ`).catch(() => {});
+  await pool.query(`ALTER TABLE agentes ADD COLUMN IF NOT EXISTS acoes_funil JSONB`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS funil_eventos (
+      id BIGSERIAL PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      contato_id UUID NOT NULL REFERENCES contatos(id) ON DELETE CASCADE,
+      de_estagio_id UUID,
+      para_estagio_id UUID,
+      origem TEXT NOT NULL,
+      resultado TEXT NOT NULL,
+      agente_id UUID,
+      motivo TEXT,
+      detalhe JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(err => log.warn('MIGRATIONS', 'funil_eventos', { err: err?.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_funil_eventos_contato ON funil_eventos (contato_id, created_at DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_funil ON contatos (user_id, funil_estagio_id) WHERE funil_estagio_id IS NOT NULL`).catch(() => {});
+
   log.info('MIGRATIONS', 'OK');
 }

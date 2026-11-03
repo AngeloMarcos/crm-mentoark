@@ -76,6 +76,9 @@ import smartLinksRouter, { smartLinkPublico } from './routes/smartLinks';
 import aiProvidersRouter from './routes/ai-providers';
 import integracoesHubRouter from './routes/integracoesHub';
 import canaisRouter from './routes/canais';
+import apiKeysRouter from './routes/apiKeys';
+import funilAutoRouter from './routes/funilAuto';
+import apiPublicaRouter from './routes/apiPublica';
 import baseConhecimentoRouter from './routes/baseConhecimento';
 import aiUsoRouter from './routes/ai-uso';
 import integracoesRouter from './routes/integracoes';
@@ -198,6 +201,9 @@ app.use('/mcp', (req, res, next) => {
   next();
 }, mcpRouter(pool));
 app.use('/api/marketing', marketing.public); // Public part of marketing (callback, webhook)
+
+// ── API pública /v1 (2026-11-02, modelo Cubo): autentica por X-API-Key, não por JWT ──────────
+app.use('/v1', apiPublicaRouter(pool));
 
 // ── Rotas n8n (x-n8n-secret, sem JWT) ─────────────────────────────────────
 app.use('/api/n8n', n8nRouter(pool));
@@ -501,6 +507,8 @@ app.use('/api/conversas', conversasRouter(pool));
 app.use('/api/ai-providers', aiProvidersRouter(pool));
 app.use('/api/integracoes', integracoesHubRouter(pool)); // 2026-10-29: integrações num lugar só (modelo Cubo)
 app.use('/api/canais', canaisRouter(pool)); // 2026-10-30: número de WhatsApp → agente que responde (modelo Cubo)
+app.use('/api/api-keys', apiKeysRouter(pool)); // 2026-11-02: chaves da API pública /v1
+app.use('/api/funil-auto', funilAutoRouter(pool)); // 2026-11-02: funil que anda sozinho (modelo atendIA)
 app.use('/api/base-conhecimento', baseConhecimentoRouter(pool)); // 2026-10-30: indexação automática
 app.use('/api/meta-oficial', metaOficialRouter(pool));
 app.use('/api/smart-links', smartLinksRouter(pool));

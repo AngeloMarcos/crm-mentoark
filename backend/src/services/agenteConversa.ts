@@ -218,7 +218,7 @@ export const CAMPOS_TESTAVEIS = [
   'rag_ativo', 'rag_resultados', 'rag_threshold', 'modalidade_imagem',
   'historico_mensagens', 'historico_max_tokens', 'divisao_ativa', 'divisao_modo', 'divisao_tamanho',
   'divisao_intervalo_ms', 'emoji_politica', 'assinatura_ativa', 'assinatura_texto', 'idioma_forcado',
-  'digitacao_ativa', 'digitacao_velocidade',
+  'digitacao_ativa', 'digitacao_velocidade', 'acoes_funil',
 ] as const;
 
 /** Agente do banco + os campos testáveis vindos da tela (ignora qualquer outra chave). */

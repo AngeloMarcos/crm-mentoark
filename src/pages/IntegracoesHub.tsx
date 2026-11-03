@@ -189,6 +189,9 @@ export default function IntegracoesHubPage() {
             <Button variant="outline" onClick={carregar} disabled={carregando}>
               <RefreshCw className={`h-4 w-4 ${carregando ? "animate-spin" : ""}`} /> Atualizar
             </Button>
+            <Button variant="outline" onClick={() => navigate("/integracoes/api")}>
+              <KeyRound className="h-4 w-4" /> API Keys
+            </Button>
             <Button onClick={abrirNova}><Plus className="h-4 w-4" /> Nova integração</Button>
           </div>
         </div>

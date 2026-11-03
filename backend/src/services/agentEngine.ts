@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
+import { MOTIVOS, decidirMovimentoIA, moverNoFunil, prepararFunilIA, registrarEventoFunil } from './funilAuto';
 import { aplicarCerebro } from './canais';
 import {
   ConfigConversa, esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
@@ -1111,6 +1112,11 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   const mcpToolsHabilitadas = agente.mcp_tools == null
     ? MCP_TOOLS
     : MCP_TOOLS.filter(t => (agente.mcp_tools as string[]).includes(t.name));
+  // 2026-11-02 (funil que anda sozinho — services/funilAuto.ts): "mover_no_funil" só existe para
+  // agente com etapas liberadas; o pedido fica pendente e só vale depois que a resposta sai.
+  const funilIA = await prepararFunilIA(pool, userIdFinal, agente, contato.id).catch(() => null);
+  const ferramentasDoTurno = funilIA ? [...mcpToolsHabilitadas, funilIA.ferramenta] : mcpToolsHabilitadas;
+  const movimentosPendentes: Array<{ etapaId: string; motivo: string }> = [];
 
   // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-27 — pedido explícito
   // do usuário, confirmado antes de implementar: "sim, implementar" pra TODAS as contas, não só
@@ -1258,7 +1264,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
     let resp: Awaited<ReturnType<typeof provider.complete>> | null = null;
     try {
       resp = await withAiFallback(
-        () => provider.complete(mensagens, systemPrompt, mcpToolsHabilitadas, {
+        () => provider.complete(mensagens, systemPrompt, ferramentasDoTurno, {
           model: modelo,
           temperature: Number(agente.temperatura) || 0.7,
           maxTokens: agente.max_tokens || 1024,
@@ -1337,9 +1343,25 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
       // Defesa em profundidade: a tool já não é oferecida no `provider.complete()` acima quando
       // desabilitada em `agente.mcp_tools`, então isto só dispara se o modelo tentar chamar algo
       // fora da lista oferecida (ex: nome reaproveitado de uma mensagem antiga do histórico).
-      if (!mcpToolsHabilitadas.some(t => t.name === tc.name)) {
+      if (!ferramentasDoTurno.some(t => t.name === tc.name)) {
         log.warn('ENGINE', 'Tool chamada pelo modelo mas desabilitada pra este agente — ignorando', { nome: tc.name, userId: userIdFinal });
         toolResults.push({ role: 'user', content: `[Resultado de ${tc.name}]: ferramenta não disponível.` });
+        continue;
+      }
+      if (tc.name === 'mover_no_funil' && funilIA) {
+        const decisao = decidirMovimentoIA(funilIA.permitidas, funilIA.todas, funilIA.etapaAtualId, tc.input?.etapa);
+        const motivoIA = String(tc.input?.motivo || '').slice(0, 300);
+        if (decisao.ok) {
+          movimentosPendentes.length = 0; // vale o último pedido do turno
+          movimentosPendentes.push({ etapaId: decisao.etapa.id, motivo: motivoIA });
+          toolResults.push({ role: 'user', content: `[Resultado de mover_no_funil]: combinado, o cliente vai para "${decisao.etapa.nome}" assim que sua resposta for enviada. Continue a conversa normalmente.` });
+        } else {
+          await registrarEventoFunil(pool, {
+            userId: userIdFinal, contatoId: contato.id, de: funilIA.etapaAtualId, para: decisao.etapa?.id ?? null,
+            origem: 'ia', resultado: 'recusado', agenteId: agente.id, motivo: `${MOTIVOS[decisao.motivo]} (IA: ${motivoIA || String(tc.input?.etapa || '')})`,
+          });
+          toolResults.push({ role: 'user', content: `[Resultado de mover_no_funil]: não movido — ${MOTIVOS[decisao.motivo]}` });
+        }
         continue;
       }
       log.info('ENGINE', 'Executando tool', { nome: tc.name, input: JSON.stringify(tc.input).slice(0, 80) });
@@ -1416,6 +1438,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // resposta saiu como texto ou voz — ver `tipoEnviado`/`mediaUrlEnviada`.
   let tipoEnviado: 'text' | 'audio' = 'text';
   let mediaUrlEnviada: string | null = null;
+  let respostaEntregue = false; // mover_no_funil só vale se a resposta saiu
 
   // 2026-11-01: envia também quando houve pausa (mensagem de encaminhamento — ver acima).
   if (parserMessages.some(m => m && m.trim())) {
@@ -1526,7 +1549,25 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
         lembrarEnviado(userIdFinal, entrada.telefone, parserMessages[i]);
         enviouAlguma = true;
       }
+      respostaEntregue = enviouAlguma;
+    } else {
+      respostaEntregue = true;
     }
+  }
+
+  // 11.1 Funil (2026-11-02): o movimento pedido pela IA neste turno só acontece com a resposta entregue.
+  for (const m of movimentosPendentes) {
+    if (!respostaEntregue) {
+      await registrarEventoFunil(pool, {
+        userId: userIdFinal, contatoId: contato.id, de: funilIA?.etapaAtualId, para: m.etapaId,
+        origem: 'ia', resultado: 'recusado', agenteId: agente.id, motivo: `${MOTIVOS.mensagem_nao_saiu} (IA: ${m.motivo})`,
+      });
+      continue;
+    }
+    const r = await moverNoFunil(pool, {
+      userId: userIdFinal, contatoId: contato.id, paraEstagioId: m.etapaId, origem: 'ia', agenteId: agente.id, motivo: m.motivo,
+    }).catch(err => ({ ok: false, motivo: err?.message, automacoes: [] }));
+    log.info('FUNIL', r.ok ? 'IA moveu o card' : 'IA não moveu o card', { telefone: entrada.telefone, etapa: m.etapaId, motivo: r.motivo });
   }
 
   // 12. Persistir em whatsapp_messages para o painel de chat
@@ -1714,6 +1755,9 @@ export async function testarAgentePlayground(
   const mcpToolsHabilitadas = agente.mcp_tools == null
     ? MCP_TOOLS
     : MCP_TOOLS.filter(t => (agente.mcp_tools as string[]).includes(t.name));
+  // Funil: no teste o cliente é fictício (fora do funil) e nada é movido — só mostra o que faria.
+  const funilIA = await prepararFunilIA(pool, userId, agente, null).catch(() => null);
+  const ferramentasDoTurno = funilIA ? [...mcpToolsHabilitadas, funilIA.ferramenta] : mcpToolsHabilitadas;
 
   const providerInfo = await criarProvider(pool, userId, agente.provider_id ?? null);
   const envKey = process.env.OPENAI_API_KEY || '';
@@ -1747,7 +1791,7 @@ export async function testarAgentePlayground(
   for (let iter = 0; iter < MAX_ITER; iter++) {
     let resp: Awaited<ReturnType<typeof provider.complete>> | null = null;
     try {
-      resp = await provider.complete(mensagens, systemPrompt, mcpToolsHabilitadas, {
+      resp = await provider.complete(mensagens, systemPrompt, ferramentasDoTurno, {
         model: modelo,
         temperature: Number(agente.temperatura) || 0.7,
         maxTokens: agente.max_tokens || 1024,
@@ -1773,8 +1817,18 @@ export async function testarAgentePlayground(
 
     const toolResults: AIMessage[] = [];
     for (const tc of resp.toolCalls) {
-      if (!mcpToolsHabilitadas.some(t => t.name === tc.name)) {
+      if (!ferramentasDoTurno.some(t => t.name === tc.name)) {
         toolResults.push({ role: 'user', content: `[Resultado de ${tc.name}]: ferramenta não disponível.` });
+        continue;
+      }
+      if (tc.name === 'mover_no_funil' && funilIA) {
+        const decisao = decidirMovimentoIA(funilIA.permitidas, funilIA.todas, null, tc.input?.etapa);
+        toolResults.push({
+          role: 'user',
+          content: decisao.ok
+            ? `[Resultado de mover_no_funil]: [PREVIEW — modo teste, nada movido] Moveria o cliente para "${decisao.etapa.nome}" depois de enviar a resposta.`
+            : `[Resultado de mover_no_funil]: não movido — ${MOTIVOS[decisao.motivo]}`,
+        });
         continue;
       }
       const resultado = await executarFerramenta(

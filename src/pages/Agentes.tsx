@@ -11,6 +11,8 @@ import { ContatosIgnoradosIA } from "@/components/agentes/ContatosIgnoradosIA";
 import {
   SecoesConversaAgente, CONVERSA_PADRAO, conversaDoAgente, conversaParaSalvar,
 } from "@/components/agentes/SecoesConversaAgente";
+import { AcoesFunilAgente } from "@/components/agentes/AcoesFunilAgente";
+import { ACOES_FUNIL_PADRAO, acoesFunilDoAgente } from "@/lib/funilAuto";
 import { SeletorIntegracaoModelo } from "@/components/agentes/SeletorIntegracaoModelo";
 import { AgentesModuloNav } from "@/components/agentes/AgentesModuloNav";
 import { ConhecimentoDoAgente } from "@/components/agentes/ConhecimentoDoAgente";
@@ -137,6 +139,7 @@ interface Agente {
   idioma_forcado?: string | null;
   mensagem_erro?: string | null;
   provider_id?: string | null;
+  acoes_funil?: unknown;
   numero_conectado?: string | null;
 }
 
@@ -379,6 +382,7 @@ const formInicial = {
   fallback_transcricao_falha: "",
   conversa: CONVERSA_PADRAO,
   provider_id: "",
+  acoes_funil: ACOES_FUNIL_PADRAO,
 };
 
 function formatarData(iso: string) {
@@ -525,6 +529,7 @@ export default function AgentesPage() {
       fallback_transcricao_falha: a.fallback_transcricao_falha ?? "",
       conversa: conversaDoAgente(a as Parameters<typeof conversaDoAgente>[0]),
       provider_id: a.provider_id ?? "",
+      acoes_funil: acoesFunilDoAgente(a.acoes_funil),
     });
     setShowKey(false);
     setModal(true);
@@ -585,6 +590,8 @@ export default function AgentesPage() {
       ...conversaParaSalvar(form.conversa),
       // Integrações (2026-10-29): vazio = padrão da conta (comportamento antigo)
       provider_id: form.provider_id || null,
+      // 2026-11-02: funil que anda sozinho (objeto → jsonb)
+      acoes_funil: form.acoes_funil,
   });
 
   const salvar = async () => {
@@ -1190,6 +1197,11 @@ export default function AgentesPage() {
               <SecoesConversaAgente
                 valor={form.conversa}
                 onChange={(conversa) => setForm({ ...form, conversa })}
+              />
+
+              <AcoesFunilAgente
+                valor={form.acoes_funil}
+                onChange={(acoes_funil) => setForm({ ...form, acoes_funil })}
               />
             </TabsContent>
 
