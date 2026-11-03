@@ -28,7 +28,7 @@ import {
   DragOverlay, DragStartEvent,
 } from "@dnd-kit/core";
 import {
-  AutomacaoEtapa, CardFunil, EtapaFunil, EventoFunil, ROTULO_ORIGEM, TipoEtapa,
+  AutomacaoEtapa, CardFunil, EtapaFunil, EventoFunil, TipoEtapa, textoEventoFunil,
   atualizarEtapa, criarEtapa, eventosDoCard, excluirEtapa, listarCardsFunil, listarEtapasFunil,
   moverCard, ordenarEtapas,
 } from "@/lib/funilAuto";
@@ -90,13 +90,7 @@ function Coluna({ id, children }: { id: string; children: React.ReactNode }) {
   );
 }
 
-function linhaEvento(ev: EventoFunil): string {
-  if (ev.origem === "automacao") return ev.motivo || "Automação da etapa";
-  const quem = ev.origem === "ia" ? `IA${ev.agente_nome ? ` (${ev.agente_nome})` : ""}` : ROTULO_ORIGEM[ev.origem];
-  const destino = ev.para_nome ? `"${ev.para_nome}"` : "fora do funil";
-  if (ev.resultado === "feito") return `${quem} moveu ${ev.de_nome ? `de "${ev.de_nome}" ` : ""}para ${destino}`;
-  return `${quem} tentou mover para ${destino}`;
-}
+const linhaEvento = textoEventoFunil;
 
 export default function FunilPage() {
   const [etapas, setEtapas] = useState<EtapaFunil[]>([]);

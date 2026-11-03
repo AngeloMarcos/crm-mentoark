@@ -9,6 +9,7 @@
  *   GET    /api/funil-auto/cards                 → contatos que estão no funil (com etapa)
  *   POST   /api/funil-auto/mover                 → { contato_id, estagio_id | null, motivo? } (origem manual)
  *   GET    /api/funil-auto/eventos?contato_id=   → histórico do card
+ *   GET    /api/funil-auto/eventos-conversa?telefone= → etapa atual + eventos, para o chat
  */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
@@ -16,6 +17,7 @@ import { AuthRequest } from '../middleware';
 import {
   garantirEtapasPadrao, listarEtapas, moverNoFunil, normalizarAutomacoes, tipoEtapa, MOTIVOS,
 } from '../services/funilAuto';
+import { variantesTelefone } from '../services/apiKeys';
 
 const LIMITE_CARDS = 3000;
 
@@ -160,6 +162,38 @@ export default function funilAutoRouter(pool: Pool): Router {
           WHERE ev.user_id = $1 AND ev.contato_id = $2
           ORDER BY ev.created_at DESC LIMIT 100`, [req.userId, contatoId]);
       return res.json({ eventos: r.rows });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Chat (2026-11-03): eventos do funil do contato da conversa, pelo telefone, para aparecerem na
+  // linha do tempo entre as mensagens. Também devolve a etapa atual (cabeçalho da conversa).
+  router.get('/eventos-conversa', async (req: AuthRequest, res: Response) => {
+    const variantes = variantesTelefone(req.query.telefone);
+    if (!variantes.length) return res.json({ contato_id: null, etapa: null, eventos: [] });
+    try {
+      const contato = (await pool.query(
+        `SELECT c.id, e.id AS etapa_id, e.nome AS etapa_nome, e.cor AS etapa_cor
+           FROM contatos c LEFT JOIN funil_estagios e ON e.id = c.funil_estagio_id
+          WHERE c.user_id = $1
+            AND (c.telefone_normalizado = ANY($2) OR regexp_replace(COALESCE(c.telefone, ''), '\\D', '', 'g') = ANY($2))
+          ORDER BY c.funil_estagio_id IS NULL, c.created_at LIMIT 1`, [req.userId, variantes])).rows[0];
+      if (!contato) return res.json({ contato_id: null, etapa: null, eventos: [] });
+      const r = await pool.query(
+        `SELECT ev.id, ev.origem, ev.resultado, ev.motivo, ev.created_at,
+                de.nome AS de_nome, para.nome AS para_nome, a.nome AS agente_nome
+           FROM funil_eventos ev
+           LEFT JOIN funil_estagios de ON de.id = ev.de_estagio_id
+           LEFT JOIN funil_estagios para ON para.id = ev.para_estagio_id
+           LEFT JOIN agentes a ON a.id = ev.agente_id
+          WHERE ev.user_id = $1 AND ev.contato_id = $2
+          ORDER BY ev.created_at DESC LIMIT 200`, [req.userId, contato.id]);
+      return res.json({
+        contato_id: contato.id,
+        etapa: contato.etapa_id ? { id: contato.etapa_id, nome: contato.etapa_nome, cor: contato.etapa_cor } : null,
+        eventos: r.rows.reverse(),
+      });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

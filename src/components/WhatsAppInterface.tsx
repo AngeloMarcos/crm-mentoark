@@ -77,6 +77,7 @@ import { TagStatusEnvio } from "@/components/TagStatusEnvio";
 // o texto canônico cru no composer. Baixo risco: é só o texto que entra no campo de digitação, o
 // atendente ainda revisa/edita antes de enviar de verdade.
 import { personalizarMensagem } from "@/lib/motorTexto";
+import { FunilDaConversa, funilDaConversa, textoEventoFunil } from "@/lib/funilAuto";
 import {
   renderWhatsAppText, stripWhatsAppMarkup, formatWaPhone, resolveDisplayName, cleanPushName,
   participantColorClass, instanceColorClass, formatListTimestamp, normalizeMessageType, mediaLabel,
@@ -1487,7 +1488,36 @@ export function WhatsAppInterface() {
   // Nenhum bug de render encontrado; se a Camada 1-4 entregam o dado atualizado em `chats`, a
   // tela reflete sem necessidade de refresh manual.
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
-  const visibleMessages = useMemo(() => (activeChat?.messages ?? []).filter(isRenderableMessage), [activeChat?.messages]);
+  // 2026-11-03 (funil que anda sozinho): movimentos do card deste contato (IA, equipe, API) entram na
+  // linha do tempo entre as mensagens, só do período que já está carregado na tela.
+  const [funilConversa, setFunilConversa] = useState<FunilDaConversa | null>(null);
+  const qtdMensagensAtivas = activeChat?.messages.length ?? 0;
+  useEffect(() => {
+    if (!activeChat?.phone || activeChat.is_group) { setFunilConversa(null); return; }
+    let vivo = true;
+    funilDaConversa(activeChat.phone).then((r) => { if (vivo) setFunilConversa(r); }).catch(() => { if (vivo) setFunilConversa(null); });
+    return () => { vivo = false; };
+  }, [activeChat?.id, activeChat?.phone, activeChat?.is_group, qtdMensagensAtivas]);
+
+  const visibleMessages = useMemo(() => {
+    const msgs = (activeChat?.messages ?? []).filter(isRenderableMessage);
+    const eventos = funilConversa?.eventos ?? [];
+    if (!eventos.length || !msgs.length) return msgs;
+    const inicio = new Date(msgs[0].rawTimestamp || 0).getTime();
+    const linhas: Message[] = eventos
+      .filter((ev) => ev.origem !== "automacao" || ev.resultado !== "feito")
+      .filter((ev) => new Date(ev.created_at).getTime() >= inicio)
+      .map((ev) => ({
+        id: `funil-${ev.id}`,
+        role: "note" as const,
+        tipo: "funil_evento",
+        content: textoEventoFunil(ev) + (ev.motivo && ev.origem !== "automacao" ? ` — ${ev.motivo}` : ""),
+        senderName: ev.resultado,
+        timestamp: formatTime(ev.created_at),
+        rawTimestamp: ev.created_at,
+      }));
+    return [...msgs, ...linhas].sort((a, b) => new Date(a.rawTimestamp || 0).getTime() - new Date(b.rawTimestamp || 0).getTime());
+  }, [activeChat?.messages, funilConversa]);
 
   // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): mesma tag "Já enviado
   // (campanha, data)"/"Nunca enviado" já usada em StepContacts (Disparos.tsx) e ContatoDetalhe.tsx —
@@ -4372,9 +4402,29 @@ export function WhatsAppInterface() {
                   </div>
                 )}
                 {visibleMessages.map((m, i) => {
+                  if (m.tipo === "funil_evento") {
+                    const feito = m.senderName === "feito";
+                    return (
+                      <div key={m.id} className="flex justify-center my-2 px-4">
+                        <div
+                          className={`flex items-center gap-1.5 max-w-[90%] rounded-full border px-3 py-1 text-[11px] ${
+                            feito ? "border-primary/30 bg-primary/5 text-foreground/80" : "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300"
+                          }`}
+                          title={m.content}
+                        >
+                          {m.content.startsWith("IA") ? <Bot className="h-3 w-3 shrink-0" /> : <Info className="h-3 w-3 shrink-0" />}
+                          <span className="truncate">Funil: {m.content}</span>
+                          <span className="tabular-nums opacity-60 shrink-0">{m.timestamp}</span>
+                        </div>
+                      </div>
+                    );
+                  }
                   const isOut = m.role === "assistant";
                   const isNote = m.role === "note";
-                  const prevMsg = i > 0 ? visibleMessages[i - 1] : null;
+                  // Faixas do funil não contam como "mensagem anterior" (data e agrupamento por remetente).
+                  let prevIdx = i - 1;
+                  while (prevIdx >= 0 && visibleMessages[prevIdx].tipo === "funil_evento") prevIdx--;
+                  const prevMsg = prevIdx >= 0 ? visibleMessages[prevIdx] : null;
                   const prevRole = prevMsg?.role ?? null;
                   
                   // Lógica de separador de data

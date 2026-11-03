@@ -102,3 +102,21 @@ export const excluirEtapa = (id: string, moverPara: string | null) =>
 export const ROTULO_ORIGEM: Record<EventoFunil["origem"], string> = {
   manual: "Equipe", ia: "IA", api: "API", automacao: "Automação",
 };
+
+/** Frase do evento, igual no histórico do card e na linha do tempo da conversa. */
+export function textoEventoFunil(ev: EventoFunil): string {
+  if (ev.origem === "automacao") return ev.motivo || "Automação da etapa";
+  const quem = ev.origem === "ia" ? `IA${ev.agente_nome ? ` (${ev.agente_nome})` : ""}` : ROTULO_ORIGEM[ev.origem];
+  const destino = ev.para_nome ? `"${ev.para_nome}"` : "fora do funil";
+  if (ev.resultado === "feito") return `${quem} moveu ${ev.de_nome ? `de "${ev.de_nome}" ` : ""}para ${destino}`;
+  return `${quem} tentou mover para ${destino}`;
+}
+
+export interface FunilDaConversa {
+  contato_id: string | null;
+  etapa: { id: string; nome: string; cor: string | null } | null;
+  eventos: EventoFunil[];
+}
+
+export const funilDaConversa = (telefone: string) =>
+  chamar<FunilDaConversa>(`/api/funil-auto/eventos-conversa?telefone=${encodeURIComponent(telefone)}`);
