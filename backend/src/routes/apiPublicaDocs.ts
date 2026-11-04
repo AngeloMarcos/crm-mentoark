@@ -72,6 +72,17 @@ export function montarOpenApi() {
       '/tags/detach': {
         post: { tags: ['Etiquetas'], summary: 'Desvincular etiquetas de contatos', requestBody: { content: json(ref('MudarTags')) }, responses: { 200: { description: '`{ data: { updated } }`' } } },
       },
+      '/stages': {
+        get: { tags: ['Funil'], summary: 'Listar etapas do funil', description: 'Um funil por conta. `kind`: open, won ou lost. `peoples` = quantos contatos estão na etapa.',
+          responses: { 200: { description: 'Lista' } } },
+      },
+      '/peoples/{id}/stage': {
+        put: { tags: ['Funil'], summary: 'Mover contato de etapa',
+          description: 'Cada contato tem um card só. `stageId: null` tira do funil. As automações da etapa de destino rodam (resultado em `automations`); o movimento fica no histórico do card como origem "API".',
+          parameters: [id],
+          requestBody: { content: json({ type: 'object', required: ['stageId'], properties: { stageId: { type: 'string', nullable: true }, reason: { type: 'string' } } }) },
+          responses: { 200: { description: '`{ data: Pessoa, moved, automations }` — `moved: false` quando já estava na etapa' }, 404: { description: 'Contato não encontrado' }, ...erros } },
+      },
       '/channels': {
         get: { tags: ['Canais'], summary: 'Listar canais (números de WhatsApp QR Code e oficiais)', responses: { 200: { description: 'Lista', content: json({ type: 'object', properties: { data: { type: 'array', items: ref('Canal') } } }) } } },
       },
@@ -109,6 +120,7 @@ export function montarOpenApi() {
           jobTitle: { type: 'string' }, origin: { type: 'string' }, status: { type: 'string' }, temperature: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } }, notes: { type: 'string' }, potentialValue: { type: 'number' },
           city: { type: 'string' }, state: { type: 'string' }, optOut: { type: 'boolean' },
+          stageId: { type: 'string', nullable: true }, stageEnteredAt: { type: 'string', format: 'date-time', nullable: true },
           lastMessageAt: { type: 'string', format: 'date-time' }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' } } },
         PessoaEntrada: { type: 'object', properties: {
           name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' }, company: { type: 'string' }, jobTitle: { type: 'string' },

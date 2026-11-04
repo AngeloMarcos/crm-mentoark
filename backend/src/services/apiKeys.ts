@@ -19,6 +19,7 @@ export const RECURSOS: Record<string, { nome: string; acoes: Acao[] }> = {
   conversations: { nome: 'Conversas', acoes: ['read'] },
   messages:      { nome: 'Envio de mensagens', acoes: ['create'] },
   agents:        { nome: 'Agentes de IA', acoes: ['read'] },
+  funnel:        { nome: 'Funil', acoes: ['read', 'update'] },
 };
 
 export type Escopos = Record<string, Acao[]>;

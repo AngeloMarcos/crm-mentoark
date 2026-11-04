@@ -23,6 +23,9 @@ import { evolutionFetch, sanitizeEvolutionUrl } from '../utils/resilientFetch';
 import { enviarTextoMetaOficial } from '../services/metaCloudApi';
 import { BOT_ECHO_TTL_MS, PREFIXO_OFICIAL, botMessageIds } from '../services/agentEngine';
 import { montarOpenApi } from './apiPublicaDocs';
+import { garantirEtapasPadrao, moverNoFunil } from '../services/funilAuto';
+
+const TIPO_API = { aberta: 'open', ganho: 'won', perdido: 'lost' } as const;
 
 interface ChaveReq extends Request {
   chave?: { id: string; user_id: string; scopes: Escopos; full_access: boolean; titulo: string; prefixo: string };
@@ -56,6 +59,7 @@ const pessoa = (c: any) => ({
   origin: c.origem, status: c.status, temperature: c.temperatura, tags: c.tags || [], notes: c.notas,
   potentialValue: c.valor_potencial != null ? Number(c.valor_potencial) : null,
   city: c.cidade, state: c.estado, optOut: !!c.opt_out, lastMessageAt: c.ultima_mensagem_em,
+  stageId: c.funil_estagio_id ?? null, stageEnteredAt: c.funil_entrou_em ?? null,
   createdAt: c.created_at, updatedAt: c.updated_at,
 });
 
@@ -343,6 +347,45 @@ export default function apiPublicaRouter(pool: Pool): Router {
   }
   router.post('/tags/attach', exige('tags', 'update'), (req: ChaveReq, res) => mudarTags(req, res, 'attach'));
   router.post('/tags/detach', exige('tags', 'update'), (req: ChaveReq, res) => mudarTags(req, res, 'detach'));
+
+  // ── Funil (2026-11-04): etapas e mover o contato (1 card por contato) ──────
+  router.get('/stages', exige('funnel', 'read'), async (req: ChaveReq, res: Response) => {
+    try {
+      const etapas = await garantirEtapasPadrao(pool, req.userId!);
+      const n = new Map((await pool.query(
+        `SELECT funil_estagio_id AS id, count(*)::int AS n FROM contatos WHERE user_id = $1 AND funil_estagio_id IS NOT NULL GROUP BY 1`,
+        [req.userId])).rows.map(r => [r.id, r.n]));
+      return res.json({
+        data: etapas.map((e, i) => ({
+          id: e.id, name: e.nome, kind: TIPO_API[e.tipo], color: e.cor ?? null, order: e.ordem ?? i, peoples: n.get(e.id) ?? 0,
+        })),
+      });
+    } catch (err: any) {
+      return erro(res, 500, err.message);
+    }
+  });
+
+  router.put('/peoples/:id/stage', exige('funnel', 'update'), async (req: ChaveReq, res: Response) => {
+    const stageId = req.body?.stageId;
+    if (stageId !== null && typeof stageId !== 'string') {
+      return erro(res, 422, 'Informe stageId (id de GET /v1/stages) ou null para tirar do funil.', 'validation_error');
+    }
+    try {
+      const r = await moverNoFunil(pool, {
+        userId: req.userId!, contatoId: String(req.params.id), paraEstagioId: stageId, origem: 'api',
+        motivo: typeof req.body?.reason === 'string' ? req.body.reason.slice(0, 300) : `API (${req.chave!.titulo})`,
+      });
+      if (!r.ok && r.motivo === 'sem_contato') return erro(res, 404, 'Contato não encontrado.', 'not_found');
+      if (!r.ok && r.motivo === 'etapa_inexistente') return erro(res, 422, 'Etapa não existe (veja GET /v1/stages).', 'unknown_stage');
+      const c = (await pool.query(`SELECT * FROM contatos WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId])).rows[0];
+      return res.json({
+        data: pessoa(c), moved: r.ok,
+        automations: r.automacoes.map(a => ({ type: a.tipo, ok: a.ok, ...(a.erro ? { error: a.erro } : {}) })),
+      });
+    } catch (err: any) {
+      return erro(res, 500, err.message);
+    }
+  });
 
   // ── Canais (números de WhatsApp) ───────────────────────────────────────────
   async function listarCanais(userId: string) {
