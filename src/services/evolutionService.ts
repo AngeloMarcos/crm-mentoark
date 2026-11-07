@@ -22,6 +22,9 @@ export interface CreateInstanceResult {
   state?: string;
   phoneNumber?: string;
   qrPending?: boolean; // true quando Evolution ainda não gerou o QR (Baileys inicializando)
+  modo?: 'qr' | 'codigo';
+  /** Proxy em uso neste pareamento (sem credenciais). */
+  proxy?: { host: string; port: number; protocolo: string; ip: string | null; pais: string | null; cidade: string | null; org: string | null; movel: boolean | null } | null;
 }
 
 export interface StatusResult {
@@ -81,6 +84,30 @@ export interface CreateInstanceOpts {
   forceReconnect?: boolean;
   novaConexao?: boolean;
   instancia?: string;
+  /** 'codigo' = código de pareamento digitado no celular (exige phoneNumber). */
+  modo?: 'qr' | 'codigo';
+  /** Proxy testado pelo backend ANTES de criar a instância; vai junto no pareamento. */
+  proxy?: ProxyConexao;
+  /** Confirma IP que esteve em outro número recentemente (resposta CONFIRMAR_TROCA_IP). */
+  confirmarTroca?: boolean;
+}
+
+export interface ProxyConexao {
+  host: string;
+  port: number;
+  protocolo: 'http' | 'socks5';
+  usuario?: string;
+  senha?: string;
+}
+
+/** Erro com `code` do backend (PROXY_RECUSADO, CONFIRMAR_TROCA_IP, NUMERO_DUPLICADO...). */
+export class ConexaoError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'ConexaoError';
+    this.code = code;
+  }
 }
 
 // [AUDITORIA] LÓGICA (Sprint Circuit-Breaker LOGOUT, 2026-08-10 — continuação Serenovlogs067):
@@ -102,7 +129,7 @@ export class LogoutLoopError extends Error {
 }
 
 export async function createInstance(opts: CreateInstanceOpts = {}): Promise<CreateInstanceResult> {
-  const { instanceName, phoneNumber, forceReconnect, novaConexao, instancia } = opts;
+  const { instanceName, phoneNumber, forceReconnect, novaConexao, instancia, modo, proxy, confirmarTroca } = opts;
   const res = await fetch(`${API_BASE}/api/whatsapp/connect`, {
     method: 'POST',
     headers: authHeaders(),
@@ -111,6 +138,9 @@ export async function createInstance(opts: CreateInstanceOpts = {}): Promise<Cre
       force_reconnect: forceReconnect === true,
       nova_conexao: novaConexao === true,
       instancia,
+      modo,
+      proxy,
+      confirmar_troca: confirmarTroca === true,
     }),
   });
   if (!res.ok) {
@@ -118,17 +148,48 @@ export async function createInstance(opts: CreateInstanceOpts = {}): Promise<Cre
     if (err.code === 'LOGOUT_LOOP') {
       throw new LogoutLoopError(err.message || 'Muitas tentativas de conexão seguidas — aguarde.', err.minutosRestantes ?? 60, err.totalRecente ?? 0);
     }
-    throw new Error(err.message || 'Erro ao conectar instância');
+    throw new ConexaoError(err.message || 'Erro ao conectar instância', err.code);
   }
   return res.json();
+}
+
+/** Testa o IP de saída de um proxy (país, operadora, tipo) sem salvar nada. */
+export async function testarProxyConexao(proxy: ProxyConexao): Promise<{ saida: ProxySaida; aceito: boolean; motivo: string | null }> {
+  // A rota de teste não usa o id do card — "novo" serve para um número que ainda vai parear.
+  const res = await fetch(`${API_BASE}/api/maturador/proxy/novo/testar`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(proxy),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ConexaoError(data?.message || 'Não foi possível testar o proxy', data?.code);
+  return data;
+}
+
+export interface ProxySaida {
+  ip: string;
+  pais: string;
+  regiao?: string | null;
+  cidade?: string | null;
+  org?: string | null;
+  asn?: string | null;
+  hospedagem?: boolean;
+  movel?: boolean | null;
 }
 
 export async function reconnectInstance(): Promise<CreateInstanceResult> {
   return createInstance();
 }
 
-export async function pollQr(instancia?: string): Promise<CreateInstanceResult> {
-  const qs = instancia ? `?instancia=${encodeURIComponent(instancia)}` : '';
+/**
+ * `numero` pede um código de pareamento novo (invalida o anterior) — só passe quando o usuário
+ * pedir o código, nunca no polling.
+ */
+export async function pollQr(instancia?: string, numero?: string): Promise<CreateInstanceResult> {
+  const params = new URLSearchParams();
+  if (instancia) params.set('instancia', instancia);
+  if (numero !== undefined) params.set('number', numero.replace(/\D/g, ''));
+  const qs = params.toString() ? `?${params}` : '';
   const res = await fetch(`${API_BASE}/api/whatsapp/poll-qr${qs}`, {
     headers: authHeaders(),
   });
@@ -136,7 +197,7 @@ export async function pollQr(instancia?: string): Promise<CreateInstanceResult> 
   // [AUDITORIA] FIX APLICADO: antes, qualquer erro HTTP virava sempre a mesma mensagem genérica
   // 'Erro ao buscar QR', mascarando o erro real que o backend passou a expor (ver whatsapp.ts
   // /poll-qr). Agora a mensagem do backend é propagada para quem chama pollQr().
-  if (!res.ok) throw new Error(data?.message || 'Erro ao buscar QR');
+  if (!res.ok) throw new ConexaoError(data?.message || 'Erro ao buscar QR', data?.code);
   return data;
 }
 

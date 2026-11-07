@@ -322,6 +322,59 @@ export async function aplicarProxy(pool: Pool, agenteId: string, userId: string,
   return { situacao: 'aplicado', saida };
 }
 
+// ── Proxy informado na própria tela de conexão (2026-11-05) ─────────────────────────────────
+// "Conectar nova instância" já pede o proxy junto com o nome: o número novo NUNCA chega a parear
+// pelo IP da VPS. Ainda não existe linha em `agentes` nesse momento, então a validação é pela
+// instância (nome Evolution) e a gravação acontece depois que /connect cria a linha.
+
+/** Agente (card) dono de uma instância Evolution, ou null se ainda não existir. */
+export async function agenteDaInstancia(pool: Pool, instancia: string): Promise<{ id: string } | null> {
+  return (await pool.query(`SELECT id FROM agentes WHERE evolution_instancia = $1 ORDER BY ativo DESC, created_at ASC LIMIT 1`, [instancia])
+    .catch(() => ({ rows: [] as any[] }))).rows[0] || null;
+}
+
+/**
+ * Mesmas regras do aplicarProxy (IP BR, sem datacenter, IP exclusivo, sem IP de outro número nos
+ * últimos dias) para um número que ainda vai parear. `precisaConfirmar` = risco aceitável só com
+ * confirmação explícita do usuário.
+ */
+export async function validarProxyParaConexao(
+  pool: Pool, p: ProxyEntrada, instancia: string, telefone: string | undefined, confirmarTroca: boolean,
+): Promise<{ erro?: string; precisaConfirmar?: boolean; saida?: SaidaProxy }> {
+  let saida: SaidaProxy;
+  try { saida = await testarSaidaProxy(p); } catch (e: any) { return { erro: e?.message || String(e) }; }
+  const recusa = motivoRecusaSaida(saida);
+  if (recusa) return { erro: recusa, saida };
+  const dono = (await pool.query(
+    `SELECT nome, evolution_instancia FROM agentes
+     WHERE evolution_instancia IS DISTINCT FROM $1 AND proxy_host IS NOT NULL
+       AND (proxy_ip_saida = $2 OR (lower(proxy_host) = $3 AND proxy_port = $4 AND COALESCE(proxy_usuario, '') = $5))
+     LIMIT 1`,
+    [instancia, saida.ip, p.host, p.port, p.usuario ?? '']
+  )).rows[0];
+  if (dono) return { erro: `Este proxy sai pelo mesmo IP (${saida.ip}) de outro número (${dono.nome || dono.evolution_instancia}). Cada número precisa de um IP só dele.`, saida };
+  const arriscado = await motivoTrocaArriscada(pool, { evolution_instancia: instancia, numero_conectado: telefone || '' }, saida.ip);
+  if (arriscado && !confirmarTroca) return { erro: arriscado, precisaConfirmar: true, saida };
+  if (arriscado) log.warn('PROXY', 'IP arriscado confirmado pelo usuário na conexão', { instancia, ip: saida.ip });
+  return { saida };
+}
+
+/** Grava no card o proxy que acabou de ir junto no /instance/create (ou /proxy/set) do pareamento. */
+export async function gravarProxyDaConexao(pool: Pool, instancia: string, p: ProxyEntrada, saida: SaidaProxy): Promise<void> {
+  const r = await pool.query(
+    `UPDATE agentes SET proxy_host = $2, proxy_port = $3, proxy_protocolo = $4, proxy_usuario = $5,
+            proxy_senha_enc = $6, proxy_ip_saida = $7, proxy_pais = $8, proxy_asn = $9, proxy_org = $10, proxy_movel = $11,
+            proxy_testado_em = NOW(), proxy_aplicado_em = NOW(), proxy_verificado_em = NOW(), updated_at = NOW()
+     WHERE evolution_instancia = $1
+     RETURNING numero_conectado, evolution_instancia`,
+    [instancia, p.host, p.port, p.protocolo, p.usuario ?? null, p.senha ? encriptarSegredoMetaOficial(p.senha) : null,
+     saida.ip, saida.pais, saida.asn, saida.org, saida.movel]
+  );
+  invalidarCacheBloqueio();
+  if (r.rows[0]) await eventoProxy(pool, r.rows[0], 'proxy_aplicado', { ip: saida.ip, host: p.host, org: saida.org, na_conexao: true });
+  log.info('PROXY', 'Proxy aplicado já no pareamento', { instancia, ip: saida.ip });
+}
+
 export async function removerProxy(pool: Pool, agenteId: string, userId: string): Promise<string | null> {
   const a = (await pool.query(`SELECT * FROM agentes WHERE id = $1 AND user_id = $2`, [agenteId, userId])).rows[0];
   if (!a?.evolution_instancia) return 'Instância não encontrada.';

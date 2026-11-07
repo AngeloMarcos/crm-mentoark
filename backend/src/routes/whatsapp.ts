@@ -23,7 +23,10 @@ import { buscarPreviewLink } from '../utils/linkPreview';
 import { fetchInstancesFromServer } from '../services/evolutionReconciliation';
 import { verificarLoopDeLogout, verificarLoopDeLogoutTenant } from '../services/logoutCircuitBreaker';
 import { buscarConexoesDuplicadas, normalizarNumero, invalidarCacheProtecao, DIAS_PROTECAO } from '../services/protecaoNumero';
-import { proxyDoAgente, camposEvolution, marcarProxyAplicado } from '../services/proxyInstancia';
+import {
+  proxyDoAgente, camposEvolution, marcarProxyAplicado, validarProxy, validarProxyParaConexao,
+  gravarProxyDaConexao, agenteDaInstancia, type ProxyEntrada, type SaidaProxy,
+} from '../services/proxyInstancia';
 import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE, invalidarCacheSaude, registrarEvento as registrarEventoSaude, registrarEstadoCelular, painelNumero, ESTADOS_CELULAR, EstadoCelular } from '../services/saudeNumero';
 import { calcularChecklistOficial } from '../services/checklistOficial';
 import { webhooksParados } from '../services/saudeWebhook';
@@ -2100,6 +2103,11 @@ export default function whatsappRouter(pool: Pool): Router {
     return res.json(c);
   });
 
+  // O que a tela de conexão mostra do proxy em uso (nunca usuário/senha).
+  function resumoProxy(p: ProxyEntrada, saida?: SaidaProxy) {
+    return { host: p.host, port: p.port, protocolo: p.protocolo, ip: saida?.ip ?? null, pais: saida?.pais ?? null, cidade: saida?.cidade ?? null, org: saida?.org ?? null, movel: saida?.movel ?? null };
+  }
+
   router.post('/connect', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     const lockKey = `connect:${userId}`;
@@ -2267,6 +2275,26 @@ export default function whatsappRouter(pool: Pool): Router {
         }
       }
 
+      // 2026-11-05: modo de pareamento escolhido na tela. 'codigo' = código de 8 letras digitado no
+      // celular (WhatsApp → Aparelhos conectados → Conectar com número de telefone); exige telefone.
+      // Sem `modo` (clientes antigos) mantém o comportamento de antes: telefone informado → pede código.
+      const modo: 'qr' | 'codigo' | undefined = req.body?.modo === 'codigo' ? 'codigo' : req.body?.modo === 'qr' ? 'qr' : undefined;
+      if (modo === 'codigo' && telefoneInformado.length < 10) {
+        return res.status(400).json({ error: true, code: 'TELEFONE_OBRIGATORIO', message: 'Para conectar por código, informe o número com DDI + DDD (ex.: 5511999999999).' });
+      }
+
+      // 2026-11-05: proxy informado na própria tela de conexão — testado AQUI, antes de criar a
+      // instância, para o número nunca parear pelo IP da VPS. Recusa = nada é criado na Evolution.
+      let proxyInformado: { p: ProxyEntrada; saida: SaidaProxy } | null = null;
+      if (req.body?.proxy && req.body.proxy.host) {
+        const v = validarProxy(req.body.proxy);
+        if (v.erro) return res.status(400).json({ error: true, code: 'PROXY_INVALIDO', message: v.erro });
+        const chk = await validarProxyParaConexao(pool, v.proxy!, cfg.stableInstancia, telefoneInformado || undefined, req.body?.confirmar_troca === true);
+        if (chk.precisaConfirmar) return res.status(409).json({ error: true, code: 'CONFIRMAR_TROCA_IP', message: chk.erro, saida: chk.saida ?? null });
+        if (chk.erro) return res.status(422).json({ error: true, code: 'PROXY_RECUSADO', message: chk.erro, saida: chk.saida ?? null });
+        proxyInformado = { p: v.proxy!, saida: chk.saida! };
+      }
+
       const forceReconnect = req.body?.force_reconnect === true;
       if (forceReconnect) {
         log.info('WHATSAPP', 'Forçando reconexão - deletando instância antiga', { instancia: cfg.stableInstancia });
@@ -2355,12 +2383,24 @@ export default function whatsappRouter(pool: Pool): Router {
         }
       }
 
-      const phoneNumber = (req.body?.phoneNumber as string | undefined)?.replace(/\D/g, '') || undefined;
+      const telefoneDigitos = (req.body?.phoneNumber as string | undefined)?.replace(/\D/g, '') || undefined;
+      // Só manda `number` (que faz a Evolution gerar código de pareamento) quando o modo pede.
+      const phoneNumber = modo === 'qr' ? undefined : telefoneDigitos;
+      const numeroQs = phoneNumber ? `?number=${encodeURIComponent(phoneNumber)}` : '';
       // Sprint 2 do maturador (2026-10-17): proxy salvo para este número entra ANTES do QR — no
       // /instance/create (a Evolution testa e grava antes de conectar) ou, se a instância já existe,
       // via /proxy/set antes do /instance/connect (que recarrega o proxy). Ver services/proxyInstancia.ts.
-      const proxySalvo = cfg.agenteId ? await proxyDoAgente(pool, cfg.agenteId).catch(() => null) : null;
-      const camposProxy = proxySalvo ? camposEvolution(proxySalvo) : null;
+      // [AUDITORIA] BUG CORRIGIDO (2026-11-05): lia `cfg.agenteId`, que getEvolutionConfig sempre
+      // devolve null — o proxy salvo "para o próximo QR" nunca era aplicado. Agora o card é achado
+      // pelo nome da instância. Proxy informado na tela de conexão tem prioridade sobre o salvo.
+      const agenteInst = await agenteDaInstancia(pool, cfg.stableInstancia);
+      const proxySalvo = !proxyInformado && agenteInst ? await proxyDoAgente(pool, agenteInst.id).catch(() => null) : null;
+      const proxyUsado = proxyInformado?.p || proxySalvo;
+      const camposProxy = proxyUsado ? camposEvolution(proxyUsado) : null;
+      const confirmarProxyAplicado = async () => {
+        if (proxyInformado) await gravarProxyDaConexao(pool, cfg.stableInstancia, proxyInformado.p, proxyInformado.saida);
+        else if (proxySalvo && agenteInst) await marcarProxyAplicado(pool, agenteInst.id);
+      };
       const createPayload = {
         instanceName: cfg.stableInstancia,
         token: cfg.api_key,
@@ -2424,16 +2464,22 @@ export default function whatsappRouter(pool: Pool): Router {
         // fluxo de criação nova logo abaixo.
         let qrCode: string | null = null;
         let pairingCode: string | null = null;
-        if (camposProxy && cfg.agenteId) {
+        let proxyAplicadoAqui = false;
+        if (camposProxy) {
           const setProxy = await evolutionFetch(`${base}/proxy/set/${cfg.stableInstancia}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', apikey: cfg.api_key },
             body: JSON.stringify({ enabled: true, ...camposProxy }),
           }).catch(() => null);
-          if (setProxy?.ok) await marcarProxyAplicado(pool, cfg.agenteId);
-          else log.warn('PROXY', 'Evolution recusou o proxy antes do QR — conectando sem proxy', { instancia: cfg.stableInstancia, status: setProxy?.status });
+          if (setProxy?.ok) proxyAplicadoAqui = true;
+          else if (proxyInformado) {
+            // Proxy pedido explicitamente na tela: não conecta pelo IP da VPS sem avisar.
+            return res.status(422).json({ error: true, code: 'PROXY_INVALIDO', message: `A Evolution recusou o proxy (HTTP ${setProxy?.status ?? 0}). Confira host, porta, usuário e senha — nada foi conectado.` });
+          } else log.warn('PROXY', 'Evolution recusou o proxy antes do QR — conectando sem proxy', { instancia: cfg.stableInstancia, status: setProxy?.status });
         }
-        for (let attempt = 0; attempt < 5 && !qrCode; attempt++) {
-          const connectRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}`, {
+        // `?number=` só enquanto não há código: cada chamada com número gera um código NOVO e
+        // invalida o anterior (o usuário pode estar digitando).
+        for (let attempt = 0; attempt < 5 && !qrCode && !(modo === 'codigo' && pairingCode); attempt++) {
+          const connectRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}${pairingCode ? '' : numeroQs}`, {
             headers: { apikey: cfg.api_key },
           }).catch(() => null);
           if (connectRes?.ok) {
@@ -2442,16 +2488,19 @@ export default function whatsappRouter(pool: Pool): Router {
             if (qrRaw) qrCode = normalizeQr(qrRaw);
             pairingCode = pairingCode || rcData?.pairingCode || null;
           }
-          if (!qrCode) await new Promise(r => setTimeout(r, 2000));
+          if (!qrCode && !(modo === 'codigo' && pairingCode)) await new Promise(r => setTimeout(r, 2000));
         }
 
         await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.stableInstancia);
+        if (proxyAplicadoAqui) await confirmarProxyAplicado();
         await registrarWebhook(base, cfg.api_key, cfg.stableInstancia);
         return res.json({
           state: 'connecting',
           qrCode,
-          qrPending: !qrCode,
+          qrPending: !qrCode && !pairingCode,
           pairingCode,
+          modo: modo ?? (pairingCode ? 'codigo' : 'qr'),
+          proxy: proxyAplicadoAqui ? resumoProxy(proxyUsado!, proxyInformado?.saida) : null,
           instanceName: cfg.stableInstancia,
           instancia: cfg.stableInstancia,
         });
@@ -2473,14 +2522,13 @@ export default function whatsappRouter(pool: Pool): Router {
         });
       }
 
-      if (camposProxy && cfg.agenteId) await marcarProxyAplicado(pool, cfg.agenteId);
       let qrCode = created?.qrcode?.base64 || created?.hash?.qrcode || null;
       let pairingCode = created?.qrcode?.pairingCode || created?.pairingCode || created?.hash?.pairingCode || null;
 
       if (!qrCode && createRes.ok) {
-        for (let attempt = 0; attempt < 5 && !qrCode; attempt++) {
+        for (let attempt = 0; attempt < 5 && !qrCode && !(modo === 'codigo' && pairingCode); attempt++) {
           await new Promise(r => setTimeout(r, 2000));
-          const qrRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}`, {
+          const qrRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}${pairingCode ? '' : numeroQs}`, {
             headers: { apikey: cfg.api_key },
           }).catch(() => null);
           if (qrRes?.ok) {
@@ -2492,13 +2540,17 @@ export default function whatsappRouter(pool: Pool): Router {
       }
 
       await saveEvolutionConfig(userId, cfg.agenteId, cfg.url, cfg.api_key, cfg.stableInstancia);
+      // Depois do save: instância nova só ganha linha em `agentes` dentro dele.
+      if (camposProxy) await confirmarProxyAplicado();
       await registrarWebhook(base, cfg.api_key, cfg.stableInstancia);
 
       return res.json({
         state: (qrCode || created?.qrcode?.base64) ? 'connecting' : (created?.instance?.state || created?.state || 'connecting'),
         qrCode: normalizeQr(qrCode),
-        qrPending: !qrCode,
+        qrPending: !qrCode && !pairingCode,
         pairingCode,
+        modo: modo ?? (pairingCode ? 'codigo' : 'qr'),
+        proxy: camposProxy ? resumoProxy(proxyUsado!, proxyInformado?.saida) : null,
         instanceName: cfg.stableInstancia,
         instancia: cfg.stableInstancia,
       });
@@ -2545,7 +2597,24 @@ export default function whatsappRouter(pool: Pool): Router {
         return res.json({ state: 'open', qrCode: null, qrPending: false });
       }
 
-      const qrRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}`, {
+      // 2026-11-05: `?number=` pede um código de pareamento (aba "Código" da tela de conexão,
+      // inclusive para reconectar um card existente). Mesma proteção do /connect: número já
+      // conectado em outra instância/ambiente é recusado antes de gerar o código.
+      const numeroPedido = normalizarNumero(req.query?.number as string | undefined);
+      if (req.query?.number !== undefined && numeroPedido.length < 10) {
+        return res.status(400).json({ state, error: true, code: 'TELEFONE_OBRIGATORIO', message: 'Informe o número com DDI + DDD (ex.: 5511999999999).' });
+      }
+      if (numeroPedido) {
+        const duplicadas = await buscarConexoesDuplicadas(pool, numeroPedido, { servidor: base, nome: cfg.instancia });
+        if (duplicadas.length) {
+          return res.status(409).json({
+            state, error: true, code: 'NUMERO_DUPLICADO',
+            message: `Este número já está conectado em "${duplicadas.map(d => d.nome).join('", "')}". Desconecte lá antes de conectar aqui.`,
+          });
+        }
+      }
+
+      const qrRes = await evolutionFetch(`${base}/instance/connect/${cfg.instancia}${numeroPedido ? `?number=${encodeURIComponent(numeroPedido)}` : ''}`, {
         headers: { apikey: cfg.api_key },
       }).catch(() => null);
 

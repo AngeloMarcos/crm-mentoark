@@ -70,6 +70,10 @@ import {
   Phone,
   ShieldCheck,
   Globe,
+  KeyRound,
+  ChevronDown,
+  Copy,
+  CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ScoreInstancia } from "./ScoreInstancia";
@@ -82,8 +86,27 @@ import {
   disconnectInstance,
   pollQr,
   LogoutLoopError,
+  ConexaoError,
+  testarProxyConexao,
   type CreateInstanceResult,
+  type ProxyConexao,
+  type ProxySaida,
 } from "@/services/evolutionService";
+
+type ModoConexao = "qr" | "codigo";
+
+function descreverSaidaProxy(s: { ip?: string | null; pais?: string | null; cidade?: string | null; regiao?: string | null; org?: string | null; asn?: string | null; hospedagem?: boolean; movel?: boolean | null } | null | undefined): string {
+  if (!s?.ip) return "";
+  const lugar = [s.cidade, s.regiao].filter(Boolean).join(" / ");
+  const tipo = s.hospedagem ? "datacenter" : s.movel ? "móvel (4G/5G)" : "residencial/ISP";
+  return `${s.ip} · ${s.pais || "?"}${lugar ? ` (${lugar})` : ""} · ${s.org || s.asn || "operadora desconhecida"} · ${tipo}`;
+}
+
+/** Código de pareamento em 2 blocos de 4 (ABCD-EFGH), como o WhatsApp mostra no celular. */
+function formatarCodigo(c: string): string {
+  const limpo = c.replace(/[\s-]/g, "").toUpperCase();
+  return limpo.length === 8 ? `${limpo.slice(0, 4)}-${limpo.slice(4)}` : limpo;
+}
 
 interface ScoreFatores {
   volume_diario: number;
@@ -244,6 +267,59 @@ export function InstanceManagementPanel() {
   const [cooldownSecondsLeft, setCooldownSecondsLeft] = useState(0);
   const [showForceConfirm, setShowForceConfirm] = useState(false);
 
+  // ─── 2026-11-05: modo de conexão (QR ou código no celular) + proxy antes do pareamento ───
+  const [connectMode, setConnectMode] = useState<ModoConexao>("qr");
+  const [usarProxy, setUsarProxy] = useState(false);
+  const [proxyForm, setProxyForm] = useState({ host: "", port: "", protocolo: "http" as "http" | "socks5", usuario: "", senha: "" });
+  const [proxyTeste, setProxyTeste] = useState<{ saida: ProxySaida; aceito: boolean; motivo: string | null } | null>(null);
+  const [testandoProxy, setTestandoProxy] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [showDicas, setShowDicas] = useState(false);
+  // Modal de pareamento: aba ativa e telefone para pedir código (inclusive ao reconectar um card).
+  const [qrTab, setQrTab] = useState<ModoConexao>("qr");
+  const [codigoPhone, setCodigoPhone] = useState("");
+  const [gerandoCodigo, setGerandoCodigo] = useState(false);
+
+  const editarProxy = (campo: keyof typeof proxyForm, valor: string) => {
+    setProxyForm(f => ({ ...f, [campo]: valor }));
+    setProxyTeste(null);
+  };
+
+  const proxyPayload = (): ProxyConexao => ({
+    host: proxyForm.host.trim(),
+    port: Number(proxyForm.port),
+    protocolo: proxyForm.protocolo,
+    usuario: proxyForm.usuario.trim() || undefined,
+    senha: proxyForm.senha || undefined,
+  });
+
+  const testarProxy = async () => {
+    setTestandoProxy(true);
+    setProxyTeste(null);
+    try {
+      setProxyTeste(await testarProxyConexao(proxyPayload()));
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setTestandoProxy(false);
+    }
+  };
+
+  const resetConnectForm = () => {
+    setNewInstanceName("");
+    setNewInstancePhone("");
+    setConnectMode("qr");
+    setUsarProxy(false);
+    setProxyForm({ host: "", port: "", protocolo: "http", usuario: "", senha: "" });
+    setProxyTeste(null);
+    setConnectError(null);
+  };
+
+  const abrirNovaConexao = () => {
+    resetConnectForm();
+    setShowConnectModal(true);
+  };
+
   useEffect(() => {
     if (!forceReconnectCooldown) { setCooldownSecondsLeft(0); return; }
     const tick = () => {
@@ -285,24 +361,43 @@ export function InstanceManagementPanel() {
   const showQrModalRef = useRef(false);
   useEffect(() => { showQrModalRef.current = showQrModal; }, [showQrModal]);
 
-  const startConnect = async () => {
+  const startConnect = async (confirmarTroca = false) => {
     // Backend garante 1 instância por usuário usando nome estável.
     const name = newInstanceName.trim() || `WhatsApp ${user?.display_name || 'Agente'}`;
-    
+    const phoneDigits = newInstancePhone.replace(/\D/g, "");
+    if (connectMode === "codigo" && phoneDigits.length < 10) {
+      setConnectError("Para conectar por código, informe o número com DDI + DDD (ex.: 5511999999999).");
+      return;
+    }
+    if (usarProxy && (!proxyForm.host.trim() || !proxyForm.port)) {
+      setConnectError("Preencha host e porta do proxy, ou desligue a opção de proxy.");
+      return;
+    }
+
     try {
       setConnecting(true);
       setErrorDetail(null);
+      setConnectError(null);
       setShowForceBtn(false);
-      const phoneDigits = newInstancePhone.replace(/\D/g, "");
 
       // [AUDITORIA] LÓGICA (Sprint 2 — multi-instância): novaConexao:true sempre — se for a
       // primeira instância do tenant, o backend resolve pro nome padrão do mesmo jeito de
       // antes; se já existir uma, calcula a próxima livre (_2, _3...) em vez de reaproveitar a
       // existente (era isso que causava "WhatsApp já conectado" ao tentar somar um segundo
       // número — ver diagnosticos/AUDITORIA_LOG.md).
-      const res = await createInstance({ instanceName: name, phoneNumber: phoneDigits || undefined, novaConexao: true });
+      // 2026-11-05: proxy vai junto — o backend testa o IP de saída e só cria a instância se aceito.
+      const res = await createInstance({
+        instanceName: name,
+        phoneNumber: phoneDigits || undefined,
+        novaConexao: true,
+        modo: connectMode,
+        proxy: usarProxy ? proxyPayload() : undefined,
+        confirmarTroca,
+      });
 
       setQrData(res);
+      setQrTab(res.pairingCode ? "codigo" : connectMode);
+      setCodigoPhone(phoneDigits);
       setShowConnectModal(false);
       setShowQrModal(true);
 
@@ -310,24 +405,40 @@ export function InstanceManagementPanel() {
         toast.success("✅ WhatsApp conectado com sucesso!");
         setShowQrModal(false);
         setQrData(null);
+        resetConnectForm();
         carregar();
       } else if (res.qrCode || res.pairingCode) {
-        toast.info("Escaneie o QR Code ou use o código de pareamento");
+        toast.info(res.pairingCode ? "Digite o código no seu celular" : "Escaneie o QR Code no seu celular");
         pollUntilConnected(res.instanceName || res.instancia);
       } else if (res.qrPending) {
-        toast.info("Aguardando inicialização do Baileys. O QR aparecerá em instantes...");
+        toast.info("Aguardando o WhatsApp inicializar. O código aparece em instantes...");
         pollQrLoop(res.instancia || res.instanceName);
       } else {
         toast.error("Evolution não retornou QR Code. Verifique o servidor.");
       }
     } catch (err: any) {
-      if (tratarErroDeConexao(err)) return;
+      if (tratarErroDeConexao(err)) { setConnectError(err.message); return; }
+      // Erros de validação (proxy, telefone, número duplicado): nada foi criado — o usuário
+      // corrige no próprio formulário, sem abrir o modal de QR.
+      if (err instanceof ConexaoError && err.code === "CONFIRMAR_TROCA_IP") {
+        if (confirm(`${err.message}\n\nConectar mesmo assim? (assumo o risco)`)) {
+          setConnecting(false);
+          return startConnect(true);
+        }
+        setConnectError(err.message);
+        return;
+      }
+      if (err instanceof ConexaoError && ["PROXY_RECUSADO", "PROXY_INVALIDO", "TELEFONE_OBRIGATORIO", "NUMERO_DUPLICADO"].includes(err.code || "")) {
+        setConnectError(err.message);
+        return;
+      }
       const msg = err.message || "";
       if (msg.includes("401") || msg.includes("unauthorized")) {
         toast.error("Erro na Evolution API: API Key inválida ou expirada.");
       } else {
         toast.error(`Falha ao conectar: ${msg}`);
       }
+      setConnectError(msg || "Falha ao conectar.");
       setErrorDetail(msg || "Falha ao conectar.");
       setShowForceBtn(true);
     } finally {
@@ -373,11 +484,12 @@ export function InstanceManagementPanel() {
           toast.error("Erro na Evolution: API Key ou Sessão inválida.");
           return;
         }
-        if (data.qrCode) {
-          setQrData(prev => ({ ...prev, ...data }));
+        if (data.qrCode || data.pairingCode) {
+          // O polling não pede código (pediria um novo a cada volta) — preserva o que já existe.
+          setQrData(prev => ({ ...prev, ...data, pairingCode: data.pairingCode || prev?.pairingCode }));
           setWaitingQr(false);
           waitingQrRef.current = false;
-          toast.success("QR Code gerado! Escaneie agora.");
+          toast.success(data.pairingCode ? "Código gerado! Digite no celular." : "QR Code gerado! Escaneie agora.");
           pollUntilConnected(data.instanceName || data.instancia);
           return;
         }
@@ -509,6 +621,8 @@ export function InstanceManagementPanel() {
     setShowForceBtn(false);
     setNewInstanceName(a.nome);
     setNewInstancePhone("");
+    setQrTab("qr");
+    setCodigoPhone(phoneNumbers[a.id] || "");
     setShowQrModal(true);
     try {
       setConnecting(true);
@@ -548,7 +662,7 @@ export function InstanceManagementPanel() {
       // da instância padrão em vez da que está de fato aberta no modal.
       const data = await pollQr(qrData?.instancia || qrData?.instanceName);
       if (data.qrCode) {
-        setQrData(prev => ({ ...prev, ...data }));
+        setQrData(prev => ({ ...prev, ...data, pairingCode: data.pairingCode || prev?.pairingCode }));
         toast.success("QR Code atualizado!");
       } else if (data.state === "open") {
         setShowQrModal(false);
@@ -567,6 +681,39 @@ export function InstanceManagementPanel() {
       toast.error(`Erro: ${e.message}`);
     } finally {
       setConnecting(false);
+    }
+  };
+
+  // Pede um código de pareamento (aba "Código"). Cada pedido invalida o código anterior.
+  const gerarCodigo = async () => {
+    const digits = codigoPhone.replace(/\D/g, "");
+    if (digits.length < 10) {
+      toast.error("Informe o número com DDI + DDD (ex.: 5511999999999).");
+      return;
+    }
+    const inst = qrData?.instancia || qrData?.instanceName;
+    setGerandoCodigo(true);
+    setErrorDetail(null);
+    try {
+      const data = await pollQr(inst, digits);
+      if (data.state === "open") {
+        setShowQrModal(false);
+        toast.success("✅ WhatsApp já conectado!");
+        carregar();
+        return;
+      }
+      if (data.pairingCode) {
+        setQrData(prev => ({ ...prev, ...data, qrCode: data.qrCode || prev?.qrCode }));
+        toast.success("Código gerado! Digite no celular.");
+        if (!pollingConnectRef.current) pollUntilConnected(inst);
+      } else {
+        toast.info("O WhatsApp ainda está inicializando — tente de novo em alguns segundos.");
+      }
+    } catch (e: any) {
+      setErrorDetail(e.message);
+      toast.error(e.message);
+    } finally {
+      setGerandoCodigo(false);
     }
   };
 
@@ -877,7 +1024,7 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
             <Button variant="outline" size="sm" onClick={carregar}>
               <RefreshCw className="h-4 w-4 mr-2" /> Atualizar
             </Button>
-            <Button size="sm" onClick={() => setShowConnectModal(true)} className="bg-green-600 hover:bg-green-700 text-white">
+            <Button size="sm" onClick={abrirNovaConexao} className="bg-green-600 hover:bg-green-700 text-white">
               <Plus className="h-4 w-4 mr-2" /> Conectar nova
             </Button>
           </div>
@@ -896,7 +1043,7 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
             <p className="text-sm text-muted-foreground mb-5">
               Conecte um número de WhatsApp para começar a receber e enviar mensagens.
             </p>
-            <Button onClick={() => setShowConnectModal(true)} className="bg-green-600 hover:bg-green-700 text-white">
+            <Button onClick={abrirNovaConexao} className="bg-green-600 hover:bg-green-700 text-white">
               <Plus className="h-4 w-4 mr-2" /> Conectar primeiro WhatsApp
             </Button>
           </Card>
@@ -1420,53 +1567,181 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
         {proxyDe && <ProxyDialog numero={proxyDe} onFechar={() => { setProxyDe(null); carregar(); }} />}
         {painelDe && <PainelNumero agente={painelDe} onFechar={() => setPainelDe(null)} />}
 
-        {/* ─── Modal: Conectar nova instância ─── */}
-        <Dialog open={showConnectModal} onOpenChange={setShowConnectModal}>
-          <DialogContent className="sm:max-w-[480px]">
+        {/* ─── Modal: Conectar nova instância (2026-11-05: QR ou código + proxy antes do pareamento) ─── */}
+        <Dialog open={showConnectModal} onOpenChange={(o) => { if (!connecting) setShowConnectModal(o); }}>
+          <DialogContent className="sm:max-w-[560px] max-h-[92vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Smartphone className="h-5 w-5 text-green-600" />
-                Conectar nova instância WhatsApp
+                Conectar novo WhatsApp
               </DialogTitle>
               <DialogDescription>
-                Dê um nome para identificar este número. Opcionalmente informe o telefone para receber código de pareamento.
+                Identifique o número, escolha como parear e, de preferência, defina o proxy antes — ele precisa estar ativo desde o primeiro pareamento.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-2">
-              <div className="space-y-1.5">
-                <Label>Nome da instância <span className="text-red-500">*</span></Label>
-                <Input
-                  placeholder="Ex: Vendas Matriz, Suporte SP..."
-                  value={newInstanceName}
-                  onChange={(e) => setNewInstanceName(e.target.value)}
-                  autoFocus
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Telefone (opcional)</Label>
-                <Input
-                  placeholder="Ex: 5511999999999 (com DDI+DDD)"
-                  value={newInstancePhone}
-                  onChange={(e) => setNewInstancePhone(e.target.value)}
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  Se informar, você pode conectar por código de pareamento em vez do QR Code — e o
-                  sistema confere antes se o número já não está conectado em outro lugar.
+            <div className="space-y-5 py-1">
+              {/* 1. Identificação */}
+              <section className="space-y-3">
+                <p className="flex items-center gap-2 text-sm font-semibold">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">1</span>
+                  Identificação
                 </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="nova-inst-nome">Nome da instância <span className="text-red-500">*</span></Label>
+                    <Input
+                      id="nova-inst-nome"
+                      placeholder="Ex: Vendas Matriz"
+                      value={newInstanceName}
+                      onChange={(e) => setNewInstanceName(e.target.value)}
+                      autoFocus
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="nova-inst-tel">
+                      Telefone {connectMode === "codigo" ? <span className="text-red-500">*</span> : <span className="text-muted-foreground font-normal">(opcional)</span>}
+                    </Label>
+                    <Input
+                      id="nova-inst-tel"
+                      inputMode="tel"
+                      placeholder="5511999999999"
+                      value={newInstancePhone}
+                      onChange={(e) => { setNewInstancePhone(e.target.value); setConnectError(null); }}
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Telefone com DDI + DDD. Com ele, o sistema confere antes se o número já não está conectado em outro lugar.
+                </p>
+              </section>
+
+              {/* 2. Como conectar */}
+              <section className="space-y-3">
+                <p className="flex items-center gap-2 text-sm font-semibold">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">2</span>
+                  Como conectar
+                </p>
+                <div role="radiogroup" aria-label="Forma de conexão" className="grid gap-2 sm:grid-cols-2">
+                  {([
+                    { modo: "qr" as const, Icon: QrCode, titulo: "QR Code", texto: "Escaneie com a câmera do celular." },
+                    { modo: "codigo" as const, Icon: KeyRound, titulo: "Código no celular", texto: "Digite um código de 8 letras no WhatsApp. Útil quando a câmera não lê o QR." },
+                  ]).map(({ modo, Icon, titulo, texto }) => {
+                    const ativo = connectMode === modo;
+                    return (
+                      <button
+                        key={modo}
+                        type="button"
+                        role="radio"
+                        aria-checked={ativo}
+                        onClick={() => { setConnectMode(modo); setConnectError(null); }}
+                        className={`relative rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${ativo ? "border-primary bg-primary/5" : "hover:bg-muted/50"}`}
+                      >
+                        {ativo && <CheckCircle2 className="absolute right-2.5 top-2.5 h-4 w-4 text-primary" />}
+                        <Icon className={`mb-1.5 h-5 w-5 ${ativo ? "text-primary" : "text-muted-foreground"}`} />
+                        <p className="text-sm font-semibold">{titulo}</p>
+                        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{texto}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* 3. Proxy */}
+              <section className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">3</span>
+                      Proxy próprio <span className="text-xs font-normal text-muted-foreground">(recomendado)</span>
+                    </p>
+                    <p className="mt-1 pl-7 text-[11px] text-muted-foreground">
+                      Sem proxy, o número pareia pelo IP do servidor (datacenter). Use proxy residencial/ISP ou 4G do Brasil, com IP fixo e só deste número.
+                    </p>
+                  </div>
+                  <Switch checked={usarProxy} onCheckedChange={(v) => { setUsarProxy(v); setConnectError(null); }} aria-label="Usar proxy próprio" />
+                </div>
+
+                {usarProxy && (
+                  <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2 space-y-1">
+                        <Label className="text-xs">Host</Label>
+                        <Input value={proxyForm.host} onChange={(e) => editarProxy("host", e.target.value)} placeholder="br.proxy.exemplo.com" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Porta</Label>
+                        <Input inputMode="numeric" value={proxyForm.port} onChange={(e) => editarProxy("port", e.target.value.replace(/\D/g, ""))} placeholder="8080" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Protocolo</Label>
+                        <Select value={proxyForm.protocolo} onValueChange={(v) => editarProxy("protocolo", v)}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="http">http</SelectItem>
+                            <SelectItem value="socks5">socks5</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Usuário</Label>
+                        <Input value={proxyForm.usuario} onChange={(e) => editarProxy("usuario", e.target.value)} autoComplete="off" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Senha</Label>
+                        <Input type="password" value={proxyForm.senha} onChange={(e) => editarProxy("senha", e.target.value)} autoComplete="new-password" />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={testarProxy} disabled={testandoProxy || !proxyForm.host || !proxyForm.port}>
+                        {testandoProxy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Globe className="mr-1.5 h-3.5 w-3.5" />}
+                        {testandoProxy ? "Testando…" : "Testar IP de saída"}
+                      </Button>
+                      {!proxyTeste && !testandoProxy && (
+                        <span className="text-[11px] text-muted-foreground">O teste também roda ao conectar.</span>
+                      )}
+                    </div>
+
+                    {proxyTeste && (
+                      <div className={`rounded-md border p-2 text-xs ${proxyTeste.aceito ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300" : "border-red-500/40 bg-red-500/10 text-red-800 dark:text-red-300"}`}>
+                        <p className="font-semibold">{proxyTeste.aceito ? "✓ Proxy aceito" : "✗ Proxy recusado"}</p>
+                        <p className="mt-0.5 font-mono text-[11px]">{descreverSaidaProxy(proxyTeste.saida)}</p>
+                        {proxyTeste.motivo && <p className="mt-1">{proxyTeste.motivo}</p>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {/* Dicas de segurança (recolhidas por padrão) */}
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5">
+                <button
+                  type="button"
+                  onClick={() => setShowDicas(v => !v)}
+                  aria-expanded={showDicas}
+                  className="flex w-full items-center justify-between gap-2 p-3 text-left text-xs font-semibold text-amber-700 dark:text-amber-400"
+                >
+                  <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5" /> Antes de conectar um número novo</span>
+                  <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showDicas ? "rotate-180" : ""}`} />
+                </button>
+                {showDicas && (
+                  <ul className="list-disc space-y-0.5 px-3 pb-3 pl-7 text-[11px] text-muted-foreground">
+                    <li>Use o chip no celular por alguns dias antes: foto, nome, conversas reais.</li>
+                    <li>Conecte o número em <b>um lugar só</b>. Nunca no CRM de teste e no de produção ao mesmo tempo.</li>
+                    <li>Pareie uma vez, com o celular na internet estável. Se falhar, espere antes de tentar de novo.</li>
+                    <li>Defina o proxy agora e não troque depois — trocar o IP de um número em uso é sinal de risco.</li>
+                    <li>Nos primeiros 14 dias o número fica protegido: sem campanhas, só conversa e Aquecimento.</li>
+                  </ul>
+                )}
               </div>
 
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] space-y-1">
-                <p className="font-semibold flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
-                  <ShieldCheck className="h-3.5 w-3.5" /> Antes de conectar um número novo
-                </p>
-                <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
-                  <li>Use o chip no celular por alguns dias antes: foto, nome, conversas reais.</li>
-                  <li>Conecte o número em <b>um lugar só</b>. Nunca no CRM de teste e no de produção ao mesmo tempo.</li>
-                  <li>Leia o QR uma vez, com o celular na internet estável. Se falhar, espere antes de tentar de novo.</li>
-                  <li>Nos primeiros 14 dias o número fica protegido: sem campanhas, só conversa e Aquecimento.</li>
-                </ul>
-              </div>
+              {connectError && (
+                <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400">
+                  <p className="flex items-center gap-1.5 font-semibold"><AlertOctagon className="h-3.5 w-3.5" /> Não foi possível conectar</p>
+                  <p className="mt-1 text-xs opacity-90">{connectError}</p>
+                </div>
+              )}
             </div>
 
             <DialogFooter>
@@ -1474,12 +1749,14 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                 Cancelar
               </Button>
               <Button
-                onClick={startConnect}
-                disabled={connecting || !newInstanceName.trim()}
+                onClick={() => startConnect()}
+                disabled={connecting || !newInstanceName.trim() || (usarProxy && proxyTeste !== null && !proxyTeste.aceito)}
                 className="bg-green-600 hover:bg-green-700 text-white"
               >
                 {connecting ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Gerando...</>
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {usarProxy ? "Testando proxy e conectando..." : "Gerando..."}</>
+                ) : connectMode === "codigo" ? (
+                  <><KeyRound className="h-4 w-4 mr-2" /> Gerar código</>
                 ) : (
                   <><QrCode className="h-4 w-4 mr-2" /> Gerar QR Code</>
                 )}
@@ -1488,7 +1765,7 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
           </DialogContent>
         </Dialog>
 
-        {/* ─── Modal: QR Code + Pareamento ─── */}
+        {/* ─── Modal: pareamento (abas QR Code / Código) ─── */}
         <Dialog
           open={showQrModal}
           onOpenChange={(o) => {
@@ -1505,78 +1782,117 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
             }
           }}
         >
-          <DialogContent className="sm:max-w-[460px]">
+          <DialogContent className="sm:max-w-[460px] max-h-[92vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
-                Conectar: <span className="text-foreground">{qrData?.instanceName || newInstanceName}</span>
+                Conectar: <span className="text-foreground">{newInstanceName || qrData?.instanceName}</span>
               </DialogTitle>
               <DialogDescription>
-                Escaneie o QR Code abaixo no seu WhatsApp para conectar este número.
+                Escolha como parear este número no WhatsApp do celular.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4">
-              {qrData?.pairingCode && (
-                <div className="rounded-xl border bg-card p-4 space-y-2">
-                  <p className="text-sm font-bold flex items-center gap-2">
-                    <Smartphone className="h-4 w-4 text-orange-500" />
-                    Código de Pareamento
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    WhatsApp → Aparelhos Conectados → Conectar com número de telefone
-                  </p>
-                  <div className="border border-dashed rounded-lg py-3 px-4 text-center bg-muted/20">
-                    <p
-                      className="text-lg font-mono font-bold tracking-[0.35em] cursor-pointer hover:text-primary"
-                      onClick={() => {
-                        navigator.clipboard.writeText(qrData.pairingCode!.replace(/\s/g, ""));
-                        toast.success("Código copiado!");
-                      }}
-                    >
-                      {qrData.pairingCode}
-                    </p>
-                  </div>
-                </div>
-              )}
+            {qrData?.proxy && (
+              <div className="flex items-start gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2 text-[11px]">
+                <Globe className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                <span>
+                  <b className="text-emerald-700 dark:text-emerald-400">Pareando pelo proxy</b>{" "}
+                  <span className="font-mono text-muted-foreground">{descreverSaidaProxy(qrData.proxy) || `${qrData.proxy.host}:${qrData.proxy.port}`}</span>
+                </span>
+              </div>
+            )}
 
-              <div className="rounded-xl border bg-card p-4 space-y-3">
-                <p className="text-sm font-bold text-center flex items-center justify-center gap-2">
-                  <QrCode className="h-4 w-4 text-green-600" /> QR Code
-                </p>
-                <div className="flex justify-center">
+            <Tabs value={qrTab} onValueChange={(v) => setQrTab(v as ModoConexao)}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="qr" className="gap-1.5"><QrCode className="h-3.5 w-3.5" /> QR Code</TabsTrigger>
+                <TabsTrigger value="codigo" className="gap-1.5"><KeyRound className="h-3.5 w-3.5" /> Código no celular</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="qr" className="mt-3 space-y-3">
+                <div className="flex justify-center rounded-xl border bg-white p-3">
                   {qrData?.qrCode?.startsWith("data:image") ? (
-                    <img src={qrData.qrCode} alt="QR Code" className="w-56 h-56" />
+                    <img src={qrData.qrCode} alt="QR Code de pareamento" className="h-56 w-56" />
                   ) : (
-                    <div className="w-56 h-56 flex flex-col items-center justify-center gap-3 bg-muted/20 rounded-lg">
+                    <div className="flex h-56 w-56 flex-col items-center justify-center gap-3 rounded-lg bg-muted/20">
                       <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
-                      <span className="text-xs text-muted-foreground text-center px-4">
-                        {waitingQr ? "Inicializando WhatsApp...\nAguarde alguns segundos" : "Carregando QR Code..."}
+                      <span className="px-4 text-center text-xs text-muted-foreground">
+                        {waitingQr ? "Inicializando WhatsApp… aguarde alguns segundos" : "Carregando QR Code…"}
                       </span>
                     </div>
                   )}
                 </div>
-              </div>
+                <ol className="list-decimal space-y-0.5 pl-5 text-[11px] text-muted-foreground">
+                  <li>Abra o WhatsApp no celular → <b>Configurações</b> → <b>Aparelhos conectados</b>.</li>
+                  <li>Toque em <b>Conectar um aparelho</b> e aponte a câmera para o código.</li>
+                </ol>
+              </TabsContent>
 
+              <TabsContent value="codigo" className="mt-3 space-y-3">
+                {qrData?.pairingCode ? (
+                  <div className="space-y-2 rounded-xl border bg-card p-4">
+                    <p className="text-center text-[11px] text-muted-foreground">Digite este código no celular</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(qrData.pairingCode!.replace(/[\s-]/g, ""));
+                        toast.success("Código copiado!");
+                      }}
+                      className="group flex w-full items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/20 px-4 py-3 hover:border-primary"
+                      title="Copiar código"
+                    >
+                      <span className="font-mono text-2xl font-bold tracking-[0.3em]">{formatarCodigo(qrData.pairingCode)}</span>
+                      <Copy className="h-4 w-4 text-muted-foreground group-hover:text-primary" />
+                    </button>
+                    <ol className="list-decimal space-y-0.5 pl-5 text-[11px] text-muted-foreground">
+                      <li>WhatsApp → <b>Configurações</b> → <b>Aparelhos conectados</b> → <b>Conectar um aparelho</b>.</li>
+                      <li>Toque em <b>Conectar com número de telefone</b> e digite o código acima.</li>
+                    </ol>
+                  </div>
+                ) : (
+                  <p className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+                    Informe o número que vai ser conectado. O WhatsApp gera um código de 8 letras para digitar no celular, sem precisar da câmera.
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <Input
+                    inputMode="tel"
+                    placeholder="5511999999999"
+                    value={codigoPhone}
+                    onChange={(e) => setCodigoPhone(e.target.value)}
+                    aria-label="Telefone com DDI e DDD"
+                  />
+                  <Button onClick={gerarCodigo} disabled={gerandoCodigo || waitingQr} variant={qrData?.pairingCode ? "outline" : "default"} className="shrink-0">
+                    {gerandoCodigo ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <KeyRound className="mr-1.5 h-4 w-4" />}
+                    {qrData?.pairingCode ? "Novo código" : "Gerar código"}
+                  </Button>
+                </div>
+                {qrData?.pairingCode && (
+                  <p className="text-[11px] text-muted-foreground">Pedir um código novo invalida o anterior.</p>
+                )}
+              </TabsContent>
+            </Tabs>
+
+            <div className="space-y-3">
               {pollingConnect && !waitingQr && (
-                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground bg-muted/30 rounded-lg p-3">
+                <div className="flex items-center justify-center gap-2 rounded-lg bg-muted/30 p-3 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Aguardando você escanear o código...
+                  {qrTab === "codigo" ? "Aguardando você digitar o código…" : "Aguardando você escanear o QR…"}
                 </div>
               )}
 
               {waitingQr && (
-                <div className="flex items-center justify-center gap-2 text-sm text-orange-600 bg-orange-500/10 rounded-lg p-3">
+                <div className="flex items-center justify-center gap-2 rounded-lg bg-orange-500/10 p-3 text-sm text-orange-600">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Aguardando WhatsApp inicializar... (pode levar até 30s)
+                  Aguardando WhatsApp inicializar… (pode levar até 30s)
                 </div>
               )}
 
               {errorDetail && (
                 <div
                   role="alert"
-                  className="p-3 text-sm rounded-lg bg-red-50 border border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-900 dark:text-red-400"
+                  className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400"
                 >
-                  <p className="font-semibold flex items-center gap-1.5">
+                  <p className="flex items-center gap-1.5 font-semibold">
                     <AlertOctagon className="h-3.5 w-3.5" /> Erro de conectividade
                   </p>
                   <p className="mt-1 text-xs opacity-90">{errorDetail}</p>
@@ -1588,7 +1904,7 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                   <Button
                     onClick={handleForceReconnect}
                     disabled={connecting || cooldownSecondsLeft > 0}
-                    className="w-full bg-amber-600 hover:bg-amber-700 text-white gap-2"
+                    className="w-full gap-2 bg-amber-600 text-white hover:bg-amber-700"
                   >
                     {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                     {cooldownSecondsLeft > 0
@@ -1596,7 +1912,7 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
                       : "Forçar Reinicialização do QR Code"}
                   </Button>
                   {cooldownSecondsLeft > 0 && (
-                    <p className="text-[11px] text-amber-600 text-center">
+                    <p className="text-center text-[11px] text-amber-600">
                       {forceReconnectCooldown?.total} desconexões seguidas detectadas — bloqueado temporariamente pra não arriscar banir o número.
                     </p>
                   )}
@@ -1608,10 +1924,12 @@ Disparo em número recém-conectado é a causa mais comum de banimento. Só faç
               <Button variant="outline" onClick={() => setShowQrModal(false)}>
                 Fechar
               </Button>
-              <Button onClick={refreshQr} disabled={connecting} className="bg-orange-500 hover:bg-orange-600 text-white">
-                {connecting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-                Atualizar QR
-              </Button>
+              {qrTab === "qr" && (
+                <Button onClick={refreshQr} disabled={connecting} className="bg-orange-500 text-white hover:bg-orange-600">
+                  {connecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                  Atualizar QR
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
