@@ -7,6 +7,7 @@ import {
   Library, Settings as SettingsIcon, Users as UsersIcon, Link2, Monitor, Users2,
   Activity, LayoutTemplate, Download, CreditCard, Radar,
 } from "lucide-react";
+import { ListChecks } from "lucide-react";
 import { useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useAssinatura } from "@/hooks/useAssinatura";
@@ -93,6 +94,7 @@ const navGroups: NavGroup[] = [
       { title: "WhatsApp", url: "/whatsapp", icon: MessageCircle, modulo: "whatsapp", color: "text-green-500" },
       { title: "Monitor", url: "/monitor-whatsapp", icon: Monitor, modulo: "whatsapp", color: "text-blue-400" },
       { title: "Respostas Rápidas", url: "/respostas-rapidas", icon: Zap, modulo: "whatsapp", color: "text-amber-500" },
+      { title: "Motivos de Atendimento", url: "/atendimento/motivos", icon: ListChecks, modulo: "whatsapp", color: "text-emerald-500" },
       { title: "Corridas Pendentes", url: "/corridas-pendentes", icon: Car, modulo: "whatsapp", color: "text-cyan-500" },
       { title: "SLA / Gestão", url: "/sla", icon: Timer, modulo: "whatsapp", color: "text-yellow-500" },
       { title: "Discagem", url: "/discagem", icon: PhoneCall, modulo: "discagem", color: "text-emerald-500" },

@@ -9,8 +9,9 @@ import { Pool, PoolClient } from 'pg';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { resolverOwnerId } from '../services/subscription';
+import { withTenantContext } from '../db';
 import {
-  gravarEvento, pausarIA, devolverIA, iaEstaPausada, erroDeEstado, lerMinutosPausa, lerNota, ehUuid,
+  gravarEvento, pausarIA, devolverIA, iaEstaPausada, erroDeEstado, lerMinutosPausa, lerNota, ehUuid, jidAtendivel,
   type AcaoComEstado,
 } from '../services/atendimento';
 
@@ -128,6 +129,58 @@ export function atendimentosRouter(pool: Pool): Router {
         },
       });
     } catch (err: any) { return erroHttp(res, err, 'Falha ao ler o atendimento'); }
+  });
+
+  // Conversa parada não tem atendimento: quem clica em "Iniciar atendimento" assume a conversa.
+  router.post('/abrir', async (req: AuthRequest, res: Response) => {
+    try {
+      const instancia = typeof req.body?.instancia === 'string' ? req.body.instancia : '';
+      const jid = typeof req.body?.jid === 'string' ? req.body.jid : '';
+      if (!instancia || !jidAtendivel(jid)) return res.status(400).json({ message: 'Conversa inválida.' });
+      const ownerId = await resolverOwnerId(pool, req.userId!);
+      const existe = await withTenantContext({ userId: ownerId, isAdmin: false }, c => c.query(
+        `SELECT 1 FROM whatsapp_messages WHERE user_id = $1 AND instance_name = $2 AND remote_jid = $3 LIMIT 1`, [ownerId, instancia, jid]
+      ));
+      if (!existe.rowCount) return res.status(404).json({ message: 'Conversa não encontrada.' });
+      const telefone = jid.split('@')[0];
+      const contato = (await pool.query(`SELECT id FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 LIMIT 1`, [ownerId, `%${telefone.slice(-11)}`])).rows[0];
+      const novo = (await pool.query(
+        `INSERT INTO atendimentos (user_id, instance_name, remote_jid, telefone, contato_id, estado, origem, atendente_id)
+         VALUES ($1, $2, $3, $4, $5, 'aberto', 'atendente', $6)
+         ON CONFLICT (user_id, instance_name, remote_jid) WHERE estado <> 'resolvido' DO NOTHING RETURNING *`,
+        [ownerId, instancia, jid, telefone, contato?.id ?? null, req.userId]
+      )).rows[0];
+      if (novo) {
+        await gravarEvento(pool, novo.id, ownerId, 'aberto', 'humano', { autorId: req.userId });
+        await gravarEvento(pool, novo.id, ownerId, 'atribuido', 'humano', { autorId: req.userId, paraAtendente: req.userId });
+        return res.status(201).json(novo);
+      }
+      const atual = (await pool.query(
+        `SELECT * FROM atendimentos WHERE user_id = $1 AND instance_name = $2 AND remote_jid = $3 AND estado <> 'resolvido'`, [ownerId, instancia, jid]
+      )).rows[0];
+      return res.json(atual);
+    } catch (err: any) { return erroHttp(res, err, 'Falha ao iniciar o atendimento'); }
+  });
+
+  // Mesma regra da lista de conversas: cada conversa conta uma vez, pelo ciclo atual.
+  router.get('/contadores', async (req: AuthRequest, res: Response) => {
+    try {
+      const ownerId = await resolverOwnerId(pool, req.userId!);
+      const r = await pool.query(
+        `SELECT COUNT(*) FILTER (WHERE estado = 'aberto')::int AS aberto,
+                COUNT(*) FILTER (WHERE estado = 'aguardando')::int AS aguardando,
+                COUNT(*) FILTER (WHERE estado = 'resolvido')::int AS resolvido,
+                COUNT(*) FILTER (WHERE estado <> 'resolvido' AND atendente_id = $2)::int AS meus,
+                COUNT(*) FILTER (WHERE estado <> 'resolvido' AND atendente_id IS NULL)::int AS sem_atendente
+         FROM (
+           SELECT DISTINCT ON (instance_name, remote_jid) estado, atendente_id
+           FROM atendimentos WHERE user_id = $1
+           ORDER BY instance_name, remote_jid, (estado <> 'resolvido') DESC, created_at DESC
+         ) atual`,
+        [ownerId, req.userId]
+      );
+      return res.json(r.rows[0]);
+    } catch (err: any) { return erroHttp(res, err, 'Falha ao contar atendimentos'); }
   });
 
   router.get('/atendentes', async (req: AuthRequest, res: Response) => {

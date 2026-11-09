@@ -78,6 +78,11 @@ import { TagStatusEnvio } from "@/components/TagStatusEnvio";
 // atendente ainda revisa/edita antes de enviar de verdade.
 import { personalizarMensagem } from "@/lib/motorTexto";
 import { FunilDaConversa, funilDaConversa, textoEventoFunil } from "@/lib/funilAuto";
+import { abrirAtendimento, acaoAtendimento, textoEventoAtendimento, type FiltroAtendimento } from "@/lib/atendimento";
+import { useAtendimentoConversa } from "@/components/atendimento/useAtendimentoConversa";
+import { BarraAtendimento } from "@/components/atendimento/BarraAtendimento";
+import { MenuPausaIA } from "@/components/atendimento/MenuPausaIA";
+import { FiltrosAtendimento } from "@/components/atendimento/FiltrosAtendimento";
 import {
   renderWhatsAppText, stripWhatsAppMarkup, formatWaPhone, resolveDisplayName, cleanPushName,
   participantColorClass, instanceColorClass, formatListTimestamp, normalizeMessageType, mediaLabel,
@@ -245,6 +250,8 @@ interface Chat {
   lastFromClient?: boolean;
   /** Tipo da última mensagem (`ultimo_tipo` de GET /conversas), pro preview de mídia. */
   lastType?: string;
+  /** JID real da conversa (pode ser @lid); chave do atendimento junto com `source`. */
+  remoteJid?: string;
   messages: Message[];
   notes?: string;
   profile_pic?: string;
@@ -993,6 +1000,11 @@ export function WhatsAppInterface() {
   const apenasGruposRef = useRef(false);
   const instanciaFiltroRef = useRef("");
   const ultimoFiltroBuscadoRef = useRef<string | null>(null);
+  // Sprint Atendimento v1: filtro aplicado no backend, antes do LIMIT 300.
+  const [filtroAtendimento, setFiltroAtendimento] = useState<FiltroAtendimento | null>(null);
+  const filtroAtendimentoRef = useRef<FiltroAtendimento | null>(null);
+  filtroAtendimentoRef.current = filtroAtendimento;
+  const [versaoAtendimento, setVersaoAtendimento] = useState(0);
   apenasGruposRef.current = apenasGrupos;
   instanciaFiltroRef.current = instanciaFiltro;
   // Ao trocar de filtro, busca já (sem esperar o próximo tick do polling)
@@ -1000,7 +1012,7 @@ export function WhatsAppInterface() {
     if (ultimoFiltroBuscadoRef.current === null) return; // primeira carga é do efeito de montagem
     fetchConversas(activeTab === "arquivadas");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apenasGrupos, instanciaFiltro]);
+  }, [apenasGrupos, instanciaFiltro, filtroAtendimento]);
 
 
   // Estados para seleção múltipla
@@ -1120,6 +1132,7 @@ export function WhatsAppInterface() {
       });
       if (res.ok) {
         setIaPausada(novoEstado);
+        recarregarAtendimento();
         toast.success(novoEstado ? 'IA pausada para este contato' : 'IA reativada');
       } else {
         toast.error('Erro ao alterar status da IA');
@@ -1499,10 +1512,23 @@ export function WhatsAppInterface() {
     return () => { vivo = false; };
   }, [activeChat?.id, activeChat?.phone, activeChat?.is_group, qtdMensagensAtivas]);
 
+  const jidAtivo = activeChat && !activeChat.is_group ? (activeChat.remoteJid || `${activeChat.phone}@s.whatsapp.net`) : undefined;
+  const { dados: atendimentoConversa, recarregar: recarregarAtendimento } = useAtendimentoConversa(activeChat?.source, jidAtivo, qtdMensagensAtivas);
+  const atendimentoAtivo = atendimentoConversa?.atendimento && atendimentoConversa.atendimento.estado !== "resolvido" ? atendimentoConversa.atendimento : null;
+  const aoMudarAtendimento = () => {
+    recarregarAtendimento();
+    setVersaoAtendimento(v => v + 1);
+    fetchConversas(activeTab === "arquivadas");
+  };
+  useEffect(() => {
+    if (atendimentoConversa) setIaPausada(atendimentoConversa.ia.pausada);
+  }, [atendimentoConversa?.ia.pausada]);
+
   const visibleMessages = useMemo(() => {
     const msgs = (activeChat?.messages ?? []).filter(isRenderableMessage);
     const eventos = funilConversa?.eventos ?? [];
-    if (!eventos.length || !msgs.length) return msgs;
+    const eventosAtendimento = atendimentoConversa?.eventos ?? [];
+    if ((!eventos.length && !eventosAtendimento.length) || !msgs.length) return msgs;
     const inicio = new Date(msgs[0].rawTimestamp || 0).getTime();
     const linhas: Message[] = eventos
       .filter((ev) => ev.origem !== "automacao" || ev.resultado !== "feito")
@@ -1516,8 +1542,19 @@ export function WhatsAppInterface() {
         timestamp: formatTime(ev.created_at),
         rawTimestamp: ev.created_at,
       }));
-    return [...msgs, ...linhas].sort((a, b) => new Date(a.rawTimestamp || 0).getTime() - new Date(b.rawTimestamp || 0).getTime());
-  }, [activeChat?.messages, funilConversa]);
+    const linhasAtendimento: Message[] = eventosAtendimento
+      .filter((ev) => ev.tipo !== "aberto" && new Date(ev.created_at).getTime() >= inicio)
+      .map((ev) => ({
+        id: `atend-${ev.id}`,
+        role: "note" as const,
+        tipo: ev.tipo === "nota" ? undefined : "atendimento_evento",
+        content: ev.tipo === "nota" ? (ev.texto || "") : textoEventoAtendimento(ev),
+        senderName: ev.autor_nome || "Nota interna",
+        timestamp: formatTime(ev.created_at),
+        rawTimestamp: ev.created_at,
+      }));
+    return [...msgs, ...linhas, ...linhasAtendimento].sort((a, b) => new Date(a.rawTimestamp || 0).getTime() - new Date(b.rawTimestamp || 0).getTime());
+  }, [activeChat?.messages, funilConversa, atendimentoConversa?.eventos]);
 
   // [AUDITORIA] LÓGICA (Sprint Colunas de Status de Envio, 2026-07-31): mesma tag "Já enviado
   // (campanha, data)"/"Nunca enviado" já usada em StepContacts (Disparos.tsx) e ContatoDetalhe.tsx —
@@ -1682,12 +1719,16 @@ export function WhatsAppInterface() {
       // no navegador sobre a lista já cortada fazia o filtro parecer vazio com dados no banco.
       const grupos = apenasGruposRef.current;
       const numero = instanciaFiltroRef.current;
-      const filtroKey = `${grupos}|${numero}|${isArchived}`;
+      const filtroAt = filtroAtendimentoRef.current;
+      const filtroKey = `${grupos}|${numero}|${isArchived}|${filtroAt}`;
       const filtroMudou = ultimoFiltroBuscadoRef.current !== null && ultimoFiltroBuscadoRef.current !== filtroKey;
       ultimoFiltroBuscadoRef.current = filtroKey;
       const qs = new URLSearchParams({ archived: String(isArchived) });
       if (grupos) qs.set('grupos', 'true');
       if (numero) qs.set('numero', numero);
+      if (filtroAt === 'meus') qs.set('meus', '1');
+      else if (filtroAt === 'sem_atendente') qs.set('sem_atendente', '1');
+      else if (filtroAt) qs.set('estado', filtroAt);
       const res = await fetch(`${API_BASE}/api/whatsapp/conversas?${qs.toString()}`, { headers: await apiHeaders() });
       if (!res.ok) {
         console.error('[WA] fetchConversas falhou', res.status);
@@ -1728,6 +1769,7 @@ export function WhatsAppInterface() {
             nameIsFallback: display.isFallback,
             lastFromClient: row.ultimo_role === 'user',
             lastType: row.ultimo_tipo || undefined,
+            remoteJid: row.remote_jid || undefined,
             phone: row.session_id,
             is_group: row.is_group || false,
             source: row.instancia || undefined,
@@ -2252,8 +2294,18 @@ export function WhatsAppInterface() {
     if (inputMode === "nota") {
       // Nota privada — salva internamente, não envia ao WhatsApp
       if (!noteInput.trim() || !activeChatId) return;
-      toast.success("Nota salva internamente");
+      if (!jidAtivo || !activeChat?.source) { toast.info("Notas internas valem para conversas individuais."); return; }
+      const texto = noteInput.trim();
       setNoteInput("");
+      try {
+        const id = atendimentoConversa?.atendimento?.id ?? (await abrirAtendimento(activeChat.source, jidAtivo)).id;
+        await acaoAtendimento(id, "notas", { texto });
+        aoMudarAtendimento();
+        toast.success("Nota interna salva");
+      } catch (e: any) {
+        setNoteInput(texto); // não perde o que foi digitado
+        toast.error(e.message);
+      }
       return;
     }
 
@@ -3448,6 +3500,8 @@ export function WhatsAppInterface() {
           </div>
         </div>
 
+        <FiltrosAtendimento valor={filtroAtendimento} onChange={setFiltroAtendimento} versao={versaoAtendimento} />
+
         {/* Search */}
         <div className="px-3 sm:px-4 py-2 sm:py-3 border-b bg-card/20 relative">
           <div className="relative group">
@@ -4097,6 +4151,8 @@ export function WhatsAppInterface() {
                     <BotOff className="h-3.5 w-3.5" />
                     <span className="hidden sm:inline">IA não entra em grupo</span>
                   </span>
+                ) : atendimentoAtivo ? (
+                  <MenuPausaIA atendimentoId={atendimentoAtivo.id} pausada={iaPausada} ate={atendimentoConversa?.ia.ate ?? null} onMudou={aoMudarAtendimento} />
                 ) : (
                   <button
                     onClick={toggleIA}
@@ -4261,6 +4317,10 @@ export function WhatsAppInterface() {
               </div>
             )}
 
+            {activeChat && !activeChat.is_group && activeChat.source && jidAtivo && (
+              <BarraAtendimento dados={atendimentoConversa} instancia={activeChat.source} jid={jidAtivo} onMudou={aoMudarAtendimento} />
+            )}
+
             {/* Mensagens fixadas (CRM-only — não sincroniza com o WhatsApp real, ver Message.fixada) */}
             {activeChat && activeChat.messages.some(m => m.fixada) && (
               <div className="border-b bg-primary/[0.03] px-4 py-1.5 space-y-1 max-h-28 overflow-y-auto shrink-0">
@@ -4402,6 +4462,17 @@ export function WhatsAppInterface() {
                   </div>
                 )}
                 {visibleMessages.map((m, i) => {
+                  if (m.tipo === "atendimento_evento") {
+                    return (
+                      <div key={m.id} className="flex justify-center my-2 px-4">
+                        <div className="flex items-center gap-1.5 max-w-[90%] rounded-full border border-border/60 bg-muted/40 px-3 py-1 text-[11px] text-foreground/80" title={m.content}>
+                          <Info className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{m.content}</span>
+                          <span className="tabular-nums opacity-60 shrink-0">{m.timestamp}</span>
+                        </div>
+                      </div>
+                    );
+                  }
                   if (m.tipo === "funil_evento") {
                     const feito = m.senderName === "feito";
                     return (
@@ -4423,7 +4494,7 @@ export function WhatsAppInterface() {
                   const isNote = m.role === "note";
                   // Faixas do funil não contam como "mensagem anterior" (data e agrupamento por remetente).
                   let prevIdx = i - 1;
-                  while (prevIdx >= 0 && visibleMessages[prevIdx].tipo === "funil_evento") prevIdx--;
+                  while (prevIdx >= 0 && (visibleMessages[prevIdx].tipo === "funil_evento" || visibleMessages[prevIdx].tipo === "atendimento_evento")) prevIdx--;
                   const prevMsg = prevIdx >= 0 ? visibleMessages[prevIdx] : null;
                   const prevRole = prevMsg?.role ?? null;
                   

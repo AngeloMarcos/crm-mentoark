@@ -1238,6 +1238,7 @@ export default function whatsappRouter(pool: Pool): Router {
          SELECT
            r.phone AS session_id,
            r.instance_name AS instancia,
+           r.remote_jid,
            -- [AUDITORIA] LÓGICA (Sprint Grupos Somem com Instância Duplicada, 2026-09-04):
            -- instancia acima é só o instance_name cru da última mensagem — não sobrevive a
            -- reconexão sob um nome novo pro mesmo número (ver comentário completo na migration de
@@ -1288,7 +1289,7 @@ export default function whatsappRouter(pool: Pool): Router {
            AND ($3::boolean IS NOT TRUE OR r.is_group)
            AND ($4::text IS NULL OR COALESCE(win.numero, r.instance_name) = $4::text)
            AND ($5::text IS NULL OR at.estado = $5::text)
-           AND ($6::uuid IS NULL OR at.atendente_id = $6::uuid)
+           AND ($6::uuid IS NULL OR (at.atendente_id = $6::uuid AND at.estado <> 'resolvido'))
            AND ($7::boolean IS NOT TRUE OR (at.estado <> 'resolvido' AND at.atendente_id IS NULL))
          -- [AUDITORIA] BUG (achado 2026-09-18 — "já tá conectado mas não aparece os grupos",
          -- mesma investigação do ledger instância-número): cu.is_pinned só existe pra contato
@@ -1324,6 +1325,7 @@ export default function whatsappRouter(pool: Pool): Router {
         return {
           session_id: row.session_id,
           instancia: row.instancia,
+          remote_jid: row.remote_jid,
           numero: row.numero,
           is_group: isGroup,
           nome: nomeFormatado,
