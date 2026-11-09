@@ -3372,5 +3372,127 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_funil_eventos_contato ON funil_eventos (contato_id, created_at DESC)`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_funil ON contatos (user_id, funil_estagio_id) WHERE funil_estagio_id IS NOT NULL`).catch(() => {});
 
+  // 2026-11-09 (Sprint Atendimento v1, Fase 1 — services/atendimento.ts): uma linha por CICLO de
+  // atendimento da conversa, com histórico próprio. No máximo um em andamento por conversa (índice único parcial).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atendimentos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      instance_name TEXT NOT NULL,
+      remote_jid TEXT NOT NULL,
+      telefone TEXT NOT NULL,
+      contato_id UUID REFERENCES contatos(id) ON DELETE SET NULL,
+      estado TEXT NOT NULL DEFAULT 'aberto' CHECK (estado IN ('aberto', 'aguardando', 'resolvido')),
+      atendente_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      departamento_id UUID,
+      origem TEXT NOT NULL,
+      reaberto_de UUID REFERENCES atendimentos(id) ON DELETE SET NULL,
+      aberto_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      primeira_resposta_em TIMESTAMPTZ,
+      primeira_resposta_humana_em TIMESTAMPTZ,
+      resolvido_em TIMESTAMPTZ,
+      resolvido_por UUID REFERENCES users(id) ON DELETE SET NULL,
+      motivo_resolucao_id UUID,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(err => log.warn('MIGRATIONS', 'atendimentos', { err: err?.message }));
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_atendimento_em_andamento ON atendimentos (user_id, instance_name, remote_jid) WHERE estado <> 'resolvido'`).catch(err => log.warn('MIGRATIONS', 'uq_atendimento_em_andamento', { err: err?.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atendimentos_conversa ON atendimentos (user_id, instance_name, remote_jid, resolvido_em DESC)`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atendimentos_lista ON atendimentos (user_id, estado, aberto_em DESC)`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atendimento_eventos (
+      id BIGSERIAL PRIMARY KEY,
+      atendimento_id UUID NOT NULL REFERENCES atendimentos(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tipo TEXT NOT NULL,
+      origem TEXT NOT NULL,
+      autor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      de_atendente UUID REFERENCES users(id) ON DELETE SET NULL,
+      para_atendente UUID REFERENCES users(id) ON DELETE SET NULL,
+      motivo_id UUID,
+      texto TEXT,
+      ate TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(err => log.warn('MIGRATIONS', 'atendimento_eventos', { err: err?.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atendimento_eventos ON atendimento_eventos (atendimento_id, created_at)`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS motivos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tipo TEXT NOT NULL CHECK (tipo IN ('transferencia', 'resolucao', 'pausa', 'perda')),
+      nome TEXT NOT NULL,
+      ativo BOOLEAN NOT NULL DEFAULT true,
+      ordem INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(err => log.warn('MIGRATIONS', 'motivos', { err: err?.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_motivos_conta ON motivos (user_id, tipo)`).catch(() => {});
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_motivos_nome ON motivos (user_id, tipo, lower(nome))`).catch(err => log.warn('MIGRATIONS', 'uq_motivos_nome', { err: err?.message }));
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atendimento_config (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      motivo_obrigatorio BOOLEAN NOT NULL DEFAULT false,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(err => log.warn('MIGRATIONS', 'atendimento_config', { err: err?.message }));
+
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ia_pausada_ate TIMESTAMPTZ`).catch(err => log.warn('MIGRATIONS', 'ia_pausada_ate', { err: err?.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_ia_pausada_ate ON contatos (ia_pausada_ate) WHERE ia_pausada_ate IS NOT NULL`).catch(() => {});
+  // Existia só no homolog; em prod o filtro do papel `membro` em routes/contatos.ts dava erro.
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS atribuido_a UUID REFERENCES users(id) ON DELETE SET NULL`).catch(err => log.warn('MIGRATIONS', 'contatos.atribuido_a', { err: err?.message }));
+
+  // Vários pontos devolvem a IA zerando só `atendente_pausou_ia`. Sem isto, um prazo antigo ficaria
+  // para trás e encerraria antes da hora a próxima pausa "até eu devolver" desse contato.
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION limpar_prazo_pausa_ia() RETURNS trigger AS $$
+    BEGIN
+      NEW.ia_pausada_ate := NULL;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql`).catch(err => log.warn('MIGRATIONS', 'limpar_prazo_pausa_ia', { err: err?.message }));
+  await pool.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_limpar_prazo_pausa_ia') THEN
+        CREATE TRIGGER trg_limpar_prazo_pausa_ia BEFORE UPDATE ON contatos
+          FOR EACH ROW WHEN (NEW.atendente_pausou_ia = false AND NEW.ia_pausada_ate IS NOT NULL)
+          EXECUTE FUNCTION limpar_prazo_pausa_ia();
+      END IF;
+    END $$`).catch(err => log.warn('MIGRATIONS', 'trg_limpar_prazo_pausa_ia', { err: err?.message }));
+
+  await criarAtendimentosIniciais(pool).catch(err => log.warn('MIGRATIONS', 'backfill atendimentos', { err: err?.message }));
+
   log.info('MIGRATIONS', 'OK');
+}
+
+/**
+ * Sprint Atendimento v1: abre um atendimento para cada conversa individual com mensagem do cliente
+ * nos últimos 7 dias. Só roda com a tabela vazia: repetir a cada boot reabriria o que já foi resolvido.
+ * `app.is_admin`: whatsapp_messages tem RLS no homolog. Origem própria para os relatórios excluírem.
+ */
+async function criarAtendimentosIniciais(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    if ((await client.query(`SELECT 1 FROM atendimentos LIMIT 1`)).rowCount) return;
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.is_admin', 'true', true)`);
+    const r = await client.query(`
+      INSERT INTO atendimentos (user_id, instance_name, remote_jid, telefone, contato_id, estado, origem, aberto_em)
+      SELECT m.user_id, m.instance_name, m.remote_jid, split_part(m.remote_jid, '@', 1), c.id, 'aberto', 'migracao', m.ultima
+      FROM (
+        SELECT user_id, instance_name, remote_jid, MAX(timestamp_wa) AS ultima
+        FROM whatsapp_messages
+        WHERE from_me = false AND NOT maturador_global AND deleted_at IS NULL
+          AND timestamp_wa > NOW() - INTERVAL '7 days'
+          AND (remote_jid LIKE '%@s.whatsapp.net' OR remote_jid LIKE '%@lid' OR remote_jid LIKE '%@bsuid')
+        GROUP BY user_id, instance_name, remote_jid
+      ) m
+      LEFT JOIN contatos c ON c.user_id = m.user_id AND c.telefone = split_part(m.remote_jid, '@', 1)
+      WHERE NOT EXISTS (SELECT 1 FROM agentes a WHERE a.numero_conectado = split_part(m.remote_jid, '@', 1))
+      ON CONFLICT (user_id, instance_name, remote_jid) WHERE estado <> 'resolvido' DO NOTHING`);
+    await client.query('COMMIT');
+    log.info('MIGRATIONS', 'Atendimentos iniciais criados', { total: r.rowCount });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }

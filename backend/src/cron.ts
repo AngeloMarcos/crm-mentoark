@@ -19,6 +19,7 @@ import { processarGruposMaturador } from './services/maturadorGrupos';
 import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappMediaStorage';
 import { enfileirarBusca, enfileirarLinkPublico } from './radar/fila';
 import { criarBuscaAgendada } from './radar/busca';
+import { encerrarPausasVencidas } from './services/atendimento';
 
 // [AUDITORIA] FIX APLICADO (Sprint Limpeza de Disco, 2026-08-23): dias de retenção pra mídia
 // recebida (áudio/imagem/vídeo/documento) salva em disco — configurável via env pra poder
@@ -33,6 +34,12 @@ const DIAS_RETENCAO_MIDIA = Number(process.env.DIAS_RETENCAO_MIDIA_WHATSAPP) || 
 const HORAS_RETENCAO_VARIANTES = Number(process.env.HORAS_RETENCAO_VARIANTES_IMAGEM) || 12;
 
 export function initCronJobs() {
+  // Sprint Atendimento v1: pausa da IA com prazo termina sozinha (services/atendimento.ts).
+  cron.schedule('*/1 * * * *', async () => {
+    const encerradas = await encerrarPausasVencidas(pool);
+    if (encerradas > 0) log.info('CRON', 'Pausas da IA com prazo encerradas', { encerradas });
+  });
+
   // Radar de Grupos: busca automática diária dos nichos marcados como "agendar" (rodízio de consultas, só traz
   // grupos novos). Espaça os nichos para não estourar o ritmo do provedor de busca.
   cron.schedule('10 5 * * *', async () => {

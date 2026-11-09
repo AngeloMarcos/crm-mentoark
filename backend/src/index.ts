@@ -69,6 +69,7 @@ import subPerfisRouter from './routes/subperfis';
 import kanbanRouter, { kanbanWebhookN8n } from './routes/kanban';
 import funisRouter from './routes/funis';
 import conversasRouter from './routes/conversas';
+import { atendimentosRouter, motivosRouter } from './routes/atendimentos';
 import { testarAgentePlayground } from './services/agentEngine';
 import metaOficialRouter from './routes/metaOficial';
 import metaWebhookRouter from './routes/metaWebhook';
@@ -504,6 +505,8 @@ app.use('/api/sub-perfis', subPerfisRouter(pool));
 app.use('/api/kanban', kanbanRouter(pool));
 app.use('/api/funis', funisRouter(pool));
 app.use('/api/conversas', conversasRouter(pool));
+app.use('/api/atendimentos', atendimentosRouter(pool));
+app.use('/api/motivos', motivosRouter(pool));
 app.use('/api/ai-providers', aiProvidersRouter(pool));
 app.use('/api/integracoes', integracoesHubRouter(pool)); // 2026-10-29: integrações num lugar só (modelo Cubo)
 app.use('/api/canais', canaisRouter(pool)); // 2026-10-30: número de WhatsApp → agente que responde (modelo Cubo)

@@ -27,6 +27,7 @@ import {
   proxyDoAgente, camposEvolution, marcarProxyAplicado, validarProxy, validarProxyParaConexao,
   gravarProxyDaConexao, agenteDaInstancia, type ProxyEntrada, type SaidaProxy,
 } from '../services/proxyInstancia';
+import { registrarSaida, iaEstaPausada, lerFiltrosConversas } from '../services/atendimento';
 import { marcarLogoutPlanejado, saudeDoUsuario, mudarFase, normalizar as normalizarSaude, ROTULO_FASE, invalidarCacheSaude, registrarEvento as registrarEventoSaude, registrarEstadoCelular, painelNumero, ESTADOS_CELULAR, EstadoCelular } from '../services/saudeNumero';
 import { calcularChecklistOficial } from '../services/checklistOficial';
 import { webhooksParados } from '../services/saudeWebhook';
@@ -1153,6 +1154,7 @@ export default function whatsappRouter(pool: Pool): Router {
       // cortada — um filtro podia parecer vazio mesmo com dados no banco).
       const apenasGrupos = req.query.grupos === 'true';
       const numeroFiltro = typeof req.query.numero === 'string' && req.query.numero.trim() ? req.query.numero.trim() : null;
+      const filtrosAtendimento = lerFiltrosConversas(req.query as Record<string, unknown>, userId);
       const tenantId = await resolveOwnerId(userId); // Carrega o ID do dono da conta
       // [AUDITORIA] FIX APLICADO (2026-07-21): setDbUserId(tenantId) -- a query abaixo filtra
       // por tenantId (dono da equipe), não pelo userId bruto; RLS precisa ver o mesmo id.
@@ -1179,6 +1181,7 @@ export default function whatsappRouter(pool: Pool): Router {
            SELECT
              b.chave AS phone,
              b.instance_name,
+             b.remote_jid,
              b.content,
              b.from_me,
              b.created_at,
@@ -1210,7 +1213,9 @@ export default function whatsappRouter(pool: Pool): Router {
              COALESCE(profile_pic_url) AS profile_pic_url,
              is_pinned,
              is_archived,
-             muted_until
+             muted_until,
+             atendente_pausou_ia,
+             ia_pausada_ate
            FROM contatos
            WHERE user_id = $1 AND telefone IS NOT NULL
            ORDER BY RIGHT(telefone, 11), updated_at DESC NULLS LAST
@@ -1259,16 +1264,32 @@ export default function whatsappRouter(pool: Pool): Router {
            gu.grupo_pic,
            COALESCE(cu.is_pinned, false) AS is_pinned,
            COALESCE(cu.is_archived, false) AS is_archived,
-           COALESCE(cu.muted_until, gu.grupo_muted_until) AS muted_until
+           COALESCE(cu.muted_until, gu.grupo_muted_until) AS muted_until,
+           cu.atendente_pausou_ia,
+           cu.ia_pausada_ate,
+           at.id AS atendimento_id,
+           at.estado AS atendimento_estado,
+           at.atendente_id,
+           at.atendente_nome
          FROM ranked r
          LEFT JOIN contato_unico cu ON cu.sufixo = RIGHT(r.phone, 11) AND NOT r.is_group
          LEFT JOIN grupo_unico gu ON gu.grupo_id = r.phone AND r.is_group
          LEFT JOIN whatsapp_instance_numeros win ON win.instance_name = r.instance_name
          LEFT JOIN push_recebido pr ON pr.chave = r.phone AND NOT r.is_group
+         -- Sprint Atendimento v1: o ciclo em andamento ou, se não houver, o último resolvido.
+         LEFT JOIN LATERAL (
+           SELECT a.id, a.estado, a.atendente_id, u.display_name AS atendente_nome
+           FROM atendimentos a LEFT JOIN users u ON u.id = a.atendente_id
+           WHERE a.user_id = $1 AND a.instance_name = r.instance_name AND a.remote_jid = r.remote_jid
+           ORDER BY (a.estado <> 'resolvido') DESC, a.created_at DESC LIMIT 1
+         ) at ON NOT r.is_group
          WHERE r.rn = 1
            AND COALESCE(cu.is_archived, false) = $2
            AND ($3::boolean IS NOT TRUE OR r.is_group)
            AND ($4::text IS NULL OR COALESCE(win.numero, r.instance_name) = $4::text)
+           AND ($5::text IS NULL OR at.estado = $5::text)
+           AND ($6::uuid IS NULL OR at.atendente_id = $6::uuid)
+           AND ($7::boolean IS NOT TRUE OR (at.estado <> 'resolvido' AND at.atendente_id IS NULL))
          -- [AUDITORIA] BUG (achado 2026-09-18 — "já tá conectado mas não aparece os grupos",
          -- mesma investigação do ledger instância-número): cu.is_pinned só existe pra contato
          -- individual (o LEFT JOIN de contato_unico exige NOT r.is_group) — pra TODO grupo esse
@@ -1282,7 +1303,7 @@ export default function whatsappRouter(pool: Pool): Router {
          -- já era o comportamento pretendido (só fixados no topo).
          ORDER BY COALESCE(cu.is_pinned, false) DESC, r.created_at DESC
          LIMIT 300`,
-        [tenantId, showArchived, apenasGrupos, numeroFiltro]
+        [tenantId, showArchived, apenasGrupos, numeroFiltro, filtrosAtendimento.estado, filtrosAtendimento.atendenteId, filtrosAtendimento.semAtendente]
       );
 
       const conversas = r.rows.map(row => {
@@ -1317,6 +1338,14 @@ export default function whatsappRouter(pool: Pool): Router {
           is_pinned: row.is_pinned || false,
           is_archived: row.is_archived || false,
           muted_until: row.muted_until || null,
+          atendimento: row.atendimento_id ? {
+            id: row.atendimento_id,
+            estado: row.atendimento_estado,
+            atendente_id: row.atendente_id,
+            atendente_nome: row.atendente_nome,
+            ia_pausada: iaEstaPausada({ atendentePausouIa: row.atendente_pausou_ia, atendimentoIa: null, iaPausadaAte: row.ia_pausada_ate }, new Date()),
+            ia_pausada_ate: row.ia_pausada_ate,
+          } : null,
           mensagens: [],
         };
       });
@@ -1469,7 +1498,8 @@ export default function whatsappRouter(pool: Pool): Router {
       const tenantId = await resolveOwnerId(userId);
 
       const upd = await pool.query(
-        `UPDATE contatos SET atendente_pausou_ia = $1
+        // O botão liga/desliga é "até eu devolver": apaga qualquer prazo que existisse.
+        `UPDATE contatos SET atendente_pausou_ia = $1, ia_pausada_ate = NULL
          WHERE user_id = $2 AND telefone ILIKE $3`,
         [pausar, tenantId, suffix]
       );
@@ -3077,6 +3107,12 @@ export default function whatsappRouter(pool: Pool): Router {
         [tenantId, userId, instancia, isGroup ? numeroDestino : `${phoneClean}@s.whatsapp.net`,
          messageId, msgType, content, mediaUrlFinal || null, mediaMimetype]
       ).catch(err => log.warn('SEND', 'Falha ao salvar', { err: err.message }));
+
+      // Sprint Atendimento v1: sem await — não atrasa o envio (grupo é ignorado pelo serviço).
+      void registrarSaida(pool, {
+        userId: tenantId, instancia, remoteJid: isGroup ? numeroDestino : `${phoneClean}@s.whatsapp.net`,
+        telefone: phoneClean, origem: 'humano', autorId: userId,
+      });
 
       return res.json({ ok: true, messageId });
     } catch (err: any) {

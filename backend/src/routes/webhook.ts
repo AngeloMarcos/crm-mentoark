@@ -72,6 +72,7 @@ import { aoConectarInstancia, aoDesconectarInstancia, instanciasEmProtecao } fro
 import { aoQuedaSaude, registrarEvento as registrarEventoSaude } from '../services/saudeNumero';
 import { extrairIdentidades, resolverTelefone, registrarIdentidades, lembrarDestinoLid, marcarContatoSoLid } from '../services/identidadeContato';
 import { registrarOrigemInbound } from './smartLinks';
+import { registrarEntrada, registrarSaida } from '../services/atendimento';
 import { registrarEventoWebhook } from '../services/saudeWebhook';
 import { registrarAckDisparo, marcarRespostaNoEnvio } from '../services/metricasDisparo';
 import { withTenantContext } from '../db';
@@ -1144,6 +1145,11 @@ export default function webhookRouter(pool: Pool): Router {
              ON CONFLICT (message_id, instance_name) DO NOTHING`,
             [userId, instancia, remoteJid, messageId, tipo, textoFromMe || null, tsVal]
           )).catch(err => log.error('WEBHOOK', 'Erro ao inserir mensagem fromMe', { traceId, err: err.message }));
+
+          // Resposta pelo celular: quem responde é o dono do número. A palavra de reativar é comando, não resposta.
+          if (textoNormFromMe !== palavraReativar) {
+            void registrarSaida(pool, { userId, instancia, remoteJid, telefone, origem: 'humano', autorId: userId });
+          }
         } else {
           // [AUDITORIA] BUG: mensagens fromMe=true de uma instância sem userId resolvido eram
           // descartadas em silêncio (sem log), diferente do fluxo de mensagens recebidas (que loga
@@ -1593,6 +1599,11 @@ export default function webhookRouter(pool: Pool): Router {
         // Sprint 3 / H7: 1ª mensagem com código de Smart Link ou vinda de anúncio clique-para-WhatsApp
         // marca a origem inbound do contato (primeiro toque vence). Ver routes/smartLinks.ts.
         if (!isGroup && !fromMe) void registrarOrigemInbound(pool, userId, telefone, texto, payload.data);
+
+        // Sprint Atendimento v1: sem await de propósito — nunca atrasa nem derruba o webhook.
+        if (!isGroup && !fromMe && (insertResult as any).rowCount === 1) {
+          void registrarEntrada(pool, { userId: userId as string, instancia, remoteJid, telefone });
+        }
 
         // Resposta a disparo (robô, recusa, interesse, opt-out): só mensagem nova de conversa individual.
         if ((insertResult as any).rowCount === 1 && !isGroup && texto) {

@@ -28,6 +28,7 @@ import { registrarEvento } from './saudeNumero';
 import { processarComDebounce, PREFIXO_OFICIAL } from './agentEngine';
 import { marcarRespostaNoEnvio } from './metricasDisparo';
 import { registrarAtribuicao } from './atribuicaoAnuncio';
+import { registrarEntrada } from './atendimento';
 
 const PALAVRAS_OPTOUT = /^\s*(sair|parar|pare|stop|cancelar|remover|n[aã]o quero( mais)?|parar promo[cç][oõ]es|descadastrar)\s*[.!]*\s*$/i;
 const digitos = (s: unknown) => String(s || '').replace(/\D/g, '');
@@ -100,6 +101,7 @@ async function tratarMensagem(pool: Pool, cfg: any, msg: any, valor: any): Promi
      ON CONFLICT (message_id, instance_name) DO NOTHING`,
     [cfg.user_id, instanceName, remoteJid, msg.id, tipo, texto, ts, pushName]
   ));
+  void registrarEntrada(pool, { userId: cfg.user_id, instancia: instanceName, remoteJid, telefone: telefone || String(bsuid || '') });
 
   if (!telefone) {
     // 2026: a Meta pode mandar só o BSUID (sem telefone). Guarda a identidade; contato sem telefone

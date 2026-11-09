@@ -20,6 +20,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { MOTIVOS, decidirMovimentoIA, moverNoFunil, prepararFunilIA, registrarEventoFunil } from './funilAuto';
 import { aplicarCerebro } from './canais';
+import { iaEstaPausada, marcarAguardando, registrarSaida } from './atendimento';
 import {
   ConfigConversa, esperaAgruparMs, limiteHistorico, cortarHistoricoPorTokens, dividirResposta,
   intervaloEntrePartesMs, instrucoesComportamento, formatarParte, mensagemDeErro, ragDoAgente,
@@ -936,10 +937,20 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
      LIMIT 1`,
     [userIdFinal, `%${entrada.telefone.slice(-11)}`]
   ).catch(() => ({ rows: [] as any[] }));
-  if (
-    pausaRes.rows[0]?.atendimento_ia === 'pause' ||
-    pausaRes.rows[0]?.atendente_pausou_ia === true
-  ) {
+  // Sprint Atendimento v1: prazo lido à parte e só para quem está pausado. Se esta leitura falhar
+  // (ex.: coluna ainda não migrada no boot), fica sem prazo e a pausa continua valendo.
+  const estaMarcadaPausada = pausaRes.rows[0]?.atendimento_ia === 'pause' || pausaRes.rows[0]?.atendente_pausou_ia === true;
+  const prazoPausa = estaMarcadaPausada
+    ? (await pool.query(
+        `SELECT ia_pausada_ate FROM contatos WHERE user_id = $1 AND telefone ILIKE $2 AND ia_pausada_ate IS NOT NULL LIMIT 1`,
+        [userIdFinal, `%${entrada.telefone.slice(-11)}`]
+      ).catch(() => ({ rows: [] as any[] }))).rows[0]?.ia_pausada_ate ?? null
+    : null;
+  if (iaEstaPausada({
+    atendentePausouIa: pausaRes.rows[0]?.atendente_pausou_ia,
+    atendimentoIa: pausaRes.rows[0]?.atendimento_ia,
+    iaPausadaAte: prazoPausa,
+  }, new Date())) {
     log.info('ENGINE', 'IA pausada', {
       telefone: entrada.telefone,
       atendimentoIa: pausaRes.rows[0]?.atendimento_ia,
@@ -963,6 +974,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // avisa o cliente, registra na linha do tempo e cria card de alta prioridade pra equipe.
   if (pediuAtendenteHumano(entrada.texto)) {
     await transferirParaHumano(pool, userIdFinal, entrada, agente, contato.id);
+    void marcarAguardando(pool, { userId: userIdFinal, instancia: entrada.instancia, remoteJid: jidConversa(entrada.telefone), telefone: entrada.telefone });
     return;
   }
 
@@ -1596,6 +1608,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
        Math.floor(Date.now() / 1000),
        nomeAgente]
     )).catch(err => log.error('ENGINE INSERT whatsapp_messages', 'Falha ao inserir whatsapp_messages', { err: err?.message, stack: err?.stack }));
+    void registrarSaida(pool, { userId: userIdFinal, instancia: entrada.instancia, remoteJid: jidConversa(entrada.telefone), telefone: entrada.telefone, origem: 'ia', autorId: null });
   }
 
   // 13. Registrar uso de tokens
