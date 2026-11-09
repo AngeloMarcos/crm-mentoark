@@ -12,14 +12,10 @@ import { resolverOwnerId } from '../services/subscription';
 import { withTenantContext } from '../db';
 import {
   gravarEvento, pausarIA, devolverIA, iaEstaPausada, erroDeEstado, lerMinutosPausa, lerNota, ehUuid, jidAtendivel,
-  type AcaoComEstado,
+  atendenteDaConta, motivoDaConta, atribuirAtendimento, resolverAtendimento,
+  RecusaAtendimento as Recusa, type AcaoComEstado, type TipoMotivo,
 } from '../services/atendimento';
 
-class Recusa extends Error {
-  constructor(public status: number, message: string) { super(message); }
-}
-
-type TipoMotivo = 'transferencia' | 'resolucao' | 'pausa' | 'perda';
 const TIPOS_MOTIVO: TipoMotivo[] = ['transferencia', 'resolucao', 'pausa', 'perda'];
 
 const MOTIVOS_PADRAO: Partial<Record<TipoMotivo, string[]>> = {
@@ -31,28 +27,6 @@ function erroHttp(res: Response, err: any, contexto: string) {
   if (err instanceof Recusa) return res.status(err.status).json({ message: err.message });
   log.error('ATENDIMENTO', contexto, { err: err?.message });
   return res.status(500).json({ message: 'Erro ao processar o atendimento.' });
-}
-
-async function atendenteDaConta(db: PoolClient, ownerId: string, atendenteId: unknown): Promise<string> {
-  if (!ehUuid(atendenteId)) throw new Recusa(400, 'Escolha um atendente.');
-  const r = await db.query(`SELECT id FROM users WHERE id = $1 AND COALESCE(owner_id, id) = $2`, [atendenteId, ownerId]);
-  if (!r.rowCount) throw new Recusa(400, 'Atendente não encontrado nesta conta.');
-  return atendenteId as string;
-}
-
-/** Devolve o id do motivo validado, ou null se nenhum foi informado (e nenhum é exigido). */
-async function motivoDaConta(db: PoolClient, ownerId: string, tipo: TipoMotivo, motivoId: unknown, exigivel: boolean): Promise<string | null> {
-  if (motivoId === undefined || motivoId === null || motivoId === '') {
-    if (exigivel) {
-      const c = await db.query(`SELECT motivo_obrigatorio FROM atendimento_config WHERE user_id = $1`, [ownerId]);
-      if (c.rows[0]?.motivo_obrigatorio) throw new Recusa(400, 'Escolha um motivo.');
-    }
-    return null;
-  }
-  if (!ehUuid(motivoId)) throw new Recusa(400, 'Motivo inválido.');
-  const r = await db.query(`SELECT id FROM motivos WHERE id = $1 AND user_id = $2 AND tipo = $3 AND ativo`, [motivoId, ownerId, tipo]);
-  if (!r.rowCount) throw new Recusa(400, 'Motivo inválido.');
-  return motivoId as string;
 }
 
 interface Contexto { db: PoolClient; at: any; ownerId: string; autorId: string; body: any }
@@ -216,9 +190,7 @@ export function atendimentosRouter(pool: Pool): Router {
   });
 
   router.post('/:id/atribuir', acao('atribuir', async ({ db, at, ownerId, autorId, body }) => {
-    const para = await atendenteDaConta(db, ownerId, body.atendente_id ?? autorId);
-    await db.query(`UPDATE atendimentos SET atendente_id = $2, estado = 'aberto', updated_at = NOW() WHERE id = $1`, [at.id, para]);
-    if (para !== at.atendente_id) await gravarEvento(db, at.id, ownerId, 'atribuido', 'humano', { autorId, deAtendente: at.atendente_id, paraAtendente: para });
+    await atribuirAtendimento(db, at, ownerId, autorId, body.atendente_id ?? autorId, 'humano');
   }));
 
   router.post('/:id/transferir', acao('transferir', async ({ db, at, ownerId, autorId, body }) => {
@@ -230,16 +202,7 @@ export function atendimentosRouter(pool: Pool): Router {
   }));
 
   router.post('/:id/resolver', acao('resolver', async ({ db, at, ownerId, autorId, body }) => {
-    const motivoId = await motivoDaConta(db, ownerId, 'resolucao', body.motivo_id, true);
-    await db.query(
-      `UPDATE atendimentos SET estado = 'resolvido', resolvido_em = NOW(), resolvido_por = $2, motivo_resolucao_id = $3, updated_at = NOW() WHERE id = $1`,
-      [at.id, autorId, motivoId]
-    );
-    await gravarEvento(db, at.id, ownerId, 'resolvido', 'humano', { autorId, motivoId });
-    // Decisão 2 do plano: resolver devolve à IA, salvo pedido explícito.
-    if (body.manter_ia_pausada !== true && await devolverIA(db, ownerId, at.telefone)) {
-      await gravarEvento(db, at.id, ownerId, 'ia_retomada', 'humano', { autorId });
-    }
+    await resolverAtendimento(db, at, ownerId, autorId, { motivoId: body.motivo_id, manterIaPausada: body.manter_ia_pausada === true, origem: 'humano' });
   }));
 
   router.post('/:id/reabrir', acao('reabrir', async ({ db, at, ownerId, autorId }) => {

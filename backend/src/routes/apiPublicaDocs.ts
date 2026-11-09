@@ -98,12 +98,24 @@ export function montarOpenApi() {
         get: { tags: ['Conversas'], summary: 'Listar mensagens da conversa (mais recentes primeiro, 50 por página)', parameters: [id, ...pagina],
           responses: { 200: { description: 'Lista paginada' }, 404: { description: 'Não encontrada' } } },
       },
+      '/conversations/{id}/assign': {
+        post: { tags: ['Conversas'], summary: 'Atribuir o atendimento em andamento (escopo conversations:update)', parameters: [id],
+          description: 'Sem `userId`, atribui ao dono da chave.',
+          requestBody: { content: json({ type: 'object', properties: { userId: { type: 'string' } } }) },
+          responses: { 200: { description: '`{ data: { id, attendanceId, state, assignedTo, resolvedAt } }`' }, 404: { description: 'Sem atendimento em andamento (code `no_open_attendance`)' }, ...erros } },
+      },
+      '/conversations/{id}/resolve': {
+        post: { tags: ['Conversas'], summary: 'Resolver o atendimento em andamento (escopo conversations:update)', parameters: [id],
+          description: 'Devolve a conversa à IA, salvo `keepAiPaused: true`. `reasonId` é obrigatório se a conta exigir motivo.',
+          requestBody: { content: json({ type: 'object', properties: { reasonId: { type: 'string' }, keepAiPaused: { type: 'boolean' } } }) },
+          responses: { 200: { description: '`{ data: { id, attendanceId, state, assignedTo, resolvedAt } }`' }, 404: { description: 'Sem atendimento em andamento (code `no_open_attendance`)' }, ...erros } },
+      },
       '/messages/send': {
         post: { tags: ['Envio de mensagens'], summary: 'Enviar mensagem de texto por um canal',
           description:
             'Destinatário: `peopleId` ou `phone`. Contato com opt-out → 422 `opted_out`. ' +
             'Canal oficial fora da janela de 24h → 422 `window_closed` (templates pela API ainda não disponíveis). ' +
-            '`sentBy: bot` (padrão) não pausa a IA; `sentBy: human` age como atendente e pausa a IA da conversa.',
+            '`sentBy: bot` (padrão) não pausa a IA; `sentBy: human` atribui a conversa ao dono da chave e pausa a IA por 1 hora.',
           requestBody: { content: json({ type: 'object', required: ['channelId', 'text'], properties: {
             channelId: { type: 'string' }, peopleId: { type: 'string' }, phone: { type: 'string' },
             text: { type: 'string', maxLength: 4096 }, sentBy: { type: 'string', enum: ['bot', 'human'] } } }) },

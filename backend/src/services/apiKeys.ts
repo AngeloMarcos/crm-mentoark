@@ -16,7 +16,7 @@ export const RECURSOS: Record<string, { nome: string; acoes: Acao[] }> = {
   peoples:       { nome: 'Contatos', acoes: ['read', 'create', 'update', 'delete'] },
   tags:          { nome: 'Etiquetas', acoes: ['read', 'create', 'update'] },
   channels:      { nome: 'Canais', acoes: ['read'] },
-  conversations: { nome: 'Conversas', acoes: ['read'] },
+  conversations: { nome: 'Conversas', acoes: ['read', 'update'] },
   messages:      { nome: 'Envio de mensagens', acoes: ['create'] },
   agents:        { nome: 'Agentes de IA', acoes: ['read'] },
   funnel:        { nome: 'Funil', acoes: ['read', 'update'] },

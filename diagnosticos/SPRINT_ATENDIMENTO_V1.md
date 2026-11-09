@@ -1,7 +1,9 @@
 # Sprint Atendimento v1 — a conversa vira um atendimento (modelo Cubo)
 
 Data: 2026-11-04 · Origem: `engenharia_reversa_suite/RELATORIO_LACUNAS_CUBO_2026-11-04.md`, Prioridade 1.
-Status: **EM ANDAMENTO**. Fases 1 e 2 em homolog desde 2026-11-09 (teste de ponta a ponta: 11/11 e 51/51), ainda não commitadas nem em produção.
+Status: **CONCLUÍDA**. As 4 fases em produção em 2026-11-09 (teste de ponta a ponta em homolog: 11/11, 51/51 e 18/18; verificação visual em tela larga e celular).
+
+Acréscimos das Fases 3 e 4: `POST /api/atendimentos/abrir` (conversa parada não tem atendimento) e `GET /api/atendimentos/contadores`; "Meus" e "Sem atendente" consideram só atendimentos em andamento.
 
 Acréscimos da Fase 2: tabela `atendimento_config` (`motivo_obrigatorio`, por conta, com `GET/PUT /api/atendimentos/config`); excluir motivo só desativa, para os padrões não voltarem.
 

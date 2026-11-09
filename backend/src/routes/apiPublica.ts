@@ -10,7 +10,7 @@
  * `contatos`), então não existem `deals`/`pipes` ainda.
  */
 import { Router, Request, Response, NextFunction } from 'express';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { log } from '../logger';
 import { withTenantContext } from '../db';
 import {
@@ -24,6 +24,7 @@ import { enviarTextoMetaOficial } from '../services/metaCloudApi';
 import { BOT_ECHO_TTL_MS, PREFIXO_OFICIAL, botMessageIds } from '../services/agentEngine';
 import { montarOpenApi } from './apiPublicaDocs';
 import { garantirEtapasPadrao, moverNoFunil } from '../services/funilAuto';
+import { RecusaAtendimento, atribuirAtendimento, registrarEnvioHumanoApi, registrarSaida, resolverAtendimento } from '../services/atendimento';
 
 const TIPO_API = { aberta: 'open', ganho: 'won', perdido: 'lost' } as const;
 
@@ -509,6 +510,38 @@ export default function apiPublicaRouter(pool: Pool): Router {
     }
   });
 
+  // ── Atendimento da conversa ────────────────────────────────────────────────
+  const acaoConversa = (fn: (db: PoolClient, at: any, req: ChaveReq) => Promise<void>) => async (req: ChaveReq, res: Response) => {
+    const conv = lerIdConversa(req.params.id);
+    if (!conv) return erro(res, 404, 'Conversa não encontrada.', 'not_found');
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const at = (await client.query(
+        `SELECT * FROM atendimentos WHERE user_id = $1 AND instance_name = $2 AND remote_jid = $3 AND estado <> 'resolvido' FOR UPDATE`,
+        [req.ownerId, conv.instancia, conv.jid]
+      )).rows[0];
+      if (!at) { await client.query('ROLLBACK'); return erro(res, 404, 'Esta conversa não tem atendimento em andamento.', 'no_open_attendance'); }
+      await fn(client, at, req);
+      const atual = (await client.query(`SELECT estado, atendente_id, resolvido_em FROM atendimentos WHERE id = $1`, [at.id])).rows[0];
+      await client.query('COMMIT');
+      return res.json({ data: { id: req.params.id, attendanceId: at.id, state: atual.estado, assignedTo: atual.atendente_id, resolvedAt: atual.resolvido_em } });
+    } catch (err: any) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (err instanceof RecusaAtendimento) return erro(res, 422, err.message, 'validation_error');
+      log.error('API_V1', 'Erro na ação da conversa', { err: err?.message });
+      return erro(res, 500, 'Erro interno.');
+    } finally {
+      client.release();
+    }
+  };
+
+  router.post('/conversations/:id/assign', exige('conversations', 'update'), acaoConversa((db, at, req) =>
+    atribuirAtendimento(db, at, req.ownerId!, req.userId!, req.body?.userId ?? req.userId, 'api')));
+
+  router.post('/conversations/:id/resolve', exige('conversations', 'update'), acaoConversa((db, at, req) =>
+    resolverAtendimento(db, at, req.ownerId!, req.userId!, { motivoId: req.body?.reasonId, manterIaPausada: req.body?.keepAiPaused === true, origem: 'api' })));
+
   /** instance_name que as mensagens do canal usam em whatsapp_messages. */
   async function instanciaDoCanal(userId: string, canalId: string): Promise<string | null> {
     const qr = await pool.query(`SELECT evolution_instancia FROM agentes WHERE id::text = $1 AND user_id = $2`, [canalId, userId]);
@@ -600,6 +633,11 @@ export default function apiPublicaRouter(pool: Pool): Router {
         [req.ownerId, sentBy === 'human' ? req.userId : null, instancia, `${telefone}@s.whatsapp.net`, idFinal, texto,
          JSON.stringify({ origem: 'api_v1', api_key_id: req.chave!.id, sent_by: sentBy })]
       )).catch(err => log.warn('API_V1', 'Falha ao gravar mensagem enviada', { err: err.message }));
+
+      // Sem await: a mensagem já saiu e a resposta da API não depende disto.
+      const conversa = { userId: req.ownerId!, instancia, remoteJid: `${telefone}@s.whatsapp.net`, telefone };
+      if (sentBy === 'human') void registrarEnvioHumanoApi(pool, { ...conversa, autorId: req.userId! });
+      else void registrarSaida(pool, { ...conversa, origem: 'ia', autorId: null });
 
       return res.status(201).json({ data: { messageId: idFinal, status: 'sent', channelId: canalId, phone: telefone, peopleId: contato?.id || null, sentBy } });
     } catch (err: any) {

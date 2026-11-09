@@ -286,3 +286,69 @@ export async function devolverIA(db: Db, ownerId: string, telefone: string): Pro
   if (antes.rowCount) await db.query(`INSERT INTO ia_pausa_log (user_id, telefone, acao) VALUES ($1, $2, 'ativo')`, [ownerId, telefone]);
   return !!antes.rowCount;
 }
+
+// ── Ações compartilhadas entre as rotas do CRM e a API pública /v1 ───────────────────────────
+
+/** Recusa esperada, com o status HTTP e a mensagem para quem chamou. */
+export class RecusaAtendimento extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+export type TipoMotivo = 'transferencia' | 'resolucao' | 'pausa' | 'perda';
+
+export async function atendenteDaConta(db: Db, ownerId: string, atendenteId: unknown): Promise<string> {
+  if (!ehUuid(atendenteId)) throw new RecusaAtendimento(400, 'Escolha um atendente.');
+  const r = await db.query(`SELECT id FROM users WHERE id = $1 AND COALESCE(owner_id, id) = $2`, [atendenteId, ownerId]);
+  if (!r.rowCount) throw new RecusaAtendimento(400, 'Atendente não encontrado nesta conta.');
+  return atendenteId as string;
+}
+
+/** Devolve o id do motivo validado, ou null se nenhum foi informado (e nenhum é exigido). */
+export async function motivoDaConta(db: Db, ownerId: string, tipo: TipoMotivo, motivoId: unknown, exigivel: boolean): Promise<string | null> {
+  if (motivoId === undefined || motivoId === null || motivoId === '') {
+    if (exigivel) {
+      const c = await db.query(`SELECT motivo_obrigatorio FROM atendimento_config WHERE user_id = $1`, [ownerId]);
+      if (c.rows[0]?.motivo_obrigatorio) throw new RecusaAtendimento(400, 'Escolha um motivo.');
+    }
+    return null;
+  }
+  if (!ehUuid(motivoId)) throw new RecusaAtendimento(400, 'Motivo inválido.');
+  const r = await db.query(`SELECT id FROM motivos WHERE id = $1 AND user_id = $2 AND tipo = $3 AND ativo`, [motivoId, ownerId, tipo]);
+  if (!r.rowCount) throw new RecusaAtendimento(400, 'Motivo inválido.');
+  return motivoId as string;
+}
+
+export async function atribuirAtendimento(db: Db, at: any, ownerId: string, autorId: string, atendenteId: unknown, origem: 'humano' | 'api'): Promise<void> {
+  const para = await atendenteDaConta(db, ownerId, atendenteId);
+  await db.query(`UPDATE atendimentos SET atendente_id = $2, estado = 'aberto', updated_at = NOW() WHERE id = $1`, [at.id, para]);
+  if (para !== at.atendente_id) await gravarEvento(db, at.id, ownerId, 'atribuido', origem, { autorId, deAtendente: at.atendente_id, paraAtendente: para });
+}
+
+export async function resolverAtendimento(
+  db: Db, at: any, ownerId: string, autorId: string, opcoes: { motivoId: unknown; manterIaPausada: boolean; origem: 'humano' | 'api' },
+): Promise<void> {
+  const motivoId = await motivoDaConta(db, ownerId, 'resolucao', opcoes.motivoId, true);
+  await db.query(
+    `UPDATE atendimentos SET estado = 'resolvido', resolvido_em = NOW(), resolvido_por = $2, motivo_resolucao_id = $3, updated_at = NOW() WHERE id = $1`,
+    [at.id, autorId, motivoId]
+  );
+  await gravarEvento(db, at.id, ownerId, 'resolvido', opcoes.origem, { autorId, motivoId });
+  // Decisão 2 do plano: resolver devolve à IA, salvo pedido explícito.
+  if (!opcoes.manterIaPausada && await devolverIA(db, ownerId, at.telefone)) {
+    await gravarEvento(db, at.id, ownerId, 'ia_retomada', opcoes.origem, { autorId });
+  }
+}
+
+const MINUTOS_PAUSA_ENVIO_API = 60;
+
+/** POST /v1/messages/send com sentBy=human: quem é dono da chave assume e a IA pausa por 1 h. Nunca lança: a mensagem já saiu. */
+export async function registrarEnvioHumanoApi(pool: Pool, s: Conversa & { autorId: string }): Promise<void> {
+  await registrarSaida(pool, { ...s, origem: 'humano' });
+  try {
+    const ate = await pausarIA(pool, s.userId, s.telefone, MINUTOS_PAUSA_ENVIO_API);
+    const at = ate === undefined ? null : await atendimentoEmAndamento(pool, s);
+    if (at) await gravarEvento(pool, at.id, s.userId, 'ia_pausada', 'api', { autorId: s.autorId, ate });
+  } catch (err: any) {
+    log.warn('ATENDIMENTO', 'Falha ao pausar a IA no envio pela API', { instancia: s.instancia, err: err?.message });
+  }
+}

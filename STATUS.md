@@ -1,5 +1,18 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-11-09 — 🎧 Sprint Atendimento v1: a conversa vira um atendimento — em PRODUÇÃO
+
+Plano e decisões em `diagnosticos/SPRINT_ATENDIMENTO_V1.md`. Cada conversa individual tem agora um atendimento (aberto,
+aguardando humano, resolvido) com atendente e histórico (`atendimentos`, `atendimento_eventos`, `motivos`,
+`atendimento_config`). Na tela: barra na conversa (Assumir, Atribuir, Transferir, Resolver, Reabrir), pausa da IA por tempo
+(`contatos.ia_pausada_ate`, cron de 1 min), notas internas de verdade (antes o botão só descartava o texto), filtros com
+contador e a página Motivos de Atendimento. API: `/api/atendimentos`, `/api/motivos`, `POST /v1/conversations/:id/assign|resolve`
+(escopo `conversations:update`) e `sentBy: human` atribui e pausa a IA por 1 h. Removido o código das Sprints A–D
+(`routes/conversas.ts`, `InboxPanel.tsx`, `kanbanInboxService.ts`); as tabelas de `crm_hml` ficaram.
+
+**Pendências:** relatórios de atendimento (próxima sprint); definir se o papel `membro` deve ver todos os contatos da conta
+(hoje só os atribuídos a ele, e nenhum está); 37 testes do backend já falhavam antes desta sprint (`custom_routes`, `disparos`, `mcp`).
+
 ## Sessão 2026-10-27 — 🐛 "Não vejo os grupos do número novo": grupos passam a ser salvos para QUALQUER instância — em PRODUÇÃO
 
 O número 5511948702939 foi reconectado na conta mentoark (`crm_435ee4720fc3_3`, papel `atendimento`). O webhook só

@@ -2,7 +2,8 @@
  * Sprint Atendimento v1, Fase 2: regras das ações do atendente (rotas em routes/atendimentos.ts).
  */
 import { describe, it, expect } from 'vitest';
-import { erroDeEstado, lerMinutosPausa, lerNota, lerFiltrosConversas, ehUuid } from '../src/services/atendimento';
+import { erroDeEstado, lerMinutosPausa, lerNota, lerFiltrosConversas, ehUuid, registrarEnvioHumanoApi } from '../src/services/atendimento';
+import { normalizarEscopos } from '../src/services/apiKeys';
 
 describe('ações permitidas por estado', () => {
   it.each(['atribuir', 'transferir', 'resolver', 'pausar-ia'] as const)('%s não vale em atendimento resolvido', acao => {
@@ -80,5 +81,31 @@ describe('id de atendimento', () => {
 
   it.each(['abc', '', undefined, "1' OR '1'='1"])('recusa %s', valor => {
     expect(ehUuid(valor as any)).toBe(false);
+  });
+});
+
+describe('envio como humano pela API pública', () => {
+  const conversa = { userId: 'u1', instancia: 'i1', remoteJid: '5511999999999@s.whatsapp.net', telefone: '5511999999999', autorId: 'u2' };
+
+  it('falha de banco não derruba o envio, que já foi feito', async () => {
+    const poolQuebrado = { query: async () => { throw new Error('banco fora'); } } as any;
+    await expect(registrarEnvioHumanoApi(poolQuebrado, conversa)).resolves.toBeUndefined();
+  });
+
+  it('pausa a IA por 1 hora', async () => {
+    const chamadas: { sql: string; params: unknown[] }[] = [];
+    const pool = { query: async (sql: string, params: unknown[]) => {
+      chamadas.push({ sql, params });
+      return /UPDATE contatos/.test(sql) ? { rows: [{ ia_pausada_ate: new Date() }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    } } as any;
+    await registrarEnvioHumanoApi(pool, conversa);
+    const pausa = chamadas.find(c => /UPDATE contatos SET atendente_pausou_ia = true/.test(c.sql));
+    expect(pausa?.params[2]).toBe(60);
+  });
+});
+
+describe('escopo da API', () => {
+  it('conversations aceita update', () => {
+    expect(normalizarEscopos({ conversations: ['read', 'update'] })).toEqual({ conversations: ['read', 'update'] });
   });
 });
