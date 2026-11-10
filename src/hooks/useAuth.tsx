@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/integrations/database/client";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "https://api.mentoark.com.br";
@@ -42,6 +43,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [modulos, setModulos]     = useState<string[]>([]);
   const [modulosLoading, setModulosLoading] = useState(true);
   const [equipeRole, setEquipeRole] = useState<'gerente' | 'membro' | null>(null);
+  // [AUDITORIA] BUG GRAVE CORRIGIDO (2026-11-10 — cliente sramos.corretor viu mensagens da conta
+  // mentoark@gmail.com): o cache do React Query nunca era limpo ao sair/entrar. Trocar de conta
+  // no mesmo navegador sem recarregar a página mostrava os dados da conta anterior. Limpa o cache
+  // inteiro em toda troca de sessão.
+  const queryClient = useQueryClient();
 
   const resolveAdmin = (u: AppUser | null) => {
     if (!u) { setIsAdmin(false); return; }
@@ -89,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const { data: { subscription } } = api.auth.onAuthStateChange((_event, sess: any) => {
       const s = sess as AppSession | null;
+      if (_event === "SIGNED_IN" || _event === "SIGNED_OUT") queryClient.clear();
       setSession(s);
       setUser(s?.user ?? null);
       resolveAdmin(s?.user ?? null);
@@ -147,6 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     await api.auth.signOut();
+    queryClient.clear();
     setUser(null);
     setSession(null);
     setIsAdmin(false);
