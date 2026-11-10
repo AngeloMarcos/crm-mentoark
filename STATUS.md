@@ -1,5 +1,15 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-11-10 — 📊 Relatórios de atendimento — em PRODUÇÃO
+
+`diagnosticos/SPRINT_RELATORIOS_ATENDIMENTO.md` (definições). Página **Relatórios de Atendimento** (`/atendimento/relatorios`):
+1ª resposta, 1ª resposta humana e resolução em mediana/p90, % dentro das metas da tela SLA / Gestão, reabertos, por dia
+(com visão em tabela), por atendente, por motivo, e o painel "Agora" com a fila de quem pediu atendente.
+`services/relatorioAtendimento.ts`, rotas `GET /api/atendimentos/relatorio` e `/agora`.
+
+**Achado em prod (10/11):** 23 atendimentos novos em 1 dia, nenhum resolvido; 134 em andamento. Sem um "resolver sozinho
+por inatividade", "Abertos" só cresce e o tempo de resolução não tem dado. Próximo passo sugerido.
+
 ## Sessão 2026-11-09 — 🎧 Sprint Atendimento v1: a conversa vira um atendimento — em PRODUÇÃO
 
 Plano e decisões em `diagnosticos/SPRINT_ATENDIMENTO_V1.md`. Cada conversa individual tem agora um atendimento (aberto,
@@ -10,7 +20,7 @@ contador e a página Motivos de Atendimento. API: `/api/atendimentos`, `/api/mot
 (escopo `conversations:update`) e `sentBy: human` atribui e pausa a IA por 1 h. Removido o código das Sprints A–D
 (`routes/conversas.ts`, `InboxPanel.tsx`, `kanbanInboxService.ts`); as tabelas de `crm_hml` ficaram.
 
-**Pendências:** relatórios de atendimento (próxima sprint); definir se o papel `membro` deve ver todos os contatos da conta
+**Pendências:** definir se o papel `membro` deve ver todos os contatos da conta
 (hoje só os atribuídos a ele, e nenhum está); 37 testes do backend já falhavam antes desta sprint (`custom_routes`, `disparos`, `mcp`).
 
 ## Sessão 2026-10-27 — 🐛 "Não vejo os grupos do número novo": grupos passam a ser salvos para QUALQUER instância — em PRODUÇÃO
