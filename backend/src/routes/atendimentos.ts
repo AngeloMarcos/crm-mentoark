@@ -10,6 +10,7 @@ import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { resolverOwnerId } from '../services/subscription';
 import { withTenantContext } from '../db';
+import { lerPeriodo, montarRelatorio, montarAgora } from '../services/relatorioAtendimento';
 import {
   gravarEvento, pausarIA, devolverIA, iaEstaPausada, erroDeEstado, lerMinutosPausa, lerNota, ehUuid, jidAtendivel,
   atendenteDaConta, motivoDaConta, atribuirAtendimento, resolverAtendimento,
@@ -155,6 +156,25 @@ export function atendimentosRouter(pool: Pool): Router {
       );
       return res.json(r.rows[0]);
     } catch (err: any) { return erroHttp(res, err, 'Falha ao contar atendimentos'); }
+  });
+
+  // Sprint Relatórios de Atendimento v1 (services/relatorioAtendimento.ts).
+  const lerInstancia = (v: unknown) => (typeof v === 'string' && v ? v : null);
+
+  router.get('/relatorio', async (req: AuthRequest, res: Response) => {
+    try {
+      const p = lerPeriodo(req.query as Record<string, unknown>);
+      if (p.erro) return res.status(400).json({ message: p.erro });
+      const ownerId = await resolverOwnerId(pool, req.userId!);
+      return res.json(await montarRelatorio(pool, ownerId, { de: p.de!, ate: p.ate!, dias: p.dias! }, lerInstancia(req.query.instancia)));
+    } catch (err: any) { return erroHttp(res, err, 'Falha ao montar o relatório'); }
+  });
+
+  router.get('/agora', async (req: AuthRequest, res: Response) => {
+    try {
+      const ownerId = await resolverOwnerId(pool, req.userId!);
+      return res.json(await montarAgora(pool, ownerId, lerInstancia(req.query.instancia)));
+    } catch (err: any) { return erroHttp(res, err, 'Falha ao ler a situação atual'); }
   });
 
   router.get('/atendentes', async (req: AuthRequest, res: Response) => {

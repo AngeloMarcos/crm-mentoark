@@ -106,3 +106,47 @@ export function tempoRestantePausa(ate: string | null, agora: Date = new Date())
   const resto = min % 60;
   return resto ? `${Math.floor(min / 60)} h ${resto} min` : `${Math.floor(min / 60)} h`;
 }
+
+// ── Relatórios (Sprint Relatórios de Atendimento v1) ─────────────────────────────────────────
+
+export interface Percentis { p50: number | null; p90: number | null }
+
+export interface RelatorioAtendimento {
+  periodo: { de: string; ate: string; dias: number };
+  resumo: {
+    total: number; resolvidos: number; emAndamento: number; reabertos: number; semAtendente: number;
+    resolvidosSoIa: number; respondidos: number; respondidosHumano: number; pediramHumano: number;
+    humanoNaMeta: number; resolvidosNaMeta: number;
+    respostaSeg: Percentis; respostaHumanaSeg: Percentis; resolucaoSeg: Percentis;
+  };
+  dias: { dia: string; abertos: number; resolvidos: number }[];
+  atendentes: { id: string; nome: string; atribuidos: number; resolvidos: number; respostaHumanaSeg: number | null; resolucaoSeg: number | null }[];
+  motivos: { nome: string; total: number }[];
+}
+
+export interface SituacaoAgora {
+  abertos: number; aguardando: number; semAtendente: number;
+  fila: { id: string; telefone: string; nome: string; atendente_nome: string | null; desde: string }[];
+}
+
+export const lerRelatorio = (de: string) => chamar<RelatorioAtendimento>(`/atendimentos/relatorio?de=${de}`);
+export const lerSituacaoAgora = () => chamar<SituacaoAgora>("/atendimentos/agora");
+
+/** "45 s", "12 min", "2 h 5 min", "1 d 3 h"; null vira "—". */
+export function formatarDuracao(seg: number | null): string {
+  if (seg === null || seg === undefined) return "—";
+  if (seg < 60) return `${Math.round(seg)} s`;
+  const min = Math.floor(seg / 60);
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), restoMin = min % 60;
+  if (h < 24) return restoMin ? `${h} h ${restoMin} min` : `${h} h`;
+  const d = Math.floor(h / 24), restoH = h % 24;
+  return restoH ? `${d} d ${restoH} h` : `${d} d`;
+}
+
+/** Primeiro dia (AAAA-MM-DD, Brasília) de um período de `dias` dias terminando hoje. */
+export function diaInicialDoPeriodo(dias: number, agora: Date = new Date()): string {
+  const hoje = agora.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const t = Date.parse(`${hoje}T00:00:00Z`) - (dias - 1) * 86_400_000;
+  return new Date(t).toISOString().slice(0, 10);
+}

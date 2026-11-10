@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { textoEventoAtendimento, tempoRestantePausa, type EventoAtendimento } from "./atendimento";
+import { textoEventoAtendimento, tempoRestantePausa, formatarDuracao, diaInicialDoPeriodo, type EventoAtendimento } from "./atendimento";
 
 const ev = (over: Partial<EventoAtendimento>): EventoAtendimento => ({
   id: 1, atendimento_id: "a1", tipo: "aberto", origem: "sistema", texto: null, ate: null,
@@ -80,5 +80,31 @@ describe("tempo restante da pausa", () => {
 
   it("prazo vencido devolve null", () => {
     expect(tempoRestantePausa(mais(-1), agora)).toBeNull();
+  });
+});
+
+describe("duração no relatório", () => {
+  it.each([
+    [null, "—"], [0, "0 s"], [45, "45 s"], [60, "1 min"], [754, "12 min"], [3600, "1 h"],
+    [7500, "2 h 5 min"], [86400, "1 d"], [97200, "1 d 3 h"],
+  ] as const)("%s segundos → %s", (seg, esperado) => {
+    expect(formatarDuracao(seg)).toBe(esperado);
+  });
+});
+
+describe("dia inicial do período", () => {
+  // 10/11/2026 01:00 em Brasília (ainda 10/11 lá, já 10/11 04:00 em UTC).
+  const agora = new Date("2026-11-10T04:00:00Z");
+
+  it("hoje é o dia de Brasília", () => {
+    expect(diaInicialDoPeriodo(1, agora)).toBe("2026-11-10");
+  });
+
+  it("7 dias contando hoje", () => {
+    expect(diaInicialDoPeriodo(7, agora)).toBe("2026-11-04");
+  });
+
+  it("perto da meia-noite UTC ainda é o dia anterior em Brasília", () => {
+    expect(diaInicialDoPeriodo(1, new Date("2026-11-10T02:00:00Z"))).toBe("2026-11-09");
   });
 });
