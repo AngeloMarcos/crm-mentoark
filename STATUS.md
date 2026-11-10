@@ -7,8 +7,9 @@
 (com visão em tabela), por atendente, por motivo, e o painel "Agora" com a fila de quem pediu atendente.
 `services/relatorioAtendimento.ts`, rotas `GET /api/atendimentos/relatorio` e `/agora`.
 
-**Achado em prod (10/11):** 23 atendimentos novos em 1 dia, nenhum resolvido; 134 em andamento. Sem um "resolver sozinho
-por inatividade", "Abertos" só cresce e o tempo de resolução não tem dado. Próximo passo sugerido.
+**Encerramento por inatividade (10/11, `150f432`):** atendimento "aberto" sem mensagem nem nota há 24 h (ajustável por conta em
+Motivos e regras de atendimento; 0 desliga) é encerrado por um cron de 15 min; "aguardando humano" fica na fila e a pausa da IA
+não muda. 1ª rodada em prod: 174 encerrados (170 herdados da migração), 60 seguem em andamento. O relatório conta esses à parte.
 
 ## Sessão 2026-11-09 — 🎧 Sprint Atendimento v1: a conversa vira um atendimento — em PRODUÇÃO
 
