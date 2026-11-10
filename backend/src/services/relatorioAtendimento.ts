@@ -63,15 +63,18 @@ export async function montarRelatorio(pool: Pool, ownerId: string, p: Required<O
              count(*) FILTER (WHERE estado <> 'resolvido')::int AS em_andamento,
              count(*) FILTER (WHERE reaberto_de IS NOT NULL)::int AS reabertos,
              count(*) FILTER (WHERE atendente_id IS NULL)::int AS sem_atendente,
-             count(*) FILTER (WHERE estado = 'resolvido' AND primeira_resposta_humana_em IS NULL)::int AS resolvidos_so_ia,
+             count(*) FILTER (WHERE estado = 'resolvido' AND resolvido_por IS NULL)::int AS resolvidos_inatividade,
+             count(*) FILTER (WHERE estado = 'resolvido' AND resolvido_por IS NOT NULL AND primeira_resposta_humana_em IS NULL)::int AS resolvidos_so_ia,
              count(*) FILTER (WHERE primeira_resposta_em IS NOT NULL)::int AS respondidos,
              count(*) FILTER (WHERE primeira_resposta_humana_em IS NOT NULL)::int AS respondidos_humano,
              count(*) FILTER (WHERE EXISTS (SELECT 1 FROM atendimento_eventos e WHERE e.atendimento_id = a.id AND e.tipo = 'aguardando'))::int AS pediram_humano,
              count(*) FILTER (WHERE primeira_resposta_humana_em - aberto_em <= meta_resposta_min * INTERVAL '1 minute')::int AS humano_na_meta,
-             count(*) FILTER (WHERE estado = 'resolvido' AND resolvido_em - aberto_em <= meta_resolucao_min * INTERVAL '1 minute')::int AS resolvidos_na_meta,
+             count(*) FILTER (WHERE estado = 'resolvido' AND resolvido_por IS NOT NULL)::int AS resolvidos_por_alguem,
+             count(*) FILTER (WHERE estado = 'resolvido' AND resolvido_por IS NOT NULL AND resolvido_em - aberto_em <= meta_resolucao_min * INTERVAL '1 minute')::int AS resolvidos_na_meta,
              ${seg('primeira_resposta_em', 0.5)} AS resposta_p50, ${seg('primeira_resposta_em', 0.9)} AS resposta_p90,
              ${seg('primeira_resposta_humana_em', 0.5)} AS resposta_humana_p50, ${seg('primeira_resposta_humana_em', 0.9)} AS resposta_humana_p90,
-             ${seg('resolvido_em', 0.5)} AS resolucao_p50, ${seg('resolvido_em', 0.9)} AS resolucao_p90
+             ${seg('resolvido_em', 0.5)} FILTER (WHERE resolvido_por IS NOT NULL) AS resolucao_p50,
+             ${seg('resolvido_em', 0.9)} FILTER (WHERE resolvido_por IS NOT NULL) AS resolucao_p90
       FROM a`, params),
     pool.query(`${COORTE}
       SELECT to_char(d, 'YYYY-MM-DD') AS dia,
@@ -88,7 +91,7 @@ export async function montarRelatorio(pool: Pool, ownerId: string, p: Required<O
              percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM a.primeira_resposta_humana_em - a.aberto_em))
                FILTER (WHERE a.atendente_id = u.id) AS resposta_humana_p50,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM a.resolvido_em - a.aberto_em))
-               FILTER (WHERE a.atendente_id = u.id) AS resolucao_p50
+               FILTER (WHERE a.atendente_id = u.id AND a.resolvido_por IS NOT NULL) AS resolucao_p50
       FROM users u LEFT JOIN a ON a.atendente_id = u.id OR a.resolvido_por = u.id
       WHERE COALESCE(u.owner_id, u.id) = $1
       GROUP BY u.id ORDER BY atribuidos DESC, nome`, params),
@@ -104,7 +107,7 @@ export async function montarRelatorio(pool: Pool, ownerId: string, p: Required<O
     periodo: { de: diaDe(p.de), ate: diaDe(new Date(p.ate.getTime() - DIA_MS)), dias: p.dias },
     resumo: {
       total: r.total, resolvidos: r.resolvidos, emAndamento: r.em_andamento, reabertos: r.reabertos, semAtendente: r.sem_atendente,
-      resolvidosSoIa: r.resolvidos_so_ia, respondidos: r.respondidos, respondidosHumano: r.respondidos_humano,
+      resolvidosSoIa: r.resolvidos_so_ia, resolvidosInatividade: r.resolvidos_inatividade, resolvidosPorAlguem: r.resolvidos_por_alguem, respondidos: r.respondidos, respondidosHumano: r.respondidos_humano,
       pediramHumano: r.pediram_humano, humanoNaMeta: r.humano_na_meta, resolvidosNaMeta: r.resolvidos_na_meta,
       respostaSeg: { p50: inteiro(r.resposta_p50), p90: inteiro(r.resposta_p90) },
       respostaHumanaSeg: { p50: inteiro(r.resposta_humana_p50), p90: inteiro(r.resposta_humana_p90) },

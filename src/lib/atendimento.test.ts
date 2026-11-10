@@ -25,7 +25,7 @@ describe("texto do evento na linha do tempo", () => {
   });
 
   it("resolução com motivo", () => {
-    expect(textoEventoAtendimento(ev({ tipo: "resolvido", autor_nome: "Ana", motivo_nome: "Venda feita" }))).toBe("Resolvido por Ana — Venda feita");
+    expect(textoEventoAtendimento(ev({ tipo: "resolvido", origem: "humano", autor_nome: "Ana", motivo_nome: "Venda feita" }))).toBe("Resolvido por Ana — Venda feita");
   });
 
   it("reabertura", () => {
@@ -50,7 +50,7 @@ describe("texto do evento na linha do tempo", () => {
   });
 
   it("sem nome de quem fez não deixa buraco no texto", () => {
-    expect(textoEventoAtendimento(ev({ tipo: "resolvido" }))).toBe("Resolvido");
+    expect(textoEventoAtendimento(ev({ tipo: "resolvido", origem: "api" }))).toBe("Resolvido");
   });
 });
 
@@ -106,5 +106,11 @@ describe("dia inicial do período", () => {
 
   it("perto da meia-noite UTC ainda é o dia anterior em Brasília", () => {
     expect(diaInicialDoPeriodo(1, new Date("2026-11-10T02:00:00Z"))).toBe("2026-11-09");
+  });
+});
+
+describe("encerramento automático na linha do tempo", () => {
+  it("resolução pelo sistema", () => {
+    expect(textoEventoAtendimento(ev({ tipo: "resolvido", origem: "sistema", texto: "Sem atividade por 24 h" }))).toBe("Encerrado por inatividade (24 h)");
   });
 });

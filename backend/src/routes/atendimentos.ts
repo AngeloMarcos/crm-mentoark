@@ -11,6 +11,7 @@ import { log } from '../logger';
 import { resolverOwnerId } from '../services/subscription';
 import { withTenantContext } from '../db';
 import { lerPeriodo, montarRelatorio, montarAgora } from '../services/relatorioAtendimento';
+import { lerHorasInatividade, HORAS_INATIVIDADE_PADRAO } from '../services/resolucaoAutomatica';
 import {
   gravarEvento, pausarIA, devolverIA, iaEstaPausada, erroDeEstado, lerMinutosPausa, lerNota, ehUuid, jidAtendivel,
   atendenteDaConta, motivoDaConta, atribuirAtendimento, resolverAtendimento,
@@ -191,21 +192,33 @@ export function atendimentosRouter(pool: Pool): Router {
   router.get('/config', async (req: AuthRequest, res: Response) => {
     try {
       const ownerId = await resolverOwnerId(pool, req.userId!);
-      const r = await pool.query(`SELECT motivo_obrigatorio FROM atendimento_config WHERE user_id = $1`, [ownerId]);
-      return res.json({ motivo_obrigatorio: r.rows[0]?.motivo_obrigatorio === true });
+      const r = await pool.query(`SELECT motivo_obrigatorio, resolver_inativo_horas FROM atendimento_config WHERE user_id = $1`, [ownerId]);
+      return res.json({
+        motivo_obrigatorio: r.rows[0]?.motivo_obrigatorio === true,
+        resolver_inativo_horas: r.rows[0]?.resolver_inativo_horas ?? HORAS_INATIVIDADE_PADRAO,
+      });
     } catch (err: any) { return erroHttp(res, err, 'Falha ao ler a configuração'); }
   });
 
   router.put('/config', async (req: AuthRequest, res: Response) => {
     try {
-      if (typeof req.body?.motivo_obrigatorio !== 'boolean') return res.status(400).json({ message: 'Informe motivo_obrigatorio (true ou false).' });
+      // Cada campo é opcional: só muda o que veio.
+      const obrigatorio = req.body?.motivo_obrigatorio;
+      if (obrigatorio !== undefined && typeof obrigatorio !== 'boolean') return res.status(400).json({ message: 'motivo_obrigatorio deve ser true ou false.' });
+      const horas = req.body?.resolver_inativo_horas === undefined ? undefined : lerHorasInatividade(req.body.resolver_inativo_horas);
+      if (horas?.erro) return res.status(400).json({ message: horas.erro });
+      if (obrigatorio === undefined && horas === undefined) return res.status(400).json({ message: 'Nada para salvar.' });
       const ownerId = await resolverOwnerId(pool, req.userId!);
-      await pool.query(
-        `INSERT INTO atendimento_config (user_id, motivo_obrigatorio) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET motivo_obrigatorio = EXCLUDED.motivo_obrigatorio, updated_at = NOW()`,
-        [ownerId, req.body.motivo_obrigatorio]
+      const r = await pool.query(
+        `INSERT INTO atendimento_config (user_id, motivo_obrigatorio, resolver_inativo_horas) VALUES ($1, COALESCE($2::boolean, false), COALESCE($3::int, $4::int))
+         ON CONFLICT (user_id) DO UPDATE SET
+           motivo_obrigatorio = COALESCE($2::boolean, atendimento_config.motivo_obrigatorio),
+           resolver_inativo_horas = COALESCE($3::int, atendimento_config.resolver_inativo_horas),
+           updated_at = NOW()
+         RETURNING motivo_obrigatorio, resolver_inativo_horas`,
+        [ownerId, obrigatorio ?? null, horas?.horas ?? null, HORAS_INATIVIDADE_PADRAO]
       );
-      return res.json({ motivo_obrigatorio: req.body.motivo_obrigatorio });
+      return res.json(r.rows[0]);
     } catch (err: any) { return erroHttp(res, err, 'Falha ao salvar a configuração'); }
   });
 

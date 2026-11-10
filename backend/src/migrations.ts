@@ -3433,6 +3433,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
       motivo_obrigatorio BOOLEAN NOT NULL DEFAULT false,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`).catch(err => log.warn('MIGRATIONS', 'atendimento_config', { err: err?.message }));
+  // 2026-11-10: resolver sozinho após N horas sem mensagem nem nota (services/resolucaoAutomatica.ts). 0 desliga.
+  await pool.query(`ALTER TABLE atendimento_config ADD COLUMN IF NOT EXISTS resolver_inativo_horas INTEGER NOT NULL DEFAULT 24`).catch(err => log.warn('MIGRATIONS', 'resolver_inativo_horas', { err: err?.message }));
 
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ia_pausada_ate TIMESTAMPTZ`).catch(err => log.warn('MIGRATIONS', 'ia_pausada_ate', { err: err?.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_ia_pausada_ate ON contatos (ia_pausada_ate) WHERE ia_pausada_ate IS NOT NULL`).catch(() => {});

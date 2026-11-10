@@ -83,16 +83,31 @@ function ListaMotivos({ tipo, ajuda }: { tipo: TipoMotivo; ajuda: string }) {
 
 export default function AtendimentoMotivosPage() {
   const [obrigatorio, setObrigatorio] = useState<boolean | null>(null);
+  const [horas, setHoras] = useState("");
+  const [horasSalvas, setHorasSalvas] = useState<number | null>(null);
 
   useEffect(() => {
-    lerConfigAtendimento().then(c => setObrigatorio(c.motivo_obrigatorio)).catch(() => setObrigatorio(false));
+    lerConfigAtendimento()
+      .then(c => { setObrigatorio(c.motivo_obrigatorio); setHoras(String(c.resolver_inativo_horas)); setHorasSalvas(c.resolver_inativo_horas); })
+      .catch(() => setObrigatorio(false));
   }, []);
+
+  const salvarHoras = async () => {
+    const n = Number(horas);
+    try {
+      const c = await salvarConfigAtendimento({ resolver_inativo_horas: n });
+      setHorasSalvas(c.resolver_inativo_horas);
+      toast.success(n === 0 ? "Encerramento automático desligado" : `Atendimentos sem atividade por ${n} h serão encerrados`);
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
 
   const alternar = async (v: boolean) => {
     const anterior = obrigatorio;
     setObrigatorio(v);
     try {
-      await salvarConfigAtendimento(v);
+      await salvarConfigAtendimento({ motivo_obrigatorio: v });
     } catch (e: any) {
       setObrigatorio(anterior);
       toast.error(e.message);
@@ -103,7 +118,7 @@ export default function AtendimentoMotivosPage() {
     <CRMLayout>
       <div className="mx-auto max-w-2xl space-y-4">
         <div>
-          <h1 className="text-xl font-bold">Motivos de atendimento</h1>
+          <h1 className="text-xl font-bold">Motivos e regras de atendimento</h1>
           <p className="text-sm text-muted-foreground">Os motivos alimentam o histórico de cada conversa e os relatórios.</p>
         </div>
         <Card className="flex items-center justify-between gap-4 p-4">
@@ -112,6 +127,17 @@ export default function AtendimentoMotivosPage() {
             <p className="text-sm text-muted-foreground">Exige um motivo para transferir ou resolver.</p>
           </div>
           <Switch id="motivo-obrigatorio" checked={obrigatorio === true} disabled={obrigatorio === null} onCheckedChange={alternar} />
+        </Card>
+        <Card className="space-y-2 p-4">
+          <Label htmlFor="horas-inatividade" className="font-semibold">Encerrar atendimento parado</Label>
+          <p className="text-sm text-muted-foreground">
+            Atendimento aberto sem nenhuma mensagem nem nota por este tempo é encerrado sozinho. A pausa da IA não muda, e quem pediu atendente continua na fila. 0 desliga.
+          </p>
+          <form className="flex items-center gap-2" onSubmit={e => { e.preventDefault(); salvarHoras(); }}>
+            <Input id="horas-inatividade" inputMode="numeric" className="w-24" value={horas} onChange={e => setHoras(e.target.value.replace(/\D/g, ""))} disabled={horasSalvas === null} />
+            <span className="text-sm text-muted-foreground">horas</span>
+            <Button type="submit" variant="outline" disabled={horasSalvas === null || horas === "" || Number(horas) === horasSalvas}>Salvar</Button>
+          </form>
         </Card>
         <Card className="p-4">
           <Tabs defaultValue="resolucao">

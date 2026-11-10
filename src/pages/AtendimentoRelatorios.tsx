@@ -195,10 +195,10 @@ export default function AtendimentoRelatoriosPage() {
               <>
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                   <Indicador titulo="Atendimentos" valor={String(r.total)} detalhe={`${r.reabertos} ${r.reabertos === 1 ? "reaberto" : "reabertos"} (${pct(r.reabertos, r.total)})`} />
-                  <Indicador titulo="Resolvidos" valor={pct(r.resolvidos, r.total)} detalhe={`${r.resolvidos} de ${r.total} · ${r.resolvidosSoIa} só pela IA`} />
+                  <Indicador titulo="Resolvidos" valor={pct(r.resolvidos, r.total)} detalhe={`${r.resolvidos} de ${r.total} · ${r.resolvidosInatividade} por inatividade`} />
                   <Indicador titulo="1ª resposta" valor={formatarDuracao(r.respostaSeg.p50)} detalhe={`IA ou pessoa · p90 ${formatarDuracao(r.respostaSeg.p90)}`} />
                   <Indicador titulo="1ª resposta humana" valor={formatarDuracao(r.respostaHumanaSeg.p50)} detalhe={`${pct(r.humanoNaMeta, r.respondidosHumano)} na meta · p90 ${formatarDuracao(r.respostaHumanaSeg.p90)}`} />
-                  <Indicador titulo="Resolução" valor={formatarDuracao(r.resolucaoSeg.p50)} detalhe={`${pct(r.resolvidosNaMeta, r.resolvidos)} na meta · p90 ${formatarDuracao(r.resolucaoSeg.p90)}`} />
+                  <Indicador titulo="Resolução" valor={formatarDuracao(r.resolucaoSeg.p50)} detalhe={`${pct(r.resolvidosNaMeta, r.resolvidosPorAlguem)} na meta · p90 ${formatarDuracao(r.resolucaoSeg.p90)} · sem os encerrados por inatividade`} />
                   <Indicador titulo="Pediram atendente" valor={String(r.pediramHumano)} detalhe={pct(r.pediramHumano, r.total) + " dos atendimentos"} />
                   <Indicador titulo="Sem resposta" valor={String(r.total - r.respondidos)} detalhe="nenhuma resposta da IA nem de pessoa" />
                   <Indicador titulo="Sem atendente" valor={String(r.semAtendente)} detalhe="nunca atribuídos a ninguém" />

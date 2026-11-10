@@ -63,9 +63,10 @@ export const acaoAtendimento = (id: string, acao: string, corpo: Record<string, 
   chamar<Atendimento>(`/atendimentos/${id}/${acao}`, { method: "POST", body: corpo });
 export const listarAtendentes = () => chamar<Atendente[]>("/atendimentos/atendentes");
 export const lerContadores = () => chamar<Contadores>("/atendimentos/contadores");
-export const lerConfigAtendimento = () => chamar<{ motivo_obrigatorio: boolean }>("/atendimentos/config");
-export const salvarConfigAtendimento = (motivo_obrigatorio: boolean) =>
-  chamar<{ motivo_obrigatorio: boolean }>("/atendimentos/config", { method: "PUT", body: { motivo_obrigatorio } });
+export interface ConfigAtendimento { motivo_obrigatorio: boolean; resolver_inativo_horas: number }
+export const lerConfigAtendimento = () => chamar<ConfigAtendimento>("/atendimentos/config");
+export const salvarConfigAtendimento = (campos: Partial<ConfigAtendimento>) =>
+  chamar<ConfigAtendimento>("/atendimentos/config", { method: "PUT", body: campos });
 export const listarMotivos = (tipo: TipoMotivo, todos = false) => chamar<Motivo[]>(`/motivos?tipo=${tipo}${todos ? "&todos=1" : ""}`);
 export const criarMotivo = (tipo: TipoMotivo, nome: string) => chamar<Motivo>("/motivos", { method: "POST", body: { tipo, nome } });
 export const editarMotivo = (id: string, campos: Partial<Pick<Motivo, "nome" | "ativo" | "ordem">>) =>
@@ -83,7 +84,13 @@ export function textoEventoAtendimento(ev: EventoAtendimento, timeZone?: string)
     case "transferido":
       return comMotivo(`Transferido${ev.de_nome ? ` de ${ev.de_nome}` : ""}${ev.para_nome ? ` para ${ev.para_nome}` : ""}`, ev.motivo_nome);
     case "aguardando": return "Cliente pediu atendente: aguardando humano";
-    case "resolvido": return comMotivo(`Resolvido${por}`, ev.motivo_nome);
+    case "resolvido": {
+      if (ev.origem === "sistema") {
+        const horas = /(\d+) h/.exec(ev.texto || "")?.[1];
+        return horas ? `Encerrado por inatividade (${horas} h)` : "Encerrado por inatividade";
+      }
+      return comMotivo(`Resolvido${por}`, ev.motivo_nome);
+    }
     case "reaberto": return `Reaberto${por}`;
     case "ia_pausada": {
       if (!ev.ate) return comMotivo(`IA pausada${por} até devolver`, ev.motivo_nome);
@@ -115,7 +122,7 @@ export interface RelatorioAtendimento {
   periodo: { de: string; ate: string; dias: number };
   resumo: {
     total: number; resolvidos: number; emAndamento: number; reabertos: number; semAtendente: number;
-    resolvidosSoIa: number; respondidos: number; respondidosHumano: number; pediramHumano: number;
+    resolvidosSoIa: number; resolvidosInatividade: number; resolvidosPorAlguem: number; respondidos: number; respondidosHumano: number; pediramHumano: number;
     humanoNaMeta: number; resolvidosNaMeta: number;
     respostaSeg: Percentis; respostaHumanaSeg: Percentis; resolucaoSeg: Percentis;
   };

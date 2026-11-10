@@ -20,6 +20,7 @@ import { limparMidiaExpirada, limparVariantesExpiradas } from './utils/whatsappM
 import { enfileirarBusca, enfileirarLinkPublico } from './radar/fila';
 import { criarBuscaAgendada } from './radar/busca';
 import { encerrarPausasVencidas } from './services/atendimento';
+import { resolverInativos } from './services/resolucaoAutomatica';
 
 // [AUDITORIA] FIX APLICADO (Sprint Limpeza de Disco, 2026-08-23): dias de retenção pra mídia
 // recebida (áudio/imagem/vídeo/documento) salva em disco — configurável via env pra poder
@@ -34,6 +35,12 @@ const DIAS_RETENCAO_MIDIA = Number(process.env.DIAS_RETENCAO_MIDIA_WHATSAPP) || 
 const HORAS_RETENCAO_VARIANTES = Number(process.env.HORAS_RETENCAO_VARIANTES_IMAGEM) || 12;
 
 export function initCronJobs() {
+  // Atendimento aberto sem atividade há N horas (padrão 24) é encerrado (services/resolucaoAutomatica.ts).
+  cron.schedule('*/15 * * * *', async () => {
+    const encerrados = await resolverInativos(pool);
+    if (encerrados > 0) log.info('CRON', 'Atendimentos encerrados por inatividade', { encerrados });
+  });
+
   // Sprint Atendimento v1: pausa da IA com prazo termina sozinha (services/atendimento.ts).
   cron.schedule('*/1 * * * *', async () => {
     const encerradas = await encerrarPausasVencidas(pool);
