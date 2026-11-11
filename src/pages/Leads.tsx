@@ -49,6 +49,8 @@ function formatWhatsappNumber(raw: string | null | undefined): string | null {
 }
 import { useToast } from "@/hooks/use-toast";
 import * as XLSX from "xlsx";
+import { CamposDoContato } from "@/components/campos/CamposDoContato";
+import { formatarValor, listarCampos, type CampoPersonalizado } from "@/lib/camposPersonalizados";
 
 interface Lista {
   id: string;
@@ -76,6 +78,7 @@ interface Contato {
   status: string;
   tags: string[] | null;
   notas: string | null;
+  campos?: Record<string, unknown> | null;
   lista_id: string | null;
   created_at: string;
   // Higienização (preenchidos pelo backend; null até o contato ser higienizado/classificado)
@@ -121,6 +124,11 @@ export default function LeadsPage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("todos");
+  // 2026-11-11: filtro por campo personalizado (chave + texto contido no valor; sem texto = preenchido).
+  const [camposConta, setCamposConta] = useState<CampoPersonalizado[]>([]);
+  const [campoFiltro, setCampoFiltro] = useState("nenhum");
+  const [campoValor, setCampoValor] = useState("");
+  useEffect(() => { listarCampos().then(setCamposConta).catch(() => setCamposConta([])); }, []);
   // "todas" | id de uma lista | "grupo:<nome>" (todas as importações do mesmo grupo de WhatsApp)
   const [listaFiltro, setListaFiltro] = useState<string>("todas");
   const [pagina, setPagina] = useState(1);
@@ -670,14 +678,17 @@ export default function LeadsPage() {
       (c.empresa ?? "").toLowerCase().includes(s);
     const matchStatus = statusFilter === "todos" || c.status === statusFilter;
     const matchLista = !listasDoFiltro || listasDoFiltro.some((id) => membrosPorLista.get(id)?.has(c.id));
-    return matchSearch && matchStatus && matchLista;
-  }), [contatos, search, statusFilter, listasDoFiltro, membrosPorLista]);
+    const campo = campoFiltro !== "nenhum" ? camposConta.find((x) => x.chave === campoFiltro) : undefined;
+    const textoCampo = campo ? formatarValor(campo, c.campos?.[campo.chave]).toLowerCase() : "";
+    const matchCampo = !campo || (campoValor.trim() ? textoCampo.includes(campoValor.trim().toLowerCase()) : !!textoCampo);
+    return matchSearch && matchStatus && matchLista && matchCampo;
+  }), [contatos, search, statusFilter, listasDoFiltro, membrosPorLista, campoFiltro, campoValor, camposConta]);
 
   // Renderizar os ~13 mil contatos de uma vez travava a tela — paginação só na exibição
   // (busca, filtros e exportação continuam sobre `filtered` inteiro).
   const POR_PAGINA = 50;
   const totalPaginas = Math.max(1, Math.ceil(filtered.length / POR_PAGINA));
-  useEffect(() => { setPagina(1); }, [search, statusFilter, listaFiltro]);
+  useEffect(() => { setPagina(1); }, [search, statusFilter, listaFiltro, campoFiltro, campoValor]);
   const paginaAtual = Math.min(pagina, totalPaginas);
   const visiveis = filtered.slice((paginaAtual - 1) * POR_PAGINA, paginaAtual * POR_PAGINA);
 
@@ -769,6 +780,20 @@ export default function LeadsPage() {
                 ))}
               </SelectContent>
             </Select>
+            {camposConta.length > 0 && (
+              <>
+                <Select value={campoFiltro} onValueChange={(v) => { setCampoFiltro(v); setCampoValor(""); }}>
+                  <SelectTrigger className="w-full sm:w-[170px]" aria-label="Filtrar por campo personalizado"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="nenhum">Campo personalizado</SelectItem>
+                    {camposConta.map((c) => <SelectItem key={c.id} value={c.chave}>{c.nome}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {campoFiltro !== "nenhum" && (
+                  <Input className="w-full sm:w-[160px]" value={campoValor} onChange={(e) => setCampoValor(e.target.value)} placeholder="Contém… (vazio = preenchido)" aria-label="Valor do campo" />
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -1178,6 +1203,11 @@ export default function LeadsPage() {
                   <div className="space-y-1.5">
                     <Label>Notas</Label>
                     <Textarea value={contatoForm.notas} onChange={(e) => setContatoForm({ ...contatoForm, notas: e.target.value })} rows={4} />
+                  </div>
+                  {/* 2026-11-11: campos personalizados salvam à parte (botão próprio), não pelo rodapé. */}
+                  <div className="space-y-1.5 rounded-lg border p-3">
+                    <Label>Campos personalizados</Label>
+                    <CamposDoContato contatoId={editing.id} />
                   </div>
                 </TabsContent>
 

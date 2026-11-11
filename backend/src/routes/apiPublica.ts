@@ -24,6 +24,7 @@ import { enviarTextoMetaOficial } from '../services/metaCloudApi';
 import { BOT_ECHO_TTL_MS, PREFIXO_OFICIAL, botMessageIds } from '../services/agentEngine';
 import { montarOpenApi } from './apiPublicaDocs';
 import { garantirEtapasPadrao, moverNoFunil } from '../services/funilAuto';
+import { listarCampos, normalizarValor, prepararValores, gravarValoresDoContato } from '../services/camposPersonalizados';
 import { RecusaAtendimento, atribuirAtendimento, registrarEnvioHumanoApi, registrarSaida, resolverAtendimento } from '../services/atendimento';
 
 const TIPO_API = { aberta: 'open', ganho: 'won', perdido: 'lost' } as const;
@@ -61,6 +62,7 @@ const pessoa = (c: any) => ({
   potentialValue: c.valor_potencial != null ? Number(c.valor_potencial) : null,
   city: c.cidade, state: c.estado, optOut: !!c.opt_out, lastMessageAt: c.ultima_mensagem_em,
   stageId: c.funil_estagio_id ?? null, stageEnteredAt: c.funil_entrou_em ?? null,
+  customFields: c.campos || {},
   createdAt: c.created_at, updatedAt: c.updated_at,
 });
 
@@ -183,6 +185,20 @@ export default function apiPublicaRouter(pool: Pool): Router {
         vals.push(d.de, d.ate);
         cond.push(`${col} BETWEEN $${vals.length - 1} AND $${vals.length}`);
       }
+      // Campo personalizado: cf_<chave>=valor (texto: contém; demais: igual ao valor normalizado).
+      const filtrosCampo = Object.entries(q).filter(([k, v]) => k.startsWith('cf_') && String(v ?? '') !== '');
+      if (filtrosCampo.length) {
+        const campos = await listarCampos(pool, req.ownerId!);
+        for (const [k, v] of filtrosCampo) {
+          const campo = campos.find(c => c.chave === k.slice(3));
+          if (!campo) return erro(res, 422, `Campo personalizado desconhecido: ${k.slice(3)}.`, 'unknown_custom_field');
+          if (campo.tipo === 'texto') { vals.push(`%${v}%`); cond.push(`campos->>'${campo.chave}' ILIKE $${vals.length}`); continue; }
+          const n = normalizarValor(campo, campo.tipo === 'multipla' ? [String(v)] : String(v));
+          if (!n.ok || n.valor === null) return erro(res, 422, n.ok ? 'Valor vazio.' : n.erro, 'invalid_value');
+          vals.push(JSON.stringify({ [campo.chave]: n.valor }));
+          cond.push(`campos @> $${vals.length}::jsonb`);
+        }
+      }
       const ordem = ORDENAVEIS[q.orderColumn] || 'created_at';
       const direcao = String(q.orderDirection).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
@@ -241,10 +257,27 @@ export default function apiPublicaRouter(pool: Pool): Router {
     return r.rows[0] || null;
   }
 
+  /** customFields do corpo: valida antes de gravar qualquer coisa (lote inteiro ou nada). */
+  async function lerCustomFields(req: ChaveReq): Promise<{ ok: true; valores: Record<string, unknown> | null } | { ok: false; status: number; msg: string; code: string }> {
+    const cf = req.body?.customFields;
+    if (cf === undefined) return { ok: true, valores: null };
+    if (!cf || typeof cf !== 'object' || Array.isArray(cf)) return { ok: false, status: 422, msg: 'customFields deve ser um objeto { chave: valor }.', code: 'validation_error' };
+    const prep = prepararValores(await listarCampos(pool, req.ownerId!), cf);
+    if (!prep.ok) return { ok: false, status: 422, msg: prep.erro, code: prep.code };
+    return { ok: true, valores: cf };
+  }
+  async function gravarCustomFields(req: ChaveReq, contato: any, valores: Record<string, unknown> | null) {
+    if (!valores) return contato;
+    const r = await gravarValoresDoContato(pool, req.ownerId!, contato.id, [req.userId!], valores);
+    return r.ok ? { ...contato, campos: r.campos } : contato;
+  }
+
   router.post('/peoples', exige('peoples', 'create'), async (req: ChaveReq, res: Response) => {
     try {
       const { cols, erro: msg } = colunasDaPessoa(req.body);
       if (msg) return erro(res, 422, msg, 'validation_error');
+      const cf = await lerCustomFields(req);
+      if (!cf.ok) return erro(res, cf.status, cf.msg, cf.code);
       if (!cols.telefone && !cols.email) return erro(res, 422, 'Informe phone ou email.', 'validation_error');
 
       const existente = cols.telefone ? await acharPorTelefone(req.userId!, cols.telefone) : null;
@@ -253,11 +286,11 @@ export default function apiPublicaRouter(pool: Pool): Router {
           return erro(res, 409, 'Já existe um contato com este telefone.', 'duplicate', { peopleId: existente.id });
         }
         const sets = Object.keys(cols).filter(c => !c.startsWith('telefone'));
-        if (!sets.length) return res.json({ data: pessoa(existente), created: false });
+        if (!sets.length) return res.json({ data: pessoa(await gravarCustomFields(req, existente, cf.valores)), created: false });
         const r = await pool.query(
           `UPDATE contatos SET ${sets.map((c, i) => `${c} = $${i + 3}`).join(', ')}, updated_at = NOW()
             WHERE id = $1 AND user_id = $2 RETURNING *`, [existente.id, req.userId, ...sets.map(c => cols[c])]);
-        return res.json({ data: pessoa(r.rows[0]), created: false });
+        return res.json({ data: pessoa(await gravarCustomFields(req, r.rows[0], cf.valores)), created: false });
       }
 
       const final = { status: 'novo', origem: 'api', ...cols, nome: cols.nome || cols.telefone || cols.email };
@@ -265,7 +298,7 @@ export default function apiPublicaRouter(pool: Pool): Router {
       const r = await pool.query(
         `INSERT INTO contatos (user_id, ${nomes.join(', ')}) VALUES ($1, ${nomes.map((_, i) => `$${i + 2}`).join(', ')}) RETURNING *`,
         [req.userId, ...nomes.map(c => (final as any)[c])]);
-      return res.status(201).json({ data: pessoa(r.rows[0]), created: true });
+      return res.status(201).json({ data: pessoa(await gravarCustomFields(req, r.rows[0], cf.valores)), created: true });
     } catch (err: any) {
       return erro(res, 500, err.message);
     }
@@ -275,17 +308,19 @@ export default function apiPublicaRouter(pool: Pool): Router {
     try {
       const { cols, erro: msg } = colunasDaPessoa(req.body);
       if (msg) return erro(res, 422, msg, 'validation_error');
+      const cf = await lerCustomFields(req);
+      if (!cf.ok) return erro(res, cf.status, cf.msg, cf.code);
       const nomes = Object.keys(cols);
-      if (!nomes.length) return erro(res, 422, 'Nada para atualizar.', 'validation_error');
+      if (!nomes.length && !cf.valores) return erro(res, 422, 'Nada para atualizar.', 'validation_error');
       if (cols.telefone) {
         const outro = await acharPorTelefone(req.userId!, cols.telefone);
         if (outro && outro.id !== req.params.id) return erro(res, 409, 'Outro contato já usa este telefone.', 'duplicate', { peopleId: outro.id });
       }
       const r = await pool.query(
-        `UPDATE contatos SET ${nomes.map((c, i) => `${c} = $${i + 3}`).join(', ')}, updated_at = NOW()
+        `UPDATE contatos SET ${[...nomes.map((c, i) => `${c} = $${i + 3}`), 'updated_at = NOW()'].join(', ')}
           WHERE id::text = $1 AND user_id = $2 RETURNING *`, [req.params.id, req.userId, ...nomes.map(c => cols[c])]);
       if (!r.rows.length) return erro(res, 404, 'Contato não encontrado.', 'not_found');
-      return res.json({ data: pessoa(r.rows[0]) });
+      return res.json({ data: pessoa(await gravarCustomFields(req, r.rows[0], cf.valores)) });
     } catch (err: any) {
       return erro(res, 500, err.message);
     }
@@ -296,6 +331,18 @@ export default function apiPublicaRouter(pool: Pool): Router {
       const r = await pool.query(`DELETE FROM contatos WHERE id::text = $1 AND user_id = $2`, [req.params.id, req.userId]);
       if (!r.rowCount) return erro(res, 404, 'Contato não encontrado.', 'not_found');
       return res.status(204).end();
+    } catch (err: any) {
+      return erro(res, 500, err.message);
+    }
+  });
+
+  // ── Campos personalizados (definições) ───────────────────────────────────
+  router.get('/custom-fields', exige('peoples', 'read'), async (req: ChaveReq, res: Response) => {
+    try {
+      const campos = await listarCampos(pool, req.ownerId!);
+      return res.json({
+        data: campos.map(c => ({ id: c.id, name: c.nome, key: c.chave, type: c.tipo, options: c.opcoes || [], description: c.descricao ?? null })),
+      });
     } catch (err: any) {
       return erro(res, 500, err.message);
     }

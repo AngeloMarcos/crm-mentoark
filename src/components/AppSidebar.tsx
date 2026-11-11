@@ -7,7 +7,7 @@ import {
   Library, Settings as SettingsIcon, Users as UsersIcon, Link2, Monitor, Users2,
   Activity, LayoutTemplate, Download, CreditCard, Radar,
 } from "lucide-react";
-import { ListChecks, ChartColumn } from "lucide-react";
+import { ListChecks, ChartColumn, SlidersHorizontal } from "lucide-react";
 import { useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useAssinatura } from "@/hooks/useAssinatura";
@@ -81,6 +81,7 @@ const navGroups: NavGroup[] = [
       { title: "Radar de Grupos", url: "/radar-grupos", icon: Radar, modulo: "leads", color: "text-cyan-500" },
       { title: "Exportar Dados", url: "/exportar-dados", icon: Download, modulo: "leads", color: "text-emerald-500" },
       { title: "Contatos", url: "/contatos", icon: BookUser, modulo: "contatos", color: "text-purple-500" },
+      { title: "Campos Personalizados", url: "/contatos/campos", icon: SlidersHorizontal, modulo: "leads", color: "text-fuchsia-500" },
       { title: "Tags e Funil", url: "/tags-funil", icon: Tags, modulo: "leads", color: "text-violet-500" },
       { title: "Funil de Vendas", url: "/funil", icon: Filter, modulo: "funil", color: "text-orange-500" },
       { title: "Kanban / Tarefas", url: "/kanban", icon: LayoutGrid, modulo: "leads", color: "text-blue-500" },

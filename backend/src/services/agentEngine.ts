@@ -19,6 +19,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { MCP_TOOLS, executarFerramenta } from './mcp/tools';
 import { MOTIVOS, decidirMovimentoIA, moverNoFunil, prepararFunilIA, registrarEventoFunil } from './funilAuto';
+import { decidirRegistroIA, formatarValor, gravarValoresDoContato, prepararCamposIA } from './camposPersonalizados';
 import { aplicarCerebro } from './canais';
 import { iaEstaPausada, marcarAguardando, registrarSaida } from './atendimento';
 import {
@@ -1127,7 +1128,14 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
   // 2026-11-02 (funil que anda sozinho — services/funilAuto.ts): "mover_no_funil" só existe para
   // agente com etapas liberadas; o pedido fica pendente e só vale depois que a resposta sai.
   const funilIA = await prepararFunilIA(pool, userIdFinal, agente, contato.id).catch(() => null);
-  const ferramentasDoTurno = funilIA ? [...mcpToolsHabilitadas, funilIA.ferramenta] : mcpToolsHabilitadas;
+  // 2026-11-11 (campos personalizados): a IA vê a ficha do cliente e preenche os campos que a conta
+  // liberou (`ia_preenche`). Gravação imediata — não muda nada que o cliente veja.
+  const camposIA = await prepararCamposIA(pool, userIdFinal, contato.id).catch(() => null);
+  const ferramentasDoTurno = [
+    ...mcpToolsHabilitadas,
+    ...(funilIA ? [funilIA.ferramenta] : []),
+    ...(camposIA ? [camposIA.ferramenta] : []),
+  ];
   const movimentosPendentes: Array<{ etapaId: string; motivo: string }> = [];
 
   // [AUDITORIA] LÓGICA (Sprint Nome Real de Leads de Grupo, cont., 2026-08-27 — pedido explícito
@@ -1170,7 +1178,7 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
 
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
-    instrucaoNome + instrucaoEscopo + instrucoesComportamento(agente);
+    instrucaoNome + instrucaoEscopo + (camposIA?.instrucao ?? '') + instrucoesComportamento(agente);
 
   // [AUDITORIA] LÓGICA (Sprint 7, 2026-07-23 — verificação de ordem do histórico enviado à
   // LLM, pedida pelo usuário): `ORDER BY created_at DESC` abaixo busca as 20 mais recentes
@@ -1374,6 +1382,19 @@ async function processarMensagem(pool: Pool, entrada: MensagemEntrada): Promise<
           });
           toolResults.push({ role: 'user', content: `[Resultado de mover_no_funil]: não movido — ${MOTIVOS[decisao.motivo]}` });
         }
+        continue;
+      }
+      if (tc.name === 'registrar_campo' && camposIA) {
+        const d = decidirRegistroIA(camposIA.liberados, tc.input?.campo, tc.input?.valor);
+        let texto: string;
+        if (!d.ok) texto = `não registrado — ${d.erro}`;
+        else {
+          const g = await gravarValoresDoContato(pool, camposIA.ownerId, contato.id, [userIdFinal, camposIA.ownerId], { [d.campo.chave]: d.valor })
+            .catch((e: any) => ({ ok: false as const, erro: e?.message || 'falha ao gravar' }));
+          texto = g.ok ? `registrado: ${d.campo.nome} = ${formatarValor(d.campo, d.valor)}.` : `não registrado — ${g.erro}`;
+          if (g.ok) log.info('ENGINE', 'IA registrou campo personalizado', { userId: userIdFinal, contatoId: contato.id, campo: d.campo.chave });
+        }
+        toolResults.push({ role: 'user', content: `[Resultado de registrar_campo]: ${texto}` });
         continue;
       }
       log.info('ENGINE', 'Executando tool', { nome: tc.name, input: JSON.stringify(tc.input).slice(0, 80) });
@@ -1759,10 +1780,14 @@ export async function testarAgentePlayground(
   }
   if (!systemPromptBase) return vazio('Este agente não tem Prompt do Sistema configurado (aba Perfil) — não há o que testar ainda.');
 
+  // Campos personalizados: no teste a ficha começa vazia e nada é gravado.
+  const camposIA = await prepararCamposIA(pool, userId, null).catch(() => null);
+
   const systemPrompt = systemPromptBase +
     `\n\nData/hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` +
     `\n\n[MODO TESTE] Você está sendo testado por um operador do CRM através da tela de configuração ` +
     `do agente — não é uma conversa real com cliente. Responda normalmente, seguindo suas instruções.` +
+    (camposIA?.instrucao ?? '') +
     instrucoesComportamento(agente);
 
   const mcpToolsHabilitadas = agente.mcp_tools == null
@@ -1770,7 +1795,11 @@ export async function testarAgentePlayground(
     : MCP_TOOLS.filter(t => (agente.mcp_tools as string[]).includes(t.name));
   // Funil: no teste o cliente é fictício (fora do funil) e nada é movido — só mostra o que faria.
   const funilIA = await prepararFunilIA(pool, userId, agente, null).catch(() => null);
-  const ferramentasDoTurno = funilIA ? [...mcpToolsHabilitadas, funilIA.ferramenta] : mcpToolsHabilitadas;
+  const ferramentasDoTurno = [
+    ...mcpToolsHabilitadas,
+    ...(funilIA ? [funilIA.ferramenta] : []),
+    ...(camposIA ? [camposIA.ferramenta] : []),
+  ];
 
   const providerInfo = await criarProvider(pool, userId, agente.provider_id ?? null);
   const envKey = process.env.OPENAI_API_KEY || '';
@@ -1841,6 +1870,16 @@ export async function testarAgentePlayground(
           content: decisao.ok
             ? `[Resultado de mover_no_funil]: [PREVIEW — modo teste, nada movido] Moveria o cliente para "${decisao.etapa.nome}" depois de enviar a resposta.`
             : `[Resultado de mover_no_funil]: não movido — ${MOTIVOS[decisao.motivo]}`,
+        });
+        continue;
+      }
+      if (tc.name === 'registrar_campo' && camposIA) {
+        const d = decidirRegistroIA(camposIA.liberados, tc.input?.campo, tc.input?.valor);
+        toolResults.push({
+          role: 'user',
+          content: d.ok
+            ? `[Resultado de registrar_campo]: [PREVIEW — modo teste, nada gravado] Registraria ${d.campo.nome}: ${formatarValor(d.campo, d.valor)}.`
+            : `[Resultado de registrar_campo]: não registrado — ${d.erro}`,
         });
         continue;
       }

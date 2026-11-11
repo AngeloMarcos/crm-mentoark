@@ -25,6 +25,7 @@ import WhatsAppPage from "./pages/WhatsApp";
 import SLAPage from "./pages/SLA";
 import RespostasRapidasPage from "./pages/RespostasRapidas";
 import AtendimentoMotivosPage from "./pages/AtendimentoMotivos";
+import CamposPersonalizadosPage from "./pages/CamposPersonalizados";
 import AtendimentoRelatoriosPage from "./pages/AtendimentoRelatorios";
 import CorridasPendentesPage from "./pages/CorridasPendentes";
 import DisparosPage from "./pages/Disparos";
@@ -95,6 +96,7 @@ const App = () => (
               <Route path="/exportar-dados" element={<ProtectedRoute requireModulo="leads">     <ExportarDadosPage /></ProtectedRoute>} />
               <Route path="/tags-funil"   element={<ProtectedRoute requireModulo="leads">       <TagsPage /></ProtectedRoute>} />
               <Route path="/contatos"     element={<ProtectedRoute requireModulo="contatos">    <ContatosPage /></ProtectedRoute>} />
+              <Route path="/contatos/campos" element={<ProtectedRoute requireModulo="leads"><CamposPersonalizadosPage /></ProtectedRoute>} />
               <Route path="/contatos/:id" element={<ProtectedRoute requireModulo="contatos">    <ContatoDetalhePage /></ProtectedRoute>} />
               <Route path="/discagem"     element={<ProtectedRoute requireModulo="discagem">    <DiscagemPage /></ProtectedRoute>} />
               <Route path="/funil/relatorio" element={<ProtectedRoute requireModulo="funil"><FunilRelatorioPage /></ProtectedRoute>} />

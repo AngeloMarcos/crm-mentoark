@@ -48,7 +48,8 @@ export function montarOpenApi() {
             q('tags', 'Etiquetas separadas por vírgula'), q('tags_op', '`any` (padrão) ou `all`'),
             q('ids', 'IDs separados por vírgula'), q('optOut', '`true` ou `false`'),
             q('created_at', '`dd/MM/yyyy` ou `dd/MM/yyyy,dd/MM/yyyy`'), q('updated_at', 'Mesmo formato de created_at'),
-            q('orderColumn', '`createdAt` (padrão), `updatedAt`, `name`, `lastMessageAt`'), q('orderDirection', '`asc` ou `desc`')],
+            q('orderColumn', '`createdAt` (padrão), `updatedAt`, `name`, `lastMessageAt`'), q('orderDirection', '`asc` ou `desc`'),
+            q('cf_{key}', 'Campo personalizado pela chave (ex.: `cf_cidade=Santos`). Texto: contém; demais tipos: igual')],
           responses: { 200: { description: 'Lista paginada', content: lista('Pessoa') }, ...erros } },
         post: { tags: ['Contatos'], summary: 'Criar contato',
           description: 'Exige `phone` ou `email`. Telefone já cadastrado → 409 `duplicate` com `peopleId`; com `upsert: true` atualiza o existente.',
@@ -60,6 +61,12 @@ export function montarOpenApi() {
         put: { tags: ['Contatos'], summary: 'Atualizar contato', parameters: [id], requestBody: { content: json(ref('PessoaEntrada')) },
           responses: { 200: { description: 'Atualizado', content: um('Pessoa') }, ...erros } },
         delete: { tags: ['Contatos'], summary: 'Excluir contato', parameters: [id], responses: { 204: { description: 'Excluído' } } },
+      },
+      '/custom-fields': {
+        get: { tags: ['Contatos'], summary: 'Listar campos personalizados',
+          description: 'Campos ativos da conta. `key` é o nome usado em `customFields` e no filtro `cf_{key}`; não muda quando o campo é renomeado. ' +
+            '`type`: texto, numero, moeda, data (aaaa-mm-dd), selecao, multipla (lista), sim_nao (booleano).',
+          responses: { 200: { description: 'Lista', content: json({ type: 'object', properties: { data: { type: 'array', items: ref('CampoPersonalizado') } } }) } } },
       },
       '/tags': {
         get: { tags: ['Etiquetas'], summary: 'Listar etiquetas (com quantos contatos usam cada uma)', responses: { 200: { description: 'Lista' } } },
@@ -133,11 +140,18 @@ export function montarOpenApi() {
           tags: { type: 'array', items: { type: 'string' } }, notes: { type: 'string' }, potentialValue: { type: 'number' },
           city: { type: 'string' }, state: { type: 'string' }, optOut: { type: 'boolean' },
           stageId: { type: 'string', nullable: true }, stageEnteredAt: { type: 'string', format: 'date-time', nullable: true },
+          customFields: { type: 'object', additionalProperties: true, description: '`{ chave: valor }` dos campos personalizados' },
           lastMessageAt: { type: 'string', format: 'date-time' }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' } } },
         PessoaEntrada: { type: 'object', properties: {
           name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' }, company: { type: 'string' }, jobTitle: { type: 'string' },
           origin: { type: 'string' }, status: { type: 'string' }, temperature: { type: 'string' }, notes: { type: 'string' },
-          potentialValue: { type: 'number' }, city: { type: 'string' }, state: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } } },
+          potentialValue: { type: 'number' }, city: { type: 'string' }, state: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
+          customFields: { type: 'object', additionalProperties: true,
+            description: 'Mescla com os valores atuais; `null` ou vazio apaga o campo. Chave desconhecida → 422 `unknown_custom_field`; valor fora do tipo → 422 `invalid_value` (nada é gravado).' } } },
+        CampoPersonalizado: { type: 'object', properties: {
+          id: { type: 'string' }, name: { type: 'string' }, key: { type: 'string' },
+          type: { type: 'string', enum: ['texto', 'numero', 'moeda', 'data', 'selecao', 'multipla', 'sim_nao'] },
+          options: { type: 'array', items: { type: 'string' } }, description: { type: 'string', nullable: true } } },
         MudarTags: { type: 'object', required: ['tags'], properties: { peopleId: { type: 'string' }, peopleIds: { type: 'array', items: { type: 'string' }, maxItems: 500 }, tags: { type: 'array', items: { type: 'string' } } } },
         Canal: { type: 'object', properties: {
           id: { type: 'string' }, type: { type: 'string', enum: ['whatsapp_qrcode', 'whatsapp_official'] }, name: { type: 'string' }, phone: { type: 'string' },

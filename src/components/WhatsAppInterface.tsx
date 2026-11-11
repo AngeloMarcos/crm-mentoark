@@ -78,6 +78,7 @@ import { TagStatusEnvio } from "@/components/TagStatusEnvio";
 // atendente ainda revisa/edita antes de enviar de verdade.
 import { personalizarMensagem } from "@/lib/motorTexto";
 import { FunilDaConversa, funilDaConversa, textoEventoFunil } from "@/lib/funilAuto";
+import { CamposDoContato } from "@/components/campos/CamposDoContato";
 import { abrirAtendimento, acaoAtendimento, textoEventoAtendimento, type FiltroAtendimento } from "@/lib/atendimento";
 import { useAtendimentoConversa } from "@/components/atendimento/useAtendimentoConversa";
 import { BarraAtendimento } from "@/components/atendimento/BarraAtendimento";
@@ -5590,6 +5591,13 @@ export function WhatsAppInterface() {
                 )}
               </div>
             </div>
+
+            {/* 2026-11-11: campos personalizados do contato (some quando a conta não tem campos). */}
+            {!activeChat.is_group && crmInfo?.id && (
+              <div className="border-t border-border/40 px-5 py-5 empty:hidden">
+                <CamposDoContato contatoId={crmInfo.id} compacto titulo="Campos do contato" />
+              </div>
+            )}
 
             {/* Anotações do CRM */}
             <div className="border-t border-border/40 px-5 py-5 bg-amber-500/[0.02]">

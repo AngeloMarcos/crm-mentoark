@@ -3461,6 +3461,26 @@ export async function runMigrations(pool: Pool): Promise<void> {
       END IF;
     END $$`).catch(err => log.warn('MIGRATIONS', 'trg_limpar_prazo_pausa_ia', { err: err?.message }));
 
+  // 2026-11-11 (campos personalizados — services/camposPersonalizados.ts): cadastro por conta; o valor
+  // fica em contatos.campos indexado pela chave (imutável). Excluir = desativar.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS campos_personalizados (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      nome TEXT NOT NULL,
+      chave TEXT NOT NULL,
+      tipo TEXT NOT NULL CHECK (tipo IN ('texto','numero','moeda','data','selecao','multipla','sim_nao')),
+      opcoes TEXT[] NOT NULL DEFAULT '{}',
+      descricao TEXT,
+      ia_preenche BOOLEAN NOT NULL DEFAULT false,
+      ativo BOOLEAN NOT NULL DEFAULT true,
+      ordem INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, chave)
+    )`).catch(err => log.warn('MIGRATIONS', 'campos_personalizados', { err: err?.message }));
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS campos JSONB NOT NULL DEFAULT '{}'::jsonb`).catch(err => log.warn('MIGRATIONS', 'contatos.campos', { err: err?.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_campos ON contatos USING GIN (campos jsonb_path_ops)`).catch(err => log.warn('MIGRATIONS', 'idx_contatos_campos', { err: err?.message }));
+
   await criarAtendimentosIniciais(pool).catch(err => log.warn('MIGRATIONS', 'backfill atendimentos', { err: err?.message }));
 
   log.info('MIGRATIONS', 'OK');

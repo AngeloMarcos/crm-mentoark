@@ -1,17 +1,30 @@
-import { Router, Response } from 'express';
+import { NextFunction, Router, Response } from 'express';
 import { Pool } from 'pg';
 import { makeCrud } from '../crud';
 import { AuthRequest } from '../middleware';
 import { log } from '../logger';
 import { normalizarTelefone } from '../utils/telefone';
 import { resolverNome } from '../utils/nomes';
+import { resolverOwnerId } from '../services/subscription';
+import { listarCampos, normalizarValor } from '../services/camposPersonalizados';
 
 export default function contatos(pool: Pool): Router {
-  const router = makeCrud(pool, 'contatos');
+  // [AUDITORIA] BUG PRÉ-EXISTENTE CORRIGIDO (2026-11-11): este arquivo fazia
+  // `const router = makeCrud(...)` e depois `router.get('/', ...)` como "override" — mas o Express
+  // despacha para o PRIMEIRO handler registrado, então o GET genérico do makeCrud respondia sempre
+  // e este handler era código morto: `?search=` dava 500 ("column search does not exist" — era o
+  // que a busca do "Adicionar ao funil" via em produção), e o filtro de membro/whitelist daqui
+  // nunca rodou. Agora o router externo registra este GET primeiro e ele só ASSUME a request
+  // quando ela usa o que só existe aqui (`search`, `cf_*`); o resto segue via next() para o GET
+  // genérico, preservando `select=`, `*_in`, `*_gte` etc. de que Disparos e outras telas dependem.
+  const router = Router();
+  const crud = makeCrud(pool, 'contatos');
 
-  // Override GET / to support text search via ?search=
-  router.get('/', async (req: AuthRequest, res: Response) => {
+  // GET / com busca (?search=) e filtro por campo personalizado (?cf_<chave>=)
+  router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      const usaCustom = !!req.query.search || Object.keys(req.query).some(k => k.startsWith('cf_'));
+      if (!usaCustom) return next();
       const userId = req.userId!;
       
       // Verifica se é membro
@@ -19,7 +32,7 @@ export default function contatos(pool: Pool): Router {
         `SELECT role FROM equipe_membros WHERE user_id = $1 LIMIT 1`,
         [userId]
       );
-      const isMembro = equipeRes.rowCount > 0 && equipeRes.rows[0].role === 'membro';
+      const isMembro = (equipeRes.rowCount ?? 0) > 0 && equipeRes.rows[0].role === 'membro';
 
       const params: any[] = [userId];
       let idx = 2;
@@ -73,6 +86,27 @@ export default function contatos(pool: Pool): Router {
         } else if (COLUNAS_FILTRAVEIS.has(key)) {
           conditions.push(`${key} = $${idx++}`);
           params.push(str);
+        }
+      }
+
+      // 2026-11-11: filtro por campo personalizado — ?cf_<chave>=valor (texto: contém; demais: igual,
+      // com o valor normalizado pelo tipo do campo; múltipla: contém a opção).
+      const filtrosCampo = Object.entries(req.query).filter(([k, v]) => k.startsWith('cf_') && String(v ?? '') !== '');
+      if (filtrosCampo.length) {
+        const ownerId = await resolverOwnerId(pool, userId);
+        const campos = await listarCampos(pool, ownerId);
+        for (const [k, v] of filtrosCampo) {
+          const campo = campos.find(c => c.chave === k.slice(3));
+          if (!campo) continue;
+          if (campo.tipo === 'texto') {
+            conditions.push(`campos->>'${campo.chave}' ILIKE $${idx++}`);
+            params.push(`%${String(v)}%`);
+            continue;
+          }
+          const n = normalizarValor(campo, campo.tipo === 'multipla' ? [String(v)] : String(v));
+          if (!n.ok || n.valor === null) { conditions.push('false'); continue; }
+          conditions.push(`campos @> $${idx++}::jsonb`);
+          params.push(JSON.stringify({ [campo.chave]: n.valor }));
         }
       }
 
@@ -456,6 +490,9 @@ export default function contatos(pool: Pool): Router {
       return res.status(500).json({ message: err.message });
     }
   });
+
+  // GET genérico, POST/PATCH/DELETE e demais rotas do makeCrud — depois das custom acima.
+  router.use(crud);
 
   return router;
 }
