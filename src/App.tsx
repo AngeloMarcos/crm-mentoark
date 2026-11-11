@@ -20,6 +20,7 @@ import ContatosPage from "./pages/Contatos";
 import ContatoDetalhePage from "./pages/ContatoDetalhe";
 import DiscagemPage from "./pages/Discagem";
 import FunilPage from "./pages/Funil";
+import FunilRelatorioPage from "./pages/FunilRelatorio";
 import WhatsAppPage from "./pages/WhatsApp";
 import SLAPage from "./pages/SLA";
 import RespostasRapidasPage from "./pages/RespostasRapidas";
@@ -96,6 +97,7 @@ const App = () => (
               <Route path="/contatos"     element={<ProtectedRoute requireModulo="contatos">    <ContatosPage /></ProtectedRoute>} />
               <Route path="/contatos/:id" element={<ProtectedRoute requireModulo="contatos">    <ContatoDetalhePage /></ProtectedRoute>} />
               <Route path="/discagem"     element={<ProtectedRoute requireModulo="discagem">    <DiscagemPage /></ProtectedRoute>} />
+              <Route path="/funil/relatorio" element={<ProtectedRoute requireModulo="funil"><FunilRelatorioPage /></ProtectedRoute>} />
               <Route path="/funil"        element={<ProtectedRoute requireModulo="funil">       <FunilPage /></ProtectedRoute>} />
               <Route path="/whatsapp"     element={<ProtectedRoute requireModulo="whatsapp">    <WhatsAppPage /></ProtectedRoute>} />
               <Route path="/sla"          element={<ProtectedRoute requireModulo="whatsapp">    <SLAPage /></ProtectedRoute>} />

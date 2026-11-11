@@ -23,6 +23,7 @@ const TIPOS_MOTIVO: TipoMotivo[] = ['transferencia', 'resolucao', 'pausa', 'perd
 const MOTIVOS_PADRAO: Partial<Record<TipoMotivo, string[]>> = {
   resolucao: ['Dúvida resolvida', 'Venda feita', 'Sem resposta do cliente'],
   transferencia: ['Fora do horário', 'Assunto de outro setor'],
+  perda: ['Preço', 'Comprou do concorrente', 'Sem resposta', 'Sem interesse', 'Fora do perfil'],
 };
 
 function erroHttp(res: Response, err: any, contexto: string) {

@@ -3433,6 +3433,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
       motivo_obrigatorio BOOLEAN NOT NULL DEFAULT false,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`).catch(err => log.warn('MIGRATIONS', 'atendimento_config', { err: err?.message }));
+  // 2026-11-10 (Sprint Funil: perda com motivo): o movimento para uma etapa de perda guarda o motivo cadastrado.
+  await pool.query(`ALTER TABLE funil_eventos ADD COLUMN IF NOT EXISTS motivo_id UUID REFERENCES motivos(id) ON DELETE SET NULL`).catch(err => log.warn('MIGRATIONS', 'funil_eventos.motivo_id', { err: err?.message }));
   // 2026-11-10: resolver sozinho após N horas sem mensagem nem nota (services/resolucaoAutomatica.ts). 0 desliga.
   await pool.query(`ALTER TABLE atendimento_config ADD COLUMN IF NOT EXISTS resolver_inativo_horas INTEGER NOT NULL DEFAULT 24`).catch(err => log.warn('MIGRATIONS', 'resolver_inativo_horas', { err: err?.message }));
 

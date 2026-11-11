@@ -375,7 +375,10 @@ export default function apiPublicaRouter(pool: Pool): Router {
       const r = await moverNoFunil(pool, {
         userId: req.userId!, contatoId: String(req.params.id), paraEstagioId: stageId, origem: 'api',
         motivo: typeof req.body?.reason === 'string' ? req.body.reason.slice(0, 300) : `API (${req.chave!.titulo})`,
+        motivoId: typeof req.body?.lostReasonId === 'string' ? req.body.lostReasonId : null,
       });
+      if (!r.ok && r.motivo === 'motivo_obrigatorio') return erro(res, 422, 'Esta conta exige lostReasonId ao mover para uma etapa de perda.', 'lost_reason_required');
+      if (!r.ok && r.motivo === 'motivo_invalido') return erro(res, 422, 'lostReasonId inválido (motivo de perda da conta).', 'invalid_lost_reason');
       if (!r.ok && r.motivo === 'sem_contato') return erro(res, 404, 'Contato não encontrado.', 'not_found');
       if (!r.ok && r.motivo === 'etapa_inexistente') return erro(res, 422, 'Etapa não existe (veja GET /v1/stages).', 'unknown_stage');
       const c = (await pool.query(`SELECT * FROM contatos WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId])).rows[0];

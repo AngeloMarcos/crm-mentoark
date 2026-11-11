@@ -20,9 +20,11 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import {
-  ArrowDown, ArrowUp, Bot, Clock, Loader2, Plus, Settings2, Trash2, User, X, Zap, Search,
+  ArrowDown, ArrowUp, Bot, Clock, Loader2, Plus, Settings2, Trash2, User, X, Zap, Search, ChartColumn,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { DialogoMotivo } from "@/components/atendimento/DialogoMotivo";
 import {
   DndContext, DragEndEvent, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
   DragOverlay, DragStartEvent,
@@ -102,6 +104,8 @@ export default function FunilPage() {
   const [eventos, setEventos] = useState<EventoFunil[] | null>(null);
   const [configAberta, setConfigAberta] = useState(false);
   const [adicionarAberto, setAdicionarAberto] = useState(false);
+  // Card indo para uma etapa de perda: antes de mover, pede o motivo.
+  const [perdaPendente, setPerdaPendente] = useState<{ contatoId: string; etapaId: string } | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -130,6 +134,10 @@ export default function FunilPage() {
   const mover = async (contatoId: string, etapaId: string | null) => {
     const anterior = cards.find((c) => c.id === contatoId);
     if (!anterior || anterior.funil_estagio_id === etapaId) return;
+    if (etapaId && etapaPorId.get(etapaId)?.tipo === "perdido") {
+      setPerdaPendente({ contatoId, etapaId });
+      return;
+    }
     setCards((prev) => etapaId
       ? prev.map((c) => (c.id === contatoId ? { ...c, funil_estagio_id: etapaId, funil_entrou_em: new Date().toISOString(), ultimo_movimento: null } : c))
       : prev.filter((c) => c.id !== contatoId));
@@ -144,6 +152,16 @@ export default function FunilPage() {
       toast.error((err as Error).message);
       carregar();
     }
+  };
+
+  // Erros sobem para o diálogo (motivo inválido/obrigatório), que mostra e deixa tentar de novo.
+  const confirmarPerda = async (motivoId?: string) => {
+    if (!perdaPendente) return;
+    const r = await moverCard(perdaPendente.contatoId, perdaPendente.etapaId, motivoId);
+    if (r.ok === false && r.motivo !== "ja_estava") throw new Error(r.message || "Não foi possível mover o card.");
+    toast.success(`Movido para ${etapaPorId.get(perdaPendente.etapaId)?.nome ?? "a etapa de perda"}`);
+    setPerdaPendente(null);
+    carregar();
   };
 
   const onDragEnd = (e: DragEndEvent) => {
@@ -164,7 +182,8 @@ export default function FunilPage() {
               Os cards andam pela equipe, pela IA (Agentes → Ações no funil) ou pela API. Tudo fica no histórico do card.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" asChild><Link to="/funil/relatorio"><ChartColumn className="h-4 w-4" /> Relatório</Link></Button>
             <Button variant="outline" onClick={() => setConfigAberta(true)}><Settings2 className="h-4 w-4" /> Etapas e automações</Button>
             <Button onClick={() => setAdicionarAberto(true)}><Plus className="h-4 w-4" /> Adicionar ao funil</Button>
           </div>
@@ -246,7 +265,12 @@ export default function FunilPage() {
               <div className="space-y-4 text-sm">
                 <div className="space-y-1.5">
                   <Label>Etapa</Label>
-                  <Select value={selecionado.funil_estagio_id} onValueChange={(v) => { mover(selecionado.id, v); setSelecionado({ ...selecionado, funil_estagio_id: v }); }}>
+                  <Select value={selecionado.funil_estagio_id} onValueChange={(v) => {
+                    mover(selecionado.id, v);
+                    // Perda abre o diálogo do motivo: fecha este para não ficar um sobre o outro.
+                    if (etapaPorId.get(v)?.tipo === "perdido") setSelecionado(null);
+                    else setSelecionado({ ...selecionado, funil_estagio_id: v });
+                  }}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {etapas.map((e) => <SelectItem key={e.id} value={e.id}>{e.nome}{e.tipo !== "aberta" ? ` (${ROTULO_TIPO[e.tipo]})` : ""}</SelectItem>)}
@@ -293,6 +317,17 @@ export default function FunilPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {perdaPendente && (
+        <DialogoMotivo
+          titulo="Por que o negócio foi perdido?"
+          descricao={`${cards.find((c) => c.id === perdaPendente.contatoId)?.nome || "O card"} vai para ${etapaPorId.get(perdaPendente.etapaId)?.nome ?? "a etapa de perda"}. O motivo entra no histórico e no relatório do funil.`}
+          botao="Mover"
+          tipo="perda"
+          onConfirmar={(r) => confirmarPerda(r.motivo_id)}
+          onFechar={() => setPerdaPendente(null)}
+        />
+      )}
 
       <ConfigEtapas aberto={configAberta} onFechar={() => setConfigAberta(false)} etapas={etapas} onMudou={carregar} />
       <AdicionarAoFunil aberto={adicionarAberto} onFechar={() => setAdicionarAberto(false)} etapas={etapas} onAdicionado={carregar} />

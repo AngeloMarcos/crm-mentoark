@@ -17,6 +17,7 @@ const ABAS: { tipo: TipoMotivo; rotulo: string; ajuda: string }[] = [
   { tipo: "resolucao", rotulo: "Resolução", ajuda: "Aparecem ao resolver um atendimento." },
   { tipo: "transferencia", rotulo: "Transferência", ajuda: "Aparecem ao passar a conversa para outra pessoa." },
   { tipo: "pausa", rotulo: "Pausa", ajuda: "Registram por que a IA foi pausada." },
+  { tipo: "perda", rotulo: "Perda", ajuda: "Aparecem ao mover um negócio para uma etapa de perda no funil." },
 ];
 
 function ListaMotivos({ tipo, ajuda }: { tipo: TipoMotivo; ajuda: string }) {
@@ -124,7 +125,7 @@ export default function AtendimentoMotivosPage() {
         <Card className="flex items-center justify-between gap-4 p-4">
           <div>
             <Label htmlFor="motivo-obrigatorio" className="font-semibold">Motivo obrigatório</Label>
-            <p className="text-sm text-muted-foreground">Exige um motivo para transferir ou resolver.</p>
+            <p className="text-sm text-muted-foreground">Exige um motivo para transferir, resolver ou perder um negócio.</p>
           </div>
           <Switch id="motivo-obrigatorio" checked={obrigatorio === true} disabled={obrigatorio === null} onCheckedChange={alternar} />
         </Card>

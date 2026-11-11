@@ -10,6 +10,7 @@
  *   POST   /api/funil-auto/mover                 → { contato_id, estagio_id | null, motivo? } (origem manual)
  *   GET    /api/funil-auto/eventos?contato_id=   → histórico do card
  *   GET    /api/funil-auto/eventos-conversa?telefone= → etapa atual + eventos, para o chat
+ *   GET    /api/funil-auto/relatorio?de=&ate=   → relatório do funil (services/relatorioFunil.ts)
  */
 import { Router, Response } from 'express';
 import { Pool } from 'pg';
@@ -18,6 +19,8 @@ import {
   garantirEtapasPadrao, listarEtapas, moverNoFunil, normalizarAutomacoes, tipoEtapa, MOTIVOS,
 } from '../services/funilAuto';
 import { variantesTelefone } from '../services/apiKeys';
+import { lerPeriodo } from '../services/relatorioAtendimento';
+import { montarRelatorioFunil } from '../services/relatorioFunil';
 
 const LIMITE_CARDS = 3000;
 
@@ -137,12 +140,23 @@ export default function funilAutoRouter(pool: Pool): Router {
       const r = await moverNoFunil(pool, {
         userId: req.userId!, contatoId, paraEstagioId: estagioId, origem: 'manual',
         motivo: typeof req.body?.motivo === 'string' ? req.body.motivo : null,
+        motivoId: typeof req.body?.motivo_id === 'string' ? req.body.motivo_id : null,
       });
       if (!r.ok) {
         const status = r.motivo === 'ja_estava' ? 200 : r.motivo === 'sem_contato' || r.motivo === 'etapa_inexistente' ? 404 : 422;
         return res.status(status).json({ ok: false, motivo: r.motivo, message: MOTIVOS[r.motivo!] || r.motivo });
       }
       return res.json(r);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  router.get('/relatorio', async (req: AuthRequest, res: Response) => {
+    const p = lerPeriodo(req.query as Record<string, unknown>);
+    if (p.erro) return res.status(400).json({ message: p.erro });
+    try {
+      return res.json(await montarRelatorioFunil(pool, req.userId!, p.de!, p.ate!));
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

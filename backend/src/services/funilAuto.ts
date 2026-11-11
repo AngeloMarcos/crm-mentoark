@@ -55,7 +55,19 @@ export const MOTIVOS: Record<string, string> = {
   mensagem_nao_saiu: 'A resposta da IA não foi entregue, então o movimento foi cancelado.',
   sem_contato: 'Este contato não existe mais.',
   etapa_inexistente: 'A etapa escolhida não existe mais.',
+  motivo_obrigatorio: 'Escolha o motivo da perda.',
+  motivo_invalido: 'Motivo de perda inválido.',
 };
+
+/** Etapa de perda pede motivo quando a conta exige ("Motivo obrigatório" em Motivos e regras de atendimento). */
+export function motivoDePerdaFaltando(tipoDestino: TipoEtapa, motivoId: string | null | undefined, obrigatorio: boolean): boolean {
+  return tipoDestino === 'perdido' && obrigatorio && !motivoId;
+}
+
+/** Ganhos ÷ (ganhos + perdidos); null quando nada fechou. */
+export function taxaConversao(ganhos: number, perdidos: number): number | null {
+  return ganhos + perdidos > 0 ? ganhos / (ganhos + perdidos) : null;
+}
 
 const TIPOS_ETAPA = new Set<TipoEtapa>(['aberta', 'ganho', 'perdido']);
 export const tipoEtapa = (v: unknown): TipoEtapa => (TIPOS_ETAPA.has(v as TipoEtapa) ? (v as TipoEtapa) : 'aberta');
@@ -161,13 +173,13 @@ export async function garantirEtapasPadrao(pool: Pool, userId: string): Promise<
 
 export async function registrarEventoFunil(pool: Pool, ev: {
   userId: string; contatoId: string; de?: string | null; para?: string | null; origem: OrigemMovimento;
-  resultado: 'feito' | 'recusado' | 'falhou'; agenteId?: string | null; motivo?: string | null; detalhe?: Record<string, unknown>;
+  resultado: 'feito' | 'recusado' | 'falhou'; agenteId?: string | null; motivo?: string | null; motivoId?: string | null; detalhe?: Record<string, unknown>;
 }): Promise<void> {
   await pool.query(
-    `INSERT INTO funil_eventos (user_id, contato_id, de_estagio_id, para_estagio_id, origem, resultado, agente_id, motivo, detalhe)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    `INSERT INTO funil_eventos (user_id, contato_id, de_estagio_id, para_estagio_id, origem, resultado, agente_id, motivo, detalhe, motivo_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [ev.userId, ev.contatoId, ev.de ?? null, ev.para ?? null, ev.origem, ev.resultado, ev.agenteId ?? null,
-     ev.motivo?.slice(0, 500) ?? null, JSON.stringify(ev.detalhe ?? {})],
+     ev.motivo?.slice(0, 500) ?? null, JSON.stringify(ev.detalhe ?? {}), ev.motivoId ?? null],
   ).catch(err => log.warn('FUNIL', 'Falha ao registrar evento', { err: err?.message }));
 }
 
@@ -177,7 +189,7 @@ export async function registrarEventoFunil(pool: Pool, ev: {
  */
 export async function moverNoFunil(pool: Pool, p: {
   userId: string; contatoId: string; paraEstagioId: string | null; origem: OrigemMovimento;
-  agenteId?: string | null; motivo?: string | null;
+  agenteId?: string | null; motivo?: string | null; motivoId?: string | null;
 }): Promise<{ ok: boolean; motivo?: string; automacoes: Array<{ tipo: string; ok: boolean; erro?: string }> }> {
   const contato = (await pool.query(
     `SELECT id, funil_estagio_id, tags, responsavel FROM contatos WHERE id = $1 AND user_id = $2`, [p.contatoId, p.userId])).rows[0];
@@ -190,12 +202,30 @@ export async function moverNoFunil(pool: Pool, p: {
   }
   if ((contato.funil_estagio_id ?? null) === (destino?.id ?? null)) return { ok: false, motivo: 'ja_estava', automacoes: [] };
 
+  // Perda: motivo do cadastro da conta (motivos.tipo = 'perda'); o nome vai também no texto do histórico.
+  let motivoTexto = p.motivo ?? null;
+  let motivoId: string | null = null;
+  if (destino?.tipo === 'perdido') {
+    const conta = (await pool.query(`SELECT COALESCE(owner_id, id) AS dono FROM users WHERE id = $1`, [p.userId])).rows[0]?.dono ?? p.userId;
+    if (p.motivoId) {
+      const m = (await pool.query(
+        `SELECT id, nome FROM motivos WHERE id::text = $1 AND user_id = $2 AND tipo = 'perda' AND ativo`, [p.motivoId, conta])).rows[0];
+      if (!m) return { ok: false, motivo: 'motivo_invalido', automacoes: [] };
+      motivoId = m.id;
+      motivoTexto = m.nome;
+    } else {
+      const obrigatorio = (await pool.query(`SELECT motivo_obrigatorio FROM atendimento_config WHERE user_id = $1`, [conta])
+        .catch(() => ({ rows: [] as any[] }))).rows[0]?.motivo_obrigatorio === true;
+      if (motivoDePerdaFaltando('perdido', null, obrigatorio)) return { ok: false, motivo: 'motivo_obrigatorio', automacoes: [] };
+    }
+  }
+
   await pool.query(
     `UPDATE contatos SET funil_estagio_id = $3, funil_entrou_em = CASE WHEN $3::uuid IS NULL THEN NULL ELSE NOW() END, updated_at = NOW()
       WHERE id = $1 AND user_id = $2`, [p.contatoId, p.userId, destino?.id ?? null]);
   await registrarEventoFunil(pool, {
     userId: p.userId, contatoId: p.contatoId, de: contato.funil_estagio_id, para: destino?.id ?? null,
-    origem: p.origem, resultado: 'feito', agenteId: p.agenteId, motivo: p.motivo,
+    origem: p.origem, resultado: 'feito', agenteId: p.agenteId, motivo: motivoTexto, motivoId,
   });
 
   const resultados: Array<{ tipo: string; ok: boolean; erro?: string }> = [];

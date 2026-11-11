@@ -83,9 +83,16 @@ export const listarCardsFunil = () => chamar<{ cards: CardFunil[]; limite: numbe
 export const eventosDoCard = (contatoId: string) =>
   chamar<{ eventos: EventoFunil[] }>(`/api/funil-auto/eventos?contato_id=${encodeURIComponent(contatoId)}`);
 
-export const moverCard = (contatoId: string, estagioId: string | null) =>
+export const moverCard = (contatoId: string, estagioId: string | null, motivoId?: string) =>
   chamar<{ ok: boolean; motivo?: string; message?: string; automacoes?: Array<{ tipo: string; ok: boolean; erro?: string }> }>(
-    "/api/funil-auto/mover", { method: "POST", body: JSON.stringify({ contato_id: contatoId, estagio_id: estagioId }) });
+    "/api/funil-auto/mover", { method: "POST", body: JSON.stringify({ contato_id: contatoId, estagio_id: estagioId, ...(motivoId ? { motivo_id: motivoId } : {}) }) });
+
+export interface RelatorioFunil {
+  resumo: { entraram: number; ganhos: number; perdidos: number; conversao: number | null; valorGanho: number; cicloSeg: { p50: number | null; p90: number | null } };
+  etapas: { id: string; nome: string; tipo: TipoEtapa; cor: string | null; cards: number; valor: number; sairam: number; tempoSeg: number | null }[];
+  motivosPerda: { nome: string; total: number }[];
+}
+export const lerRelatorioFunil = (de: string) => chamar<RelatorioFunil>(`/api/funil-auto/relatorio?de=${de}`);
 
 export const criarEtapa = (nome: string, tipo: TipoEtapa = "aberta", cor?: string) =>
   chamar<{ id: string }>("/api/funil-auto/etapas", { method: "POST", body: JSON.stringify({ nome, tipo, cor }) });
