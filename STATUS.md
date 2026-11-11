@@ -1,5 +1,19 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-11-11 (2) — 🏷️ Campos personalizados do contato, com a IA preenchendo — em PRODUÇÃO
+
+`diagnosticos/SPRINT_CAMPOS_PERSONALIZADOS.md` (`8f84bb9`). Cadastro por conta em **/contatos/campos** (menu Vendas): 7 tipos,
+chave imutável (é o nome do campo na API), "IA preenche" com orientação opcional; excluir desativa e preserva os valores. Valor por
+contato em `contatos.campos` (jsonb), editável no painel da conversa e na aba Dados do lead; filtro na lista de Leads e
+`GET /api/contatos?cf_<chave>=`. IA: ferramenta `registrar_campo` com a "ficha do cliente" no prompt — registra só o que o cliente
+disser, nos campos liberados. `/v1`: `GET /custom-fields`, `customFields` no contato (ler/gravar) e filtro `cf_<chave>`, no OpenAPI.
+Validado em homolog e prod: 17 unitários + E2E 29/29 + visual.
+
+**Bug pré-existente corrigido junto:** `GET /api/contatos?search=` dava **500 em produção** desde sempre — o "override" do GET em
+`routes/contatos.ts` era código morto atrás do GET genérico do `makeCrud` (a busca do "Adicionar ao funil" estava quebrada). Agora o
+handler custom assume só requests com `search`/`cf_` e o resto segue para o genérico (`select=`, `*_in` de Disparos intactos).
+Observação: o filtro do papel `membro` (`atribuido_a`) só vale nessas requests — ligar geral continua decisão pendente (ver 11-09).
+
 ## Sessão 2026-11-11 — 🎯 Funil: perda com motivo cadastrado + relatório do funil — em PRODUÇÃO
 
 `diagnosticos/SPRINT_FUNIL_PERDA_RELATORIO.md` (`fc4c0d2`). Levar um card para etapa de tipo Perdido pede o motivo (cadastro
