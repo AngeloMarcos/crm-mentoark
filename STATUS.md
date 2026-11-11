@@ -1,5 +1,13 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-11-11 — 🎯 Funil: perda com motivo cadastrado + relatório do funil — em PRODUÇÃO
+
+`diagnosticos/SPRINT_FUNIL_PERDA_RELATORIO.md` (`fc4c0d2`). Levar um card para etapa de tipo Perdido pede o motivo (cadastro
+`motivos` tipo perda, 5 padrões; obrigatório quando a conta exige motivo em Motivos e regras de atendimento); `funil_eventos.motivo_id`.
+API: `PUT /v1/peoples/:id/stage` aceita `lostReasonId`. Página **Relatório do funil** (`/funil/relatorio`, botão no Funil de Vendas):
+entraram, ganhos, perdidos, conversão, valor ganho, ciclo de venda (mediana/p90), por etapa (cards, valor, saídas, tempo) e motivos de
+perda. Observação: em prod ninguém usa o funil ainda (0 linhas em `funil_eventos`), então o relatório nasce vazio.
+
 ## Sessão 2026-11-10 — 📊 Relatórios de atendimento — em PRODUÇÃO
 
 `diagnosticos/SPRINT_RELATORIOS_ATENDIMENTO.md` (definições). Página **Relatórios de Atendimento** (`/atendimento/relatorios`):
