@@ -3481,6 +3481,19 @@ export async function runMigrations(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS campos JSONB NOT NULL DEFAULT '{}'::jsonb`).catch(err => log.warn('MIGRATIONS', 'contatos.campos', { err: err?.message }));
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_campos ON contatos USING GIN (campos jsonb_path_ops)`).catch(err => log.warn('MIGRATIONS', 'idx_contatos_campos', { err: err?.message }));
 
+  // 2026-11-12 (filtros salvos — lacuna P3 do Cubo): combinações de filtro da lista com nome, por
+  // USUÁRIO (pessoal, como no Cubo). CRUD pelo makeCrud genérico (/api/filtros_salvos).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS filtros_salvos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tela TEXT NOT NULL DEFAULT 'leads',
+      nome TEXT NOT NULL,
+      filtros JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(err => log.warn('MIGRATIONS', 'filtros_salvos', { err: err?.message }));
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_filtros_salvos_unico ON filtros_salvos (user_id, tela, lower(nome))`).catch(() => {});
+
   await criarAtendimentosIniciais(pool).catch(err => log.warn('MIGRATIONS', 'backfill atendimentos', { err: err?.message }));
 
   log.info('MIGRATIONS', 'OK');

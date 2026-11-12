@@ -50,6 +50,7 @@ function formatWhatsappNumber(raw: string | null | undefined): string | null {
 import { useToast } from "@/hooks/use-toast";
 import * as XLSX from "xlsx";
 import { CamposDoContato } from "@/components/campos/CamposDoContato";
+import { FiltrosSalvos, type FiltrosLeads } from "@/components/leads/FiltrosSalvos";
 import { formatarValor, listarCampos, type CampoPersonalizado } from "@/lib/camposPersonalizados";
 
 interface Lista {
@@ -780,6 +781,16 @@ export default function LeadsPage() {
                 ))}
               </SelectContent>
             </Select>
+            <FiltrosSalvos
+              atual={{ search, statusFilter, listaFiltro, campoFiltro, campoValor }}
+              onAplicar={(f: FiltrosLeads) => {
+                setSearch(f.search ?? "");
+                setStatusFilter(f.statusFilter || "todos");
+                setListaFiltro(f.listaFiltro || "todas");
+                setCampoFiltro(f.campoFiltro || "nenhum");
+                setCampoValor(f.campoValor ?? "");
+              }}
+            />
             {camposConta.length > 0 && (
               <>
                 <Select value={campoFiltro} onValueChange={(v) => { setCampoFiltro(v); setCampoValor(""); }}>

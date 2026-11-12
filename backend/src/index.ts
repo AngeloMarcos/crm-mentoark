@@ -347,6 +347,7 @@ const SIMPLE_TABLES = [
   'funil_estagios',
   'follow_ups',
   'workflows',
+  'filtros_salvos', // 2026-11-12: filtros salvos da lista de Leads (pessoais, por usuário)
 ];
 for (const table of SIMPLE_TABLES) {
   app.use(`/api/${table}`, makeCrud(pool, table));
