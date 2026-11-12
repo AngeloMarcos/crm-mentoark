@@ -1,5 +1,12 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-11-12 — 🔖 Filtros salvos na lista de Leads — em PRODUÇÃO
+
+Lacuna P3 do Cubo (`filters.*`). Botão **Filtros salvos** na lista de Leads guarda a combinação atual (busca, status,
+lista, campo personalizado) com um nome, **por usuário** (`filtros_salvos`, CRUD genérico `/api/filtros_salvos`; nome
+único por usuário+tela sem diferenciar maiúsculas). Aplicar é um clique no item; excluir no ícone do próprio item.
+E2E 6/6 em homolog e prod + visual do dropdown. Da P3 agora só falta **organizações** (empresa do contato como entidade).
+
 ## Sessão 2026-11-11 (2) — 🏷️ Campos personalizados do contato, com a IA preenchendo — em PRODUÇÃO
 
 `diagnosticos/SPRINT_CAMPOS_PERSONALIZADOS.md` (`8f84bb9`). Cadastro por conta em **/contatos/campos** (menu Vendas): 7 tipos,
