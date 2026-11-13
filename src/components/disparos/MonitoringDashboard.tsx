@@ -17,19 +17,15 @@
  * por `MonitorWhatsApp.tsx` (lista persistente "Campanhas de Disparo", nova) — mesma lógica,
  * sem duplicar `handleStatusChange`/poll/etc.
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Play, Pause, Square, Settings2, Loader2, Trash2,
-  MessageSquare, Table as TableIcon, Send, XCircle, Activity, AlertCircle, CheckCircle2, Eye, UserX,
+  MessageSquare, Table as TableIcon, Send, XCircle, AlertCircle, CheckCircle2, Eye, UserX,
 } from "lucide-react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { getAuthToken } from "@/lib/api-token";
@@ -89,15 +85,18 @@ function EditarConfiguracaoPausada({ campaign, onSaved }: { campaign: any; onSav
   };
 
   return (
-    <Card className="p-4 space-y-4 border-primary/30">
-      <div className="flex items-center justify-between">
-        <Label className="font-bold flex items-center gap-2"><Settings2 className="h-4 w-4" /> Editar configuração (campanha pausada)</Label>
-        <Badge variant="outline" className="text-[10px]">Aplica no próximo envio, sem reiniciar a fila</Badge>
+    <div className="lq-surface rounded-2xl p-5" style={{ "--lq-accent": "38 92% 50%" } as CSSProperties}>
+      <div className="lq-content space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label className="flex items-center gap-2 text-sm font-medium">
+          <Settings2 className="h-4 w-4 text-muted-foreground" /> Ajustar o ritmo da campanha
+        </Label>
+        <span className="text-xs text-muted-foreground">Vale a partir do próximo envio, sem reiniciar a fila</span>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Perfil de velocidade</span>
+          <span className="text-xs text-muted-foreground">Perfil de velocidade</span>
           <Select value={editForm.perfil_velocidade} onValueChange={v => setEditForm({ ...editForm, perfil_velocidade: v })}>
             <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -109,51 +108,104 @@ function EditarConfiguracaoPausada({ campaign, onSaved }: { campaign: any; onSav
           </Select>
         </div>
         <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Intervalo mínimo (min)</span>
+          <span className="text-xs text-muted-foreground">Intervalo mínimo (min)</span>
           <Input type="number" step="0.1" min={DELAY_MIN_ABSOLUTO_MINUTOS} className="h-8"
             value={editForm.delay_min_minutos}
             onChange={e => setEditForm({ ...editForm, delay_min_minutos: parseFloat(e.target.value) })} />
         </div>
         <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Intervalo máximo (min)</span>
+          <span className="text-xs text-muted-foreground">Intervalo máximo (min)</span>
           <Input type="number" step="0.1" min={DELAY_MIN_ABSOLUTO_MINUTOS} className="h-8"
             value={editForm.delay_max_minutos}
             onChange={e => setEditForm({ ...editForm, delay_max_minutos: parseFloat(e.target.value) })} />
         </div>
       </div>
       {intervaloInvalido && (
-        <p className="text-[10px] text-destructive font-medium">
+        <p className="text-xs text-destructive">
           O mínimo não pode ser maior que o máximo, e nenhum dos dois pode ser menor que {DELAY_MIN_ABSOLUTO_MINUTOS.toFixed(2)} min (5s).
         </p>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Início da janela</span>
+          <span className="text-xs text-muted-foreground">Início da janela</span>
           <Input type="time" className="h-8" value={editForm.horario_inicio} onChange={e => setEditForm({ ...editForm, horario_inicio: e.target.value })} />
         </div>
         <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Fim da janela</span>
+          <span className="text-xs text-muted-foreground">Fim da janela</span>
           <Input type="time" className="h-8" value={editForm.horario_fim} onChange={e => setEditForm({ ...editForm, horario_fim: e.target.value })} />
         </div>
         <div className="space-y-1">
-          <span className="text-[10px] uppercase text-muted-foreground">Limite diário (mensagens)</span>
+          <span className="text-xs text-muted-foreground">Limite diário (mensagens)</span>
           <Input type="number" min={1} className="h-8" value={editForm.limite_diario_mensagens} onChange={e => setEditForm({ ...editForm, limite_diario_mensagens: e.target.value })} />
         </div>
       </div>
 
-      <div className="flex items-center justify-between">
-        <span className="text-xs">Pausar nos fins de semana</span>
+      <div className="flex items-center justify-between border-t border-border/60 pt-4">
+        <span className="text-sm">Pausar nos fins de semana</span>
         <Switch checked={editForm.pausa_fins_semana} onCheckedChange={v => setEditForm({ ...editForm, pausa_fins_semana: v })} />
       </div>
 
       <div className="flex justify-end">
         <Button size="sm" onClick={salvar} disabled={salvando || intervaloInvalido}>
           {salvando && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-          Salvar configuração
+          Salvar ajustes
         </Button>
       </div>
-    </Card>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Status de um envio no log. Mesmo vocabulário de cor da tela inteira: âmbar = atenção,
+ * vermelho = falha, verde = chegou, laranja da marca = acontecendo agora, cinza = inerte.
+ * Antes era um `Badge` com cinco `variant`s diferentes mais classes soltas de amber por cima.
+ */
+const STATUS_ENVIO: Record<string, { rotulo: string; accent: string | null }> = {
+  sent:      { rotulo: "Enviado",             accent: "152 55% 45%" },
+  failed:    { rotulo: "Falha",               accent: "0 72% 51%" },
+  cooldown:  { rotulo: "Bloqueado (cooldown)", accent: "38 92% 50%" },
+  sending:   { rotulo: "Enviando",            accent: "var(--primary)" },
+  cancelado: { rotulo: "Removido",            accent: null },
+  pending:   { rotulo: "Pendente",            accent: null },
+};
+
+function StatusEnvio({ status }: { status: string }) {
+  const { rotulo, accent } = STATUS_ENVIO[status] ?? { rotulo: "Pendente", accent: null };
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs"
+      style={accent
+        ? { borderColor: `hsl(${accent} / 0.35)`, background: `hsl(${accent} / 0.1)`, color: `hsl(${accent})` }
+        : { borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }}
+    >
+      {status === 'sending' && <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />}
+      {rotulo}
+    </span>
+  );
+}
+
+/**
+ * Aviso da campanha — um só formato para todos os alertas da tela. Antes havia três paletas de
+ * aviso concorrendo (yellow-50/yellow-950 cru, amber-500 e `destructive`), cada uma com peso
+ * visual diferente para o mesmo tipo de informação. Agora são dois tons: atenção (âmbar) e
+ * crítico (vermelho), ambos desenhados como painel tingido, sem o `animate-bounce` que fazia o
+ * bloco pular na tela.
+ */
+function Aviso({ tom, titulo, children }: { tom: "atencao" | "critico"; titulo: string; children: ReactNode }) {
+  const accent = tom === "critico" ? "0 72% 51%" : "38 92% 50%";
+  return (
+    <div
+      className="flex gap-3 rounded-2xl border p-4"
+      style={{ borderColor: `hsl(${accent} / 0.35)`, background: `hsl(${accent} / 0.08)` }}
+    >
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: `hsl(${accent})` }} />
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="text-sm font-medium" style={{ color: `hsl(${accent})` }}>{titulo}</p>
+        <div className="text-sm text-muted-foreground">{children}</div>
+      </div>
+    </div>
   );
 }
 
@@ -230,20 +282,45 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
   };
 
   const enviadosReais = metricas?.enviados ?? (currentCampaign.enviados || 0);
-  const pct = (v: number) => (enviadosReais > 0 ? `${((v / enviadosReais) * 100).toFixed(0)}% dos enviados` : null);
-  const stats = [
-    { label: "Enviados", val: enviadosReais, total: currentCampaign.total_leads || 0, icon: Send, color: "text-blue-500", bg: "bg-blue-500/10", sub: null },
-    { label: "Entregues", val: metricas?.entregues ?? 0, total: null, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10", sub: pct(metricas?.entregues ?? 0) },
-    { label: "Lidos", val: metricas?.lidos ?? 0, total: null, icon: Eye, color: "text-sky-500", bg: "bg-sky-500/10", sub: pct(metricas?.lidos ?? 0) },
-    { label: "Respondidos", val: metricas?.respondidos ?? 0, total: null, icon: MessageSquare, color: "text-purple-500", bg: "bg-purple-500/10", sub: pct(metricas?.respondidos ?? 0) },
-    { label: "Opt-outs", val: metricas?.optouts ?? 0, total: null, icon: UserX, color: "text-orange-500", bg: "bg-orange-500/10", sub: pct(metricas?.optouts ?? 0) },
-    { label: "Falhas", val: currentCampaign.falhas || 0, total: null, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10", sub: null },
+
+  // Redesign 2026-11-13: as métricas de entrega são um FUNIL (enviado → entregue → lido →
+  // respondido), não seis categorias independentes — antes eram seis cards em seis matizes sem
+  // relação (azul/esmeralda/céu/roxo/laranja/vermelho), e o laranja de "Opt-outs" ainda brigava
+  // com o laranja da marca. Agora: um hue só no funil (o comprimento da barra é que compara) e
+  // cor reservada para os dois vazamentos — falha (vermelho) e opt-out (âmbar).
+  const taxa = (v: number) => (enviadosReais > 0 ? Math.min(100, (v / enviadosReais) * 100) : 0);
+  const funil = [
+    { label: "Enviados", val: enviadosReais, icon: Send },
+    { label: "Entregues", val: metricas?.entregues ?? 0, icon: CheckCircle2 },
+    { label: "Lidos", val: metricas?.lidos ?? 0, icon: Eye },
+    { label: "Respondidos", val: metricas?.respondidos ?? 0, icon: MessageSquare },
+  ];
+  const vazamentos = [
+    { label: "Falhas", val: currentCampaign.falhas || 0, icon: XCircle, accent: "0 72% 51%",
+      nota: "não chegaram ao destinatário" },
+    { label: "Opt-outs", val: metricas?.optouts ?? 0, icon: UserX, accent: "38 92% 50%",
+      nota: "pediram para não receber mais" },
   ];
   const porHora = (metricas?.por_hora ?? []).map((h: any) => ({
     ...h, rotulo: new Date(h.hora).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit" }) + "h",
   }));
 
   const failureRate = currentCampaign.enviados > 0 ? (currentCampaign.falhas / (currentCampaign.enviados + currentCampaign.falhas)) * 100 : 0;
+
+  // Redesign 2026-11-13 ("liquid glass", ver `.lq-*` no index.css): o progresso da campanha é o
+  // preenchimento do painel inteiro, não um filete. Mesma linguagem da lista (`CampanhasList`).
+  const totalLeads = currentCampaign.total_leads || 0;
+  const pctGeral = totalLeads > 0 ? Math.min(100, Math.round((enviadosReais / totalLeads) * 100)) : 0;
+  const ativa = currentCampaign.status === 'em_andamento';
+  const accentCampanha = ativa ? "var(--primary)"
+    : currentCampaign.status === 'pausado' ? "38 92% 50%"
+    : currentCampaign.status === 'concluido' ? "152 55% 45%"
+    : "0 0% 45%";
+  const rotuloStatus = ativa ? "Disparando agora"
+    : currentCampaign.status === 'pausado' ? "Pausada"
+    : currentCampaign.status === 'concluido' ? "Concluída"
+    : currentCampaign.status === 'cancelado' ? "Cancelada"
+    : currentCampaign.status;
 
   const handleStatusChange = async (newStatus: string) => {
     const { error } = await api
@@ -283,23 +360,50 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in zoom-in duration-300">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <Activity className="h-6 w-6 text-primary animate-pulse" />
-            Monitoramento: {currentCampaign.nome}
-          </h2>
-          <Badge className={`mt-1 ${currentCampaign.status === 'em_andamento' ? 'bg-emerald-500/20 text-emerald-600' : 'bg-yellow-500/20 text-yellow-600'}`}>
-            {currentCampaign.status.toUpperCase()}
-          </Badge>
-        </div>
-        <div className="flex gap-2">
-          {currentCampaign.status === 'em_andamento' ? (
-            <Button variant="outline" onClick={() => handleStatusChange('pausado')}><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
-          ) : (
-            <Button variant="outline" onClick={() => handleStatusChange('em_andamento')}><Play className="w-4 h-4 mr-2" /> Retomar</Button>
-          )}
-          <Button variant="destructive" onClick={() => handleStatusChange('cancelado')}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
+      <div className="lq-surface rounded-2xl" style={{ "--lq-accent": accentCampanha } as CSSProperties}>
+        <div
+          className={`lq-fill ${ativa ? "lq-fill-live" : "lq-fill-quiet"}`}
+          style={{ "--lq-progress": `${pctGeral}%` } as CSSProperties}
+        />
+        <div className="lq-content flex flex-wrap items-center justify-between gap-5 p-5">
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${ativa ? "animate-pulse" : ""}`}
+                style={{ background: `hsl(${accentCampanha})` }}
+              />
+              {rotuloStatus}
+            </p>
+            <h2 className="mt-1.5 truncate text-2xl font-bold tracking-tight">{currentCampaign.nome}</h2>
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <span className="tabular-nums">
+                {enviadosReais.toLocaleString("pt-BR")} de {totalLeads.toLocaleString("pt-BR")} enviados
+              </span>
+              {(currentCampaign.falhas || 0) > 0 && (
+                <span className="inline-flex items-center rounded-full bg-red-500/10 px-2 py-0.5 text-xs text-red-500 tabular-nums">
+                  {Number(currentCampaign.falhas).toLocaleString("pt-BR")} falhas
+                </span>
+              )}
+            </p>
+          </div>
+          <div className="flex items-center gap-5">
+            {totalLeads > 0 && (
+              <p
+                className="text-3xl font-semibold tabular-nums tracking-tight"
+                style={{ color: ativa ? `hsl(${accentCampanha})` : undefined }}
+              >
+                {pctGeral}<span className="text-base font-medium opacity-60">%</span>
+              </p>
+            )}
+            <div className="flex gap-2">
+              {ativa ? (
+                <Button variant="outline" onClick={() => handleStatusChange('pausado')}><Pause className="w-4 h-4 mr-2" /> Pausar</Button>
+              ) : (
+                <Button variant="outline" onClick={() => handleStatusChange('em_andamento')}><Play className="w-4 h-4 mr-2" /> Retomar</Button>
+              )}
+              <Button variant="destructive" onClick={() => handleStatusChange('cancelado')}><Square className="w-4 h-4 mr-2" /> Cancelar</Button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -311,70 +415,158 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
       )}
 
       {failureRate > 10 && (
-        <Alert variant={failureRate > 25 ? "destructive" : "default"} className={`animate-bounce ${failureRate <= 25 ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950/20' : ''}`}>
-          <AlertCircle className={`h-4 w-4 ${failureRate <= 25 ? 'text-yellow-500' : ''}`} />
-          <AlertTitle className={failureRate <= 25 ? 'text-yellow-600' : ''}>{failureRate > 25 ? "Pausa Automática Ativada" : "Taxa de Falha Elevada"}</AlertTitle>
-          <AlertDescription className={failureRate <= 25 ? 'text-yellow-600/80' : ''}>
-            {failureRate > 25
-              ? "A campanha foi pausada automaticamente devido a uma taxa de erro superior a 25%."
-              : "Detectamos que mais de 10% dos disparos estão falhando. Recomendamos revisar suas instâncias."}
-          </AlertDescription>
-        </Alert>
+        <Aviso
+          tom={failureRate > 25 ? "critico" : "atencao"}
+          titulo={failureRate > 25 ? "Campanha pausada automaticamente" : "Taxa de falha elevada"}
+        >
+          {failureRate > 25
+            ? "Mais de 25% dos envios falharam, então a campanha parou sozinha. Revise suas instâncias antes de retomar."
+            : "Mais de 10% dos envios estão falhando. Vale revisar suas instâncias antes de continuar."}
+        </Aviso>
       )}
 
       {/* Sprint 7 (API oficial / H4-H7): opt-in da audiência por origem; cliques, custo real e
           falhas por código da Meta só aparecem com dado (campanha do canal oficial). */}
       {metricas?.optin && (
-        <div className="rounded-md border p-3 text-xs space-y-1">
-          <div>
-            <span className="font-medium">Contatos com consentimento (opt-in): {metricas.optin.pct}%</span>
-            <span className="text-muted-foreground"> — {(metricas.optin.por_origem ?? []).map((o: any) =>
-              `${ROTULO_OPTIN[o.origem] ?? o.origem}: ${o.total}`).join(" · ")}</span>
+        <div className="lq-surface rounded-2xl p-5">
+          <div className="lq-content space-y-4">
+            <div>
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="text-sm font-medium">Consentimento da audiência</p>
+                <p className="text-sm font-semibold tabular-nums">{metricas.optin.pct}% com opt-in</p>
+              </div>
+              <div className="mt-2.5 lq-track">
+                <span className="lq-track-fill" style={{ width: `${metricas.optin.pct}%` }} />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5">
+                {(metricas.optin.por_origem ?? []).map((o: any) => (
+                  <span key={o.origem} className="text-xs text-muted-foreground">
+                    {ROTULO_OPTIN[o.origem] ?? o.origem}
+                    <b className="ml-1.5 font-semibold text-foreground tabular-nums">{o.total}</b>
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {((metricas.cliques ?? 0) > 0 || (metricas.cobradas ?? 0) > 0) && (
+              <div className="grid grid-cols-3 gap-4 border-t border-border/60 pt-4">
+                {[
+                  { r: "Cliques em botões", v: Number(metricas.cliques ?? 0).toLocaleString("pt-BR") },
+                  { r: "Mensagens cobradas", v: Number(metricas.cobradas ?? 0).toLocaleString("pt-BR") },
+                  { r: "Custo real", v: `US$ ${Number(metricas.custo_real_usd ?? 0).toFixed(2)}` },
+                ].map(m => (
+                  <div key={m.r}>
+                    <p className="text-xs text-muted-foreground">{m.r}</p>
+                    <p className="mt-0.5 text-lg font-semibold tabular-nums tracking-tight">{m.v}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {(metricas.erros_meta ?? []).length > 0 && (
+              <div className="border-t border-border/60 pt-4">
+                <p className="text-xs text-muted-foreground">Falhas reportadas pela Meta</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {metricas.erros_meta.map((e: any) => (
+                    <span key={e.codigo} className="rounded-full border border-border/60 px-2.5 py-1 text-xs text-muted-foreground">
+                      {e.codigo} {e.titulo ?? ""}
+                      <b className="ml-1.5 font-semibold text-foreground tabular-nums">{e.total}</b>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          {((metricas.cliques ?? 0) > 0 || (metricas.cobradas ?? 0) > 0) && (
-            <div>Cliques em botões: <b>{metricas.cliques ?? 0}</b> · Mensagens cobradas: <b>{metricas.cobradas ?? 0}</b> · Custo real: <b>US$ {Number(metricas.custo_real_usd ?? 0).toFixed(2)}</b></div>
-          )}
-          {(metricas.erros_meta ?? []).length > 0 && (
-            <div className="text-muted-foreground">Falhas na Meta: {metricas.erros_meta.map((e: any) => `${e.codigo} ${e.titulo ?? ""} (${e.total})`).join(" · ")}</div>
-          )}
         </div>
       )}
 
       {(metricas?.falhas_instancia_caida ?? 0) > 0 && (
-        <Alert className="border-amber-500/50 bg-amber-500/10">
-          <AlertCircle className="h-4 w-4 text-amber-600" />
-          <AlertTitle className="text-amber-700">{metricas.falhas_instancia_caida} falha(s) por instância caída</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-amber-700/90">
-            <span>Esses contatos não tiveram problema — a instância estava desconectada no momento do envio.</span>
+        <Aviso
+          tom="atencao"
+          titulo={`${metricas.falhas_instancia_caida} ${metricas.falhas_instancia_caida === 1 ? 'falha' : 'falhas'} por instância caída`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>Esses contatos não tiveram problema — a instância estava desconectada na hora do envio.</span>
             <Button size="sm" variant="outline" disabled={reenviando} onClick={reenviarFalhasInstancia}>
               {reenviando ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
-              Reenviar falhas por instância caída
+              Reenviar esses contatos
             </Button>
-          </AlertDescription>
-        </Alert>
+          </div>
+        </Aviso>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-        {stats.map(s => (
-          <Card key={s.label} className="p-5 border-none shadow-sm overflow-hidden relative group">
-            <div className={`absolute top-0 right-0 p-4 transition-transform group-hover:scale-110`}>
-              <s.icon className={`h-12 w-12 opacity-10 ${s.color}`} />
+      <div className="grid gap-4 lg:grid-cols-[1.7fr_1fr]">
+        <div className="lq-surface rounded-2xl p-5">
+          <div className="lq-content">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-sm font-medium">Funil de entrega</p>
+              <p className="text-xs text-muted-foreground">Percentual sobre os enviados</p>
             </div>
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">{s.label}</p>
-            <div className="flex items-baseline gap-1">
-              <span className={`text-3xl font-black ${s.color}`}>{s.val}</span>
-              {s.total !== null && <span className="text-sm text-muted-foreground font-bold">/ {s.total}</span>}
+            <div className="mt-4 space-y-3.5">
+              {funil.map(f => (
+                <div key={f.label}>
+                  <div className="mb-1.5 flex items-baseline justify-between gap-3">
+                    <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <f.icon className="h-3.5 w-3.5" />
+                      {f.label}
+                    </span>
+                    <span className="flex items-baseline gap-2">
+                      <span className="text-sm font-semibold tabular-nums">{Number(f.val).toLocaleString("pt-BR")}</span>
+                      <span className="w-10 text-right text-xs text-muted-foreground tabular-nums">
+                        {taxa(f.val).toFixed(0)}%
+                      </span>
+                    </span>
+                  </div>
+                  <div className="lq-track">
+                    <span className="lq-track-fill" style={{ width: `${taxa(f.val)}%` }} />
+                  </div>
+                </div>
+              ))}
             </div>
-            {s.total !== null && <Progress value={(s.val/s.total)*100} className={`h-1.5 mt-3 ${s.bg}`} />}
-            {s.sub && <p className="text-[10px] text-muted-foreground font-semibold mt-2">{s.sub}</p>}
-          </Card>
-        ))}
+          </div>
+        </div>
+
+        <div className="grid content-start gap-4 sm:grid-cols-2 lg:grid-cols-1">
+          {vazamentos.map(v => (
+            <div
+              key={v.label}
+              className="lq-surface rounded-2xl p-5"
+              style={{ "--lq-accent": v.accent } as CSSProperties}
+            >
+              {v.val > 0 && (
+                <div
+                  className="lq-fill lq-fill-quiet"
+                  style={{ "--lq-progress": `${taxa(v.val)}%` } as CSSProperties}
+                />
+              )}
+              <div className="lq-content">
+                <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <v.icon className="h-3.5 w-3.5" style={{ color: v.val > 0 ? `hsl(${v.accent})` : undefined }} />
+                  {v.label}
+                </p>
+                <p className="mt-1.5 flex items-baseline gap-2">
+                  <span
+                    className="text-3xl font-semibold tabular-nums tracking-tight"
+                    style={{ color: v.val > 0 ? `hsl(${v.accent})` : undefined }}
+                  >
+                    {Number(v.val).toLocaleString("pt-BR")}
+                  </span>
+                  {v.val > 0 && enviadosReais > 0 && (
+                    <span className="text-xs text-muted-foreground tabular-nums">{taxa(v.val).toFixed(1)}%</span>
+                  )}
+                </p>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">{v.nota}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {porHora.length > 0 && (
-        <Card className="p-4 border-none shadow-sm">
-          <p className="text-sm font-bold mb-2">Envios por hora</p>
-          <div className="h-40">
+        <div className="lq-surface rounded-2xl p-5">
+          <div className="lq-content">
+          <p className="text-sm font-medium mb-4">Envios por hora</p>
+          <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={porHora} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
                 <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
@@ -386,64 +578,72 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
                     if (!active || !payload?.length) return null;
                     const h = payload[0].payload;
                     return (
-                      <div className="rounded-md border bg-popover px-3 py-2 text-xs shadow-md space-y-0.5">
-                        <p className="font-semibold">{h.rotulo}</p>
-                        <p>Enviados: <b>{h.enviados}</b></p>
-                        <p className="text-muted-foreground">Entregues: {h.entregues} · Lidos: {h.lidos} · Respondidos: {h.respondidos}</p>
+                      <div className="rounded-lg border bg-popover px-3 py-2 text-xs shadow-md">
+                        <p className="font-medium">{h.rotulo}</p>
+                        <div className="mt-1.5 space-y-0.5">
+                          {[
+                            { r: "Enviados", v: h.enviados },
+                            { r: "Entregues", v: h.entregues },
+                            { r: "Lidos", v: h.lidos },
+                            { r: "Respondidos", v: h.respondidos },
+                          ].map(l => (
+                            <p key={l.r} className="flex justify-between gap-6">
+                              <span className="text-muted-foreground">{l.r}</span>
+                              <b className="font-semibold tabular-nums">{l.v}</b>
+                            </p>
+                          ))}
+                        </div>
                       </div>
                     );
                   }}
                 />
-                <Bar dataKey="enviados" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                {/* Laranja a 60% de propósito: cheio, o gráfico virava o elemento mais pesado da
+                    tela sendo a informação menos importante dela. */}
+                <Bar dataKey="enviados" fill="hsl(var(--primary) / 0.6)" radius={[4, 4, 0, 0]} maxBarSize={28} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </Card>
+          </div>
+        </div>
       )}
 
-      <Card className="border-none shadow-sm overflow-hidden">
-        <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
-          <h3 className="font-bold text-sm flex items-center gap-2"><TableIcon className="h-4 w-4" /> Log de Envios (Tempo Real)</h3>
-          <Badge variant="outline" className="text-[10px]">Atualizando a cada 3s</Badge>
+      <div className="lq-surface rounded-2xl">
+        <div className="lq-content">
+        <div className="flex items-center justify-between gap-3 border-b border-border/60 p-4">
+          <h3 className="flex items-center gap-2 text-sm font-medium">
+            <TableIcon className="h-4 w-4 text-muted-foreground" /> Envios em tempo real
+          </h3>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+            Atualizando a cada 3s
+          </span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b bg-muted/10">
-                <th className="p-3 text-left font-bold">Nome</th>
-                <th className="p-3 text-left font-bold">Número</th>
-                <th className="p-3 text-left font-bold">Status</th>
-                <th className="p-3 text-left font-bold">Erro</th>
-                <th className="p-3 text-left font-bold">Horário</th>
-                <th className="p-3 text-left font-bold w-10"></th>
+              <tr className="border-b border-border/60">
+                <th className="p-3 text-left text-xs font-medium text-muted-foreground">Nome</th>
+                <th className="p-3 text-left text-xs font-medium text-muted-foreground">Número</th>
+                <th className="p-3 text-left text-xs font-medium text-muted-foreground">Status</th>
+                <th className="p-3 text-left text-xs font-medium text-muted-foreground">Erro</th>
+                <th className="p-3 text-left text-xs font-medium text-muted-foreground">Horário</th>
+                <th className="w-10 p-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y divide-border/40">
               {logs.map((log) => (
-                <tr key={log.id} className="hover:bg-muted/5 transition-colors">
+                <tr key={log.id} className="transition-colors hover:bg-foreground/[0.03]">
                   <td className="p-3 font-medium">{log.nome || "Contato"}</td>
                   <td className="p-3 text-xs font-mono">{log.telefone}</td>
                   <td className="p-3">
-                    <Badge variant={
-                      log.status === 'sent' ? 'secondary' :
-                      log.status === 'failed' ? 'destructive' :
-                      log.status === 'cooldown' ? 'outline' :
-                      log.status === 'cancelado' ? 'outline' :
-                      log.status === 'sending' ? 'default' : 'outline'
-                    } className={`text-[10px] px-2 py-0 ${log.status === 'cooldown' ? 'border-amber-500 text-amber-600' : ''} ${log.status === 'cancelado' ? 'border-muted-foreground/40 text-muted-foreground' : ''}`}>
-                      {log.status === 'sent' ? 'Enviado' :
-                       log.status === 'failed' ? 'Falha' :
-                       log.status === 'cooldown' ? 'Bloqueado (cooldown)' :
-                       log.status === 'cancelado' ? 'Removido' :
-                       log.status === 'sending' ? 'Enviando...' : 'Pendente'}
-                    </Badge>
+                    <StatusEnvio status={log.status} />
                     {log.status === 'sent' && (log.respondido_em || log.lido_em || log.entregue_em) && (
-                      <span className="ml-1.5 text-[10px] text-muted-foreground">
-                        {log.respondido_em ? '· respondeu' : log.lido_em ? '· lido' : '· entregue'}
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {log.respondido_em ? 'respondeu' : log.lido_em ? 'leu' : 'entregue'}
                       </span>
                     )}
                   </td>
-                  <td className="p-3 text-xs text-red-500 max-w-[200px] truncate" title={log.erro}>
+                  <td className="max-w-[200px] truncate p-3 text-xs" style={{ color: log.erro ? "hsl(0 72% 51%)" : undefined }} title={log.erro}>
                     {log.tipo_falha && (
                       <span className="mr-1 font-semibold">
                         [{({ numero_invalido: 'número inválido', instancia_caida: 'instância caída', restricao: 'restrição', erro_desconhecido: 'erro' } as Record<string, string>)[log.tipo_falha] ?? log.tipo_falha}]
@@ -472,15 +672,16 @@ export function MonitoringDashboard({ campaign, onCancel }: { campaign: any, onC
               ))}
               {logs.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-muted-foreground italic">
-                    Nenhum envio registrado ainda.
+                  <td colSpan={6} className="p-10 text-center text-sm text-muted-foreground">
+                    Os envios aparecem aqui assim que a campanha começar.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

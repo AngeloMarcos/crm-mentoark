@@ -206,6 +206,126 @@
     @apply bg-card/40 backdrop-blur-xl border border-border/40;
   }
 
+  /* ──────────────────────────────────────────────────────────────────────────
+     Liquid glass — material translúcido com realce especular, usado nas
+     campanhas de Disparo (2026-11-13). A barra de progresso deixou de ser um
+     filete embaixo do texto: virou o próprio preenchimento do retângulo, como
+     líquido subindo dentro de um vidro. O conteúdo fica por cima, legível.
+
+     Uso:
+       <div class="lq-surface" style={{ '--lq-accent': '22 95% 53%' }}>
+         <div class="lq-fill lq-fill-live" style={{ '--lq-progress': '19%' }} />
+         <div class="lq-content"> … </div>
+       </div>
+
+     `--lq-accent` é um trio HSL sem `hsl()` (mesmo formato dos tokens do tema).
+     ────────────────────────────────────────────────────────────────────────── */
+  .lq-surface {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    --lq-accent: var(--primary);
+    background: hsl(var(--card) / 0.55);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid hsl(var(--border) / 0.8);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.06),
+      0 1px 2px hsl(0 0% 0% / 0.22),
+      0 12px 32px -20px hsl(0 0% 0% / 0.55);
+    transition: background-color .25s ease, border-color .25s ease, box-shadow .25s ease;
+  }
+  .lq-surface:hover {
+    background: hsl(var(--card) / 0.72);
+    border-color: hsl(var(--lq-accent) / 0.45);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.1),
+      0 2px 4px hsl(0 0% 0% / 0.22),
+      0 16px 38px -20px hsl(0 0% 0% / 0.6);
+  }
+  .lq-surface:focus-visible {
+    outline: 2px solid hsl(var(--lq-accent) / 0.7);
+    outline-offset: 2px;
+  }
+
+  /* O líquido: ocupa a altura inteira do retângulo, largura = progresso. */
+  .lq-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 0;
+    width: var(--lq-progress, 0%);
+    background: hsl(var(--lq-accent) / 0.16);
+    box-shadow: inset 0 1px 0 hsl(var(--lq-accent) / 0.14);
+    pointer-events: none;
+    transition: width .9s cubic-bezier(.22, .61, .36, 1);
+  }
+  /* Menisco — a borda de avanço brilha e difunde, como a curva da água no vidro. */
+  .lq-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 32px;
+    background: linear-gradient(90deg, transparent, hsl(var(--lq-accent) / 0.26));
+    border-right: 1.5px solid hsl(var(--lq-accent) / 0.9);
+  }
+  /* Campanha parada (histórico): mesmo líquido, mais discreto — quem está disparando domina. */
+  .lq-fill-quiet {
+    background: hsl(var(--lq-accent) / 0.1);
+  }
+  .lq-fill-quiet::after {
+    background: linear-gradient(90deg, transparent, hsl(var(--lq-accent) / 0.18));
+    border-right-color: hsl(var(--lq-accent) / 0.6);
+  }
+
+  /* Campanha viva: um brilho lento atravessa o líquido. Só em `em_andamento`. */
+  .lq-fill-live::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.08), transparent);
+    transform: translateX(-100%);
+    animation: lq-sheen 4.5s cubic-bezier(.4, 0, .2, 1) infinite;
+  }
+  @keyframes lq-sheen {
+    0% { transform: translateX(-100%); }
+    65%, 100% { transform: translateX(100%); }
+  }
+
+  .lq-content {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Barra fina no mesmo material — funil de entrega da campanha. Todas as barras do funil usam
+     o MESMO acento de propósito: o comprimento é que compara, a cor não deve competir. */
+  .lq-track {
+    position: relative;
+    height: 6px;
+    border-radius: 999px;
+    background: hsl(var(--foreground) / 0.07);
+    overflow: hidden;
+  }
+  .lq-track-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: hsl(var(--lq-accent) / 0.85);
+    box-shadow: 0 0 12px -2px hsl(var(--lq-accent) / 0.5);
+    transition: width .9s cubic-bezier(.22, .61, .36, 1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lq-track-fill { transition: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lq-fill { transition: none; }
+    .lq-fill-live::before { animation: none; }
+  }
+
   /* "gradient-brand*" — agora SÓLIDO (degradê removido, laranja de marca chapado) */
   .gradient-brand {
     background: hsl(var(--primary));
