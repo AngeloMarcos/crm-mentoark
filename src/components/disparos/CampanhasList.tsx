@@ -12,7 +12,8 @@
  */
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
-import { Play, Pause, Square, RefreshCw, ChevronRight, Plus, Send, FileEdit, Clock, CheckCircle2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Play, Pause, Square, RefreshCw, ChevronRight, Plus, Send, FileEdit, Clock, CheckCircle2, Search } from "lucide-react";
 import { api } from "@/integrations/database/client";
 
 interface CampanhasListProps {
@@ -44,11 +45,36 @@ export function CampanhasList({ onOpen, onNova }: CampanhasListProps) {
     return () => clearInterval(timer);
   }, [fetchCampanhas]);
 
-  const emAndamento = campanhas.filter(c => c.status === 'em_andamento');
-  const resto = campanhas.filter(c => c.status !== 'em_andamento');
+  // Busca e filtro (2026-11-13): a lista crescia sem limite e campanhas recriadas com o mesmo
+  // nome ficavam indistinguíveis — três "Mentoark 05*" seguidas, nenhuma forma de saber qual é
+  // qual. Resolvido junto com a data na linha (ver `CampanhaRow`).
+  const [busca, setBusca] = useState("");
+  const [filtro, setFiltro] = useState<string>("todas");
 
-  const enviadosAgora = emAndamento.reduce((acc, c) => acc + (c.enviados || 0), 0);
-  const totalAgora = emAndamento.reduce((acc, c) => acc + (c.total_leads || 0), 0);
+  const termo = busca.trim().toLowerCase();
+  const visiveis = campanhas.filter(c => {
+    if (termo && !String(c.nome || "").toLowerCase().includes(termo)) return false;
+    if (filtro !== "todas" && c.status !== filtro) return false;
+    return true;
+  });
+
+  const emAndamento = visiveis.filter(c => c.status === 'em_andamento');
+  const resto = visiveis.filter(c => c.status !== 'em_andamento');
+  const filtrando = termo !== "" || filtro !== "todas";
+
+  // O resumo do topo é sempre sobre o estado real da operação, nunca sobre o que o filtro mostra:
+  // esconder "2 disparando agora" porque o operador buscou outra coisa seria perigoso.
+  const ativas = campanhas.filter(c => c.status === 'em_andamento');
+  const enviadosAgora = ativas.reduce((acc, c) => acc + (c.enviados || 0), 0);
+  const totalAgora = ativas.reduce((acc, c) => acc + (c.total_leads || 0), 0);
+
+  const FILTROS = [
+    { v: "todas", r: "Todas" },
+    { v: "em_andamento", r: "Em andamento" },
+    { v: "pausado", r: "Pausadas" },
+    { v: "concluido", r: "Concluídas" },
+    { v: "cancelado", r: "Canceladas" },
+  ].filter(f => f.v === "todas" || f.v === filtro || campanhas.some(c => c.status === f.v));
 
   return (
     <div className="max-w-6xl mx-auto space-y-7">
@@ -56,9 +82,9 @@ export function CampanhasList({ onOpen, onNova }: CampanhasListProps) {
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Campanhas de Disparo</h1>
           <p className="text-sm text-muted-foreground">
-            {emAndamento.length > 0 ? (
+            {ativas.length > 0 ? (
               <>
-                {emAndamento.length === 1 ? "1 campanha disparando agora" : `${emAndamento.length} campanhas disparando agora`}
+                {ativas.length === 1 ? "1 campanha disparando agora" : `${ativas.length} campanhas disparando agora`}
                 {totalAgora > 0 && (
                   <span className="tabular-nums"> — {enviadosAgora.toLocaleString("pt-BR")} de {totalAgora.toLocaleString("pt-BR")} mensagens enviadas</span>
                 )}
@@ -98,18 +124,69 @@ export function CampanhasList({ onOpen, onNova }: CampanhasListProps) {
           </div>
         </div>
       ) : (
-        <div className="space-y-8">
-          {emAndamento.length > 0 && (
-            <section className="space-y-2.5">
-              <SecaoTitulo titulo="Em andamento" quantidade={emAndamento.length} />
-              {emAndamento.map(c => <CampanhaRow key={c.id} c={c} onOpen={onOpen} />)}
-            </section>
+        <div className="space-y-6">
+          {campanhas.length > 4 && (
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative min-w-[220px] flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={busca}
+                  onChange={e => setBusca(e.target.value)}
+                  placeholder="Buscar campanha pelo nome"
+                  className="pl-9"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {FILTROS.map(f => (
+                  <button
+                    key={f.v}
+                    type="button"
+                    onClick={() => setFiltro(f.v)}
+                    className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                      filtro === f.v
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border/60 text-muted-foreground hover:bg-foreground/[0.04]"
+                    }`}
+                  >
+                    {f.r}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
-          {resto.length > 0 && (
-            <section className="space-y-2.5">
-              <SecaoTitulo titulo="Histórico" quantidade={resto.length} />
-              {resto.map(c => <CampanhaRow key={c.id} c={c} onOpen={onOpen} />)}
-            </section>
+
+          {visiveis.length === 0 ? (
+            <div className="lq-surface rounded-2xl p-10 text-center">
+              <div className="lq-content">
+                <p className="text-sm font-medium">Nenhuma campanha encontrada</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Ajuste a busca ou escolha outro status.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-5"
+                  onClick={() => { setBusca(""); setFiltro("todas"); }}
+                >
+                  Limpar filtros
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-8">
+              {emAndamento.length > 0 && (
+                <section className="space-y-2.5">
+                  <SecaoTitulo titulo="Em andamento" quantidade={emAndamento.length} />
+                  {emAndamento.map(c => <CampanhaRow key={c.id} c={c} onOpen={onOpen} />)}
+                </section>
+              )}
+              {resto.length > 0 && (
+                <section className="space-y-2.5">
+                  <SecaoTitulo titulo={filtrando ? "Resultados" : "Histórico"} quantidade={resto.length} />
+                  {resto.map(c => <CampanhaRow key={c.id} c={c} onOpen={onOpen} />)}
+                </section>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -142,12 +219,38 @@ const APARENCIA: Record<string, { rotulo: string; accent: string; icone: typeof 
   rascunho:     { rotulo: "Rascunho",     accent: "215 10% 50%",    icone: FileEdit },
 };
 
+/**
+ * Quando a campanha foi criada, em formato curto. Sem isso, campanhas recriadas com o mesmo nome
+ * (acontece o tempo todo: três "Mentoark 05*" seguidas na lista real) ficam indistinguíveis — não
+ * havia NENHUMA data na tela. Hoje mostra a hora; no ano, dia e mês; antes disso, com ano.
+ */
+function quando(valor: string | null | undefined): string | null {
+  if (!valor) return null;
+  const d = new Date(valor);
+  if (Number.isNaN(d.getTime())) return null;
+  const agora = new Date();
+  const mesmoDia = d.toDateString() === agora.toDateString();
+  if (mesmoDia) return `hoje ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+
+  const ontem = new Date(agora);
+  ontem.setDate(agora.getDate() - 1);
+  if (d.toDateString() === ontem.toDateString()) {
+    return `ontem ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  return d.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "short",
+    ...(d.getFullYear() === agora.getFullYear() ? {} : { year: "numeric" }),
+  }).replace(".", "");
+}
+
 function CampanhaRow({ c, onOpen }: { c: any; onOpen: (id: string) => void }) {
   const enviados = c.enviados || 0;
   const total = c.total_leads || 0;
   const falhas = c.falhas || 0;
   const pct = total > 0 ? Math.min(100, Math.round((enviados / total) * 100)) : 0;
   const ativa = c.status === 'em_andamento';
+  const criada = quando(c.created_at);
 
   const { rotulo, accent, icone: Icone } = APARENCIA[c.status] ?? {
     rotulo: c.status, accent: "215 10% 50%", icone: Square,
@@ -192,6 +295,11 @@ function CampanhaRow({ c, onOpen }: { c: any; onOpen: (id: string) => void }) {
             {falhas > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-1.5 py-0.5 text-[11px] text-red-500 tabular-nums">
                 {falhas.toLocaleString("pt-BR")} {falhas === 1 ? "falha" : "falhas"}
+              </span>
+            )}
+            {criada && (
+              <span className="ml-auto hidden shrink-0 pl-3 tabular-nums sm:inline" title={new Date(c.created_at).toLocaleString("pt-BR")}>
+                criada {criada}
               </span>
             )}
           </p>
