@@ -63,6 +63,7 @@ const pessoa = (c: any) => ({
   city: c.cidade, state: c.estado, optOut: !!c.opt_out, lastMessageAt: c.ultima_mensagem_em,
   stageId: c.funil_estagio_id ?? null, stageEnteredAt: c.funil_entrou_em ?? null,
   customFields: c.campos || {},
+  organizationId: c.organizacao_id ?? null,
   createdAt: c.created_at, updatedAt: c.updated_at,
 });
 
@@ -185,6 +186,10 @@ export default function apiPublicaRouter(pool: Pool): Router {
         vals.push(d.de, d.ate);
         cond.push(`${col} BETWEEN $${vals.length - 1} AND $${vals.length}`);
       }
+      if (q.organizationId) {
+        vals.push(q.organizationId);
+        cond.push(`organizacao_id::text = $${vals.length}`);
+      }
       // Campo personalizado: cf_<chave>=valor (texto: contém; demais: igual ao valor normalizado).
       const filtrosCampo = Object.entries(q).filter(([k, v]) => k.startsWith('cf_') && String(v ?? '') !== '');
       if (filtrosCampo.length) {
@@ -257,6 +262,17 @@ export default function apiPublicaRouter(pool: Pool): Router {
     return r.rows[0] || null;
   }
 
+  /** organizationId do corpo: valida que a organização é da conta. Devolve a coluna a gravar. */
+  async function lerOrganizationId(req: ChaveReq): Promise<{ ok: true; tem: boolean; valor: string | null } | { ok: false; msg: string }> {
+    const v = req.body?.organizationId;
+    if (v === undefined) return { ok: true, tem: false, valor: null };
+    if (v === null) return { ok: true, tem: true, valor: null };
+    if (typeof v !== 'string') return { ok: false, msg: 'organizationId deve ser texto ou null.' };
+    const r = await pool.query(`SELECT 1 FROM organizacoes WHERE id::text = $1 AND user_id = $2`, [v, req.ownerId]);
+    if (!r.rowCount) return { ok: false, msg: 'Organização não encontrada.' };
+    return { ok: true, tem: true, valor: v };
+  }
+
   /** customFields do corpo: valida antes de gravar qualquer coisa (lote inteiro ou nada). */
   async function lerCustomFields(req: ChaveReq): Promise<{ ok: true; valores: Record<string, unknown> | null } | { ok: false; status: number; msg: string; code: string }> {
     const cf = req.body?.customFields;
@@ -278,6 +294,9 @@ export default function apiPublicaRouter(pool: Pool): Router {
       if (msg) return erro(res, 422, msg, 'validation_error');
       const cf = await lerCustomFields(req);
       if (!cf.ok) return erro(res, cf.status, cf.msg, cf.code);
+      const org = await lerOrganizationId(req);
+      if (!org.ok) return erro(res, 422, org.msg, 'validation_error');
+      if (org.tem) cols.organizacao_id = org.valor;
       if (!cols.telefone && !cols.email) return erro(res, 422, 'Informe phone ou email.', 'validation_error');
 
       const existente = cols.telefone ? await acharPorTelefone(req.userId!, cols.telefone) : null;
@@ -310,6 +329,9 @@ export default function apiPublicaRouter(pool: Pool): Router {
       if (msg) return erro(res, 422, msg, 'validation_error');
       const cf = await lerCustomFields(req);
       if (!cf.ok) return erro(res, cf.status, cf.msg, cf.code);
+      const org = await lerOrganizationId(req);
+      if (!org.ok) return erro(res, 422, org.msg, 'validation_error');
+      if (org.tem) cols.organizacao_id = org.valor;
       const nomes = Object.keys(cols);
       if (!nomes.length && !cf.valores) return erro(res, 422, 'Nada para atualizar.', 'validation_error');
       if (cols.telefone) {
@@ -331,6 +353,95 @@ export default function apiPublicaRouter(pool: Pool): Router {
       const r = await pool.query(`DELETE FROM contatos WHERE id::text = $1 AND user_id = $2`, [req.params.id, req.userId]);
       if (!r.rowCount) return erro(res, 404, 'Contato não encontrado.', 'not_found');
       return res.status(204).end();
+    } catch (err: any) {
+      return erro(res, 500, err.message);
+    }
+  });
+
+  // ── Organizações ─────────────────────────────────────────────────────────
+  const organizacao = (o: any) => ({
+    id: o.id, name: o.nome, website: o.site, phone: o.telefone, city: o.cidade, state: o.estado,
+    notes: o.notas, peoples: o.contatos != null ? Number(o.contatos) : undefined,
+    createdAt: o.created_at, updatedAt: o.updated_at,
+  });
+  const CAMPOS_ORG_API: Record<string, string> = { name: 'nome', website: 'site', phone: 'telefone', city: 'cidade', state: 'estado', notes: 'notas' };
+
+  router.get('/organizations', exige('organizations', 'read'), async (req: ChaveReq, res: Response) => {
+    try {
+      const { page, perPage, offset } = lerPaginacao(req.query);
+      const busca = String((req.query as any).name || '').trim();
+      const [lista, total] = await Promise.all([
+        pool.query(
+          `SELECT o.*, (SELECT count(*) FROM contatos c WHERE c.organizacao_id = o.id)::int AS contatos
+             FROM organizacoes o WHERE o.user_id = $1 AND ($2 = '' OR o.nome ILIKE '%' || $2 || '%')
+            ORDER BY lower(o.nome) LIMIT ${perPage} OFFSET ${offset}`, [req.ownerId, busca]),
+        pool.query(`SELECT count(*)::int AS n FROM organizacoes WHERE user_id = $1 AND ($2 = '' OR nome ILIKE '%' || $2 || '%')`, [req.ownerId, busca]),
+      ]);
+      return res.json({ data: lista.rows.map(organizacao), metadata: metadataDaPagina(total.rows[0].n, page, perPage) });
+    } catch (err: any) {
+      return erro(res, 500, err.message);
+    }
+  });
+
+  router.get('/organizations/:id', exige('organizations', 'read'), async (req: ChaveReq, res: Response) => {
+    const r = await pool.query(
+      `SELECT o.*, (SELECT count(*) FROM contatos c WHERE c.organizacao_id = o.id)::int AS contatos
+         FROM organizacoes o WHERE o.id::text = $1 AND o.user_id = $2`, [req.params.id, req.ownerId]).catch(() => ({ rows: [] as any[] }));
+    if (!r.rows.length) return erro(res, 404, 'Organização não encontrada.', 'not_found');
+    return res.json({ data: organizacao(r.rows[0]) });
+  });
+
+  /** Corpo da organização → colunas. */
+  function colunasDaOrganizacao(body: any): { cols: Record<string, any>; erro?: string } {
+    const cols: Record<string, any> = {};
+    for (const [campo, col] of Object.entries(CAMPOS_ORG_API)) {
+      if (body?.[campo] === undefined) continue;
+      const v = body[campo];
+      if (v !== null && typeof v !== 'string') return { cols, erro: `${campo} deve ser texto.` };
+      cols[col] = v === null ? null : v.trim().slice(0, campo === 'notes' ? 5000 : 200) || null;
+    }
+    return { cols };
+  }
+
+  router.post('/organizations', exige('organizations', 'create'), async (req: ChaveReq, res: Response) => {
+    try {
+      const { cols, erro: msg } = colunasDaOrganizacao(req.body);
+      if (msg) return erro(res, 422, msg, 'validation_error');
+      if (!cols.nome) return erro(res, 422, 'Informe name.', 'validation_error');
+      const nomes = Object.keys(cols);
+      const r = await pool.query(
+        `INSERT INTO organizacoes (user_id, ${nomes.join(', ')}) VALUES ($1, ${nomes.map((_, i) => `$${i + 2}`).join(', ')}) RETURNING *`,
+        [req.ownerId, ...nomes.map(c => cols[c])]);
+      return res.status(201).json({ data: organizacao(r.rows[0]) });
+    } catch (err: any) {
+      if (err?.code === '23505') return erro(res, 409, 'Já existe uma organização com este nome.', 'duplicate');
+      return erro(res, 500, err.message);
+    }
+  });
+
+  router.put('/organizations/:id', exige('organizations', 'update'), async (req: ChaveReq, res: Response) => {
+    try {
+      const { cols, erro: msg } = colunasDaOrganizacao(req.body);
+      if (msg) return erro(res, 422, msg, 'validation_error');
+      if (cols.nome === null) return erro(res, 422, 'name não pode ficar vazio.', 'validation_error');
+      const nomes = Object.keys(cols);
+      if (!nomes.length) return erro(res, 422, 'Nada para atualizar.', 'validation_error');
+      const r = await pool.query(
+        `UPDATE organizacoes SET ${nomes.map((c, i) => `${c} = $${i + 3}`).join(', ')}, updated_at = NOW()
+          WHERE id::text = $1 AND user_id = $2 RETURNING *`, [req.params.id, req.ownerId, ...nomes.map(c => cols[c])]);
+      if (!r.rows.length) return erro(res, 404, 'Organização não encontrada.', 'not_found');
+      return res.json({ data: organizacao(r.rows[0]) });
+    } catch (err: any) {
+      if (err?.code === '23505') return erro(res, 409, 'Já existe uma organização com este nome.', 'duplicate');
+      return erro(res, 500, err.message);
+    }
+  });
+
+  router.delete('/organizations/:id', exige('organizations', 'delete'), async (req: ChaveReq, res: Response) => {
+    try {
+      const r = await pool.query(`DELETE FROM organizacoes WHERE id::text = $1 AND user_id = $2`, [req.params.id, req.ownerId]);
+      if (!r.rowCount) return erro(res, 404, 'Organização não encontrada.', 'not_found');
+      return res.status(204).end(); // contatos soltam sozinhos (ON DELETE SET NULL)
     } catch (err: any) {
       return erro(res, 500, err.message);
     }

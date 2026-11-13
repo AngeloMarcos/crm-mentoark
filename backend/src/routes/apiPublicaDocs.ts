@@ -49,7 +49,8 @@ export function montarOpenApi() {
             q('ids', 'IDs separados por vírgula'), q('optOut', '`true` ou `false`'),
             q('created_at', '`dd/MM/yyyy` ou `dd/MM/yyyy,dd/MM/yyyy`'), q('updated_at', 'Mesmo formato de created_at'),
             q('orderColumn', '`createdAt` (padrão), `updatedAt`, `name`, `lastMessageAt`'), q('orderDirection', '`asc` ou `desc`'),
-            q('cf_{key}', 'Campo personalizado pela chave (ex.: `cf_cidade=Santos`). Texto: contém; demais tipos: igual')],
+            q('cf_{key}', 'Campo personalizado pela chave (ex.: `cf_cidade=Santos`). Texto: contém; demais tipos: igual'),
+            q('organizationId', 'Contatos de uma organização')],
           responses: { 200: { description: 'Lista paginada', content: lista('Pessoa') }, ...erros } },
         post: { tags: ['Contatos'], summary: 'Criar contato',
           description: 'Exige `phone` ou `email`. Telefone já cadastrado → 409 `duplicate` com `peopleId`; com `upsert: true` atualiza o existente.',
@@ -61,6 +62,24 @@ export function montarOpenApi() {
         put: { tags: ['Contatos'], summary: 'Atualizar contato', parameters: [id], requestBody: { content: json(ref('PessoaEntrada')) },
           responses: { 200: { description: 'Atualizado', content: um('Pessoa') }, ...erros } },
         delete: { tags: ['Contatos'], summary: 'Excluir contato', parameters: [id], responses: { 204: { description: 'Excluído' } } },
+      },
+      '/organizations': {
+        get: { tags: ['Organizações'], summary: 'Listar organizações',
+          description: 'A empresa do contato como registro próprio, compartilhado pela conta. `peoples` = quantos contatos estão nela.',
+          parameters: [...pagina, q('name', 'Busca parcial no nome')],
+          responses: { 200: { description: 'Lista paginada', content: lista('Organizacao') }, ...erros } },
+        post: { tags: ['Organizações'], summary: 'Criar organização', description: 'Exige `name`. Nome repetido na conta → 409 `duplicate`.',
+          requestBody: { content: json(ref('OrganizacaoEntrada')) },
+          responses: { 201: { description: 'Criada', content: um('Organizacao') }, 409: { description: 'Nome já usado', content: json(ref('Erro')) }, ...erros } },
+      },
+      '/organizations/{id}': {
+        get: { tags: ['Organizações'], summary: 'Detalhar organização', parameters: [id],
+          responses: { 200: { description: 'Organização', content: um('Organizacao') }, 404: { description: 'Não encontrada' } } },
+        put: { tags: ['Organizações'], summary: 'Atualizar organização', parameters: [id], requestBody: { content: json(ref('OrganizacaoEntrada')) },
+          responses: { 200: { description: 'Atualizada', content: um('Organizacao') }, ...erros } },
+        delete: { tags: ['Organizações'], summary: 'Excluir organização', parameters: [id],
+          description: 'Os contatos continuam existindo, só deixam de ter organização.',
+          responses: { 204: { description: 'Excluída' }, 404: { description: 'Não encontrada' } } },
       },
       '/custom-fields': {
         get: { tags: ['Contatos'], summary: 'Listar campos personalizados',
@@ -141,6 +160,7 @@ export function montarOpenApi() {
           city: { type: 'string' }, state: { type: 'string' }, optOut: { type: 'boolean' },
           stageId: { type: 'string', nullable: true }, stageEnteredAt: { type: 'string', format: 'date-time', nullable: true },
           customFields: { type: 'object', additionalProperties: true, description: '`{ chave: valor }` dos campos personalizados' },
+          organizationId: { type: 'string', nullable: true },
           lastMessageAt: { type: 'string', format: 'date-time' }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' } } },
         PessoaEntrada: { type: 'object', properties: {
           name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' }, company: { type: 'string' }, jobTitle: { type: 'string' },
@@ -148,6 +168,13 @@ export function montarOpenApi() {
           potentialValue: { type: 'number' }, city: { type: 'string' }, state: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
           customFields: { type: 'object', additionalProperties: true,
             description: 'Mescla com os valores atuais; `null` ou vazio apaga o campo. Chave desconhecida → 422 `unknown_custom_field`; valor fora do tipo → 422 `invalid_value` (nada é gravado).' } } },
+        Organizacao: { type: 'object', properties: {
+          id: { type: 'string' }, name: { type: 'string' }, website: { type: 'string', nullable: true }, phone: { type: 'string', nullable: true },
+          city: { type: 'string', nullable: true }, state: { type: 'string', nullable: true }, notes: { type: 'string', nullable: true },
+          peoples: { type: 'integer' }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' } } },
+        OrganizacaoEntrada: { type: 'object', required: ['name'], properties: {
+          name: { type: 'string' }, website: { type: 'string' }, phone: { type: 'string' },
+          city: { type: 'string' }, state: { type: 'string' }, notes: { type: 'string' } } },
         CampoPersonalizado: { type: 'object', properties: {
           id: { type: 'string' }, name: { type: 'string' }, key: { type: 'string' },
           type: { type: 'string', enum: ['texto', 'numero', 'moeda', 'data', 'selecao', 'multipla', 'sim_nao'] },

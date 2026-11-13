@@ -3494,6 +3494,21 @@ export async function runMigrations(pool: Pool): Promise<void> {
     )`).catch(err => log.warn('MIGRATIONS', 'filtros_salvos', { err: err?.message }));
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_filtros_salvos_unico ON filtros_salvos (user_id, tela, lower(nome))`).catch(() => {});
 
+  // 2026-11-12 (organizações — lacuna P3 do Cubo): empresa do contato como entidade da CONTA;
+  // excluir organização solta os contatos (SET NULL). `contatos.empresa` (texto) segue como está.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS organizacoes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      nome TEXT NOT NULL,
+      site TEXT, telefone TEXT, cidade TEXT, estado TEXT, notas TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(err => log.warn('MIGRATIONS', 'organizacoes', { err: err?.message }));
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_organizacoes_user_nome ON organizacoes (user_id, lower(nome))`).catch(() => {});
+  await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS organizacao_id UUID REFERENCES organizacoes(id) ON DELETE SET NULL`).catch(err => log.warn('MIGRATIONS', 'contatos.organizacao_id', { err: err?.message }));
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_contatos_organizacao ON contatos (organizacao_id) WHERE organizacao_id IS NOT NULL`).catch(() => {});
+
   await criarAtendimentosIniciais(pool).catch(err => log.warn('MIGRATIONS', 'backfill atendimentos', { err: err?.message }));
 
   log.info('MIGRATIONS', 'OK');

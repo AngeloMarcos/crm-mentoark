@@ -51,6 +51,7 @@ import { useToast } from "@/hooks/use-toast";
 import * as XLSX from "xlsx";
 import { CamposDoContato } from "@/components/campos/CamposDoContato";
 import { FiltrosSalvos, type FiltrosLeads } from "@/components/leads/FiltrosSalvos";
+import { listarOrganizacoes, type Organizacao } from "@/lib/organizacoes";
 import { formatarValor, listarCampos, type CampoPersonalizado } from "@/lib/camposPersonalizados";
 
 interface Lista {
@@ -80,6 +81,7 @@ interface Contato {
   tags: string[] | null;
   notas: string | null;
   campos?: Record<string, unknown> | null;
+  organizacao_id?: string | null;
   lista_id: string | null;
   created_at: string;
   // Higienização (preenchidos pelo backend; null até o contato ser higienizado/classificado)
@@ -147,8 +149,11 @@ export default function LeadsPage() {
   // Form contato
   const [contatoForm, setContatoForm] = useState({
     nome: "", telefone: "", email: "", empresa: "", cargo: "",
-    origem: "Manual", status: "novo", tags: "", notas: "", lista_id: "",
+    origem: "Manual", status: "novo", tags: "", notas: "", lista_id: "", organizacao_id: "",
   });
+  // 2026-11-12: organizações da conta, para vincular o contato na ficha.
+  const [organizacoes, setOrganizacoes] = useState<Organizacao[]>([]);
+  useEffect(() => { listarOrganizacoes().then(setOrganizacoes).catch(() => setOrganizacoes([])); }, []);
 
   // Importação
   const [csvTexto, setCsvTexto] = useState("");
@@ -315,7 +320,7 @@ export default function LeadsPage() {
     setContatoForm({
       nome: "", telefone: "", email: "", empresa: "", cargo: "",
       origem: "Manual", status: "novo", tags: "", notas: "",
-      lista_id: listaIdPadrao,
+      lista_id: listaIdPadrao, organizacao_id: "",
     });
     setModalContato(true);
   };
@@ -333,6 +338,7 @@ export default function LeadsPage() {
       tags: (c.tags ?? []).join(", "),
       notas: c.notas ?? "",
       lista_id: c.lista_id ?? "",
+      organizacao_id: c.organizacao_id ?? "",
     });
     setModalContato(true);
   };
@@ -350,6 +356,7 @@ export default function LeadsPage() {
       tags: contatoForm.tags ? contatoForm.tags.split(",").map((t) => t.trim()).filter(Boolean) : [],
       notas: contatoForm.notas.trim() || null,
       lista_id: contatoForm.lista_id || null,
+      organizacao_id: contatoForm.organizacao_id || null,
     };
     const { error } = editing
       ? await api.from("contatos").update(payload).eq("id", editing.id)
@@ -1206,6 +1213,22 @@ export default function LeadsPage() {
                         </SelectContent>
                       </Select>
                     </div>
+                    {/* 2026-11-12: vincula o contato a uma organização (cadastro em /organizacoes). */}
+                    <div className="space-y-1.5">
+                      <Label>Organização</Label>
+                      <Select
+                        value={contatoForm.organizacao_id || "__nenhuma__"}
+                        onValueChange={(v) => setContatoForm({ ...contatoForm, organizacao_id: v === "__nenhuma__" ? "" : v })}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Sem organização" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__nenhuma__">Sem organização</SelectItem>
+                          {organizacoes.map((o) => (
+                            <SelectItem key={o.id} value={o.id}>{o.nome}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                   <div className="space-y-1.5">
                     <Label>Tags (separadas por vírgula)</Label>
@@ -1276,6 +1299,22 @@ export default function LeadsPage() {
                         <SelectContent>
                           {listas.map((l) => (
                             <SelectItem key={l.id} value={l.id}>{l.nome}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {/* 2026-11-12: vincula o contato a uma organização (cadastro em /organizacoes). */}
+                    <div className="space-y-1.5">
+                      <Label>Organização</Label>
+                      <Select
+                        value={contatoForm.organizacao_id || "__nenhuma__"}
+                        onValueChange={(v) => setContatoForm({ ...contatoForm, organizacao_id: v === "__nenhuma__" ? "" : v })}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Sem organização" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__nenhuma__">Sem organização</SelectItem>
+                          {organizacoes.map((o) => (
+                            <SelectItem key={o.id} value={o.id}>{o.nome}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>

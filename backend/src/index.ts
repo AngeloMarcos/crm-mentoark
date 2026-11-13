@@ -79,6 +79,7 @@ import canaisRouter from './routes/canais';
 import apiKeysRouter from './routes/apiKeys';
 import funilAutoRouter from './routes/funilAuto';
 import camposPersonalizadosRouter from './routes/camposPersonalizados';
+import organizacoesRouter from './routes/organizacoes';
 import apiPublicaRouter from './routes/apiPublica';
 import baseConhecimentoRouter from './routes/baseConhecimento';
 import aiUsoRouter from './routes/ai-uso';
@@ -513,6 +514,7 @@ app.use('/api/canais', canaisRouter(pool)); // 2026-10-30: número de WhatsApp �
 app.use('/api/api-keys', apiKeysRouter(pool)); // 2026-11-02: chaves da API pública /v1
 app.use('/api/funil-auto', funilAutoRouter(pool)); // 2026-11-02: funil que anda sozinho (modelo atendIA)
 app.use('/api/campos-personalizados', camposPersonalizadosRouter(pool)); // 2026-11-11: campos personalizados do contato
+app.use('/api/organizacoes', organizacoesRouter(pool)); // 2026-11-12: empresa do contato como entidade
 app.use('/api/base-conhecimento', baseConhecimentoRouter(pool)); // 2026-10-30: indexação automática
 app.use('/api/meta-oficial', metaOficialRouter(pool));
 app.use('/api/smart-links', smartLinksRouter(pool));
