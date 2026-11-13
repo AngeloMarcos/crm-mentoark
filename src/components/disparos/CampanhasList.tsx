@@ -13,15 +13,16 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Play, Pause, Square, RefreshCw, ChevronRight, Plus, Send, FileEdit, Clock, CheckCircle2, Search } from "lucide-react";
+import { Play, Pause, Square, RefreshCw, ChevronRight, Plus, Send, FileEdit, Clock, CheckCircle2, Search, Copy } from "lucide-react";
 import { api } from "@/integrations/database/client";
 
 interface CampanhasListProps {
   onOpen: (id: string) => void;
   onNova: () => void;
+  onDuplicar?: (c: any) => void;
 }
 
-export function CampanhasList({ onOpen, onNova }: CampanhasListProps) {
+export function CampanhasList({ onOpen, onNova, onDuplicar }: CampanhasListProps) {
   const [campanhas, setCampanhas] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [carregouUmaVez, setCarregouUmaVez] = useState(false);
@@ -177,13 +178,13 @@ export function CampanhasList({ onOpen, onNova }: CampanhasListProps) {
               {emAndamento.length > 0 && (
                 <section className="space-y-2.5">
                   <SecaoTitulo titulo="Em andamento" quantidade={emAndamento.length} />
-                  {emAndamento.map(c => <CampanhaRow key={c.id} c={c} onOpen={onOpen} />)}
+                  {emAndamento.map(c => <CampanhaRow key={c.id} c={c} onOpen={onOpen} onDuplicar={onDuplicar} />)}
                 </section>
               )}
               {resto.length > 0 && (
                 <section className="space-y-2.5">
                   <SecaoTitulo titulo={filtrando ? "Resultados" : "Histórico"} quantidade={resto.length} />
-                  {resto.map(c => <CampanhaRow key={c.id} c={c} onOpen={onOpen} />)}
+                  {resto.map(c => <CampanhaRow key={c.id} c={c} onOpen={onOpen} onDuplicar={onDuplicar} />)}
                 </section>
               )}
             </div>
@@ -244,7 +245,7 @@ function quando(valor: string | null | undefined): string | null {
   }).replace(".", "");
 }
 
-function CampanhaRow({ c, onOpen }: { c: any; onOpen: (id: string) => void }) {
+function CampanhaRow({ c, onOpen, onDuplicar }: { c: any; onOpen: (id: string) => void; onDuplicar?: (c: any) => void }) {
   const enviados = c.enviados || 0;
   const total = c.total_leads || 0;
   const falhas = c.falhas || 0;
@@ -257,10 +258,11 @@ function CampanhaRow({ c, onOpen }: { c: any; onOpen: (id: string) => void }) {
   };
 
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(c.id)}
-      aria-label={`Abrir campanha ${c.nome}. ${rotulo}, ${pct}% enviado.`}
+    // A linha deixou de ser um <button> envolvendo tudo quando ganhou a ação "Duplicar": botão
+    // dentro de botão é HTML inválido. Agora o nome é o botão real (rótulo acessível de verdade)
+    // e o `after:absolute after:inset-0` estende a área de clique dele para o card inteiro; a
+    // ação secundária fica acima pelo z-10. Padrão "stretched link".
+    <div
       className="lq-surface w-full rounded-2xl text-left"
       style={{ "--lq-accent": accent } as CSSProperties}
     >
@@ -279,7 +281,14 @@ function CampanhaRow({ c, onOpen }: { c: any; onOpen: (id: string) => void }) {
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-semibold">{c.nome}</p>
+            <button
+              type="button"
+              onClick={() => onOpen(c.id)}
+              aria-label={`Abrir campanha ${c.nome}. ${rotulo}, ${pct}% enviado.`}
+              className="truncate rounded text-left text-sm font-semibold after:absolute after:inset-0 after:content-['']"
+            >
+              {c.nome}
+            </button>
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border/60 bg-background/40 px-2 py-0.5 text-[11px] text-muted-foreground backdrop-blur-sm">
               <span
                 className={`h-1.5 w-1.5 rounded-full ${ativa ? "animate-pulse" : ""}`}
@@ -314,8 +323,20 @@ function CampanhaRow({ c, onOpen }: { c: any; onOpen: (id: string) => void }) {
           </p>
         )}
 
+        {onDuplicar && (
+          <button
+            type="button"
+            onClick={() => onDuplicar(c)}
+            title="Duplicar esta campanha"
+            aria-label={`Duplicar a campanha ${c.nome}`}
+            className="relative z-10 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+        )}
+
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
       </div>
-    </button>
+    </div>
   );
 }

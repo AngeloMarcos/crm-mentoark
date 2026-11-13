@@ -488,6 +488,59 @@ export default function DisparosPage() {
   const abrirCampanha = (id: string) => setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('campanha', id); return p; });
   const fecharCampanha = () => setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('campanha'); return p; });
 
+  /**
+   * Duplicar campanha (2026-11-13) — abre o wizard com tudo preenchido a partir de uma campanha
+   * existente. Motivo: a lista real do usuário tem a mesma campanha recriada várias vezes na mão
+   * ("Mentoark 05*" três vezes, "novembro - mentoark" duas), refazendo as 4 etapas toda vez.
+   *
+   * O que NÃO é copiado: a lista de contatos. As colunas `tags_selecionadas`/
+   * `estagios_selecionados`/`listas_ids` já eram gravadas em toda campanha (ver `StepReview`) —
+   * a cópia reaproveita o RECORTE e o `StepContacts` resolve os contatos ao vivo. Copiar a lista
+   * congelada mandaria para contatos que já saíram da tag/etapa e deixaria de fora quem entrou.
+   *
+   * Nasce como rascunho não enviado: o operador ainda passa pelas 4 etapas e confirma no final,
+   * então nenhuma duplicação vira disparo por acidente.
+   */
+  const duplicarCampanha = (c: any) => {
+    const seg = (v: any, padrao: number) => (v == null ? padrao : Number(v) / 60);
+    setForm(f => ({
+      ...f,
+      nome: `${c.nome || "Campanha"} (cópia)`,
+      tipo_midia: c.tipo_midia || "texto",
+      template_id: c.template_id ?? null,
+      mensagem: c.tipo_midia && c.tipo_midia !== "texto" ? "" : (c.mensagem_template || ""),
+      url_midia: c.url_midia || "",
+      legenda_midia: c.legenda_midia || (c.tipo_midia && c.tipo_midia !== "texto" ? c.mensagem_template || "" : ""),
+      perfil_velocidade: c.perfil_velocidade || f.perfil_velocidade,
+      janela_inicio: c.horario_inicio || f.janela_inicio,
+      janela_fim: c.horario_fim || f.janela_fim,
+      pausa_fins_semana: c.pausa_fins_semana ?? f.pausa_fins_semana,
+      pausa_erros_consecutivos: c.pausa_erros_consecutivos ?? f.pausa_erros_consecutivos,
+      limite_erros_consecutivos: c.limite_erros_consecutivos ?? f.limite_erros_consecutivos,
+      limite_diario_mensagens: c.limite_diario_mensagens ?? f.limite_diario_mensagens,
+      pausa_bloqueios_detectados: c.pausa_bloqueios_detectados ?? f.pausa_bloqueios_detectados,
+      cooldown_horas: c.cooldown_horas ?? f.cooldown_horas,
+      delay_min_minutos: seg(c.delay_min_segundos, f.delay_min_minutos),
+      delay_max_minutos: seg(c.delay_max_segundos, f.delay_max_minutos),
+      instancias_ids: Array.isArray(c.instancias_ids) ? c.instancias_ids : [],
+      tags_selecionadas: Array.isArray(c.tags_selecionadas) ? c.tags_selecionadas : [],
+      estagios_selecionados: Array.isArray(c.estagios_selecionados) ? c.estagios_selecionados : [],
+      listas_selecionadas: Array.isArray(c.listas_ids) ? c.listas_ids : [],
+      humanizar_ia: c.humanizar_ia ?? f.humanizar_ia,
+      variar_imagem: c.variar_imagem ?? f.variar_imagem,
+      mensagens_variantes: Array.isArray(c.mensagens_variantes) ? c.mensagens_variantes : [],
+      distribuicao_variantes: c.distribuicao_variantes || f.distribuicao_variantes,
+      regra_variante_por_tag: c.regra_variante_por_tag || {},
+      variacao_automatica: c.variacao_automatica ?? f.variacao_automatica,
+      contatos: [],
+    }));
+    setTargetContacts([]);
+    setStep(0);
+    fecharCampanha();
+    setModo('nova');
+    toast.success("Campanha duplicada. Confira os contatos — a lista é recalculada agora.");
+  };
+
   useEffect(() => {
     if (!campanhaAbertaId) { setCampanhaAberta(null); return; }
     let cancelado = false;
@@ -827,7 +880,7 @@ export default function DisparosPage() {
   if (modo === 'lista') {
     return (
       <CRMLayout>
-        <CampanhasList onOpen={abrirCampanha} onNova={() => setModo('nova')} />
+        <CampanhasList onOpen={abrirCampanha} onNova={() => setModo('nova')} onDuplicar={duplicarCampanha} />
       </CRMLayout>
     );
   }
