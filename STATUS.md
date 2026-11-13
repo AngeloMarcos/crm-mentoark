@@ -1,5 +1,20 @@
 # STATUS — CRM Mentoark
 
+## Sessão 2026-11-13 — 🏢 Organizações: a empresa do contato como registro próprio — em PRODUÇÃO
+
+Última lacuna P3 do Cubo (`1bd4bed`). Tela **Organizações** (`/organizacoes`, menu Vendas): cadastro da conta com nome, site,
+telefone, cidade, estado e notas; o card mostra quantos contatos tem e abre a lista deles. O vínculo é feito na ficha do lead
+(**Leads → Editar → Organização**) ou em lote por `POST /api/organizacoes/:id/vincular|desvincular`. Excluir a organização
+**solta** os contatos (`ON DELETE SET NULL`), nunca os apaga. `contatos.empresa` (texto livre) segue existindo — sem migração
+automática, quem quiser converte na mão.
+
+API `/v1`: recurso `organizations` (read/create/update/delete) com CRUD completo, `organizationId` no contato (leitura e escrita,
+validando que a organização é da conta) e filtro `?organizationId=` em `/v1/peoples`. Tudo no OpenAPI.
+E2E 26/26 em homolog e prod + visual da tela e do diálogo.
+
+**Com isso a Prioridade 3 do relatório do Cubo está fechada** (perda com motivo, campos personalizados, filtros salvos, organizações).
+Restam P4 (IA: rerun de execuções, handoff targets, follow-up na janela de 24 h) e P5 (cadências, formulários, mesclar duplicados, lixeira).
+
 ## Sessão 2026-11-12 — 🔖 Filtros salvos na lista de Leads — em PRODUÇÃO
 
 Lacuna P3 do Cubo (`filters.*`). Botão **Filtros salvos** na lista de Leads guarda a combinação atual (busca, status,
